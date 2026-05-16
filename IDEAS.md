@@ -104,13 +104,19 @@ things, read docs, summarize articles.
 - **Why not now**: scope creep for Phase 2. Phase 3+ territory.
 - **When to revisit**: any time. Probably bundled with Phase 4 or earlier.
 
-### Allowlist for `shell_exec`
-Pre-approved commands (e.g., `ls`, `cat`, `head`, `grep`, `python`) skip
-the y/N prompt. Required for the heartbeat daemon to act unattended.
+### Allowlist for `shell_exec` in autonomous mode
+Phase 3 disables shell_exec entirely in autonomous (heartbeat) mode —
+the LLM is told to leave a note via remember() instead. A more flexible
+approach: an allowlist of pre-approved patterns (e.g., `ls *`, `cat *`,
+`grep *`, `python *`) that the heartbeat could execute without
+approval, while anything else still routes to remember().
 
-- **Why not now**: interactive REPL mode prefers confirmation.
-- **When to revisit**: as part of Phase 3 — the heartbeat can't ask a
-  human for y/N.
+- **Why not now**: blanket disable is the safer default; pattern
+  matching for shell arguments is non-trivial to do safely (regex
+  escapes, injection vectors).
+- **When to revisit**: when the heartbeat genuinely needs to run code
+  unattended (e.g., periodic test runs, log-tail scrapes). Build with
+  a strict pattern language and a deny-by-default policy.
 
 ---
 
@@ -145,16 +151,13 @@ display the agent's reply token-by-token, like a real chat UI.
 
 ---
 
-## Phases 3 and 4 (already planned)
+## Phase 4 (still planned)
 
-### Phase 3 — Heartbeat daemon
-Async background process that wakes every N minutes and self-prompts the
-agent: "Given recent memory, is there anything proactive you should do?"
-The agent becomes truly autonomous, not just reactive.
-
-### Phase 4 — Messaging bridge (Telegram)
-Telegram bot that bridges your phone ↔ the agent. The heartbeat can push
+### Phase 4 — Messaging bridge (Telegram or Discord)
+Bot that bridges your phone ↔ the agent. The heartbeat can push
 proactive messages ("you asked me to check X — here's what I found").
+Replaces the REPL as the primary way you interact when you're away
+from your laptop.
 
 ---
 
