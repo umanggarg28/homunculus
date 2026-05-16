@@ -1,11 +1,18 @@
-# docker-compose.yml for Homunculus — Phase 1
+# docker-compose.yml for Homunculus
 #
-# Run the REPL interactively:
-#     docker compose run --rm homunculus
+# Two services share the same image and the same workspace volume:
 #
-# `run --rm` starts a one-off container and deletes it on exit, which is
-# what we want for an interactive session. `up` is for long-running
-# services and doesn't attach stdin properly.
+#   homunculus  → interactive REPL. Run with:
+#                   docker compose run --rm homunculus
+#
+#   heartbeat   → autonomous daemon. Wakes every N minutes and self-
+#                 prompts. Run in the background with:
+#                   docker compose up -d heartbeat
+#                   docker compose logs -f heartbeat
+#                   docker compose stop heartbeat
+#
+# `run --rm` is for one-off interactive sessions (`up` doesn't attach
+# stdin properly). `up -d` is for long-running detached daemons.
 
 services:
   homunculus:
@@ -20,3 +27,17 @@ services:
       # agent creates are visible in your editor on the host. The agent
       # can only read/write files INSIDE this directory by default.
       - ./workspace:/app/workspace
+
+  heartbeat:
+    build: .
+    image: homunculus:phase1    # Same image — heartbeat reuses everything
+    env_file: .env
+    working_dir: /app/workspace
+    volumes:
+      - ./workspace:/app/workspace  # Same workspace mount → shared memory
+    # Override the default CMD to launch the daemon instead of the REPL.
+    command: ["uv", "run", "--project", "/app", "python", "/app/heartbeat.py"]
+    # Auto-restart if the daemon crashes (but not if we explicitly stop it).
+    restart: unless-stopped
+    # No stdin_open/tty — this is a background daemon, not an interactive
+    # process. Its output goes to `docker compose logs heartbeat`.

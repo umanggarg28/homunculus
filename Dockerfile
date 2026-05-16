@@ -21,7 +21,7 @@ COPY pyproject.toml ./
 RUN uv sync --no-install-project
 
 # Copy the source code into the image.
-COPY core.py tools.py memory.py main.py ./
+COPY core.py tools.py memory.py main.py heartbeat.py ./
 
 # uv run picks up the project's venv automatically (at .venv/).
 # Absolute path so this works regardless of working_dir (compose sets cwd

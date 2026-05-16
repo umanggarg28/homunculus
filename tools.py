@@ -21,12 +21,19 @@ from memory import Memory
 # initialize it once at startup with `tools.init(memory)`.
 
 _memory: Memory | None = None
+_autonomous: bool = False
 
 
-def init(memory: Memory) -> None:
-    """Wire up the Memory instance used by the remember() tool."""
-    global _memory
+def init(memory: Memory, autonomous: bool = False) -> None:
+    """Wire up the Memory instance and runtime mode.
+
+    autonomous=True means there's no human at the keyboard to approve
+    shell commands. shell_exec will refuse and tell the LLM to leave a
+    note for the user instead. Read/write/remember still work normally.
+    """
+    global _memory, _autonomous
     _memory = memory
+    _autonomous = autonomous
 
 
 # --- Tool implementations -------------------------------------------------
@@ -57,12 +64,23 @@ def remember(name: str, description: str, type: str, body: str) -> str:
 
 
 def shell_exec(command: str) -> str:
-    """Run a shell command. Prompts the user to approve each call.
+    """Run a shell command.
 
-    Safety boundary: we NEVER run shell commands without explicit user
-    consent in Phase 1. This is the most dangerous tool — an LLM with
-    unchecked shell access can do real damage.
+    REPL mode: prompts the user to approve each call (y/N).
+    Autonomous mode (heartbeat): refuses outright. The LLM is told to
+    leave a note via remember() instead so the user can run it next
+    REPL session.
+
+    Safety boundary: we NEVER run shell commands unsupervised. Even
+    inside the container, autonomous shell access invites trouble.
     """
+    if _autonomous:
+        return (
+            "BLOCKED: shell_exec is disabled in autonomous (heartbeat) mode. "
+            "If you really need this command run, call remember() to leave "
+            "a note for the user describing what you want and why; they'll "
+            "execute it next REPL session."
+        )
     print(f"\n  [agent wants to run]: {command}")
     answer = input("  approve? [y/N]: ").strip().lower()
     if answer != "y":

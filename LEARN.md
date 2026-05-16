@@ -1,8 +1,8 @@
 # LEARN.md — Homunculus
 
 > Currently covers: **Phase 1** (agent core), **Phase 2** (persistent memory),
-> **Phase 2.5** (daily logs + age awareness). Phases 3 (heartbeat) and 4
-> (messaging) are still ahead.
+> **Phase 2.5** (daily logs + age awareness), **Phase 3** (autonomous
+> heartbeat). Phase 4 (messaging bridge) is still ahead.
 
 A reference doc for understanding every piece of this project. Written to be
 useful months from now when you've forgotten the details. If you only read
@@ -582,24 +582,124 @@ workspace/memory/
 
 ---
 
+## Phase 3 — Autonomous Heartbeat
+
+This is the phase that turns Homunculus from a chatbot into a real
+agent. A background daemon wakes every N minutes and self-prompts:
+"Look at your memory and recent logs. Is there anything proactive
+worth doing right now?" The agent decides for itself. Nothing else has
+to be running — no REPL open, no human at the keyboard.
+
+### What was added
+
+- **`heartbeat.py`** — new module. An infinite loop that builds a fresh
+  `Agent`, runs ONE conversation turn with the heartbeat prompt, sleeps
+  N minutes, repeats. Catches exceptions per-tick so a single bad tick
+  can't kill the daemon.
+- **`tools.py` mode flag** — `init(memory, autonomous=True)` puts tools
+  into autonomous mode. In that mode `shell_exec` refuses to run and
+  tells the LLM to leave a note instead.
+- **A second service in `docker-compose.yml`** — `heartbeat` shares the
+  same image and the same workspace volume as the REPL, but runs
+  `heartbeat.py` instead of `main.py`. No stdin/tty (it's a daemon).
+- **`HEARTBEAT_INTERVAL_MINUTES`** env var — default 10.
+
+### How to run
+
+```bash
+# Talk to it (interactive, when you want)
+docker compose run --rm homunculus
+
+# Start the autonomy daemon (background, auto-restart)
+docker compose up -d heartbeat
+docker compose logs -f heartbeat     # watch what it does
+docker compose stop heartbeat        # stop it
+```
+
+You can run both at the same time. They share the memory folder, so
+anything the heartbeat learns shows up in your next REPL session, and
+vice versa.
+
+### Safety: why shell_exec is disabled in autonomous mode
+
+In REPL mode, `shell_exec` shows the command and asks for y/N. There's
+a human in the loop. In heartbeat mode there is no human, no terminal,
+no way to ask. Three options for what to do about shell access:
+
+1. Auto-allow everything → too risky even inside a container
+2. Allowlist specific commands → real engineering, defer to later
+3. Disable entirely, tell the LLM to leave a note → cheap, safe, gives
+   the LLM a sensible fallback
+
+We picked (3). When the autonomous agent decides it needs to run a
+shell command, `shell_exec` returns:
+
+> "BLOCKED: shell_exec is disabled in autonomous (heartbeat) mode. If
+> you really need this command run, call remember() to leave a note
+> for the user describing what you want and why; they'll execute it
+> next REPL session."
+
+So the agent's recourse is to write a memory entry like "User: please
+run `pytest tests/` to check if my changes pass." Next time you start
+the REPL, you see that note in the memory index and decide.
+
+### Prompt engineering: "don't invent work"
+
+The biggest failure mode of a self-prompted LLM is inventing tasks just
+to feel productive. ("Let me reorganize the memory folder…") We
+explicitly tell it that doing nothing is fine:
+
+> "If nothing genuinely useful comes to mind, say so in one line and
+> STOP. Do NOT invent work just to feel productive. Doing nothing is
+> fine."
+
+In practice this works — in our smoke test, the heartbeat read today's
+log file, decided there was nothing to do, and exited the tick. That's
+the desired behavior.
+
+### Why a fresh Agent every tick (not one persistent agent)?
+
+Each heartbeat tick creates a new `Agent(memory=memory)`. We don't
+carry conversation history across ticks. Three reasons:
+
+1. **Bounded context.** A persistent agent would accumulate hours of
+   tick history. The fresh-agent design keeps each tick small.
+2. **Independence.** Each tick is its own reasoning, not influenced by
+   what the agent decided 5 ticks ago.
+3. **Continuity comes from memory, not history.** The agent doesn't
+   need to remember "5 minutes ago I decided X" — if X was important,
+   it should already be in the memory index.
+
+This is a deliberate architectural choice: ticks share *memory* (long-
+term, curated) but not *history* (short-term, conversational).
+
+### File layout after Phase 3
+
+```
+homunculus/
+    core.py          tools.py        memory.py
+    main.py          ← REPL entry
+    heartbeat.py     ← daemon entry (NEW in Phase 3)
+    Dockerfile       docker-compose.yml
+    workspace/
+        memory/  …   ← shared between REPL and heartbeat
+```
+
+---
+
 ## What's Next
-
-Phase 2 is complete. The next milestones:
-
-### Phase 3 — Heartbeat daemon
-An async background process that wakes every N minutes and self-prompts
-the agent: "Given recent memory, is there anything proactive you should
-do?" This is when it stops being a chatbot and becomes a real *agent*.
 
 ### Phase 4 — Messaging bridge
 A Telegram (or Discord) bot bridging your phone ↔ the agent. The
-heartbeat can push proactive messages.
+heartbeat can push proactive messages ("you asked me to research X,
+here's what I found"). Replaces the REPL as the primary way you
+interact with Homunculus when you're not at your laptop.
 
 ### See also: `IDEAS.md`
 Deferred improvements (LLM-based memory retrieval, embedding search,
-session resume, mid-session compaction, etc.) are listed in `IDEAS.md`.
-Each entry says what it is, why we deferred it, and when revisiting
-would be worthwhile.
+session resume, mid-session compaction, shell allowlist, etc.) are
+tracked in `IDEAS.md`. Each entry says what it is, why we deferred it,
+and when revisiting would be worthwhile.
 
 ---
 
