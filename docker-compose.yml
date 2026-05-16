@@ -1,0 +1,22 @@
+# docker-compose.yml for Homunculus — Phase 1
+#
+# Run the REPL interactively:
+#     docker compose run --rm homunculus
+#
+# `run --rm` starts a one-off container and deletes it on exit, which is
+# what we want for an interactive session. `up` is for long-running
+# services and doesn't attach stdin properly.
+
+services:
+  homunculus:
+    build: .                    # Build from the Dockerfile in this directory
+    image: homunculus:phase1    # Tag the resulting image
+    stdin_open: true            # Keep stdin open (so input() works)
+    tty: true                   # Allocate a TTY (so prompts render nicely)
+    env_file: .env              # Load HOMUNCULUS_API_KEY etc. from .env
+    working_dir: /app/workspace # The agent's "current directory" inside the container
+    volumes:
+      # Mount a host directory as the agent's workspace, so files the
+      # agent creates are visible in your editor on the host. The agent
+      # can only read/write files INSIDE this directory by default.
+      - ./workspace:/app/workspace

@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+
+# Runtime state — agent's working files and memory are user-specific.
+workspace/*
+!workspace/.gitkeep
+
+# Note: uv.lock IS committed — it pins exact dep versions for reproducible builds.
