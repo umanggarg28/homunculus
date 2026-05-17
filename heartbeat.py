@@ -49,11 +49,11 @@ Important rules:
 """
 
 
-def tick(memory: Memory) -> None:
+def tick(memory: Memory, model: str | None) -> None:
     """One heartbeat iteration — fresh agent, one prompt, then discard."""
-    agent = Agent(memory=memory)
+    agent = Agent(memory=memory, model=model)
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    print(f"\n[heartbeat] tick at {timestamp}", flush=True)
+    print(f"\n[heartbeat] tick at {timestamp} (model={agent.model})", flush=True)
     response = agent.chat(HEARTBEAT_PROMPT)
     print(f"[agent] {response}", flush=True)
 
@@ -65,15 +65,18 @@ def main() -> None:
 
     interval_min = int(os.environ.get("HEARTBEAT_INTERVAL_MINUTES", "10"))
     memory_dir = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
+    # Heartbeat's task is simpler than the bot/REPL — pick a smaller
+    # default. Saves ~6x on tokens-per-tick. Override via env if needed.
+    model = os.environ.get("HOMUNCULUS_MODEL_HEARTBEAT", "openai/gpt-oss-20b")
 
     memory = Memory(memory_dir)
     tools.init(memory, autonomous=True)
 
-    print(f"[heartbeat] starting, interval = {interval_min} min", flush=True)
+    print(f"[heartbeat] starting, interval = {interval_min} min, model = {model}", flush=True)
 
     while True:
         try:
-            tick(memory)
+            tick(memory, model=model)
         except Exception:
             # Don't let one bad tick kill the daemon. Log and continue.
             print("[heartbeat] error during tick:", flush=True)
