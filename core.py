@@ -49,6 +49,14 @@ MODEL = os.environ.get("HOMUNCULUS_MODEL", "openai/gpt-oss-120b")
 # LLM could call tools forever. 20 is plenty for any realistic task.
 MAX_TURNS = 20
 
+# Mid-session compaction thresholds. When history grows past
+# COMPACT_TRIGGER messages, we summarize all but the last
+# COMPACT_KEEP_RECENT into a single system-role summary. This bounds
+# context usage on long-running conversations (especially the Telegram
+# bot which keeps state across days).
+COMPACT_TRIGGER = 30
+COMPACT_KEEP_RECENT = 12
+
 
 SYSTEM_PROMPT = """You are Homunculus, a minimal autonomous personal assistant.
 
@@ -91,7 +99,11 @@ don't need.
 
 # --- HTTP layer -----------------------------------------------------------
 
-def call_llm(messages: list[dict], tool_schemas: list[dict]) -> dict:
+def call_llm(
+    messages: list[dict],
+    tool_schemas: list[dict] | None,
+    model: str | None = None,
+) -> dict:
     """One round-trip to the Groq chat completions endpoint.
 
     Returns the assistant message dict, shape:
@@ -102,6 +114,12 @@ def call_llm(messages: list[dict], tool_schemas: list[dict]) -> dict:
     If "tool_calls" is present, the LLM is asking us to run tools.
     If "content" is present (and no tool_calls), it's a final answer.
 
+    tool_schemas=None makes it a plain-chat call (no tool use). We use
+    this for cheap side-calls like history compaction summaries.
+
+    model defaults to MODEL but services can override (e.g. heartbeat
+    uses a smaller cheaper model).
+
     Retries once on 429 (rate limited). Groq sends a `retry-after` header
     telling us when capacity returns; we sleep that long + 1s buffer and
     try again. After one retry it gives up so we don't block forever.
@@ -110,12 +128,13 @@ def call_llm(messages: list[dict], tool_schemas: list[dict]) -> dict:
     if not api_key:
         raise RuntimeError("HOMUNCULUS_API_KEY is not set.")
 
-    payload = {
-        "model": MODEL,
+    payload: dict[str, Any] = {
+        "model": model or MODEL,
         "messages": messages,
-        "tools": tool_schemas,
-        "tool_choice": "auto",  # let the LLM decide when to call a tool
     }
+    if tool_schemas is not None:
+        payload["tools"] = tool_schemas
+        payload["tool_choice"] = "auto"  # let the LLM decide when to call a tool
 
     for attempt in (1, 2):
         response = httpx.post(
@@ -170,8 +189,10 @@ class Agent:
         self,
         memory: Memory | None = None,
         system_prompt: str = SYSTEM_PROMPT,
+        model: str | None = None,
     ) -> None:
         self.memory = memory
+        self.model = model or MODEL
         # If memory is provided, paste the index into the system prompt so
         # the LLM sees what's already been remembered.
         full_prompt = system_prompt
@@ -223,12 +244,14 @@ class Agent:
         number of times before producing a final answer. We cap at
         MAX_TURNS as a safety net.
         """
+        self._maybe_compact()  # bound history growth before adding more
+
         self.history.append({"role": "user", "content": user_message})
         if self.memory is not None:
             self.memory.log_turn("user", user_message)
 
         for _ in range(MAX_TURNS):
-            assistant_msg = call_llm(self.history, tools.SCHEMAS)
+            assistant_msg = call_llm(self.history, tools.SCHEMAS, model=self.model)
             # Keep only fields the API accepts on the request side. Groq
             # returns extras like `reasoning`, sometimes `executed_tools`,
             # and explicit `null` fields — replaying those triggers 400s.
@@ -270,3 +293,74 @@ class Agent:
         user can see what the agent is doing."""
         preview = ", ".join(f"{k}={repr(v)[:40]}" for k, v in args.items())
         print(f"  -> {name}({preview})")
+
+    # --- Mid-session compaction -----------------------------------------
+
+    def _maybe_compact(self) -> None:
+        """If history is too long, replace its older portion with a summary.
+
+        Cuts at a user-message boundary so we never split a paired
+        (assistant tool_call → tool result) sequence — the API rejects
+        orphaned tool messages.
+        """
+        if len(self.history) < COMPACT_TRIGGER:
+            return
+
+        # User-message indices in history (the system prompt is at [0]).
+        user_idxs = [i for i, m in enumerate(self.history) if m.get("role") == "user"]
+        if len(user_idxs) <= COMPACT_KEEP_RECENT:
+            return  # already small in terms of conversation turns
+
+        cut_at = user_idxs[-COMPACT_KEEP_RECENT]
+        # Slice [1:cut_at] = everything between system prompt and the
+        # turn we're keeping.
+        to_summarize = self.history[1:cut_at]
+        if not to_summarize:
+            return
+
+        summary = self._summarize_messages(to_summarize)
+        summary_msg = {
+            "role": "system",
+            "content": f"# Summary of earlier conversation\n\n{summary}",
+        }
+        # New history: [original system prompt, summary, recent turns]
+        self.history = [self.history[0], summary_msg] + self.history[cut_at:]
+        print(
+            f"[compact] summarized {len(to_summarize)} old messages "
+            f"→ history now {len(self.history)} messages",
+            flush=True,
+        )
+
+    def _summarize_messages(self, messages: list[dict]) -> str:
+        """Ask the LLM (no tools) to write a tight summary of older turns."""
+        flat = "\n\n".join(_flatten_message_for_summary(m) for m in messages)
+        prompt = [
+            {
+                "role": "system",
+                "content": (
+                    "Summarize the following conversation excerpt into 3-6 "
+                    "tight sentences. Preserve: what the user asked for, "
+                    "decisions made, important facts, pending tasks. Skip "
+                    "small talk and meta-commentary. Use plain text."
+                ),
+            },
+            {"role": "user", "content": flat},
+        ]
+        try:
+            response = call_llm(prompt, tool_schemas=None, model=self.model)
+            return response.get("content") or "(no summary returned)"
+        except Exception as e:
+            # If summarization fails, fall back to a degenerate "summary"
+            # so the conversation can continue without an exception.
+            return f"(automatic summary failed: {e}; older context dropped)"
+
+
+def _flatten_message_for_summary(msg: dict) -> str:
+    """Render a single history message as a line for the summary prompt."""
+    role = msg.get("role", "?")
+    if msg.get("content"):
+        return f"[{role}]: {msg['content']}"
+    if msg.get("tool_calls"):
+        names = [tc["function"]["name"] for tc in msg["tool_calls"]]
+        return f"[{role}]: (called tools: {', '.join(names)})"
+    return f"[{role}]: (empty)"

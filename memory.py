@@ -49,17 +49,57 @@ class Memory:
 
     # ---- read side -----------------------------------------------------
 
-    def load_index(self) -> str:
+    def load_index(self, max_entries: int = 30) -> str:
         """Return MEMORY.md content with age annotations on each entry.
 
         We don't store ages in the file (they'd be stale instantly). Instead
         we inject "(N days ago)" at read time based on the linked file's
         actual mtime. Old memories also get a 'stale' marker so the LLM
         knows to double-check them.
+
+        Caps at the `max_entries` most recently-touched memories (by mtime).
+        Older entries stay on disk and are still discoverable via read_file —
+        they just don't auto-appear in every system prompt. This bounds the
+        size of the prompt as memory grows.
         """
         raw = self.index_path.read_text(encoding="utf-8")
-        annotated_lines = [self._annotate_entry(line) for line in raw.splitlines()]
-        return "\n".join(annotated_lines) + "\n"
+        # Separate the header lines from the entry lines so we can sort the
+        # entries by mtime without disturbing the header.
+        header_lines: list[str] = []
+        entry_lines: list[str] = []
+        for line in raw.splitlines():
+            if line.startswith("- ["):
+                entry_lines.append(line)
+            else:
+                header_lines.append(line)
+
+        # Sort entries newest-first by the linked file's mtime.
+        entry_lines.sort(key=self._entry_mtime, reverse=True)
+
+        # Cap and annotate.
+        total = len(entry_lines)
+        kept = entry_lines[:max_entries]
+        annotated = [self._annotate_entry(line) for line in kept]
+
+        footer = ""
+        if total > max_entries:
+            footer = (
+                f"\n\n(Showing the {max_entries} most recently-touched memories "
+                f"out of {total}. Older entries remain on disk — use read_file "
+                f"to fetch them if you remember their filename.)"
+            )
+
+        return "\n".join(header_lines + annotated) + footer + "\n"
+
+    def _entry_mtime(self, line: str) -> float:
+        """Return the mtime of the file an index line links to, or 0."""
+        match = re.match(r"^- \[[^\]]+\]\(\./([^)]+)\)", line)
+        if not match:
+            return 0.0
+        path = self.root / match.group(1)
+        if not path.exists():
+            return 0.0
+        return path.stat().st_mtime
 
     def log_turn(self, role: str, content: str) -> None:
         """Append a timestamped entry to today's conversation log.
