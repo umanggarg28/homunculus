@@ -46,6 +46,16 @@ API_URL = os.environ.get(
 )
 MODEL = os.environ.get("HOMUNCULUS_MODEL", "openai/gpt-oss-120b")
 
+# Optional fallback provider triggered on 429 from the primary. Default
+# target is Gemini's OpenAI-compatible endpoint — 1M TPM free tier (vs
+# Groq's 8K), large headroom when we burn through the primary window.
+# Falls back only if HOMUNCULUS_API_KEY_FALLBACK is set in env.
+API_URL_FALLBACK = os.environ.get(
+    "HOMUNCULUS_API_URL_FALLBACK",
+    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+)
+MODEL_FALLBACK = os.environ.get("HOMUNCULUS_MODEL_FALLBACK", "gemini-2.0-flash")
+
 # Hard cap on tool-use iterations per user turn. Without this, a broken
 # LLM could call tools forever. 20 is plenty for any realistic task.
 MAX_TURNS = 20
@@ -55,8 +65,8 @@ MAX_TURNS = 20
 # COMPACT_KEEP_RECENT into a single system-role summary. This bounds
 # context usage on long-running conversations (especially the Telegram
 # bot which keeps state across days).
-COMPACT_TRIGGER = 30
-COMPACT_KEEP_RECENT = 12
+COMPACT_TRIGGER = 15
+COMPACT_KEEP_RECENT = 6
 
 
 SYSTEM_PROMPT = """You are Homunculus, a minimal autonomous personal assistant.
@@ -103,65 +113,207 @@ don't need.
 
 # --- HTTP layer -----------------------------------------------------------
 
+def _providers(model_override: str | None) -> list[tuple[str, str, str]]:
+    """Return ordered list of (url, api_key, model) to try.
+
+    Primary always present. Fallback included only if its API key is set
+    in env — otherwise we skip it (no point trying an endpoint with no
+    auth). The fallback's model is fixed (MODEL_FALLBACK) regardless of
+    the primary's per-call model override, since providers don't share
+    model names.
+    """
+    out = [(API_URL, os.environ.get("HOMUNCULUS_API_KEY", ""), model_override or MODEL)]
+    fb_key = os.environ.get("HOMUNCULUS_API_KEY_FALLBACK", "")
+    if fb_key:
+        out.append((API_URL_FALLBACK, fb_key, MODEL_FALLBACK))
+    return out
+
+
 def call_llm(
     messages: list[dict],
     tool_schemas: list[dict] | None,
     model: str | None = None,
 ) -> dict:
-    """One round-trip to the Groq chat completions endpoint.
+    """One round-trip to the LLM chat completions endpoint.
 
     Returns the assistant message dict, shape:
       {"role": "assistant",
        "content": str | None,
        "tool_calls": [...] | None}
 
-    If "tool_calls" is present, the LLM is asking us to run tools.
-    If "content" is present (and no tool_calls), it's a final answer.
+    On 429 (rate limited) from the primary provider, automatically tries
+    the fallback provider (Gemini by default) if its API key is set in
+    env. If the fallback is unset, sleeps for retry-after and retries
+    primary once. This gives us elastic capacity without paying for it.
 
-    tool_schemas=None makes it a plain-chat call (no tool use). We use
-    this for cheap side-calls like history compaction summaries.
-
-    model defaults to MODEL but services can override (e.g. heartbeat
-    uses a smaller cheaper model).
-
-    Retries once on 429 (rate limited). Groq sends a `retry-after` header
-    telling us when capacity returns; we sleep that long + 1s buffer and
-    try again. After one retry it gives up so we don't block forever.
+    tool_schemas=None makes it a plain-chat call (no tool use).
+    model defaults to MODEL; services can override per-call.
     """
-    api_key = os.environ.get("HOMUNCULUS_API_KEY")
-    if not api_key:
+    primary_key = os.environ.get("HOMUNCULUS_API_KEY")
+    if not primary_key:
         raise RuntimeError("HOMUNCULUS_API_KEY is not set.")
 
-    payload: dict[str, Any] = {
-        "model": model or MODEL,
-        "messages": messages,
-    }
-    if tool_schemas is not None:
-        payload["tools"] = tool_schemas
-        payload["tool_choice"] = "auto"  # let the LLM decide when to call a tool
+    providers = _providers(model)
+    last_response_text: str = ""
 
-    for attempt in (1, 2):
+    for idx, (url, key, model_id) in enumerate(providers):
+        if not key:
+            continue
+        payload: dict[str, Any] = {"model": model_id, "messages": messages}
+        if tool_schemas is not None:
+            payload["tools"] = tool_schemas
+            payload["tool_choice"] = "auto"
+
         response = httpx.post(
-            API_URL,
-            headers={"Authorization": f"Bearer {api_key}"},
+            url,
+            headers={"Authorization": f"Bearer {key}"},
             json=payload,
             timeout=60.0,
         )
-        if response.status_code == 429 and attempt == 1:
-            # Rate limited. Honor the retry-after header if present;
-            # otherwise fall back to a 20s sleep.
+        if response.status_code == 429:
+            last_response_text = response.text
+            if idx + 1 < len(providers):
+                # Try fallback immediately — its budget is independent.
+                print(f"[call_llm] primary 429, trying fallback ({providers[idx+1][2]})", flush=True)
+                continue
+            # No more providers; honor retry-after and try primary again.
             wait = _parse_retry_after(response) or 20.0
             print(f"[call_llm] rate-limited, sleeping {wait:.1f}s before retry", flush=True)
-            time.sleep(wait + 1.0)  # +1s buffer to avoid landing right on the boundary
-            continue
-        if response.status_code >= 400:
-            # Surface the API's actual error message (not just the status code).
-            raise RuntimeError(
-                f"API error {response.status_code}: {response.text}"
+            time.sleep(wait + 1.0)
+            response = httpx.post(
+                url,
+                headers={"Authorization": f"Bearer {key}"},
+                json=payload,
+                timeout=60.0,
             )
+            if response.status_code >= 400:
+                raise RuntimeError(f"API error {response.status_code}: {response.text}")
+            return response.json()["choices"][0]["message"]
+        if response.status_code >= 400:
+            raise RuntimeError(f"API error {response.status_code}: {response.text}")
         return response.json()["choices"][0]["message"]
 
-    raise RuntimeError(f"API still rate-limited after retry: {response.text}")
+    raise RuntimeError(f"All providers exhausted: {last_response_text}")
+
+
+def call_llm_stream(
+    messages: list[dict],
+    tool_schemas: list[dict] | None,
+    model: str | None = None,
+):
+    """Streaming variant of call_llm.
+
+    Generator yielding tuples of (kind, payload) as chunks arrive:
+        ("content", "<delta text>")   — append to assistant content
+        ("tool_call_delta", <dict>)   — partial tool_call to accumulate
+        ("done", <assistant_msg>)     — final reconstructed message
+
+    Real LLM streaming and tool-use don't compose cleanly: until we see
+    chunks we don't know whether this turn is a text reply or a tool
+    call. We forward content deltas immediately (so the user sees text
+    appear word-by-word) and silently accumulate tool_call deltas. At
+    [DONE] we yield the assembled message — caller can check for
+    tool_calls then.
+
+    No retry on 429 (the SSE response complicates retry); caller can
+    fall back to non-streaming call_llm for retry semantics if needed.
+    """
+    primary_key = os.environ.get("HOMUNCULUS_API_KEY")
+    if not primary_key:
+        raise RuntimeError("HOMUNCULUS_API_KEY is not set.")
+
+    # On 429, try the fallback provider transparently. We open the
+    # stream on whichever provider answers first without a 429.
+    last_err = ""
+    response_ctx = None
+    response = None
+    for idx, (url, key, model_id) in enumerate(_providers(model)):
+        if not key:
+            continue
+        payload: dict[str, Any] = {
+            "model": model_id,
+            "messages": messages,
+            "stream": True,
+        }
+        if tool_schemas is not None:
+            payload["tools"] = tool_schemas
+            payload["tool_choice"] = "auto"
+        response_ctx = httpx.stream(
+            "POST",
+            url,
+            headers={"Authorization": f"Bearer {key}"},
+            json=payload,
+            timeout=120.0,
+        )
+        response = response_ctx.__enter__()
+        if response.status_code == 429:
+            response.read()
+            last_err = response.text
+            response_ctx.__exit__(None, None, None)
+            response_ctx = None
+            print(f"[call_llm_stream] {model_id} 429, trying next provider", flush=True)
+            continue
+        if response.status_code >= 400:
+            response.read()
+            err = response.text
+            response_ctx.__exit__(None, None, None)
+            raise RuntimeError(f"API error {response.status_code}: {err}")
+        break
+
+    if response_ctx is None or response is None:
+        raise RuntimeError(f"All providers exhausted: {last_err}")
+
+    content_acc: list[str] = []
+    tool_calls_acc: dict[int, dict[str, Any]] = {}
+
+    try:
+        for raw_line in response.iter_lines():
+            if not raw_line:
+                continue
+            line = raw_line.strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            choices = chunk.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
+
+            if "content" in delta and delta["content"]:
+                content_acc.append(delta["content"])
+                yield ("content", delta["content"])
+
+            for tc_delta in delta.get("tool_calls") or []:
+                idx = tc_delta.get("index", 0)
+                slot = tool_calls_acc.setdefault(idx, {
+                    "id": "",
+                    "type": "function",
+                    "function": {"name": "", "arguments": ""},
+                })
+                if tc_delta.get("id"):
+                    slot["id"] = tc_delta["id"]
+                fn = tc_delta.get("function") or {}
+                if fn.get("name"):
+                    slot["function"]["name"] += fn["name"]
+                if fn.get("arguments"):
+                    slot["function"]["arguments"] += fn["arguments"]
+                yield ("tool_call_delta", slot)
+    finally:
+        response_ctx.__exit__(None, None, None)
+
+    # Assemble the final assistant message in the shape the loop expects.
+    assistant_msg: dict[str, Any] = {"role": "assistant"}
+    if content_acc:
+        assistant_msg["content"] = "".join(content_acc)
+    if tool_calls_acc:
+        assistant_msg["tool_calls"] = [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
+    yield ("done", assistant_msg)
 
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
@@ -302,6 +454,84 @@ class Agent:
                 })
 
         return "(hit MAX_TURNS without a final answer)"
+
+    def chat_stream(self, user_message: str):
+        """Streaming variant of chat() for the web UI.
+
+        Yields strings (content chunks) as they arrive from the LLM.
+        Tool calls happen silently in the background — their activity
+        is observable via the /events SSE feed. After all turns are
+        done, the final assembled reply is also stored in history and
+        memory exactly like chat() does.
+
+        This is a *sync* generator (httpx.stream is sync); FastAPI is
+        happy to consume sync generators in StreamingResponse.
+        """
+        self._maybe_compact()
+        self.history.append({"role": "user", "content": user_message})
+        if self.memory is not None:
+            self.memory.log_turn("user", user_message)
+        events.emit("user_message", text=events.truncate_preview(user_message))
+
+        final_reply_parts: list[str] = []
+
+        for _ in range(MAX_TURNS):
+            assistant_msg: dict[str, Any] | None = None
+            for kind, payload in call_llm_stream(self.history, tools.SCHEMAS, model=self.model):
+                if kind == "content":
+                    final_reply_parts.append(payload)
+                    yield payload
+                elif kind == "done":
+                    assistant_msg = payload
+                # tool_call_delta is accumulated inside call_llm_stream;
+                # we don't need to act on it per-chunk here.
+
+            if assistant_msg is None:
+                yield "\n(empty stream)\n"
+                return
+
+            cleaned: dict[str, Any] = {"role": "assistant"}
+            if assistant_msg.get("content"):
+                cleaned["content"] = assistant_msg["content"]
+            if assistant_msg.get("tool_calls"):
+                cleaned["tool_calls"] = assistant_msg["tool_calls"]
+            if "content" not in cleaned and "tool_calls" not in cleaned:
+                cleaned["content"] = ""
+            self.history.append(cleaned)
+
+            tool_calls = assistant_msg.get("tool_calls")
+            if not tool_calls:
+                reply = assistant_msg.get("content") or "(empty response)"
+                if self.memory is not None:
+                    self.memory.log_turn("assistant", reply)
+                events.emit("assistant_reply", text=events.truncate_preview(reply))
+                return
+
+            for call in tool_calls:
+                name = call["function"]["name"]
+                args = json.loads(call["function"]["arguments"] or "{}")
+                self._log_tool_call(name, args)
+                events.emit(
+                    "tool_call",
+                    name=name,
+                    args=events.truncate_preview(json.dumps(args, ensure_ascii=False)),
+                )
+                result = tools.execute(name, args)
+                events.emit(
+                    "tool_result",
+                    name=name,
+                    result=events.truncate_preview(result),
+                )
+                self.history.append({
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": result,
+                })
+            # Loop — next turn starts a fresh stream.
+            # Reset content accumulator for next turn's text (if any).
+            final_reply_parts = []
+
+        yield "\n(hit MAX_TURNS without a final answer)\n"
 
     @staticmethod
     def _log_tool_call(name: str, args: dict[str, Any]) -> None:

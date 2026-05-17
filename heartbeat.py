@@ -145,7 +145,7 @@ def main() -> None:
     if not os.environ.get("HOMUNCULUS_API_KEY"):
         sys.exit("HOMUNCULUS_API_KEY is not set.")
 
-    interval_min = int(os.environ.get("HEARTBEAT_INTERVAL_MINUTES", "10"))
+    interval_min = int(os.environ.get("HEARTBEAT_INTERVAL_MINUTES", "60"))
     memory_dir = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
     # Heartbeat's task is simpler than the bot/REPL — pick a smaller
     # default. Saves ~6x on tokens-per-tick. Override via env if needed.
