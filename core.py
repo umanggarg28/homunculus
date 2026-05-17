@@ -23,6 +23,7 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 
+import events
 import tools
 from memory import Memory
 
@@ -252,6 +253,7 @@ class Agent:
         self.history.append({"role": "user", "content": user_message})
         if self.memory is not None:
             self.memory.log_turn("user", user_message)
+        events.emit("user_message", text=events.truncate_preview(user_message))
 
         for _ in range(MAX_TURNS):
             assistant_msg = call_llm(self.history, tools.SCHEMAS, model=self.model)
@@ -274,6 +276,7 @@ class Agent:
                 reply = assistant_msg.get("content") or "(empty response)"
                 if self.memory is not None:
                     self.memory.log_turn("assistant", reply)
+                events.emit("assistant_reply", text=events.truncate_preview(reply))
                 return reply
 
             # Otherwise: run each requested tool, append result, loop.
@@ -281,7 +284,17 @@ class Agent:
                 name = call["function"]["name"]
                 args = json.loads(call["function"]["arguments"])
                 self._log_tool_call(name, args)
+                events.emit(
+                    "tool_call",
+                    name=name,
+                    args=events.truncate_preview(json.dumps(args, ensure_ascii=False)),
+                )
                 result = tools.execute(name, args)
+                events.emit(
+                    "tool_result",
+                    name=name,
+                    result=events.truncate_preview(result),
+                )
                 self.history.append({
                     "role": "tool",
                     "tool_call_id": call["id"],

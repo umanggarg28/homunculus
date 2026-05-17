@@ -1345,3 +1345,144 @@ What it does NOT give you:
 For day-to-day Telegram use, you'll rarely open Obsidian. For
 "what does my agent know about me?" introspection, the graph view is
 genuinely useful.
+
+
+## Phase 6.2 — Live Thinking Feed
+
+### Goal
+
+A browser page that shows what the agent is doing in real time across
+all three services (REPL / heartbeat / Telegram). Every user message,
+every tool call, every tool result, every reply — streamed live.
+
+Open `http://localhost:8765` and watch your agent think. This is the
+single best demo of the whole system.
+
+### The architecture (deliberately boring)
+
+```
+   services emit  →  workspace/_events.jsonl  ←  feed.py tails
+                                                       ↓
+                                                  SSE stream
+                                                       ↓
+                                                browser EventSource
+```
+
+Three observations make this work:
+
+1. **All services already share `workspace/` as a volume.** We don't
+   need a new transport — just a file at a known path inside it.
+2. **JSONL appends are atomic at the kernel level for small writes** —
+   multiple services can append concurrently without corruption.
+3. **SSE = long-lived HTTP response with `text/event-stream`.** No
+   protocol, no upgrade dance — just lines of `data: {...}\n\n` over
+   HTTP.
+
+No Redis, no message broker, no websockets. The shared volume IS the
+message bus.
+
+### Why SSE over WebSockets
+
+| | SSE | WebSockets |
+|---|---|---|
+| Direction | server → client only | bidirectional |
+| Transport | plain HTTP | upgrade handshake |
+| Auto-reconnect | built into browser | hand-rolled |
+| Proxy compatibility | universal | sometimes blocked |
+| Lines of code | ~20 | ~80 |
+
+The feed is one-way (server pushes events to viewer; viewer never sends
+anything). SSE is the right cut — anything else is over-engineering.
+
+### Three small modules
+
+**`events.py`** — single function `emit(event, **fields)` that appends
+one JSON record per call to `workspace/_events.jsonl`. Writes are
+best-effort: any IOError is swallowed so logging can never break the
+agent's actual work. Each service identifies itself via the
+`HOMUNCULUS_SERVICE` env var set in docker-compose.yml (`repl`,
+`heartbeat`, `telegram`).
+
+**`core.py` instrumentation** — four call sites in the agent loop:
+`user_message` before entering the turn, `tool_call` + `tool_result`
+around each tool dispatch, `assistant_reply` when the loop returns
+the final answer. About 6 added lines.
+
+**`feed.py`** — FastAPI app with two endpoints:
+- `GET /` returns the single-page HTML/JS UI inline (no separate
+  static-files setup)
+- `GET /events` returns a `StreamingResponse` whose body is an async
+  generator that polls the JSONL file every 250ms for new lines and
+  yields them in SSE wire format
+
+The HTML is dark-mode monospace, 100 lines including CSS. It uses the
+browser's native `EventSource` API — five lines of JavaScript to
+consume the stream, render colored rows, and auto-scroll.
+
+### Why poll the file instead of inotify
+
+`asyncio.sleep(0.25)` in a loop costs essentially nothing and works
+identically on macOS and Linux. `inotify` is Linux-only; `watchdog`
+is a whole library; SIGIO is obscure. Polling at 4Hz reads the file
+position with one syscall when there's nothing to read. The simplicity
+is worth more than the ~1 syscall/sec overhead.
+
+### Initial tail replay
+
+When a client first connects, the SSE generator replays the last
+**50** events from the file before entering tail mode. So if you open
+the page mid-conversation, you immediately see context — not a blank
+screen waiting for the next event.
+
+Implementation is one `readlines()[-50:]` slurp followed by `seek(0,
+SEEK_END)`. The trick is that the file pointer is positioned at end
+*after* the replay so live tail picks up exactly where the replay
+left off — no gap, no duplicates.
+
+### The port collision
+
+Initially I bound the feed to `0.0.0.0:8000`. Docker reported "port
+already allocated" — another uvicorn (from a different project) was
+on 8000. Moved to **8765** because:
+
+- It's not a default for anything common (8000 is Django/FastAPI
+  default; 3000 is React/Next.js; 5173 is Vite; 8080 is many things).
+- "8765" reads like decreasing digits — memorable.
+- Above 1024 so no root needed.
+
+### What this unlocks for portfolio / demo
+
+You record a 30-second screen capture: open the feed page, send a
+question via Telegram on your phone, and the page lights up:
+
+```
+14:32:01  telegram  user →     what's the weather in tokyo this weekend
+14:32:02  telegram  ↳ web_search   {"query": "Tokyo weather May 16 17 2026"}
+14:32:04  telegram  ↩ web_search   Found 3 results from weather.com...
+14:32:05  telegram  ↳ web_fetch    {"url": "https://weather.com/..."}
+14:32:08  telegram  ↩ web_fetch    Tokyo May 16-17: highs 22-24°C...
+14:32:10  telegram  ← reply        Tokyo's weekend looks warm and dry...
+```
+
+Anyone who watches that immediately gets what an agent is — multi-step
+reasoning made visible. Far stronger than "look, the bot replied
+correctly" because it shows the *process*, not just the output.
+
+### Limitations (deliberate)
+
+- **No filtering / search UI.** It's a chronological feed; that's it.
+- **No event-level replay** — the file is the truth, the UI is just a
+  view. If you want to re-watch yesterday, `cat workspace/_events.jsonl`.
+- **No rotation.** The JSONL grows forever. For now this is fine
+  (each event is ~100 bytes; thousands per day = single-digit MB/yr).
+  Logged in IDEAS.md if it ever matters.
+
+### One subtle thing
+
+The "user_message" event for heartbeat ticks shows the full proactive
+prompt template ("It's a scheduled heartbeat tick…"). That's accurate
+— it really IS the prompt the agent received — but it floods the feed
+on each tick. If this becomes annoying, the fix is either to skip
+emitting `user_message` for non-interactive services or to tag the
+event differently. Left as-is for now; it's honest about what the
+system is doing.

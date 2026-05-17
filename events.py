@@ -1,0 +1,63 @@
+"""
+Event log for the live thinking feed.
+
+Every service (REPL / heartbeat / telegram) writes JSONL events to a
+shared file at workspace/_events.jsonl. The feed service tails that
+file and streams new lines to the browser over SSE.
+
+Why a file: all three services already share the workspace volume.
+No new infrastructure needed. tail -f works for debugging without the
+UI. Survives feed-service downtime — services keep appending; the UI
+catches up when it comes back.
+
+Each line is a single JSON object with at minimum:
+    ts:      ISO 8601 timestamp
+    service: which homunculus process emitted it (repl/heartbeat/telegram)
+    event:   short kind tag (user_message, tool_call, tool_result, assistant_reply)
+plus event-specific fields.
+"""
+
+import json
+import os
+from datetime import datetime
+from pathlib import Path
+
+
+# Where the JSONL lives. Sits in workspace/ next to the agent's other
+# runtime state. Single shared file across all services.
+_EVENTS_PATH = Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
+
+# Identifies which service is emitting. Set via env in docker-compose.yml
+# so the feed UI can label each line. Falls back to "unknown" so missing
+# env doesn't crash anything.
+_SERVICE = os.environ.get("HOMUNCULUS_SERVICE", "unknown")
+
+
+def emit(event: str, **fields) -> None:
+    """Append one JSON event line to the shared events log.
+
+    Best-effort: any write error is swallowed. We never want a logging
+    failure to break the agent's actual work.
+    """
+    record = {
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "service": _SERVICE,
+        "event": event,
+        **fields,
+    }
+    try:
+        with _EVENTS_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        # Logging must never break the caller. Drop the event silently.
+        pass
+
+
+def truncate_preview(text: str, limit: int = 240) -> str:
+    """Shorten a string for display in the feed. Multi-line → single line."""
+    if text is None:
+        return ""
+    s = " ".join(str(text).split())
+    if len(s) <= limit:
+        return s
+    return s[:limit] + f"… (+{len(s) - limit} chars)"
