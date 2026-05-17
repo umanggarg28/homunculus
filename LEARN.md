@@ -1228,3 +1228,120 @@ building Homunculus, the user…" — flooding the index with low-signal
 entries that drown the high-signal ones. Bounding the output count
 forces the model to triage. A small prompt-engineering choice with a
 large quality effect.
+
+
+## Phase 6.1 — Obsidian-compatible Memory Vault
+
+### Goal
+
+Make `memory/` openable as an Obsidian vault — without changing how the
+agent reads or writes memory. Obsidian gives us graph view, backlinks,
+and (with Syncthing/iCloud) mobile read access to every memory and log,
+all for ~50 lines of code.
+
+### What Obsidian actually buys us
+
+Obsidian is a free local-first markdown editor. Open any folder of `.md`
+files as a "vault" and Obsidian renders frontmatter, resolves
+`[[wikilinks]]`, builds backlinks, and draws a graph view of how notes
+connect. Their mobile app reads the same folder if it's synced (iCloud,
+Dropbox, Syncthing).
+
+This is **not** a behavioral change for the agent. The agent still
+reads `MEMORY.md`, calls `read_file`, calls `remember()` exactly as
+before. Obsidian is purely a viewing/exploration layer on top of the
+same files. Nothing in `core.py`, `heartbeat.py`, or `telegram_bot.py`
+needed to change.
+
+### The three concrete changes
+
+**1. Dual-link MEMORY.md entries.** Each index line now carries both a
+standard markdown link AND an Obsidian `[[wikilink]]`:
+
+```
+- [User Role](./user_user_role.md) — Senior PM, ... [[user_user_role]]
+```
+
+The markdown link is for our regex parser and plain-text viewers. The
+wikilink is what Obsidian's backlink resolver picks up. Two link styles,
+one line — neither breaks the other. Critically, the existing
+`_annotate_entry` regex still matches because it parses the markdown
+link form and treats the rest as description.
+
+**2. Optional `related` arg on `remember()`.** The tool now accepts an
+optional `related: list[str]` of memory slugs. We:
+
+- Store them in YAML frontmatter (`related: [user_role, project_homunculus]`)
+- Append a `## Related` section at the bottom of the body with
+  `[[wikilinks]]` so the graph view shows the edges
+
+We deliberately keep `related` **optional** so the agent can save
+quick memories without thinking about graph topology. When it
+naturally connects two things, it links them; otherwise no friction.
+
+**3. Auto-generated `memory/README.md`.** First time `Memory.__init__`
+runs, it drops a schema doc into `memory/README.md` explaining the
+four memory types, the layout, and how to use the folder as a vault.
+
+Obsidian sorts files alphabetically, so `README.md` appears near the
+top of the file list. Whoever opens the vault (you on your phone, a
+future LLM session, a collaborator) sees the schema explained before
+they see any individual memory. This is borrowed directly from
+Karpathy's LLM-wiki pattern (`CLAUDE.md` at the root explains the vault
+to any agent that visits).
+
+The README is created only if it doesn't exist — your local edits stick.
+
+### What we borrowed from Karpathy's wiki pattern
+
+Looked at an existing personal wiki implementing Karpathy's "LLM Wiki"
+idea: typed folders (`concepts/`, `entities/`, `analyses/`, `sources/`),
+an `index.md`, append-only `log.md`, wikilink-first navigation, and a
+`CLAUDE.md` schema doc at the root.
+
+Borrowed:
+- **Schema doc at the root** (our `README.md` plays this role)
+- **`[[wikilink]]` style everywhere** for Obsidian graph
+- **Explicit `Related:` cross-references** as a frontmatter field
+
+Did NOT borrow:
+- **Typed folders.** Our memories are already typed via filename prefix
+  (`user_`, `feedback_`, `project_`, `reference_`) and frontmatter
+  `type:`. Adding folder buckets would duplicate that classification.
+- **`raw/` ingest queue.** That pattern is for compiling external docs
+  into knowledge pages. Homunculus's memory comes from live
+  conversation, not document ingestion — different shape.
+
+### How to use the vault
+
+1. Install [Obsidian](https://obsidian.md) (free).
+2. "Open folder as vault" → point at `homunculus/workspace/memory/`.
+3. The graph view shows memories connected by `[[wikilinks]]`.
+4. For mobile: enable any folder-sync solution on `workspace/memory/`
+   (iCloud Drive, Dropbox, Syncthing) and open the same folder in
+   Obsidian Mobile.
+
+`.obsidian/` is gitignored — your local Obsidian config doesn't
+pollute the repo.
+
+### The honest assessment
+
+Obsidian doesn't make Homunculus smarter. It doesn't add new
+capabilities. It's a viewing layer.
+
+What it DOES give you:
+- A nice mobile-read interface for memory (free, no servers, no auth)
+- A graph view that occasionally surfaces non-obvious connections
+- Better markdown rendering than VS Code's raw view
+- A future-proofing benefit: the day you want to leave Homunculus,
+  your memory is still just a folder of markdown files
+
+What it does NOT give you:
+- A way to write memory from the Obsidian app (one-way only — agent
+  writes, you read)
+- Automatic sync (you provide the sync layer)
+- Any change in agent behavior
+
+For day-to-day Telegram use, you'll rarely open Obsidian. For
+"what does my agent know about me?" introspection, the graph view is
+genuinely useful.

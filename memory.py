@@ -36,6 +36,56 @@ ALLOWED_TYPES = {"user", "feedback", "project", "reference"}
 
 _INDEX_HEADER = "# Memory\n\nThis index lists every durable fact I've remembered. Full bodies live in the linked files; use read_file to fetch one when relevant.\n\n"
 
+# Schema doc dropped into memory/README.md on first init. Renders nicely
+# in Obsidian (which sorts files alphabetically — README appears first).
+# Explains the vault layout to any human who opens the folder and to any
+# future LLM session that reads it.
+_README_CONTENT = """# Homunculus Memory Vault
+
+This folder is Homunculus's long-term memory. It's a plain folder of
+markdown files — open it directly in any editor, or open it as a vault
+in [Obsidian](https://obsidian.md) to get graph view, backlinks, and
+mobile access via the Obsidian mobile app.
+
+## Layout
+
+```
+memory/
+  MEMORY.md              # index — every memory in one line, with [[wikilinks]]
+  README.md              # this file
+  user_<slug>.md         # facts about the user (role, preferences)
+  feedback_<slug>.md     # collaboration rules the user has set
+  project_<slug>.md      # ongoing work context
+  reference_<slug>.md    # pointers to external resources
+  logs/YYYY/MM/<date>.md # daily conversation logs (append-only)
+```
+
+## Memory types
+
+| Type        | What it captures                                              |
+|-------------|---------------------------------------------------------------|
+| `user`      | Who the user is, role, preferences, expertise                 |
+| `feedback`  | Rules the user has set ("don't do X", "always do Y")          |
+| `project`   | Current work, deadlines, in-progress decisions (decays fast)  |
+| `reference` | Pointers to external resources (Linear projects, dashboards)  |
+
+Each file has YAML frontmatter (`name`, `description`, `type`, optional
+`related`) followed by the memory body. The `related:` field lists
+other memory slugs this entry connects to, surfaced as `[[wikilinks]]`
+at the bottom of the body so Obsidian's graph picks them up.
+
+## Using as an Obsidian vault
+
+1. Install Obsidian (free, local-first).
+2. "Open folder as vault" → point at this `memory/` directory.
+3. The graph view will show how memories link via `[[wikilinks]]`.
+4. For mobile: enable iCloud / Syncthing / Dropbox sync on this folder,
+   then open the same folder in Obsidian mobile.
+
+Obsidian's per-user config (`.obsidian/`) is gitignored — it's safe to
+configure locally without polluting the repo.
+"""
+
 
 class Memory:
     """Disk-backed memory store. One instance per agent."""
@@ -46,6 +96,10 @@ class Memory:
         self.index_path = root / "MEMORY.md"
         if not self.index_path.exists():
             self.index_path.write_text(_INDEX_HEADER, encoding="utf-8")
+        # Schema doc — created once. Never overwritten so user edits stick.
+        readme_path = root / "README.md"
+        if not readme_path.exists():
+            readme_path.write_text(_README_CONTENT, encoding="utf-8")
 
     # ---- read side -----------------------------------------------------
 
@@ -221,12 +275,24 @@ class Memory:
 
     # ---- write side ----------------------------------------------------
 
-    def remember(self, name: str, description: str, type: str, body: str) -> str:
+    def remember(
+        self,
+        name: str,
+        description: str,
+        type: str,
+        body: str,
+        related: list[str] | None = None,
+    ) -> str:
         """Save a memory entry and update the index. Returns a status string.
 
         If a memory file with the same generated filename already exists,
         we overwrite it — letting the agent "update" memories rather than
         accumulate duplicates.
+
+        `related` is an optional list of memory slugs (filenames without
+        .md extension) that this entry connects to. Stored in frontmatter
+        AND rendered as a [[wikilink]] section at the bottom of the body
+        so Obsidian's graph view picks up the relationships.
         """
         if type not in ALLOWED_TYPES:
             return f"ERROR: type must be one of {sorted(ALLOWED_TYPES)}, got '{type}'"
@@ -235,8 +301,26 @@ class Memory:
         filename = f"{type}_{slug}.md"
         path = self.root / filename
 
+        # Normalize related: drop empty/None, strip .md suffix if the LLM
+        # included it, drop any self-reference.
+        rel_clean: list[str] = []
+        for r in related or []:
+            r = (r or "").strip()
+            if r.endswith(".md"):
+                r = r[:-3]
+            if r and r != filename[:-3]:
+                rel_clean.append(r)
+
+        frontmatter_related = ""
+        related_section = ""
+        if rel_clean:
+            frontmatter_related = "related: [" + ", ".join(rel_clean) + "]\n"
+            wikilinks = "\n".join(f"- [[{r}]]" for r in rel_clean)
+            related_section = f"\n\n## Related\n{wikilinks}"
+
         path.write_text(
-            f"---\nname: {name}\ndescription: {description}\ntype: {type}\n---\n\n{body.strip()}\n",
+            f"---\nname: {name}\ndescription: {description}\ntype: {type}\n"
+            f"{frontmatter_related}---\n\n{body.strip()}{related_section}\n",
             encoding="utf-8",
         )
         self._upsert_index_entry(name, description, filename)
@@ -286,8 +370,14 @@ class Memory:
         return f"- [{title}](./{filename}) *({age}{stale})* — {desc}"
 
     def _upsert_index_entry(self, name: str, description: str, filename: str) -> None:
-        """Add or replace this entry's line in MEMORY.md."""
-        line = f"- [{name}](./{filename}) — {description}"
+        """Add or replace this entry's line in MEMORY.md.
+
+        Each line carries BOTH a markdown link (for plain-text viewers and
+        our own parsing) and an Obsidian [[wikilink]] (for Obsidian's
+        backlink resolver / graph view). Two link styles, one line.
+        """
+        stem = filename[:-3] if filename.endswith(".md") else filename
+        line = f"- [{name}](./{filename}) — {description} [[{stem}]]"
         current = self.index_path.read_text(encoding="utf-8")
         # Drop any existing line referencing this filename (for upserts).
         kept = [
