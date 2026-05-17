@@ -26,6 +26,9 @@ services:
     stdin_open: true            # Keep stdin open (so input() works)
     tty: true                   # Allocate a TTY (so prompts render nicely)
     env_file: .env              # Load HOMUNCULUS_API_KEY etc. from .env
+    environment:
+      # Identifies which service emitted each event in the live feed.
+      HOMUNCULUS_SERVICE: repl
     working_dir: /app/workspace # The agent's "current directory" inside the container
     volumes:
       # Mount a host directory as the agent's workspace, so files the
@@ -41,6 +44,8 @@ services:
     build: .
     image: homunculus:phase1    # Same image — heartbeat reuses everything
     env_file: .env
+    environment:
+      HOMUNCULUS_SERVICE: heartbeat
     working_dir: /app/workspace
     volumes:
       - ./workspace:/app/workspace  # Same workspace mount → shared memory
@@ -56,6 +61,8 @@ services:
     build: .
     image: homunculus:phase1
     env_file: .env
+    environment:
+      HOMUNCULUS_SERVICE: telegram
     working_dir: /app/workspace
     volumes:
       - ./workspace:/app/workspace  # Same workspace mount → shared memory
@@ -63,3 +70,23 @@ services:
     command: ["uv", "run", "--project", "/app", "python", "/app/telegram_bot.py"]
     restart: unless-stopped
     # No stdin_open/tty — daemon that long-polls Telegram for messages.
+
+  feed:
+    build: .
+    image: homunculus:phase1
+    environment:
+      # The feed itself emits nothing — but core.py imports events.py
+      # which reads this. Set for consistency.
+      HOMUNCULUS_SERVICE: feed
+    working_dir: /app/workspace  # so _events.jsonl resolves to workspace/_events.jsonl
+    volumes:
+      - ./workspace:/app/workspace  # read the shared events file
+    # Bind to 8765 on the host. Open http://localhost:8765 in a browser
+    # to watch all services think in real time. (8000 is a popular dev
+    # port and tends to collide — 8765 avoids common defaults.)
+    ports:
+      - "8765:8765"
+    command: ["uv", "run", "--project", "/app", "uvicorn", "feed:app", "--host", "0.0.0.0", "--port", "8765", "--app-dir", "/app"]
+    restart: unless-stopped
+    # No docker.sock — the feed service doesn't run python_exec.
+    # No .env — it doesn't need the LLM API key either.
