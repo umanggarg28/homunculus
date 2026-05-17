@@ -59,10 +59,81 @@ Important rules:
 """
 
 
+REFLECTION_PROMPT_TEMPLATE = """It's a daily REFLECTION tick — no user is
+talking to you right now. The current date is {today}.
+
+Your task: review what happened yesterday ({yesterday}) and learn from it.
+
+Step 1 — Read yesterday's log file:
+    read_file("memory/logs/{yesterday_path}.md")
+(If the file doesn't exist, yesterday was quiet — say so in one line and stop.)
+
+Step 2 — Look for PATTERNS worth carrying forward:
+- Did the user correct you on something? → save as a "feedback" memory.
+- Did the user reveal an ongoing goal, deadline, or project state? →
+  save as a "project" memory.
+- Did you make a mistake (wrong tool, wrong assumption) that a future
+  you should avoid? → save as a "feedback" memory phrased as a rule.
+- Did the user confirm a non-obvious choice worked well? → save as a
+  "feedback" memory so future-you keeps doing it.
+
+Step 3 — Save AT MOST 3 new memories via remember(). Fewer is fine.
+Skip anything trivial or already covered by an existing memory in your
+index. Quality over quantity.
+
+Step 4 — Reply with a ONE-LINE summary of what you learned (or
+"nothing notable from yesterday"). Then stop.
+
+Important:
+- Reading yesterday's log is the ONLY log read you should do this tick.
+  Don't chain into older logs.
+- Don't write to workspace files. This tick is for memory only.
+- Don't call notify(). Reflections are silent.
+- shell_exec is disabled.
+"""
+
+
+def _today_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def _yesterday_iso_and_path() -> tuple[str, str]:
+    """Return (YYYY-MM-DD, YYYY/MM/YYYY-MM-DD) for yesterday."""
+    y = datetime.now() - timedelta(days=1)
+    iso = y.strftime("%Y-%m-%d")
+    path_form = y.strftime("%Y/%m/%Y-%m-%d")
+    return iso, path_form
+
+
 def tick(memory: Memory, model: str | None) -> None:
-    """One heartbeat iteration — fresh agent, one prompt, then discard."""
+    """One heartbeat iteration — fresh agent, one prompt, then discard.
+
+    If reflection is due (we haven't reflected today yet) AND there's a
+    yesterday to look at, this tick runs the reflection prompt instead
+    of the normal proactive prompt. The marker is updated on success so
+    we don't reflect twice in the same calendar day.
+    """
+    today = _today_str()
+    last = memory.get_last_reflection_date()
+    do_reflection = last is None or last < today
+
     agent = Agent(memory=memory, model=model)
     now_iso = datetime.now().isoformat(timespec="seconds")
+
+    if do_reflection:
+        yesterday_iso, yesterday_path = _yesterday_iso_and_path()
+        print(f"\n[heartbeat] REFLECTION tick at {now_iso} "
+              f"(reviewing {yesterday_iso}, model={agent.model})", flush=True)
+        prompt = REFLECTION_PROMPT_TEMPLATE.format(
+            today=today,
+            yesterday=yesterday_iso,
+            yesterday_path=yesterday_path,
+        )
+        response = agent.chat(prompt)
+        memory.set_last_reflection_date(today)
+        print(f"[agent] {response}", flush=True)
+        return
+
     print(f"\n[heartbeat] tick at {now_iso} (model={agent.model})", flush=True)
     prompt = HEARTBEAT_PROMPT_TEMPLATE.format(now_iso=now_iso)
     response = agent.chat(prompt)

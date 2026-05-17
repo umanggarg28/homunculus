@@ -184,6 +184,28 @@ class Memory:
             self.next_tick_path.unlink()
         return value or None
 
+    # ---- self-improvement / daily reflection ---------------------------
+    # The heartbeat runs at most one reflection per calendar day. We
+    # remember the last reflection date as a plain YYYY-MM-DD string in
+    # memory/_last_reflection.txt so the daemon can decide whether the
+    # next tick should reflect (review yesterday's logs and save feedback
+    # memories) or run a normal proactive tick.
+
+    @property
+    def last_reflection_path(self) -> Path:
+        return self.root / "_last_reflection.txt"
+
+    def get_last_reflection_date(self) -> str | None:
+        """Return the YYYY-MM-DD string of the last reflection, or None."""
+        if not self.last_reflection_path.exists():
+            return None
+        value = self.last_reflection_path.read_text(encoding="utf-8").strip()
+        return value or None
+
+    def set_last_reflection_date(self, date_str: str) -> None:
+        """Mark a YYYY-MM-DD as having had its reflection done."""
+        self.last_reflection_path.write_text(date_str.strip(), encoding="utf-8")
+
     def recent_log_paths(self, days: int = 3) -> list[Path]:
         """Return paths to log files from the last `days` days (newest first).
 

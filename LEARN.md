@@ -1085,3 +1085,146 @@ when revisiting would be worthwhile.
   directory. Files are shared bidirectionally in real time.
 - **Container sandbox.** Running the agent inside Docker so `shell_exec`'s
   blast radius is the container's filesystem, not your host.
+
+
+## Phase 5.4 — Self-improvement Loop
+
+### Goal
+
+Once per day, the agent reviews **its own behavior from yesterday** and
+writes itself feedback/project memories. No human in the loop, no new
+service, no new external dependency. It learns from its own logs.
+
+This is the meta layer: the agent is already producing artifacts
+(daily logs, tool calls, replies) and already has a way to persist
+learning (`remember()`). All that's missing is a recurring trigger that
+says "look back, decide what's worth keeping, save it."
+
+### The mental model
+
+A normal heartbeat tick is forward-looking — "what should I do *now*?"
+A reflection tick is backward-looking — "what did I do *yesterday*, and
+what should I learn from it?" Same Agent class, same tools, same memory
+instance — different prompt, different scope.
+
+### Why piggyback on the heartbeat instead of a separate service
+
+We considered a dedicated `reflector` daemon in docker-compose. Tempting
+because the *concept* is clean: "this service does daily learning." But:
+
+- We'd duplicate ~30 lines of daemon scaffolding (env loading, error
+  handling, sleep loop)
+- We'd have a 4th service to start/stop/monitor
+- The heartbeat already has Agent + tools + memory wired up
+
+Reusing the heartbeat costs ~40 lines of code total. The trade-off is
+that one tick per day will be a reflection instead of a normal tick —
+acceptable, since reflection IS the useful work for that tick.
+
+### The trigger logic: simpler than cron
+
+Cron-style scheduling for "once per day at 3am" would need a cron
+library, timezone reasoning, "did I miss yesterday's run because the
+daemon was down?" recovery logic, etc.
+
+Instead: at the start of each tick, read `memory/_last_reflection.txt`.
+If the stored date is older than today (or missing entirely), this
+tick reflects. Otherwise, normal tick.
+
+Consequences:
+- **At most one reflection per calendar day** — the marker is set on
+  success.
+- **Self-healing** — if the daemon was down for 3 days, the next tick
+  catches up automatically (today's date > stored date, so reflect).
+- **No timezone math** — we use the host's local date string.
+- **No cron config** — the existing 10-min heartbeat schedule is the
+  carrier wave; the first tick of each new calendar day rides on it.
+
+### The marker file
+
+`memory/_last_reflection.txt` is a single line: `YYYY-MM-DD`. That's it.
+
+```python
+def get_last_reflection_date(self) -> str | None: ...
+def set_last_reflection_date(self, date_str: str) -> None: ...
+```
+
+We compare strings, not datetime objects. `"2026-05-16" < "2026-05-17"`
+works because ISO date strings sort lexicographically. Worth knowing as
+a small ergonomic win — you can keep "is yesterday before today" logic
+to a one-line `str` comparison anywhere in the codebase.
+
+### The reflection prompt
+
+Different shape from a normal heartbeat. It tells the agent exactly
+which file to read (yesterday's log), what to look for (corrections,
+mistakes, confirmations, ongoing project state), and what to do with
+findings (`remember()` at most 3 things). It forbids workspace writes
+and `notify()` so the reflection is silent — pure memory work.
+
+The four "patterns worth carrying forward" categories map directly to
+our existing memory `type` values:
+- corrections → `feedback`
+- non-obvious confirmations → `feedback`
+- ongoing project state → `project`
+- past-mistake-don't-repeat → `feedback`
+
+This makes the prompt write directly to the typed-memory schema the
+agent already knows.
+
+### The branch inside `tick()`
+
+```python
+today = _today_str()
+last = memory.get_last_reflection_date()
+do_reflection = last is None or last < today
+
+agent = Agent(memory=memory, model=model)
+if do_reflection:
+    # build reflection prompt, run, set marker, return
+else:
+    # build normal heartbeat prompt, run
+```
+
+Marker is set **after** `agent.chat()` returns successfully. If the
+chat raises mid-tick (rate limit, network blip), the marker stays
+stale and the next tick retries the reflection. Self-healing.
+
+### What we didn't add
+
+- **No reading older logs.** The prompt explicitly says "don't chain
+  into older logs." Reflection is meant to be cheap and bounded — one
+  log file per pass. Recurring patterns will naturally accumulate as
+  memories over multiple days, so we don't need to re-scan history.
+- **No diff against existing memories.** The prompt says "skip anything
+  trivial or already covered by an existing memory in your index."
+  We trust the index (already in system prompt) to dedupe at the LLM
+  level rather than building deterministic dedup.
+- **No quality scoring.** No reranking, no "did this memory help"
+  feedback. If memories pile up uselessly, we'll address it then.
+
+### The autonomy story
+
+Phase 1: it could think and call tools.
+Phase 2: it could remember.
+Phase 3: it could act unprompted.
+Phase 4: it could be reached from anywhere.
+Phase 5.1: it could schedule itself.
+Phase 5.2: it could research.
+Phase 5.3: it could compute.
+**Phase 5.4: it learns from itself.**
+
+The loop is now genuinely closed — the agent's behavior today is shaped
+by what it observed about yesterday's behavior. Not training in the ML
+sense (no weight updates), but learning in the practical sense
+(persistent rules saved to typed memory that influence future prompts).
+
+### One subtle thing
+
+The reflection prompt's instruction "save at most 3 memories" is a
+**deliberate cap**. Without it, models will tend to over-summarize —
+"the user prefers terse replies, the user likes Python, the user is
+building Homunculus, the user…" — flooding the index with low-signal
+entries that drown the high-signal ones. Bounding the output count
+forces the model to triage. A small prompt-engineering choice with a
+large quality effect.
