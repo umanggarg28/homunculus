@@ -64,6 +64,7 @@ You have these tools available:
 - write_file(path, content): write text to a file (overwrites)
 - shell_exec(command): run a shell command (user must approve each one)
 - remember(name, description, type, body): save a durable fact to long-term memory
+- notify(text): push a message to the user via Telegram. INTERRUPTS them — use sparingly, only for time-sensitive things (a deadline tomorrow, a question that blocks progress). Routine summaries belong in files, not notifications.
 
 Memory works like this: every session you receive a "Your memory" section
 below containing an index of everything you've remembered before. Each
@@ -179,8 +180,29 @@ class Agent:
         self.history: list[dict] = [{"role": "system", "content": full_prompt}]
 
     def reset(self) -> None:
-        """Wipe history except for the system prompt."""
+        """Wipe history except for the system prompt.
+
+        Also clears any saved session on disk, so a future restart
+        doesn't restore the cleared turns.
+        """
         self.history = self.history[:1]
+        if self.memory is not None:
+            self.memory.clear_session()
+
+    def restore_session(self) -> int:
+        """Opt-in: load previously-saved conversation history.
+
+        Callers that want cross-session continuity (REPL, Telegram bot)
+        call this right after __init__. Callers that want fresh-each-
+        time semantics (heartbeat) simply don't call it.
+
+        Returns the number of messages restored (0 if no saved session).
+        """
+        if self.memory is None:
+            return 0
+        saved = self.memory.load_session()
+        self.history.extend(saved)
+        return len(saved)
 
     def reflect(self) -> str:
         """Ask the LLM to review the conversation and save anything worth
