@@ -103,7 +103,7 @@ class Memory:
 
     # ---- read side -----------------------------------------------------
 
-    def load_index(self, max_entries: int = 30) -> str:
+    def load_index(self, max_entries: int = 15) -> str:
         """Return MEMORY.md content with age annotations on each entry.
 
         We don't store ages in the file (they'd be stale instantly). Instead

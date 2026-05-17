@@ -1486,3 +1486,208 @@ on each tick. If this becomes annoying, the fix is either to skip
 emitting `user_message` for non-interactive services or to tag the
 event differently. Left as-is for now; it's honest about what the
 system is doing.
+
+
+## Phase 6.3 — Full Web UI (Mini scope + status panel + streaming)
+
+### Goal
+
+A single browser tab that gives you:
+- **Chat** with the agent, replies streaming token-by-token
+- **Live thinking feed** (Phase 6.2, now under `/feed`)
+- **Memory browser** — list of typed memories, click to read body
+- **Log viewer** — daily log files, newest first, click to read
+- **Status panel** — per-service liveness pill in the header
+
+All on `http://localhost:8765`. No build step. FastAPI + inline HTML/JS,
+same stack as the feed. ~600 lines total in `feed.py`.
+
+### The honest hard part: streaming + tool use
+
+Streaming a plain chat reply is trivial — Groq sends
+`data: {"delta": {"content": "Hello"}}` chunks; you forward each one.
+
+But an agent turn might be a **tool call**, not a text reply, and tool
+calls *also* arrive as deltas:
+
+```
+data: {"delta":{"tool_calls":[{"index":0,"id":"call_abc","function":{"name":"web_search","arguments":""}}]}}
+data: {"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"q"}}]}}
+data: {"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\":\\"tokyo\\"}"}}]}}
+```
+
+You only know after the stream finishes whether this turn was a tool
+call or a final reply.
+
+**Our compromise** (`call_llm_stream` in `core.py`):
+
+- Yield content deltas immediately as `("content", "<text>")` — these
+  go straight to the browser.
+- Accumulate tool_call deltas silently into a dict keyed by `index`.
+- At `[DONE]`, yield `("done", <assembled_message>)` so the caller can
+  inspect tool_calls and dispatch them.
+
+If the turn was a tool call, the user sees nothing arrive (content_acc
+stays empty), then briefly waits while the tool runs (visible in the
+live feed), then the *next* turn's reply streams normally. If the turn
+was a final reply, words appear as they're generated.
+
+This is the cleanest cut I could find. The alternative — non-streaming
+detection turn followed by a second streaming turn — doubles latency
+and token cost on every final reply for no real win.
+
+### Architecture
+
+```
+   browser ⇄ feed:8765
+              │
+              ├── GET /          → chat page (sends POST /chat/send)
+              ├── POST /chat/send → SSE stream of reply tokens
+              ├── GET /feed       → live thinking feed page
+              ├── GET /events     → SSE stream from _events.jsonl
+              ├── GET /memory     → list memory entries
+              ├── GET /memory/<f> → render one memory file
+              ├── GET /logs       → list daily logs
+              ├── GET /logs/<p>   → render one log file
+              └── GET /status     → JSON per-service liveness
+```
+
+The feed service now reads the workspace volume (existing) **plus** the
+Docker socket (new — chat may invoke `python_exec`) **plus** the .env
+file (new — needs the LLM API key for chat). Three services were
+already running with these mounts; the feed joins them.
+
+### Why a shared session with REPL/Telegram
+
+The chat agent calls `agent.restore_session()` at startup and
+`memory.save_session()` after each turn. This is the same
+`_session.json` the REPL and Telegram bot use. Result: you can start a
+thought on the web, continue on your phone, finish in the terminal.
+
+Concurrency risk: if you message Telegram while typing on the web at
+literally the same second, one save wins and the other gets clobbered.
+Realistically you won't be on two surfaces simultaneously. Logged as a
+non-issue.
+
+### Status panel without infrastructure
+
+Service health detection without adding cron pings or container probes:
+**read the freshness of each service's most recent event in
+`_events.jsonl`**.
+
+- Last event < 12 min ago → **live**
+- < 60 min ago → **idle**
+- ≥ 60 min ago → **stale**
+- Never seen → **unknown**
+
+The feed page polls `/status` every 10s; the four pills in the header
+update colors based on the response. Zero new infrastructure — just
+recency-of-existing-events. Heartbeat naturally emits at least every
+10 min (its tick interval), so it shows live during normal operation;
+Telegram emits only when messaged, so it sits at "idle" most of the
+time (correct semantically — the bot is healthy but doing nothing).
+
+The `_safe_subpath` helper rejects path traversal attempts
+(`../../../etc/passwd` style) on the memory and log routes — table
+stakes for any HTTP server that opens user-supplied paths.
+
+### No build step is a feature
+
+Total client code: ~150 lines of vanilla JS across two pages, no
+imports, no transpiler, no `node_modules`. The chat client is one
+`fetch()` to `/chat/send` plus a `ReadableStream` reader that splits
+on `\\n\\n` boundaries and appends `data:` payloads to the reply
+element. That's the entire streaming UX.
+
+If we ever need richer interactions (memory edit, multi-session, file
+upload), then it's time for a real framework. Today it would be
+ceremony.
+
+### What's deliberately NOT here
+
+- **No auth.** Localhost only. If the user ever wants to expose this
+  beyond localhost, the right move is an SSH tunnel or a reverse proxy
+  with auth in front — not baking auth into the app.
+- **No memory editing.** The browser shows memory; `remember()` writes
+  it. Mixing the two creates conflict scenarios with the agent.
+- **No multi-conversation.** Single shared session across all
+  surfaces, like Telegram. If you need parallel conversations, that's
+  a future iteration.
+- **No rich markdown rendering in chat** — `white-space: pre-wrap` and
+  done. If the agent writes a list, you see the dashes. Authentic to
+  the underlying text and avoids markdown-rendering edge cases.
+
+### Subjective: when to use which surface
+
+- **Telegram** — when you're away from your laptop or want push
+  notifications.
+- **REPL** — when you're debugging the agent itself; raw print
+  statements show in `docker compose logs`.
+- **Web UI** — when you want chat + observability in the same view,
+  on a laptop. Best for "agent does a multi-step research task and I
+  want to watch the tool calls flow through the feed while the reply
+  streams."
+
+The three are intentionally redundant. Each surface has a moment
+where it's the right one.
+
+
+### Token-saving package (bundled in this PR)
+
+The screenshot in dev — 8K TPM exhausted on the second "hi" turn —
+forced the issue: our base payload (tool schemas + system prompt +
+memory index + history) was ~3K tokens before the user typed
+anything. We're on Groq's free tier (8K TPM for gpt-oss-120b), so two
+turns and we're throttled.
+
+Six concrete fixes shipped together so 6.3 is actually usable:
+
+1. **Heartbeat default 10min → 60min.** The daemon was burning ~3K
+   tokens every 10 minutes whether or not it did anything useful. 60
+   minutes is enough cadence for a personal assistant. Override via
+   `HEARTBEAT_INTERVAL_MINUTES`.
+
+2. **`COMPACT_TRIGGER` 30 → 15, `COMPACT_KEEP_RECENT` 12 → 6.**
+   History compacts much sooner. The conversational quality cost is
+   minor (the compaction summary preserves the gist of older turns);
+   the token saving is large because every turn includes the entire
+   history.
+
+3. **Memory index cap 30 → 15.** Smaller fixed cost per turn. Older
+   memories still on disk, still discoverable via `read_file` when the
+   agent specifically wants one — they just don't auto-appear in every
+   prompt.
+
+4. **Tool schema descriptions trimmed ~30%.** Removed redundant context
+   that the LLM didn't need (e.g. the `remember()` description used to
+   re-explain memory types that the system prompt already covers).
+   Kept the constraints that actually shape behavior (python is
+   sandboxed, notify interrupts, web_search must cite URLs).
+
+5. **Provider fallback on 429.** New optional env vars
+   (`HOMUNCULUS_API_KEY_FALLBACK`, `_URL_FALLBACK`, `_MODEL_FALLBACK`)
+   that point at Gemini's OpenAI-compatible endpoint by default. When
+   Groq returns 429, we transparently try Gemini instead. Gemini's
+   free tier is **1M TPM** vs Groq's 8K — 125x headroom — so it
+   absorbs bursts that would otherwise throttle us.
+
+   Caveat: Gemini's OpenAI-compatibility layer is known to occasionally
+   misformat tool calls on complex schemas. For final-text turns it's
+   reliable; for tool-call turns it might emit a garbled call that we
+   recover from. Acceptable trade for "user doesn't see 429".
+
+6. **`.env.example` documents the fallback** with a link to
+   https://aistudio.google.com/apikey (free key, no card).
+
+### The honest takeaway on free-tier agentic systems
+
+Even an "efficient" agent with tool use and memory eats ~3K tokens per
+turn just for context. On a free tier with 8K TPM, that's about 2.5
+turns/minute headroom — fine for one user typing, painful for
+heartbeat + telegram + web chat all sharing the budget.
+
+The fallback provider strategy buys real headroom without changing
+quality on the happy path. Long-term, if this matters more, the next
+move is either paying for higher Groq tier (~$10/mo) or running a
+local model via Ollama (free, slower, no rate limits — but the user
+explicitly ruled out local for this project).

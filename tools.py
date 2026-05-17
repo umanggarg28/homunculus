@@ -416,12 +416,7 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "remember",
-            "description": (
-                "Save a durable fact to long-term memory. Use for things "
-                "worth remembering across sessions (user preferences, "
-                "project context, feedback rules, references). Not for "
-                "ephemeral conversation state."
-            ),
+            "description": "Save a durable fact to long-term memory (persists across sessions). Not for ephemeral state.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -436,13 +431,7 @@ SCHEMAS = [
                     "related": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": (
-                            "Optional. Memory slugs this entry connects to "
-                            "(filenames without .md), e.g. "
-                            "['user_role', 'project_homunculus']. Renders as "
-                            "Obsidian [[wikilinks]] so the graph view shows "
-                            "the relationship."
-                        ),
+                        "description": "Optional. Related memory slugs (filenames without .md).",
                     },
                 },
                 "required": ["name", "description", "type", "body"],
@@ -453,14 +442,7 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "python",
-            "description": (
-                "Run Python code in a sandboxed container (no network, "
-                "256MB RAM cap, 0.5 CPU, read-only filesystem, 30s "
-                "timeout, fresh per call). Returns stdout/stderr. Use "
-                "for math, parsing, computation, verifying snippets, "
-                "exploring data. CANNOT reach the network or persist "
-                "files — pass data in via the code itself."
-            ),
+            "description": "Run Python in a sandbox (no network, 30s, ephemeral). Returns stdout/stderr. Pass data via the code itself.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -477,12 +459,7 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": (
-                "Search the web. Returns up to 5 results (titles, URLs, "
-                "content snippets) plus an answer summary when available. "
-                "Use for current/external info not in your memory. Cite "
-                "URLs in your reply when you use search results."
-            ),
+            "description": "Search the web. Returns ~5 results + summary. Cite full URLs in your reply when you use results.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -496,11 +473,7 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "web_fetch",
-            "description": (
-                "Download a specific URL and return its main text "
-                "content. Use to read a full article identified by "
-                "web_search. Output is capped at ~16K chars."
-            ),
+            "description": "Fetch a URL and return its main text. Capped ~16K chars.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -514,13 +487,7 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "schedule_next_tick",
-            "description": (
-                "Tell the heartbeat daemon when to wake up next. Only "
-                "meaningful when called from the heartbeat. Pass an ISO "
-                "8601 datetime (e.g. '2026-05-18T08:00:00'), in local "
-                "time, within 24h of now. If not called, the heartbeat "
-                "falls back to its default interval."
-            ),
+            "description": "Set heartbeat's next wake time. ISO 8601 local datetime, within 24h. Heartbeat-only.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -537,13 +504,7 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "notify",
-            "description": (
-                "Push a proactive message to the user via Telegram. "
-                "INTERRUPTS the user — only use for genuinely time-"
-                "sensitive things (a deadline tomorrow, a question that "
-                "blocks further work). Routine summaries belong in files, "
-                "not notifications."
-            ),
+            "description": "Push a Telegram message. INTERRUPTS the user — use only for time-sensitive things. Routine summaries belong in files.",
             "parameters": {
                 "type": "object",
                 "properties": {

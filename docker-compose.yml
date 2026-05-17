@@ -74,19 +74,17 @@ services:
   feed:
     build: .
     image: homunculus:phase1
+    env_file: .env              # Phase 6.3: chat endpoint needs the LLM API key
     environment:
-      # The feed itself emits nothing — but core.py imports events.py
-      # which reads this. Set for consistency.
       HOMUNCULUS_SERVICE: feed
     working_dir: /app/workspace  # so _events.jsonl resolves to workspace/_events.jsonl
     volumes:
-      - ./workspace:/app/workspace  # read the shared events file
+      - ./workspace:/app/workspace  # read the shared events file + memory
+      - /var/run/docker.sock:/var/run/docker.sock  # chat may call python_exec
     # Bind to 8765 on the host. Open http://localhost:8765 in a browser
-    # to watch all services think in real time. (8000 is a popular dev
-    # port and tends to collide — 8765 avoids common defaults.)
+    # for the full web UI. (8000 is a popular dev port and tends to
+    # collide — 8765 avoids common defaults.)
     ports:
       - "8765:8765"
     command: ["uv", "run", "--project", "/app", "uvicorn", "feed:app", "--host", "0.0.0.0", "--port", "8765", "--app-dir", "/app"]
     restart: unless-stopped
-    # No docker.sock — the feed service doesn't run python_exec.
-    # No .env — it doesn't need the LLM API key either.
