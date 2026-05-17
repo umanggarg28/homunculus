@@ -1,8 +1,10 @@
 # LEARN.md — Homunculus
 
-> Covers all four phases: **Phase 1** (agent core), **Phase 2** (persistent
-> memory), **Phase 2.5** (daily logs + age awareness), **Phase 3** (autonomous
-> heartbeat), **Phase 4** (Telegram bridge).
+> Covers: **Phase 1** (agent core), **Phase 2** (persistent memory),
+> **Phase 2.5** (daily logs + age awareness), **Phase 3** (autonomous
+> heartbeat), **Phase 4** (Telegram bridge), **Phase 5.0** (token
+> efficiency: compaction, model override, index cap), **Phase 5.1**
+> (self-scheduling heartbeat).
 
 A reference doc for understanding every piece of this project. Written to be
 useful months from now when you've forgotten the details. If you only read
@@ -835,11 +837,97 @@ in `IDEAS.md`.
 
 ---
 
+## Phase 5.0 — Token-efficiency Package
+
+The free Groq tier has an 8000-tokens-per-minute ceiling. We hit it
+during the first heartbeat demos. Three optimizations land in 5.0 to
+bound token usage before Phase 5.1+ feature work makes prompts bigger.
+
+### 5.0a — Mid-session compaction
+
+When `Agent.history` grows past `COMPACT_TRIGGER` (30 messages), the
+older portion is replaced with a one-paragraph summary written by the
+LLM itself.
+
+- Cut point: at a user-message boundary (`COMPACT_KEEP_RECENT=12`
+  recent user turns kept verbatim). Never split a paired
+  `(assistant_with_tool_calls → tool_result)` sequence.
+- Summary call: uses `call_llm(messages, tool_schemas=None)` —
+  no tools, plain completion, much cheaper.
+- Where it runs: `Agent._maybe_compact()` is called at the top of
+  every `chat()` so growth is bounded before each new turn.
+
+### 5.0b — Per-service model override
+
+`Agent(..., model="...")` lets each service pick its own model. The
+heartbeat (default `openai/gpt-oss-20b`) burns ~6x fewer tokens per
+tick than the 120B used for REPL/Telegram, and the heartbeat's task
+doesn't need the bigger model's reasoning quality.
+
+Override via `HOMUNCULUS_MODEL_HEARTBEAT` env var if you want.
+
+### 5.0c — Memory index cap
+
+`Memory.load_index(max_entries=30)` sorts entries by mtime newest-first
+and caps the result. Older memories stay on disk and are still
+discoverable — they just don't auto-appear in every system prompt. A
+footer line tells the LLM how many were hidden:
+
+> `(Showing the 30 most recently-touched memories out of 47. Older
+> entries remain on disk — use read_file to fetch them if you remember
+> their filename.)`
+
+Why a simple time-based cap instead of embedding-based retrieval? It
+covers 90% of the value at 5% of the complexity. Embedding search
+goes in `IDEAS.md` for when we actually have >100 memories.
+
+---
+
+## Phase 5.1 — Self-scheduling Heartbeat
+
+The heartbeat used to sleep for a fixed `HEARTBEAT_INTERVAL_MINUTES`.
+Now the agent itself decides when to wake next — by calling a new
+tool, `schedule_next_tick(iso_datetime)`. If it doesn't call the tool,
+the daemon falls back to the configured interval.
+
+### Flow
+
+1. Heartbeat tick runs. The prompt includes `current_time = ...` so
+   the agent can compute relative times like "8am tomorrow."
+2. The agent may call `schedule_next_tick("2026-05-18T08:00:00")`.
+   The tool validates (future, within 24h, parseable) and writes the
+   target to `memory/_next_tick.txt`.
+3. After the tick, the daemon calls `memory.pop_next_tick()` — reads
+   the value AND deletes the file (so a missed schedule next time
+   doesn't reuse the stale value).
+4. Daemon sleeps until the target time (or default interval if none).
+
+### Why it matters
+
+Without this, the agent's autonomy felt mechanical — every N minutes,
+on the clock. With it, the agent can have **temporal intent**:
+
+> "Tokyo flight booking deadline is tomorrow at 5pm. Set next tick to
+> tomorrow at 9am so I can nudge the user one final time before the
+> deadline."
+
+That's the qualitative difference between "scheduled cron" and "agent
+that knows when to act."
+
+### Safety belts
+
+- Tool rejects past times → `"in the past"` error
+- Tool rejects >24h schedules → can't disappear for weeks
+- Tool validates ISO format → no silent parse failures
+- Daemon double-checks at sleep time (defense in depth)
+
+---
+
 ## What's Next
 
-The four planned phases are now complete. The natural next axis of
-work shifts from "build features" to "use it and learn what's missing."
-Things you'd plausibly want eventually are tracked in `IDEAS.md`.
+5.0 and 5.1 are done. The next planned features (5.2 web research,
+5.3 code execution, 5.4 self-improvement loop, 5.5 calendar, 5.6
+email) are documented in `IDEAS.md`.
 
 ### Highlights of `IDEAS.md`
 

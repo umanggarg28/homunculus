@@ -156,6 +156,34 @@ class Memory:
         if self.session_path.exists():
             self.session_path.unlink()
 
+    # ---- self-scheduled heartbeat --------------------------------------
+    # The heartbeat daemon can be told (by the agent itself, via the
+    # schedule_next_tick tool) when to wake up next. We store the target
+    # ISO datetime in a single-line file at memory/_next_tick.txt.
+
+    @property
+    def next_tick_path(self) -> Path:
+        return self.root / "_next_tick.txt"
+
+    def set_next_tick(self, iso_datetime: str) -> None:
+        """Persist the target wake time."""
+        self.next_tick_path.write_text(iso_datetime.strip(), encoding="utf-8")
+
+    def pop_next_tick(self) -> str | None:
+        """Return the target wake time and delete the file.
+
+        We pop (not just read) so each tick starts fresh — if the agent
+        forgets to schedule itself next time, we fall back to the default
+        interval instead of using a stale schedule.
+        """
+        if not self.next_tick_path.exists():
+            return None
+        try:
+            value = self.next_tick_path.read_text(encoding="utf-8").strip()
+        finally:
+            self.next_tick_path.unlink()
+        return value or None
+
     def recent_log_paths(self, days: int = 3) -> list[Path]:
         """Return paths to log files from the last `days` days (newest first).
 
