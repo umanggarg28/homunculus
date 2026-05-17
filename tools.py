@@ -134,6 +134,77 @@ def schedule_next_tick(iso_datetime: str) -> str:
     return f"Scheduled next heartbeat for {iso_datetime} (in {delta})."
 
 
+def python_exec(code: str, timeout: int = 30) -> str:
+    """Run Python code in an ephemeral sandbox container.
+
+    Each call spawns a fresh python:3.12-slim sibling container via the
+    host's Docker daemon (we have the socket mounted). Container is
+    destroyed when it exits.
+
+    Sandbox flags:
+      --network=none   no internet, no exfiltration
+      --memory=256m    RAM cap
+      --cpus=0.5       CPU cap
+      --pids-limit=50  no fork bombs
+      --read-only      filesystem read-only (no persistence)
+      --rm             auto-cleanup
+      30s wall-clock timeout from our side
+
+    Code is delivered via stdin; only stdout/stderr come back. The
+    sandbox has no access to workspace/, memory/, or our network — it
+    is a real isolation boundary, not just process separation.
+
+    Use for: math, parsing, computation, verifying snippets, exploring
+    data, running untrusted-ish code safely. Cannot persist files or
+    reach the network.
+    """
+    cmd = [
+        "docker", "run", "--rm", "-i",
+        "--network=none",
+        "--memory=256m",
+        "--cpus=0.5",
+        "--pids-limit=50",
+        "--read-only",
+        "--tmpfs", "/tmp:size=64m",  # /tmp needs to be writable for some libs
+        "python:3.12-slim",
+        "python", "-",
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            input=code,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return f"ERROR: code execution timed out after {timeout}s"
+    except FileNotFoundError:
+        return (
+            "ERROR: docker CLI not found. The python_exec tool needs "
+            "/var/run/docker.sock mounted and the docker CLI binary in "
+            "the image. Check docker-compose.yml and Dockerfile."
+        )
+
+    parts: list[str] = []
+    if result.stdout:
+        parts.append(f"STDOUT:\n{result.stdout.rstrip()}")
+    if result.stderr:
+        parts.append(f"STDERR:\n{result.stderr.rstrip()}")
+    if not parts:
+        parts.append(f"(no output, exit code {result.returncode})")
+    elif result.returncode != 0:
+        parts.append(f"(exit code: {result.returncode})")
+
+    output = "\n\n".join(parts)
+    if len(output) > READ_FILE_MAX_CHARS:
+        output = (
+            output[:READ_FILE_MAX_CHARS]
+            + f"\n[...{len(output) - READ_FILE_MAX_CHARS} chars truncated]"
+        )
+    return output
+
+
 def web_search(query: str) -> str:
     """Search the web. Returns up to 5 results with titles + URLs + snippets.
 
@@ -358,6 +429,30 @@ SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "python_exec",
+            "description": (
+                "Run Python code in a sandboxed container (no network, "
+                "256MB RAM cap, 0.5 CPU, read-only filesystem, 30s "
+                "timeout, fresh per call). Returns stdout/stderr. Use "
+                "for math, parsing, computation, verifying snippets, "
+                "exploring data. CANNOT reach the network or persist "
+                "files — pass data in via the code itself."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Python source to execute. Print results to stdout.",
+                    },
+                },
+                "required": ["code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "web_search",
             "description": (
                 "Search the web. Returns up to 5 results (titles, URLs, "
@@ -460,6 +555,7 @@ TOOLS = {
     "read_file": read_file,
     "write_file": write_file,
     "remember": remember,
+    "python_exec": python_exec,
     "web_search": web_search,
     "web_fetch": web_fetch,
     "schedule_next_tick": schedule_next_tick,

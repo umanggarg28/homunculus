@@ -32,6 +32,10 @@ services:
       # agent creates are visible in your editor on the host. The agent
       # can only read/write files INSIDE this directory by default.
       - ./workspace:/app/workspace
+      # Docker socket → python_exec spawns sandbox containers via host's
+      # docker daemon. Only our code uses this; the LLM only sees
+      # stdout/stderr of the code it runs.
+      - /var/run/docker.sock:/var/run/docker.sock
 
   heartbeat:
     build: .
@@ -40,6 +44,7 @@ services:
     working_dir: /app/workspace
     volumes:
       - ./workspace:/app/workspace  # Same workspace mount → shared memory
+      - /var/run/docker.sock:/var/run/docker.sock  # for python_exec sandbox
     # Override the default CMD to launch the daemon instead of the REPL.
     command: ["uv", "run", "--project", "/app", "python", "/app/heartbeat.py"]
     # Auto-restart if the daemon crashes (but not if we explicitly stop it).
@@ -54,6 +59,7 @@ services:
     working_dir: /app/workspace
     volumes:
       - ./workspace:/app/workspace  # Same workspace mount → shared memory
+      - /var/run/docker.sock:/var/run/docker.sock  # for python_exec sandbox
     command: ["uv", "run", "--project", "/app", "python", "/app/telegram_bot.py"]
     restart: unless-stopped
     # No stdin_open/tty — daemon that long-polls Telegram for messages.
