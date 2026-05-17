@@ -177,6 +177,122 @@ and have rich formatting — but MarkdownV2 requires escaping `.` `-`
 
 ---
 
+## Phase 5 candidates ("wow" features, prioritized for build)
+
+These are features we've decided are worth doing — listed in the order
+we'd build them. Each one is its own feature branch + PR.
+
+### 5.1 — Self-scheduling heartbeat
+Drop the fixed `HEARTBEAT_INTERVAL_MINUTES`. Instead, the agent decides
+when it should wake itself next: at the end of each tick it writes a
+target wake time to memory (e.g., `next_wake_2026_05_18_0800.md`). The
+heartbeat loop reads the soonest pending wake and sleeps until then.
+Feels uncannily alive — the agent stops being a script and starts
+having intentionality.
+
+- **Effort**: ~half a day.
+- **Why first**: foundational, modifies existing heartbeat, low risk,
+  high "feels alive" payoff.
+- **Gotchas**: need a fallback if the agent forgets to schedule
+  itself (default to N minutes if no target found).
+
+### 5.2 — Web research with citations
+A `web_search(query)` tool. Use Tavily or Serper free tier (or DuckDuckGo
+HTML scraping as last resort). Agent gets actual current info, returns
+results with source links it cites in its replies.
+
+- **Effort**: ~half to one day.
+- **Why second**: biggest single capability unlock. Tokyo trip example
+  works for real after this.
+- **Pairs with**: Phase 5.3 if the agent needs to do anything with
+  what it finds.
+
+### 5.3 — Code execution sandbox
+A `python_exec(code)` tool that runs Python in an ephemeral side
+container (`docker run --rm --network=none python:slim`) and returns
+stdout + any image written to a known output path. Lets the agent
+make charts, compute things, debug its own scripts.
+
+- **Effort**: ~1 day.
+- **Why third**: very high visual impact (charts as images in
+  Telegram), unlocks the agent to actually run the code it writes.
+- **Gotchas**: container-in-container — needs the host's Docker socket
+  mounted, OR a separate sandboxed runtime like microVMs.
+
+### 5.4 — Self-improvement loop
+A daily cron-style heartbeat tick that reads the last 24h of log files
+and asks the agent: "review your behavior. What did you do well? What
+did you miss? Write yourself a feedback memory." The agent learns from
+its own mistakes. Meta loop.
+
+- **Effort**: ~half a day, mostly prompt engineering.
+- **Why fourth**: builds on existing log infrastructure, no new
+  external dependencies, completes the autonomy story.
+
+### 5.5 — Calendar awareness
+Read Google Calendar events. New tool `upcoming_events(days=7)`. Agent
+proactively notifies before events. "Tokyo flight in 3 days, 4 hours
+until your client call."
+
+- **Effort**: ~1 day. Google Calendar OAuth is the painful part.
+- **Why fifth**: unlocks proactive scheduling but requires external
+  API setup, depends on a working `notify()` (already done).
+
+### 5.6 — Email triage
+Connect to Gmail via IMAP or OAuth. Agent reads recent unread emails,
+classifies, drafts replies you approve via Telegram (with inline
+buttons — see "Inline-button approval" entry above).
+
+- **Effort**: ~1-2 days. Gmail OAuth setup is the worst part.
+- **Why sixth**: highest setup friction, but most "this actually saves
+  me time" once working.
+- **Depends on**: 5.7 (inline-button approval) for the approval flow
+  to be clean.
+
+---
+
+## Phase 6 candidates (visual / portfolio polish)
+
+### 6.1 — Obsidian-compatible memory vault
+Point `HOMUNCULUS_MEMORY_DIR` at an Obsidian vault folder. Get all of
+Obsidian's features for free: graph view, mobile viewer, backlinks,
+markdown rendering, optional Syncthing sync to phone.
+
+Tiny code changes:
+- Add `.obsidian/` to gitignore
+- Optionally emit both `[name](./file.md)` and `[[name]]` link styles
+  so Obsidian's backlink resolver picks them up
+- Document the setup (point the memory dir, install Obsidian)
+
+- **Effort**: ~30 min.
+- **Why**: free graph viz + mobile memory access. Replaces the
+  "memory graph visualization" idea from the original list.
+
+### 6.2 — Live "thinking" feed (web page)
+A tiny FastAPI/Server-Sent-Events page that streams the agent's current
+tool calls in real time. Open `http://localhost:8000` in a browser and
+watch your AI think — `read_file(memory/...)` `remember(...)` etc., as
+they happen across all three services.
+
+- **Effort**: ~1 day. Need to expose Agent.chat to emit events to
+  a queue that the FastAPI service drains over SSE.
+- **Why**: pure demo wow. Show this in a Loom video and people get it
+  immediately.
+
+### 6.3 — Full UI (eventual)
+A real web UI replacing/complementing the REPL. Chat interface,
+memory browser, log viewer, agent status panel. Like a self-hosted
+Claude Code.
+
+- **Effort**: 1+ week.
+- **Why later**: needs all the above functionality settled first.
+  Building UI on shifting backend is wasted work. Once Phase 5 is done
+  and the agent's behavior is what we want, then UI is the wrapper.
+- **Stack candidates**: React + FastAPI, or HTMX + FastAPI for
+  minimum complexity.
+
+---
+
 ## When to use this file
 
 When we discuss something that's interesting but out of scope, log it
