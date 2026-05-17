@@ -79,9 +79,21 @@ Step 2 — Look for PATTERNS worth carrying forward:
 
 Step 3 — Save AT MOST 3 new memories via remember(). Fewer is fine.
 Skip anything trivial or already covered by an existing memory in your
-index. Quality over quantity.
+index. Quality over quantity. If a new fact updates an existing memory,
+call remember() with the SAME `name` as that entry to overwrite in
+place — don't create duplicates.
 
-Step 4 — Reply with a ONE-LINE summary of what you learned (or
+Step 4 — Memory hygiene pass. Scan your memory index for:
+- Duplicates (two entries that describe the same fact) — call forget()
+  on the older / less-accurate one.
+- Contradictions (a newer memory contradicts an older one) — call
+  forget() on the outdated one.
+- Plain garbage that's no longer relevant (a project that's over,
+  a deadline that's passed) — call forget().
+Call forget() AT MOST 2 times this tick. Be conservative — when in
+doubt, leave it. Losing context is worse than carrying old facts.
+
+Step 5 — Reply with a ONE-LINE summary of what you learned (or
 "nothing notable from yesterday"). Then stop.
 
 Important:

@@ -326,6 +326,70 @@ class Memory:
         self._upsert_index_entry(name, description, filename)
         return f"Saved memory '{name}' to {filename}"
 
+    def forget(self, identifier: str) -> str:
+        """Delete a memory by name OR by filename. Returns a status string.
+
+        Accepts either the human name ("User Role") or the filename
+        ("user_user_role.md" / "user_user_role") — we resolve to a
+        filename and remove BOTH the body file and the index line.
+
+        Idempotent: removing an already-gone memory returns a benign
+        status rather than raising. This way the agent can call forget()
+        confidently from the reflection loop without exception handling.
+        """
+        candidates = self._resolve_filename(identifier)
+        if not candidates:
+            return f"Memory '{identifier}' not found (already gone?)"
+
+        removed: list[str] = []
+        for filename in candidates:
+            path = self.root / filename
+            if path.exists():
+                path.unlink()
+            self._remove_index_entry(filename)
+            removed.append(filename)
+        return f"Forgot memory: {', '.join(removed)}"
+
+    def _resolve_filename(self, identifier: str) -> list[str]:
+        """Find memory filenames matching a name or filename hint.
+
+        Resolution order:
+          1. Exact filename match (e.g. "user_role.md")
+          2. Filename without .md (e.g. "user_role")
+          3. Slug match against any type prefix (e.g. "User Role" →
+             check user_user_role.md, feedback_user_role.md, ...)
+
+        Returns a list because in rare cases the same slug exists across
+        multiple type prefixes — caller deletes all matches.
+        """
+        ident = identifier.strip()
+        if ident.endswith(".md"):
+            return [ident] if (self.root / ident).exists() else []
+        # Try as bare filename
+        candidate = ident + ".md"
+        if (self.root / candidate).exists():
+            return [candidate]
+        # Try as a human name — slug it and check each type prefix
+        slug = self._slugify(ident)
+        matches: list[str] = []
+        for type_prefix in ALLOWED_TYPES:
+            fname = f"{type_prefix}_{slug}.md"
+            if (self.root / fname).exists():
+                matches.append(fname)
+        return matches
+
+    def _remove_index_entry(self, filename: str) -> None:
+        """Drop the MEMORY.md line that links to this filename."""
+        if not self.index_path.exists():
+            return
+        current = self.index_path.read_text(encoding="utf-8")
+        kept = [
+            line for line in current.splitlines()
+            if f"({filename})" not in line and f"(./{filename})" not in line
+        ]
+        # Preserve header (non-entry lines) + remaining entries.
+        self.index_path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
     # ---- internals -----------------------------------------------------
 
     @staticmethod
