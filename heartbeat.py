@@ -197,6 +197,11 @@ def _compute_sleep(memory: Memory, default_seconds: float) -> float:
     except ValueError:
         print(f"[heartbeat] could not parse scheduled time '{scheduled}', using default", flush=True)
         return default_seconds
+    # Defense-in-depth: schedule_next_tick now persists naive local time,
+    # but older stored values might be timezone-aware. Normalize before
+    # comparing to datetime.now() (which is naive).
+    if target.tzinfo is not None:
+        target = target.astimezone().replace(tzinfo=None)
     delta = (target - datetime.now()).total_seconds()
     if delta <= 0:
         print(f"[heartbeat] scheduled time {scheduled} is in the past, using default", flush=True)

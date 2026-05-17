@@ -402,6 +402,8 @@ _PAGE_SHELL = """<!doctype html>
   .kind-assistant_reply  .kind { color: var(--reply); }
   .kind-tool_call        .kind { color: var(--tool); }
   .kind-tool_result      .kind { color: var(--result); }
+  .kind-llm_call         .kind { color: var(--muted); }
+  .kind-llm_call         .text { color: var(--muted); }
   .text { color: var(--fg); white-space: pre-wrap; word-break: break-word; }
   /* Chat */
   #chat-log { display: flex; flex-direction: column; gap: 14px; padding-bottom: 80px; }
@@ -482,6 +484,8 @@ src.onmessage = (e) => {
     body = `<span class="kind">↳ ${escape(evt.name || '')}</span> <span class="text muted">${escape(evt.args || '')}</span>`;
   } else if (evt.event === 'tool_result') {
     body = `<span class="kind">↩ ${escape(evt.name || '')}</span> <span class="text">${escape(evt.result || '')}</span>`;
+  } else if (evt.event === 'llm_call') {
+    body = `<span class="kind">⊛ llm</span> <span class="text">${escape(evt.model || '')} via ${escape(evt.host || '')}</span>`;
   } else {
     body = `<span class="kind">${escape(evt.event)}</span> <span class="text">${escape(JSON.stringify(evt))}</span>`;
   }
