@@ -26,6 +26,7 @@ existing read_file tool) when the agent decides a specific memory is
 relevant. This keeps context usage tiny even as memory grows.
 """
 
+import json
 import re
 import time
 from datetime import datetime
@@ -77,6 +78,43 @@ class Memory:
         entry = f"\n### {timestamp} — {role}\n\n{content}\n"
         with log_file.open("a", encoding="utf-8") as f:
             f.write(entry)
+
+    # ---- session persistence -------------------------------------------
+    # This is conversation history (user + assistant messages), NOT the
+    # typed semantic memory above. Shared across all services that opt in
+    # (REPL + Telegram), so a thread you start on your phone continues
+    # in the REPL. Heartbeat deliberately does NOT use this — its ticks
+    # are independent.
+
+    @property
+    def session_path(self) -> Path:
+        # Underscore prefix marks this as machinery, not user-facing memory.
+        # It also keeps the file out of the MEMORY.md index pattern.
+        return self.root / "_session.json"
+
+    def save_session(self, history: list[dict]) -> None:
+        """Persist the conversation history (excluding the system prompt).
+
+        The system prompt is regenerated fresh each time an agent starts
+        (with current memory index, etc.), so we don't save it.
+        """
+        body = [msg for msg in history if msg.get("role") != "system"]
+        self.session_path.write_text(json.dumps(body), encoding="utf-8")
+
+    def load_session(self) -> list[dict]:
+        """Return the previously-saved messages, or [] if no session file."""
+        if not self.session_path.exists():
+            return []
+        try:
+            return json.loads(self.session_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            # File got corrupted somehow — pretend it doesn't exist
+            return []
+
+    def clear_session(self) -> None:
+        """Delete the saved session. Called when the user types reset."""
+        if self.session_path.exists():
+            self.session_path.unlink()
 
     def recent_log_paths(self, days: int = 3) -> list[Path]:
         """Return paths to log files from the last `days` days (newest first).

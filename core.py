@@ -180,8 +180,29 @@ class Agent:
         self.history: list[dict] = [{"role": "system", "content": full_prompt}]
 
     def reset(self) -> None:
-        """Wipe history except for the system prompt."""
+        """Wipe history except for the system prompt.
+
+        Also clears any saved session on disk, so a future restart
+        doesn't restore the cleared turns.
+        """
         self.history = self.history[:1]
+        if self.memory is not None:
+            self.memory.clear_session()
+
+    def restore_session(self) -> int:
+        """Opt-in: load previously-saved conversation history.
+
+        Callers that want cross-session continuity (REPL, Telegram bot)
+        call this right after __init__. Callers that want fresh-each-
+        time semantics (heartbeat) simply don't call it.
+
+        Returns the number of messages restored (0 if no saved session).
+        """
+        if self.memory is None:
+            return 0
+        saved = self.memory.load_session()
+        self.history.extend(saved)
+        return len(saved)
 
     def reflect(self) -> str:
         """Ask the LLM to review the conversation and save anything worth

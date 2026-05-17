@@ -44,7 +44,13 @@ def main() -> None:
     tools.init(memory)
     agent = Agent(memory=memory)
 
-    print("homunculus ready. type a task, 'reset' to clear history, or 'exit'.")
+    # Restore any prior conversation history (shared with the Telegram bot).
+    restored = agent.restore_session()
+    if restored:
+        print(f"homunculus ready. (restored {restored} messages from previous session)")
+    else:
+        print("homunculus ready.")
+    print("type a task, 'reset' to clear history, or 'exit'.")
 
     while True:
         try:
@@ -68,6 +74,9 @@ def main() -> None:
     # End-of-session reflection: let the agent save anything worth keeping.
     print("\n(reflecting on the session...)")
     print(f"agent: {agent.reflect()}")
+
+    # Persist conversation history so it's available next time (REPL or bot).
+    memory.save_session(agent.history)
 
 
 if __name__ == "__main__":

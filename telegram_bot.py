@@ -155,6 +155,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(f"Error: {type(e).__name__}: {e}")
         return
 
+    # Persist history after every turn so the REPL (or a bot restart) can
+    # pick up the thread later. _agent.memory is set in main(); the bot
+    # always runs with memory.
+    assert _agent.memory is not None
+    _agent.memory.save_session(_agent.history)
+
     # Clean markdown artifacts before sending (LLM ignores prompt rules).
     reply = _clean_for_plaintext(reply)
 
@@ -202,6 +208,9 @@ def main() -> None:
 
     global _agent
     _agent = Agent(memory=memory, system_prompt=SYSTEM_PROMPT + TELEGRAM_PROMPT_SUFFIX)
+    restored = _agent.restore_session()
+    if restored:
+        logging.info("Restored %d messages from previous session", restored)
 
     allowed = get_allowed_user_id()
     if allowed is None:
