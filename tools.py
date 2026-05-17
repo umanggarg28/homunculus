@@ -9,8 +9,11 @@ We register tools in a single dict (TOOLS) so the agent loop can
 look them up by name.
 """
 
+import os
 import subprocess
 from pathlib import Path
+
+import httpx
 
 from memory import Memory
 
@@ -92,6 +95,36 @@ def remember(name: str, description: str, type: str, body: str) -> str:
     if _memory is None:
         return "ERROR: memory subsystem is not initialized"
     return _memory.remember(name=name, description=description, type=type, body=body)
+
+
+def notify(text: str) -> str:
+    """Push a proactive message to the user via Telegram.
+
+    Use sparingly. This interrupts the user (notification on their phone),
+    so reserve it for things genuinely worth their attention: a critical
+    deadline approaching, a question that blocks further progress, etc.
+    Routine summaries should go to memory/files, not notifications.
+
+    Returns a confirmation or a configuration error.
+    """
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_ALLOWED_USER_ID")
+    if not token or not chat_id:
+        return (
+            "ERROR: Telegram is not configured (TELEGRAM_BOT_TOKEN or "
+            "TELEGRAM_ALLOWED_USER_ID missing). Cannot send notification."
+        )
+    try:
+        response = httpx.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text},
+            timeout=10.0,
+        )
+    except httpx.HTTPError as e:
+        return f"ERROR: Telegram request failed: {e}"
+    if response.status_code != 200:
+        return f"ERROR: Telegram API {response.status_code}: {response.text}"
+    return f"Notification delivered ({len(text)} chars)."
 
 
 def shell_exec(command: str) -> str:
@@ -195,6 +228,29 @@ SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "notify",
+            "description": (
+                "Push a proactive message to the user via Telegram. "
+                "INTERRUPTS the user — only use for genuinely time-"
+                "sensitive things (a deadline tomorrow, a question that "
+                "blocks further work). Routine summaries belong in files, "
+                "not notifications."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Message text. Keep concise.",
+                    },
+                },
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "shell_exec",
             "description": "Run a shell command. User must approve each invocation.",
             "parameters": {
@@ -214,6 +270,7 @@ TOOLS = {
     "read_file": read_file,
     "write_file": write_file,
     "remember": remember,
+    "notify": notify,
     "shell_exec": shell_exec,
 }
 

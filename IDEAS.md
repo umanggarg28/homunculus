@@ -151,13 +151,44 @@ display the agent's reply token-by-token, like a real chat UI.
 
 ---
 
-## Phase 4 (still planned)
+## Telegram-related follow-ups
 
-### Phase 4 — Messaging bridge (Telegram or Discord)
-Bot that bridges your phone ↔ the agent. The heartbeat can push
-proactive messages ("you asked me to check X — here's what I found").
-Replaces the REPL as the primary way you interact when you're away
-from your laptop.
+### Inline-button approval for `shell_exec` in the bot
+Right now the Telegram bot disables `shell_exec` (no terminal for y/N).
+A nicer design: when the agent calls `shell_exec`, the bot sends an
+inline keyboard message with the command + "Approve" / "Deny" buttons.
+User taps; the bot runs (or doesn't) and replies. Bridges the
+interactivity gap properly.
+
+- **Why not now**: scope creep on Phase 4. Want to ship & use it first.
+- **When to revisit**: any time you find yourself wishing the bot
+  could run shell commands too.
+
+### Cross-service conversation continuity
+Each Docker service (REPL, heartbeat, telegram) has its own `Agent`
+instance with its own in-memory `history`. The same long-term memory
+is shared, but the chat history isn't. So if you start a thread on
+Telegram and then open the REPL, the REPL agent doesn't recall the
+back-and-forth (only what got committed via `remember()`).
+
+Fix: persist `agent.history` to a JSON file on shutdown, load it on
+startup. Easy ~30 lines.
+
+- **Why not now**: in practice, the typed-memory + reflection pattern
+  covers most of what you'd want. Continuous chat history is "nice to
+  have" not "essential."
+- **When to revisit**: first time the discontinuity actually annoys
+  you. (Likely soon.)
+
+### Telegram message formatting via `parse_mode`
+Currently we strip markdown artifacts on the way out so the message
+goes as plain text. We *could* set `parse_mode="MarkdownV2"` instead
+and have rich formatting — but MarkdownV2 requires escaping `.` `-`
+`(` `!` and many other chars, and any miss crashes the send.
+
+- **Why not now**: brittle. Plain text + cleanup is robust.
+- **When to revisit**: only if rich formatting in the bot becomes
+  genuinely valuable. Probably never.
 
 ---
 

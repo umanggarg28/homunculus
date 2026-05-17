@@ -1,8 +1,8 @@
 # LEARN.md — Homunculus
 
-> Currently covers: **Phase 1** (agent core), **Phase 2** (persistent memory),
-> **Phase 2.5** (daily logs + age awareness), **Phase 3** (autonomous
-> heartbeat). Phase 4 (messaging bridge) is still ahead.
+> Covers all four phases: **Phase 1** (agent core), **Phase 2** (persistent
+> memory), **Phase 2.5** (daily logs + age awareness), **Phase 3** (autonomous
+> heartbeat), **Phase 4** (Telegram bridge).
 
 A reference doc for understanding every piece of this project. Written to be
 useful months from now when you've forgotten the details. If you only read
@@ -729,19 +729,134 @@ homunculus/
 
 ---
 
+## Phase 4 — Telegram Bridge
+
+The third way to talk to Homunculus: from your phone. A Telegram bot
+runs as its own Docker service, receives messages, routes them to a
+persistent `Agent`, and sends replies back. Also gives the heartbeat
+a new `notify()` tool so it can push proactive messages to your phone
+when it has something worth interrupting you about.
+
+### What was added
+
+- **`telegram_bot.py`** — new daemon. Long-polls Telegram for messages,
+  routes them through the agent loop, sends replies back. Single-user
+  locked (only your `TELEGRAM_ALLOWED_USER_ID` can talk to it).
+- **`notify(text)` tool** in `tools.py` — sends a Telegram message via
+  the bot token + chat ID. Works from any service (REPL, heartbeat,
+  even the bot itself) as long as Telegram env vars are configured.
+- **Third Docker service** in `docker-compose.yml` — `telegram`. Shares
+  the same image and the same workspace volume as REPL and heartbeat.
+- **Self-onboarding** — if `TELEGRAM_ALLOWED_USER_ID` is unset, the bot
+  greets any incoming message with the sender's user ID and tells you
+  what to paste into `.env`. No need for a separate ID-fetcher bot.
+- **`python-telegram-bot`** added to `pyproject.toml`.
+
+### How to set it up
+
+1. Telegram → search `@BotFather` → `/newbot` → get a token.
+2. Put it in `.env`:
+   ```
+   TELEGRAM_BOT_TOKEN=...
+   TELEGRAM_ALLOWED_USER_ID=
+   ```
+   (leave the user ID blank initially)
+3. `docker compose up -d telegram`
+4. Open your bot in Telegram and send any message.
+5. The bot replies with your numeric user ID. Paste it into
+   `TELEGRAM_ALLOWED_USER_ID=...` and `docker compose restart telegram`.
+6. Now talk to your bot — it'll respond as the agent.
+
+### Single-user lock
+
+The bot rejects any message whose `effective_user.id` doesn't match
+`TELEGRAM_ALLOWED_USER_ID`. This matters: a Telegram bot is *publicly
+discoverable* — anyone who finds your bot's username can message it.
+Without the lock, randoms could trigger your agent (and burn your
+Groq quota, write files in your workspace, etc.).
+
+### Architecture: three services, one memory
+
+```
+Telegram app    ↓ messages           ↑ replies + notifications
+                ↓                    ↑
+       [telegram service]
+                ↓ Agent.chat()       ↑
+                ↓                    ↑
+       memory/ + workspace/ ←──┐
+                ↑              │ shared volume
+       [heartbeat service]     │
+                ↓ Agent.chat() │
+                ↓              │
+                └──── ticks ───┘
+
+       [homunculus REPL]
+       (run on demand)
+                ↑ Agent.chat()
+                └──── REPL ────┘
+```
+
+Three separate Agent instances (one per service), but they share the
+same `memory/` directory. Anything any of them remembers, the others
+see in their next session.
+
+### Plain-text formatting hack
+
+Telegram doesn't render markdown tables. It also crashes on `parse_mode`
+errors if the agent emits unbalanced asterisks or special chars. So we
+take two precautions:
+
+1. **Prompt suffix**: `TELEGRAM_PROMPT_SUFFIX` added to the agent's
+   system prompt tells the LLM to write in plain-text style — bullets
+   with `-`, no tables, no headers, no `**bold**`.
+2. **Post-processor**: `_clean_for_plaintext()` strips `**`, `__`,
+   `` ` ``, `# ` prefixes, and converts any leftover table rows into
+   `cell · cell · cell` lines before sending.
+
+The post-processor is what actually works. LLMs ignore prompt-level
+formatting instructions about as reliably as they ignore path
+conventions — defensive code in the bot is what saves us. Same pattern
+as Phase 3's `_normalize_workspace_path()`.
+
+### Why `autonomous=True` in the bot too
+
+The bot calls `tools.init(memory, autonomous=True)` — same flag as
+the heartbeat. Why disable `shell_exec` in an interactive bot? Because
+**there's no terminal attached to the bot process.** `shell_exec`'s
+y/N prompt uses `input()`, which would block the asyncio event loop
+forever. Better to refuse and tell the agent to use `remember()` to
+ask for shell help via the user's next REPL session.
+
+If you want shell access through Telegram in the future, the right
+design is a callback-button approval flow: agent calls `shell_exec`,
+bot sends "Approve `ls -R` ?" with inline buttons, user taps Yes/No,
+bot runs (or doesn't) and replies. Real engineering — saved for later
+in `IDEAS.md`.
+
+---
+
 ## What's Next
 
-### Phase 4 — Messaging bridge
-A Telegram (or Discord) bot bridging your phone ↔ the agent. The
-heartbeat can push proactive messages ("you asked me to research X,
-here's what I found"). Replaces the REPL as the primary way you
-interact with Homunculus when you're not at your laptop.
+The four planned phases are now complete. The natural next axis of
+work shifts from "build features" to "use it and learn what's missing."
+Things you'd plausibly want eventually are tracked in `IDEAS.md`.
+
+### Highlights of `IDEAS.md`
+
+- **Conversation continuity across services** — currently each service
+  has its own Agent with its own history. You could finish a thought on
+  Telegram and start the REPL fresh; the REPL agent doesn't recall what
+  you just said on the phone (only what got remembered).
+- **Side-LLM memory retrieval** — when memory grows past ~50 entries,
+  inject just the relevant ones rather than the whole index.
+- **Telegram inline-button approval for `shell_exec`** — would let the
+  bot run commands with explicit user approval, the same as REPL.
+- **Mid-session context compaction** — for long sessions that push the
+  token budget.
 
 ### See also: `IDEAS.md`
-Deferred improvements (LLM-based memory retrieval, embedding search,
-session resume, mid-session compaction, shell allowlist, etc.) are
-tracked in `IDEAS.md`. Each entry says what it is, why we deferred it,
-and when revisiting would be worthwhile.
+Each deferred improvement says what it is, why we deferred it, and
+when revisiting would be worthwhile.
 
 ---
 

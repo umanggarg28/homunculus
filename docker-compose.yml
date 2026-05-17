@@ -1,15 +1,20 @@
 # docker-compose.yml for Homunculus
 #
-# Two services share the same image and the same workspace volume:
+# Three services share the same image and the same workspace volume:
 #
-#   homunculus  → interactive REPL. Run with:
+#   homunculus  → interactive REPL.
 #                   docker compose run --rm homunculus
 #
 #   heartbeat   → autonomous daemon. Wakes every N minutes and self-
-#                 prompts. Run in the background with:
+#                 prompts to do proactive work.
 #                   docker compose up -d heartbeat
 #                   docker compose logs -f heartbeat
 #                   docker compose stop heartbeat
+#
+#   telegram    → messaging frontend. Talk to the agent from your phone.
+#                   docker compose up -d telegram
+#                   docker compose logs -f telegram
+#                   docker compose stop telegram
 #
 # `run --rm` is for one-off interactive sessions (`up` doesn't attach
 # stdin properly). `up -d` is for long-running detached daemons.
@@ -41,3 +46,14 @@ services:
     restart: unless-stopped
     # No stdin_open/tty — this is a background daemon, not an interactive
     # process. Its output goes to `docker compose logs heartbeat`.
+
+  telegram:
+    build: .
+    image: homunculus:phase1
+    env_file: .env
+    working_dir: /app/workspace
+    volumes:
+      - ./workspace:/app/workspace  # Same workspace mount → shared memory
+    command: ["uv", "run", "--project", "/app", "python", "/app/telegram_bot.py"]
+    restart: unless-stopped
+    # No stdin_open/tty — daemon that long-polls Telegram for messages.
