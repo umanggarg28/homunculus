@@ -19,6 +19,7 @@ import os
 import sys
 import time
 import traceback
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -28,15 +29,24 @@ from core import Agent
 from memory import Memory
 
 
-HEARTBEAT_PROMPT = """It's a scheduled heartbeat tick — no user is talking
-to you right now. Look at your MEMORY INDEX (already in your system
-prompt) and decide if there's anything proactive worth doing RIGHT NOW.
+HEARTBEAT_PROMPT_TEMPLATE = """It's a scheduled heartbeat tick — no user is
+talking to you right now. The current time is {now_iso}.
+
+Look at your MEMORY INDEX (already in your system prompt) and decide if
+there's anything proactive worth doing RIGHT NOW.
 
 Examples of useful proactive actions:
 - Notice a follow-up the user mentioned and leave a `remember()` note
   about it.
 - Draft a short summary of recent work and save it (a simple filename
   like `summary.md` lands in the workspace).
+- For time-sensitive memories (e.g. a deadline tomorrow), use `notify()`
+  to push a message to the user's Telegram. Use sparingly.
+
+Scheduling: by default the next tick is in ~10 minutes. If you'd like
+to adjust that (e.g. wake at 8am tomorrow before a deadline, or in
+2 hours to check progress), call `schedule_next_tick("YYYY-MM-DDTHH:MM:SS")`.
+Must be in the future, within 24h.
 
 Important rules:
 - DO NOT read the daily log files unless you have a specific recall
@@ -52,9 +62,10 @@ Important rules:
 def tick(memory: Memory, model: str | None) -> None:
     """One heartbeat iteration — fresh agent, one prompt, then discard."""
     agent = Agent(memory=memory, model=model)
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    print(f"\n[heartbeat] tick at {timestamp} (model={agent.model})", flush=True)
-    response = agent.chat(HEARTBEAT_PROMPT)
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    print(f"\n[heartbeat] tick at {now_iso} (model={agent.model})", flush=True)
+    prompt = HEARTBEAT_PROMPT_TEMPLATE.format(now_iso=now_iso)
+    response = agent.chat(prompt)
     print(f"[agent] {response}", flush=True)
 
 
@@ -74,6 +85,7 @@ def main() -> None:
 
     print(f"[heartbeat] starting, interval = {interval_min} min, model = {model}", flush=True)
 
+    default_interval = interval_min * 60
     while True:
         try:
             tick(memory, model=model)
@@ -81,7 +93,37 @@ def main() -> None:
             # Don't let one bad tick kill the daemon. Log and continue.
             print("[heartbeat] error during tick:", flush=True)
             traceback.print_exc()
-        time.sleep(interval_min * 60)
+
+        sleep_seconds = _compute_sleep(memory, default_interval)
+        wake_at = (datetime.now() + timedelta(seconds=sleep_seconds)).isoformat(timespec="seconds")
+        print(f"[heartbeat] sleeping {sleep_seconds:.0f}s, next tick ~{wake_at}", flush=True)
+        time.sleep(sleep_seconds)
+
+
+def _compute_sleep(memory: Memory, default_seconds: float) -> float:
+    """Read the agent's self-scheduled wake time, or fall back to default.
+
+    Pops the scheduled time so each tick decides independently — if the
+    agent forgets to schedule next time, we don't reuse a stale value.
+    """
+    scheduled = memory.pop_next_tick()
+    if scheduled is None:
+        return default_seconds
+    try:
+        target = datetime.fromisoformat(scheduled)
+    except ValueError:
+        print(f"[heartbeat] could not parse scheduled time '{scheduled}', using default", flush=True)
+        return default_seconds
+    delta = (target - datetime.now()).total_seconds()
+    if delta <= 0:
+        print(f"[heartbeat] scheduled time {scheduled} is in the past, using default", flush=True)
+        return default_seconds
+    # The schedule_next_tick tool already caps at 24h on the way in, but
+    # double-check here as a defense-in-depth.
+    capped = min(delta, 24 * 3600)
+    if capped < delta:
+        print(f"[heartbeat] capping {delta:.0f}s schedule to 24h", flush=True)
+    return capped
 
 
 if __name__ == "__main__":

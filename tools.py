@@ -97,6 +97,43 @@ def remember(name: str, description: str, type: str, body: str) -> str:
     return _memory.remember(name=name, description=description, type=type, body=body)
 
 
+def schedule_next_tick(iso_datetime: str) -> str:
+    """Tell the heartbeat daemon when you want to wake up next.
+
+    Takes an ISO 8601 datetime string in the local timezone, e.g.
+    "2026-05-18T08:00:00". Must be in the future, within 24h. Only
+    meaningful when called from the heartbeat (other services ignore
+    the scheduled time).
+
+    If you don't call this, the heartbeat falls back to its default
+    interval (HEARTBEAT_INTERVAL_MINUTES, typically 10 min).
+    """
+    if _memory is None:
+        return "ERROR: memory subsystem is not initialized"
+    # Validate before persisting so the agent gets immediate feedback if
+    # it passed something malformed.
+    from datetime import datetime, timedelta
+    try:
+        target = datetime.fromisoformat(iso_datetime)
+    except ValueError:
+        return (
+            f"ERROR: '{iso_datetime}' is not a valid ISO 8601 datetime. "
+            f"Format: YYYY-MM-DDTHH:MM:SS (e.g. 2026-05-18T08:00:00)."
+        )
+    now = datetime.now()
+    if target <= now:
+        return f"ERROR: target time {target} is in the past (now: {now})."
+    if target > now + timedelta(hours=24):
+        return (
+            f"ERROR: target time {target} is more than 24h away. "
+            f"Schedule something sooner; you can always re-schedule from "
+            f"the next tick."
+        )
+    _memory.set_next_tick(iso_datetime)
+    delta = target - now
+    return f"Scheduled next heartbeat for {iso_datetime} (in {delta})."
+
+
 def notify(text: str) -> str:
     """Push a proactive message to the user via Telegram.
 
@@ -228,6 +265,29 @@ SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "schedule_next_tick",
+            "description": (
+                "Tell the heartbeat daemon when to wake up next. Only "
+                "meaningful when called from the heartbeat. Pass an ISO "
+                "8601 datetime (e.g. '2026-05-18T08:00:00'), in local "
+                "time, within 24h of now. If not called, the heartbeat "
+                "falls back to its default interval."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "iso_datetime": {
+                        "type": "string",
+                        "description": "Target wake time, ISO 8601, local timezone.",
+                    },
+                },
+                "required": ["iso_datetime"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "notify",
             "description": (
                 "Push a proactive message to the user via Telegram. "
@@ -270,6 +330,7 @@ TOOLS = {
     "read_file": read_file,
     "write_file": write_file,
     "remember": remember,
+    "schedule_next_tick": schedule_next_tick,
     "notify": notify,
     "shell_exec": shell_exec,
 }
