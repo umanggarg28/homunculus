@@ -85,16 +85,28 @@ def write_file(path: str, content: str) -> str:
     return f"Wrote {len(content)} bytes to {p}"
 
 
-def remember(name: str, description: str, type: str, body: str) -> str:
+def remember(
+    name: str,
+    description: str,
+    type: str,
+    body: str,
+    related: list[str] | None = None,
+) -> str:
     """Save a durable fact to long-term memory.
 
     Memory is read on every future session, so use this for things worth
     remembering across conversations: user preferences, project context,
     feedback rules, references. Not for ephemeral conversation state.
+
+    `related` is an optional list of memory slugs (filenames without
+    .md) that this memory connects to — e.g. ["user_role", "project_homunculus"].
+    Renders as [[wikilinks]] for Obsidian graph view.
     """
     if _memory is None:
         return "ERROR: memory subsystem is not initialized"
-    return _memory.remember(name=name, description=description, type=type, body=body)
+    return _memory.remember(
+        name=name, description=description, type=type, body=body, related=related,
+    )
 
 
 def schedule_next_tick(iso_datetime: str) -> str:
@@ -421,6 +433,17 @@ SCHEMAS = [
                         "description": "Category of memory.",
                     },
                     "body": {"type": "string", "description": "Full content of the memory."},
+                    "related": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Optional. Memory slugs this entry connects to "
+                            "(filenames without .md), e.g. "
+                            "['user_role', 'project_homunculus']. Renders as "
+                            "Obsidian [[wikilinks]] so the graph view shows "
+                            "the relationship."
+                        ),
+                    },
                 },
                 "required": ["name", "description", "type", "body"],
             },

@@ -71,7 +71,7 @@ You have these tools available:
 - read_file(path): read a UTF-8 text file
 - write_file(path, content): write text to a file (overwrites)
 - shell_exec(command): run a shell command (user must approve each one)
-- remember(name, description, type, body): save a durable fact to long-term memory
+- remember(name, description, type, body, related=None): save a durable fact to long-term memory. `related` is an optional list of memory slugs (e.g. ["user_role", "project_homunculus"]) when this memory naturally connects to existing ones — they render as Obsidian [[wikilinks]] so the graph view shows the relationship.
 - python(code): run Python code in a sandbox container (no network, 256MB cap, 30s timeout). Returns stdout/stderr. Use for math, parsing, computation, verification. Cannot persist files.
 - web_search(query): search the web. Returns titles, URLs, snippets, and often an answer summary. Use for current/external info not in your memory. When you use results, ALWAYS cite the full URL (https://...), never just the positional index like "result 1" — positional refs are useless to the user.
 - web_fetch(url): download a URL and return its main text. Use to read a full article after web_search identifies it.

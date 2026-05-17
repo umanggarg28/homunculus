@@ -7,4 +7,11 @@ __pycache__/
 workspace/*
 !workspace/.gitkeep
 
+# Obsidian per-user state — if you open workspace/memory as a vault,
+# Obsidian creates these. Already covered by `workspace/*` but listed
+# here defensively in case the memory dir moves elsewhere.
+.obsidian/
+.obsidian-mobile/
+*.obsidian-workspace
+
 # Note: uv.lock IS committed — it pins exact dep versions for reproducible builds.
