@@ -4,7 +4,8 @@
 > **Phase 2.5** (daily logs + age awareness), **Phase 3** (autonomous
 > heartbeat), **Phase 4** (Telegram bridge), **Phase 5.0** (token
 > efficiency: compaction, model override, index cap), **Phase 5.1**
-> (self-scheduling heartbeat), **Phase 5.2** (web research).
+> (self-scheduling heartbeat), **Phase 5.2** (web research), **Phase
+> 5.3** (sandboxed code execution).
 
 A reference doc for understanding every piece of this project. Written to be
 useful months from now when you've forgotten the details. If you only read
@@ -973,10 +974,79 @@ trying it.
 
 ---
 
+## Phase 5.3 — Sandboxed Code Execution
+
+A `python_exec(code)` tool that runs Python in a **fresh, isolated
+container** per call. The agent can compute, parse, verify snippets,
+explore data — without any of that code being able to touch our
+workspace, memory, or the network.
+
+### Sandbox shape
+
+Each call spawns a sibling container with these flags:
+
+| Flag | What it does |
+|---|---|
+| `--rm` | container auto-deleted on exit |
+| `--network=none` | no internet, no DNS, can't exfiltrate |
+| `--memory=256m` | hard RAM cap |
+| `--cpus=0.5` | half a CPU |
+| `--pids-limit=50` | no fork bombs |
+| `--read-only` | filesystem is read-only |
+| `--tmpfs /tmp:size=64m` | small writable scratch for libraries that need /tmp |
+
+Plus our own 30-second wall-clock timeout, in case the container
+somehow ignores SIGTERM.
+
+### How we get the docker CLI without a 177MB apt install
+
+```dockerfile
+COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
+```
+
+Multi-stage `COPY --from` grabs just the CLI binary from the official
+Docker image — same trick we use for `uv`. ~20MB instead of ~177MB.
+No daemon installed in our image; the CLI talks to the **host's**
+Docker daemon via the `/var/run/docker.sock` we mount in
+`docker-compose.yml`.
+
+This means our service containers can spawn sibling containers but
+cannot run a Docker daemon themselves. Clean separation.
+
+### Safety reasoning
+
+Mounting `/var/run/docker.sock` is famously "root-equivalent" on the
+host. Two reasons that's acceptable here:
+
+1. **Only our Python code touches the socket** — never the LLM. The
+   LLM only sees `tool_result` strings; we pre-construct the `docker
+   run` invocation with hardcoded safe flags.
+2. **The sandbox container itself has none of this.** Code running
+   inside the sandbox doesn't get the socket, has no network, has
+   read-only filesystem. So even if LLM-generated code is malicious,
+   its blast radius is the throw-away container.
+
+### Initial scoping choices
+
+- **stdin-only delivery, stdout/stderr return.** Code goes in as
+  stdin, output comes back. No file mounting. Simpler, no host-path
+  translation headaches.
+- **No artifact return path yet.** The sandbox is read-only, so code
+  can't produce files the agent later reads. This means no
+  chart-as-image workflows in Phase 5.3. Adding a writable shared
+  tmpfs is documented as a follow-up in `IDEAS.md`.
+
+### Cost: one image pull on first run
+
+First call pulls `python:3.12-slim` (~50MB, ~5 seconds). After that,
+the image is cached on the host and subsequent calls start in <500ms.
+
+---
+
 ## What's Next
 
-Up next from `IDEAS.md`: 5.3 (code execution sandbox), 5.4 (self-
-improvement loop), 5.5 (calendar), 5.6 (email triage).
+Up next from `IDEAS.md`: 5.4 (self-improvement loop), 5.5 (calendar),
+5.6 (email triage).
 
 ### Highlights of `IDEAS.md`
 

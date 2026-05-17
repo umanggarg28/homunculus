@@ -97,6 +97,19 @@ outdated memories.
 - **When to revisit**: when accumulated stale entries become an actual
   problem.
 
+### `python_exec` writing files the agent can read
+Right now `python_exec` runs in a read-only sandbox with no shared
+volume — code can compute things but can't produce artifacts the
+agent later reads. To enable chart-as-image workflows (the wow demo
+from the original IDEAS list), mount a one-shot tmpfs into the
+sandbox, then read any files that landed there after the run and
+optionally surface them (e.g. send images via Telegram).
+
+- **Why not now**: deliberate v1 scope — bidirectional file passing
+  changes the safety model (sandbox can now write into our workspace).
+- **When to revisit**: when the agent's first practical need is to
+  produce an artifact (chart, parsed file, etc.) it can pass along.
+
 ### `http_get(url)` tool
 Fetch web pages. Massive capability unlock — the agent could research
 things, read docs, summarize articles.

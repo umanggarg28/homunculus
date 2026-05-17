@@ -11,6 +11,14 @@ FROM python:3.12-slim
 # Copy the uv binary from Astral's official image — avoids a curl/install step.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
+# Copy just the Docker CLI binary from the official cli image. Same
+# trick as for uv above — multi-stage COPY gets us the binary without
+# an apt install (which would pull in 177MB of daemon + dependencies
+# we don't want). The CLI talks to the host's docker daemon via the
+# /var/run/docker.sock mount declared in docker-compose.yml.
+# Used by tools.python_exec to spawn sandboxed sibling containers.
+COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
+
 # Where our code lives inside the container.
 WORKDIR /app
 
