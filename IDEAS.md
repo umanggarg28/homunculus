@@ -164,21 +164,6 @@ interactivity gap properly.
 - **When to revisit**: any time you find yourself wishing the bot
   could run shell commands too.
 
-### Cross-service conversation continuity
-Each Docker service (REPL, heartbeat, telegram) has its own `Agent`
-instance with its own in-memory `history`. The same long-term memory
-is shared, but the chat history isn't. So if you start a thread on
-Telegram and then open the REPL, the REPL agent doesn't recall the
-back-and-forth (only what got committed via `remember()`).
-
-Fix: persist `agent.history` to a JSON file on shutdown, load it on
-startup. Easy ~30 lines.
-
-- **Why not now**: in practice, the typed-memory + reflection pattern
-  covers most of what you'd want. Continuous chat history is "nice to
-  have" not "essential."
-- **When to revisit**: first time the discontinuity actually annoys
-  you. (Likely soon.)
 
 ### Telegram message formatting via `parse_mode`
 Currently we strip markdown artifacts on the way out so the message
