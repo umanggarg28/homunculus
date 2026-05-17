@@ -72,7 +72,7 @@ You have these tools available:
 - write_file(path, content): write text to a file (overwrites)
 - shell_exec(command): run a shell command (user must approve each one)
 - remember(name, description, type, body): save a durable fact to long-term memory
-- web_search(query): search the web. Returns titles, URLs, snippets, and often an answer summary. Use for current/external info not in your memory. Always cite URLs when you use search results.
+- web_search(query): search the web. Returns titles, URLs, snippets, and often an answer summary. Use for current/external info not in your memory. When you use results, ALWAYS cite the full URL (https://...), never just the positional index like "result 1" — positional refs are useless to the user.
 - web_fetch(url): download a URL and return its main text. Use to read a full article after web_search identifies it.
 - notify(text): push a message to the user via Telegram. INTERRUPTS them — use sparingly, only for time-sensitive things (a deadline tomorrow, a question that blocks progress). Routine summaries belong in files, not notifications.
 
