@@ -16,6 +16,7 @@ No SDK, no framework. Just httpx and JSON.
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,13 @@ MAX_TURNS = 20
 
 
 SYSTEM_PROMPT = """You are Homunculus, a minimal autonomous personal assistant.
+
+Working directory: your current directory IS already the workspace. Use
+plain relative filenames like `summary.md` or `notes/today.md`. Do NOT
+prefix paths with `workspace/` — that would create a nested
+workspace/workspace/ folder by mistake. Memory lives at `memory/`,
+daily logs at `memory/logs/YYYY/MM/YYYY-MM-DD.md` (these paths are
+correct as-is).
 
 You have these tools available:
 - read_file(path): read a UTF-8 text file
@@ -92,6 +100,10 @@ def call_llm(messages: list[dict], tool_schemas: list[dict]) -> dict:
 
     If "tool_calls" is present, the LLM is asking us to run tools.
     If "content" is present (and no tool_calls), it's a final answer.
+
+    Retries once on 429 (rate limited). Groq sends a `retry-after` header
+    telling us when capacity returns; we sleep that long + 1s buffer and
+    try again. After one retry it gives up so we don't block forever.
     """
     api_key = os.environ.get("HOMUNCULUS_API_KEY")
     if not api_key:
@@ -103,18 +115,45 @@ def call_llm(messages: list[dict], tool_schemas: list[dict]) -> dict:
         "tools": tool_schemas,
         "tool_choice": "auto",  # let the LLM decide when to call a tool
     }
-    response = httpx.post(
-        API_URL,
-        headers={"Authorization": f"Bearer {api_key}"},
-        json=payload,
-        timeout=60.0,
-    )
-    if response.status_code >= 400:
-        # Surface the API's actual error message (not just the status code).
-        raise RuntimeError(
-            f"Groq API {response.status_code}: {response.text}"
+
+    for attempt in (1, 2):
+        response = httpx.post(
+            API_URL,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=payload,
+            timeout=60.0,
         )
-    return response.json()["choices"][0]["message"]
+        if response.status_code == 429 and attempt == 1:
+            # Rate limited. Honor the retry-after header if present;
+            # otherwise fall back to a 20s sleep.
+            wait = _parse_retry_after(response) or 20.0
+            print(f"[call_llm] rate-limited, sleeping {wait:.1f}s before retry", flush=True)
+            time.sleep(wait + 1.0)  # +1s buffer to avoid landing right on the boundary
+            continue
+        if response.status_code >= 400:
+            # Surface the API's actual error message (not just the status code).
+            raise RuntimeError(
+                f"API error {response.status_code}: {response.text}"
+            )
+        return response.json()["choices"][0]["message"]
+
+    raise RuntimeError(f"API still rate-limited after retry: {response.text}")
+
+
+def _parse_retry_after(response: httpx.Response) -> float | None:
+    """Extract retry-after delay (seconds) from response, or None.
+
+    Groq sends it as a numeric header value. Some providers send a
+    timestamp instead; we keep it simple here and only handle the
+    numeric-seconds case.
+    """
+    header = response.headers.get("retry-after")
+    if header is None:
+        return None
+    try:
+        return float(header)
+    except ValueError:
+        return None
 
 
 # --- The agent ------------------------------------------------------------

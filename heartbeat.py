@@ -29,20 +29,23 @@ from memory import Memory
 
 
 HEARTBEAT_PROMPT = """It's a scheduled heartbeat tick — no user is talking
-to you right now. Look at your memory index and (if useful) read today's
-log file at memory/logs/<year>/<month>/<today>.md.
+to you right now. Look at your MEMORY INDEX (already in your system
+prompt) and decide if there's anything proactive worth doing RIGHT NOW.
 
-Decide: is there anything proactive worth doing RIGHT NOW? Good examples:
-- Notice a follow-up the user mentioned in a past conversation and leave
-  yourself a note about it (via remember()).
-- Spot a gap in your project memory and fill it from logs.
-- Draft a short summary of recent work in workspace/summary_<date>.md.
+Examples of useful proactive actions:
+- Notice a follow-up the user mentioned and leave a `remember()` note
+  about it.
+- Draft a short summary of recent work and save it (a simple filename
+  like `summary.md` lands in the workspace).
 
-If nothing genuinely useful comes to mind, say so in one line and STOP.
-Do NOT invent work just to feel productive. Doing nothing is fine.
-
-Note: shell_exec is disabled in this mode. If a task would need shell
-access, call remember() to leave a note asking the user to handle it.
+Important rules:
+- DO NOT read the daily log files unless you have a specific recall
+  task. Logs contain your own previous heartbeat output and reading
+  them every tick creates a feedback loop. Trust your memory index.
+- If nothing genuinely useful comes to mind, say so in ONE line and
+  STOP. Doing nothing is fine. Don't invent busywork.
+- shell_exec is disabled. If a task would need shell access, call
+  remember() to leave a note for the user.
 """
 
 

@@ -673,6 +673,48 @@ carry conversation history across ticks. Three reasons:
 This is a deliberate architectural choice: ticks share *memory* (long-
 term, curated) but not *history* (short-term, conversational).
 
+### Operational lessons (from first runs)
+
+Four issues surfaced during the first autonomous demo and got fixed.
+Recording them here because the underlying causes apply broadly to
+any agent system, not just this one.
+
+**1. LLMs ignore path conventions, no matter how clearly stated.**
+The system prompt told the agent its cwd was `workspace/`. It still
+wrote files to `workspace/summary.md`, producing a nested
+`workspace/workspace/`. Fix: defensive path normalization in
+`read_file` / `write_file` — strip `workspace/` and `/app/workspace/`
+prefixes server-side. The agent can be wrong about cwd and still land
+in the right place. **General lesson: don't trust prompt instructions
+for correctness; treat them as preferences and enforce constraints in
+code.**
+
+**2. Rate limits hit fast with verbose prompts.**
+Each tick was burning ~5K tokens (system prompt + memory index +
+log content). Free tier is 8K TPM. Back-to-back ticks within a minute
+exceed it. Fix: parse the `retry-after` header on 429, sleep that
+long + 1s buffer, retry once. **General lesson: any HTTP integration
+with a rate-limited API needs retry-with-backoff. Don't assume
+unlimited quota.**
+
+**3. Self-reading feedback loops.**
+The heartbeat prompt suggested reading today's log file. The agent
+took the suggestion every tick. The log contains the agent's own
+*previous* heartbeat output. Each tick read the bloated log, added
+more text to the log, and the cycle compounded. Fix: explicit prompt
+instruction "DO NOT read the daily log files unless you have a
+specific recall task". Also capped `read_file` output at 16KB (tail
+preserved). **General lesson: when an agent both reads and writes the
+same source, the system has positive feedback. Either break the
+loop in the prompt or bound the read.**
+
+**4. Per-tick error isolation matters.**
+The retry failed the first time. Without the `try/except` in
+`heartbeat.tick()`, that single error would have killed the daemon.
+Instead the daemon logged and kept ticking. **General lesson: a
+background daemon must catch and continue on transient errors.
+Crash-on-first-failure is fine for CLI tools, not for services.**
+
 ### File layout after Phase 3
 
 ```

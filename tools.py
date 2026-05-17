@@ -38,17 +38,48 @@ def init(memory: Memory, autonomous: bool = False) -> None:
 
 # --- Tool implementations -------------------------------------------------
 
+# How much of a file to return at most. Above this, we keep the TAIL
+# (most recent content) and prepend a note. Keeps daily logs from blowing
+# up the context window, which would otherwise feed back on itself —
+# each heartbeat tick reads the log, writes more to the log, etc.
+READ_FILE_MAX_CHARS = 16_000
+
+
+def _normalize_workspace_path(path: str) -> str:
+    """Defensive path normalization.
+
+    The Docker container sets cwd to /app/workspace, so the agent's
+    relative paths are already inside the workspace. But LLMs often
+    still emit 'workspace/foo.md', which then becomes /app/workspace/
+    workspace/foo.md — a nested mess. We strip those prefixes so the
+    agent can be wrong about cwd and still land in the right place.
+    """
+    if path.startswith("/app/workspace/"):
+        return path[len("/app/workspace/"):]
+    if path.startswith("workspace/"):
+        return path[len("workspace/"):]
+    return path
+
+
 def read_file(path: str) -> str:
-    """Read a UTF-8 text file. Returns its contents as a string."""
-    return Path(path).read_text(encoding="utf-8")
+    """Read a UTF-8 text file. Returns its contents, capped to the last
+    READ_FILE_MAX_CHARS characters if the file is larger (tail preserved
+    because for logs and chronological files, recent content is what
+    matters)."""
+    text = Path(_normalize_workspace_path(path)).read_text(encoding="utf-8")
+    if len(text) <= READ_FILE_MAX_CHARS:
+        return text
+    truncated = text[-READ_FILE_MAX_CHARS:]
+    omitted = len(text) - READ_FILE_MAX_CHARS
+    return f"[...{omitted} chars omitted from start; showing tail...]\n\n{truncated}"
 
 
 def write_file(path: str, content: str) -> str:
     """Write text to a file (overwrites). Creates parent dirs if missing."""
-    p = Path(path)
+    p = Path(_normalize_workspace_path(path))
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
-    return f"Wrote {len(content)} bytes to {path}"
+    return f"Wrote {len(content)} bytes to {p}"
 
 
 def remember(name: str, description: str, type: str, body: str) -> str:
