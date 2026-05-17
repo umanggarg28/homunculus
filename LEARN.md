@@ -1791,3 +1791,90 @@ when reading, prune occasionally with judgment. We now have all three.
 The "hard cap on index lines" is the safety net: even if hygiene
 completely fails, only the 15 most-recently-touched memories make it
 into the prompt. Older entries become silent and harmless.
+
+
+## Phase 5.4.2 — Reliability fixes (timezone-aware scheduling + multi-provider routing)
+
+Two small but real reliability fixes bundled together.
+
+### Bug 1: `schedule_next_tick` rejected timezone-aware datetimes
+
+The agent in real conversations naturally emits ISO datetimes WITH
+timezone offsets — `"2026-05-18T09:00:00+05:30"` (the user asked for
+9am IST). Python's `datetime.fromisoformat` happily parses this into
+a timezone-aware datetime. But our code compared it against
+`datetime.now()` — which is naive. The comparison raised
+`TypeError: can't compare offset-naive and offset-aware datetimes`.
+
+The fix is two lines: if the parsed target has `tzinfo`, convert to
+local naive time before comparing. The same defensive normalization
+is now in `heartbeat._compute_sleep` in case any stale aware strings
+were persisted earlier.
+
+We also persist the *normalized* form (naive local ISO) so reads
+always succeed. Mixed naive/aware comparisons are one of those
+quintessential Python footguns; better to canonicalize on the way in
+than handle every read site.
+
+### Bug 2: Gemini fallback also hit 429
+
+Gemini's free tier is generous on TPM (1M) but tight on **RPM** (15)
+and **RPD** (1500). When the agent makes 4-5 LLM calls per turn (one
+per tool-use iteration) and three services share one key, hitting 15
+RPM becomes plausible. We were falling back to Gemini and immediately
+429ing there too.
+
+### Solution: multi-provider chain with cooldown routing
+
+The new provider chain has up to 4 slots:
+
+| Slot | Default provider | Free tier shape |
+|---|---|---|
+| 0 (primary) | Groq `gpt-oss-120b` | 8K TPM, 30 RPM |
+| 1 (fallback) | Gemini `gemini-2.0-flash` | 1M TPM, 15 RPM, 1500 RPD |
+| 2 (fallback 2) | OpenRouter `deepseek/deepseek-chat:free` | ~20 RPM, ~200 RPD/model |
+| 3 (fallback 3) | Cerebras `llama-3.3-70b` | Generous TPM, fast |
+
+Each slot independent — fill in only the keys you have.
+
+**The cooldown trick.** When a provider returns 429, we mark it dead
+for **60 seconds** via a module-level `_PROVIDER_COOLDOWN` dict, then
+move to the next provider in the chain. During those 60 seconds the
+cooled provider is **skipped entirely** — we don't re-attempt it just
+to discover it's still throttled. This is the key insight: every
+re-attempt of a throttled endpoint wastes a round trip *and* counts
+against limits on some providers. The cooldown turns 429s into
+zero-cost negative information that informs routing.
+
+After 60s the cooldown expires and the provider re-enters rotation.
+60 seconds is chosen because both Groq's TPM and Gemini's RPM are
+per-minute windows.
+
+**If all providers are cooled simultaneously**, `_providers()`
+returns the primary anyway (so the caller can attempt rather than
+crash on empty list), and `call_llm` does one final 30-second sleep
+before walking the chain again.
+
+### Telemetry: `llm_call` events
+
+Every successful API call now emits
+```json
+{"event": "llm_call", "model": "openai/gpt-oss-120b", "host": "api.groq.com"}
+```
+to the event stream. The live feed renders these as
+`⊛ llm openai/gpt-oss-120b via api.groq.com`. You can now
+literally watch the chain in action — see Groq answer turn 1, then
+notice it 429 on turn 2 and watch Gemini answer turn 2 from the same
+chat session, no error surfaced to the user.
+
+### Why this approach (vs paying)
+
+Paying $5-10/mo on Groq Dev Tier (30K TPM, no daily cap) would
+eliminate this whole problem with a single move. We chose the free
+stacking approach because the user explicitly wants "free tier only"
+for this project — both as a constraint and as a learning exercise
+in how production agentic systems route around rate limits.
+
+Stacking 4 free providers (~8K + 1M + ~14K + ~30K = ~1M+ effective
+TPM) gives roughly **125x** the headroom of Groq alone, for the
+price of three more sign-ups and three more env vars.

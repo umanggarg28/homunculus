@@ -46,15 +46,46 @@ API_URL = os.environ.get(
 )
 MODEL = os.environ.get("HOMUNCULUS_MODEL", "openai/gpt-oss-120b")
 
-# Optional fallback provider triggered on 429 from the primary. Default
-# target is Gemini's OpenAI-compatible endpoint — 1M TPM free tier (vs
-# Groq's 8K), large headroom when we burn through the primary window.
-# Falls back only if HOMUNCULUS_API_KEY_FALLBACK is set in env.
+# Fallback provider chain. Each slot is independent — set only the keys
+# you have. On 429 from one provider, we move to the next; a 429'd
+# provider is benched for PROVIDER_COOLDOWN_SECONDS so we don't hammer
+# a throttled endpoint.
+#
+# Slot 1 (HOMUNCULUS_API_KEY_FALLBACK): Gemini's OpenAI-compatible
+#   endpoint — 1M TPM free tier (vs Groq's 8K), but 15 RPM / 1500 RPD.
+# Slot 2 (HOMUNCULUS_API_KEY_FALLBACK_2): OpenRouter — many free models,
+#   ~20 RPM, ~200 RPD per model. Get key at openrouter.ai/keys.
+# Slot 3 (HOMUNCULUS_API_KEY_FALLBACK_3): Cerebras — fast inference,
+#   generous TPM. Get key at cloud.cerebras.ai.
 API_URL_FALLBACK = os.environ.get(
     "HOMUNCULUS_API_URL_FALLBACK",
     "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
 )
 MODEL_FALLBACK = os.environ.get("HOMUNCULUS_MODEL_FALLBACK", "gemini-2.0-flash")
+
+API_URL_FALLBACK_2 = os.environ.get(
+    "HOMUNCULUS_API_URL_FALLBACK_2",
+    "https://openrouter.ai/api/v1/chat/completions",
+)
+MODEL_FALLBACK_2 = os.environ.get(
+    "HOMUNCULUS_MODEL_FALLBACK_2", "deepseek/deepseek-chat:free"
+)
+
+API_URL_FALLBACK_3 = os.environ.get(
+    "HOMUNCULUS_API_URL_FALLBACK_3",
+    "https://api.cerebras.ai/v1/chat/completions",
+)
+MODEL_FALLBACK_3 = os.environ.get("HOMUNCULUS_MODEL_FALLBACK_3", "llama-3.3-70b")
+
+# How long to bench a provider after it returns 429. During this window
+# we skip it entirely and route to the next provider in the chain. 60s
+# is long enough for most rate-limit windows to refill (Groq TPM is
+# per-minute, Gemini RPM is per-minute).
+PROVIDER_COOLDOWN_SECONDS = 60.0
+
+# Module-level cooldown cache: url -> wall-clock expiry timestamp.
+# A provider is "cooled" if time.time() < its expiry.
+_PROVIDER_COOLDOWN: dict[str, float] = {}
 
 # Hard cap on tool-use iterations per user turn. Without this, a broken
 # LLM could call tools forever. 20 is plenty for any realistic task.
@@ -130,19 +161,35 @@ don't need.
 # --- HTTP layer -----------------------------------------------------------
 
 def _providers(model_override: str | None) -> list[tuple[str, str, str]]:
-    """Return ordered list of (url, api_key, model) to try.
+    """Return ordered (url, api_key, model) chain, skipping cooled providers.
 
-    Primary always present. Fallback included only if its API key is set
-    in env — otherwise we skip it (no point trying an endpoint with no
-    auth). The fallback's model is fixed (MODEL_FALLBACK) regardless of
-    the primary's per-call model override, since providers don't share
-    model names.
+    Slots:
+      0: primary (Groq) — required
+      1: fallback (Gemini by default) — if HOMUNCULUS_API_KEY_FALLBACK
+      2: fallback 2 (OpenRouter by default) — if HOMUNCULUS_API_KEY_FALLBACK_2
+      3: fallback 3 (Cerebras by default) — if HOMUNCULUS_API_KEY_FALLBACK_3
+
+    Empty key = slot skipped. Cooled provider (recent 429) = slot
+    skipped until cooldown expires. If ALL providers are cooled we
+    still return at least one so the caller can attempt rather than
+    crash on empty list — the call will likely 429 again and we'll
+    re-cool, which is fine.
     """
-    out = [(API_URL, os.environ.get("HOMUNCULUS_API_KEY", ""), model_override or MODEL)]
-    fb_key = os.environ.get("HOMUNCULUS_API_KEY_FALLBACK", "")
-    if fb_key:
-        out.append((API_URL_FALLBACK, fb_key, MODEL_FALLBACK))
-    return out
+    raw = [
+        (API_URL, os.environ.get("HOMUNCULUS_API_KEY", ""), model_override or MODEL),
+        (API_URL_FALLBACK, os.environ.get("HOMUNCULUS_API_KEY_FALLBACK", ""), MODEL_FALLBACK),
+        (API_URL_FALLBACK_2, os.environ.get("HOMUNCULUS_API_KEY_FALLBACK_2", ""), MODEL_FALLBACK_2),
+        (API_URL_FALLBACK_3, os.environ.get("HOMUNCULUS_API_KEY_FALLBACK_3", ""), MODEL_FALLBACK_3),
+    ]
+    have_keys = [p for p in raw if p[1]]
+    now = time.time()
+    fresh = [p for p in have_keys if _PROVIDER_COOLDOWN.get(p[0], 0) <= now]
+    return fresh or have_keys[:1]  # never return empty if any keys are set
+
+
+def _cool_provider(url: str) -> None:
+    """Mark a provider as 429'd; skip it for PROVIDER_COOLDOWN_SECONDS."""
+    _PROVIDER_COOLDOWN[url] = time.time() + PROVIDER_COOLDOWN_SECONDS
 
 
 def call_llm(
@@ -170,16 +217,48 @@ def call_llm(
         raise RuntimeError("HOMUNCULUS_API_KEY is not set.")
 
     providers = _providers(model)
-    last_response_text: str = ""
+    last_err = ""
 
     for idx, (url, key, model_id) in enumerate(providers):
-        if not key:
-            continue
         payload: dict[str, Any] = {"model": model_id, "messages": messages}
         if tool_schemas is not None:
             payload["tools"] = tool_schemas
             payload["tool_choice"] = "auto"
 
+        try:
+            response = httpx.post(
+                url,
+                headers={"Authorization": f"Bearer {key}"},
+                json=payload,
+                timeout=60.0,
+            )
+        except httpx.HTTPError as e:
+            last_err = f"{type(e).__name__}: {e}"
+            _cool_provider(url)
+            continue
+
+        if response.status_code == 429:
+            last_err = response.text
+            _cool_provider(url)
+            print(f"[call_llm] {model_id} 429 → cooling 60s, trying next", flush=True)
+            continue
+        if response.status_code >= 400:
+            raise RuntimeError(f"API error {response.status_code}: {response.text}")
+        # Emit which model actually answered, so the live feed shows it.
+        events.emit("llm_call", model=model_id, host=_url_host(url))
+        return response.json()["choices"][0]["message"]
+
+    # All providers in this attempt 429'd or errored. Honor a short sleep
+    # then retry the chain once — usually one provider's cooldown will
+    # have expired by then.
+    wait = 30.0
+    print(f"[call_llm] all providers cooled; sleeping {wait:.0f}s and retrying once", flush=True)
+    time.sleep(wait)
+    for url, key, model_id in _providers(model):
+        payload = {"model": model_id, "messages": messages}
+        if tool_schemas is not None:
+            payload["tools"] = tool_schemas
+            payload["tool_choice"] = "auto"
         response = httpx.post(
             url,
             headers={"Authorization": f"Bearer {key}"},
@@ -187,29 +266,22 @@ def call_llm(
             timeout=60.0,
         )
         if response.status_code == 429:
-            last_response_text = response.text
-            if idx + 1 < len(providers):
-                # Try fallback immediately — its budget is independent.
-                print(f"[call_llm] primary 429, trying fallback ({providers[idx+1][2]})", flush=True)
-                continue
-            # No more providers; honor retry-after and try primary again.
-            wait = _parse_retry_after(response) or 20.0
-            print(f"[call_llm] rate-limited, sleeping {wait:.1f}s before retry", flush=True)
-            time.sleep(wait + 1.0)
-            response = httpx.post(
-                url,
-                headers={"Authorization": f"Bearer {key}"},
-                json=payload,
-                timeout=60.0,
-            )
-            if response.status_code >= 400:
-                raise RuntimeError(f"API error {response.status_code}: {response.text}")
-            return response.json()["choices"][0]["message"]
+            _cool_provider(url)
+            continue
         if response.status_code >= 400:
             raise RuntimeError(f"API error {response.status_code}: {response.text}")
+        events.emit("llm_call", model=model_id, host=_url_host(url))
         return response.json()["choices"][0]["message"]
 
-    raise RuntimeError(f"All providers exhausted: {last_response_text}")
+    raise RuntimeError(f"All providers exhausted: {last_err}")
+
+
+def _url_host(url: str) -> str:
+    """Extract the host part of a URL for compact event labels."""
+    try:
+        return url.split("://", 1)[1].split("/", 1)[0]
+    except (IndexError, AttributeError):
+        return url
 
 
 def call_llm_stream(
@@ -238,14 +310,14 @@ def call_llm_stream(
     if not primary_key:
         raise RuntimeError("HOMUNCULUS_API_KEY is not set.")
 
-    # On 429, try the fallback provider transparently. We open the
-    # stream on whichever provider answers first without a 429.
+    # Walk the provider chain, cooling any that 429. Open the stream
+    # on whichever provider answers first without a rate-limit.
     last_err = ""
     response_ctx = None
     response = None
-    for idx, (url, key, model_id) in enumerate(_providers(model)):
-        if not key:
-            continue
+    used_url = ""
+    used_model = ""
+    for url, key, model_id in _providers(model):
         payload: dict[str, Any] = {
             "model": model_id,
             "messages": messages,
@@ -254,26 +326,38 @@ def call_llm_stream(
         if tool_schemas is not None:
             payload["tools"] = tool_schemas
             payload["tool_choice"] = "auto"
-        response_ctx = httpx.stream(
-            "POST",
-            url,
-            headers={"Authorization": f"Bearer {key}"},
-            json=payload,
-            timeout=120.0,
-        )
-        response = response_ctx.__enter__()
+        try:
+            response_ctx = httpx.stream(
+                "POST",
+                url,
+                headers={"Authorization": f"Bearer {key}"},
+                json=payload,
+                timeout=120.0,
+            )
+            response = response_ctx.__enter__()
+        except httpx.HTTPError as e:
+            last_err = f"{type(e).__name__}: {e}"
+            _cool_provider(url)
+            response_ctx = None
+            response = None
+            continue
         if response.status_code == 429:
             response.read()
             last_err = response.text
             response_ctx.__exit__(None, None, None)
             response_ctx = None
-            print(f"[call_llm_stream] {model_id} 429, trying next provider", flush=True)
+            response = None
+            _cool_provider(url)
+            print(f"[call_llm_stream] {model_id} 429 → cooling 60s, trying next", flush=True)
             continue
         if response.status_code >= 400:
             response.read()
             err = response.text
             response_ctx.__exit__(None, None, None)
             raise RuntimeError(f"API error {response.status_code}: {err}")
+        used_url = url
+        used_model = model_id
+        events.emit("llm_call", model=model_id, host=_url_host(url))
         break
 
     if response_ctx is None or response is None:

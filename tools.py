@@ -144,6 +144,12 @@ def schedule_next_tick(iso_datetime: str) -> str:
             f"ERROR: '{iso_datetime}' is not a valid ISO 8601 datetime. "
             f"Format: YYYY-MM-DDTHH:MM:SS (e.g. 2026-05-18T08:00:00)."
         )
+    # The agent often passes ISO strings WITH timezone offsets (e.g.
+    # "+05:30"). datetime.now() is naive (no tzinfo). Comparing naive
+    # vs aware raises TypeError. Normalize both to local naive time
+    # before comparing.
+    if target.tzinfo is not None:
+        target = target.astimezone().replace(tzinfo=None)
     now = datetime.now()
     if target <= now:
         return f"ERROR: target time {target} is in the past (now: {now})."
@@ -153,9 +159,11 @@ def schedule_next_tick(iso_datetime: str) -> str:
             f"Schedule something sooner; you can always re-schedule from "
             f"the next tick."
         )
-    _memory.set_next_tick(iso_datetime)
+    # Persist the NORMALIZED (naive local) form so _compute_sleep can
+    # parse it back without timezone gymnastics.
+    _memory.set_next_tick(target.isoformat(timespec="seconds"))
     delta = target - now
-    return f"Scheduled next heartbeat for {iso_datetime} (in {delta})."
+    return f"Scheduled next heartbeat for {target.isoformat(timespec='seconds')} (in {delta})."
 
 
 def python_exec(code: str, timeout: int = 30) -> str:
