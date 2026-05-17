@@ -429,7 +429,7 @@ SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "python_exec",
+            "name": "python",
             "description": (
                 "Run Python code in a sandboxed container (no network, "
                 "256MB RAM cap, 0.5 CPU, read-only filesystem, 30s "
@@ -555,7 +555,7 @@ TOOLS = {
     "read_file": read_file,
     "write_file": write_file,
     "remember": remember,
-    "python_exec": python_exec,
+    "python": python_exec,
     "web_search": web_search,
     "web_fetch": web_fetch,
     "schedule_next_tick": schedule_next_tick,
