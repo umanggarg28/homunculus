@@ -85,6 +85,18 @@ def write_file(path: str, content: str) -> str:
     return f"Wrote {len(content)} bytes to {p}"
 
 
+def forget(name: str) -> str:
+    """Delete a memory that's outdated, contradicted, or no longer relevant.
+
+    Pass either the human name ("User Role") or the slug filename
+    ("user_user_role"). Idempotent — safe to call on already-gone
+    memories. Use sparingly: when in doubt, leave it.
+    """
+    if _memory is None:
+        return "ERROR: memory subsystem is not initialized"
+    return _memory.forget(name)
+
+
 def remember(
     name: str,
     description: str,
@@ -415,6 +427,20 @@ SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "forget",
+            "description": "Delete a memory by name or filename. Use when an entry is outdated, contradicted, or no longer relevant. Use sparingly — when in doubt, leave it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Memory name or filename (with or without .md)."}
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "remember",
             "description": "Save a durable fact to long-term memory (persists across sessions). Not for ephemeral state.",
             "parameters": {
@@ -539,6 +565,7 @@ TOOLS = {
     "read_file": read_file,
     "write_file": write_file,
     "remember": remember,
+    "forget": forget,
     "python": python_exec,
     "web_search": web_search,
     "web_fetch": web_fetch,

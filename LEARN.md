@@ -1691,3 +1691,103 @@ quality on the happy path. Long-term, if this matters more, the next
 move is either paying for higher Groq tier (~$10/mo) or running a
 local model via Ollama (free, slower, no rate limits — but the user
 explicitly ruled out local for this project).
+
+
+## Phase 5.4.1 — Memory Hygiene
+
+### Goal
+
+A way for the agent to **delete its own stale memories**, modeled on
+how Claude Code handles the same problem: write discipline + read-time
+verification + sparse deletion, not time-based decay.
+
+### What Claude Code actually does (researched, not guessed)
+
+Looking at Claude Code's own system prompt and `/context` output:
+
+1. **"Don't duplicate" rule at write time.** The agent is told: before
+   calling `remember()`, scan the index. If an existing memory covers
+   the same fact, update it (same name → overwrite) rather than create
+   a new entry. This keeps memory growth slow.
+
+2. **Hard line cap on `MEMORY.md` (~200 lines).** Anything past the cap
+   is silently truncated when loaded into context. Working set bounded
+   even if disk-bound entries pile up.
+
+3. **"Update or remove" rule.** When the agent notices a memory is
+   wrong or outdated, it's responsible for cleaning up.
+
+4. **Verify-before-action.** A memory is a *claim* that needs
+   re-checking, not ground truth. Stale entries get caught at use-time.
+
+5. **No automatic deletion.** No background reaper, no time-based
+   decay. Hygiene is a *judgment* the agent applies during its own
+   work, not a cron job.
+
+### What we already had
+
+| Claude Code | Homunculus before this phase |
+|---|---|
+| "Don't duplicate" rule in prompt | Same-name upsert worked but no prompt rule |
+| Index cap (~200 lines) | Index cap of 15 entries |
+| `forget()` capability | **Missing — no way to delete from inside the agent** |
+| Verify-before-action | Staleness markers (`⚠ may be stale`) but no explicit rule |
+
+### Three small changes
+
+**1. `Memory.forget(identifier)`** — accepts a name ("User Role") OR
+a filename ("user_user_role" / "user_user_role.md"). Resolution tries
+exact filename first, then name without `.md`, then slugifies the name
+and probes each type prefix. Removes BOTH the body file and the index
+line. **Idempotent** — already-gone memories return a benign status,
+no exception. This matters: the agent shouldn't need try/except around
+hygiene calls.
+
+**2. `forget` tool** — schema with one string arg, registered in
+`TOOLS`. The tool description deliberately includes "use sparingly —
+when in doubt, leave it" so the LLM's behavior leans conservative.
+
+**3. System prompt: "Memory hygiene" section** — four numbered rules:
+   - Scan before write; reuse same name to overwrite, not duplicate
+   - Forget contradicted/outdated memories when encountered
+   - Verify "may be stale" entries against reality before acting
+   - Be conservative — losing context is worse than carrying old facts
+
+**4. Reflection prompt extension** — the Phase 5.4 daily reflection
+tick now includes an explicit hygiene pass: scan for duplicates,
+contradictions, irrelevant entries; `forget()` at most 2 per tick.
+The "at most 2" bound prevents over-deletion sprees if the model has
+a bad day.
+
+### Why this preserves quality
+
+- The agent only deletes things **it judges** obsolete. It has full
+  conversation context for the judgment.
+- The reflection tick is **bounded** (≤ 2 deletes/day) so accidental
+  over-pruning is capped.
+- Memory is **append-easy via remember()** — restoration after
+  accidental deletion is one chat message away.
+- The system prompt's "when in doubt, leave it" instruction biases
+  toward keeping, not deleting.
+
+### Why we deliberately did NOT add
+
+- **Time-based automatic decay.** A 6-month-old `user_role` is still
+  true. Age alone doesn't mean stale. Claude Code agrees — no decay
+  in their design either.
+- **LLM-as-judge background pruning daemon.** Already have the
+  reflection tick; one daily pass is enough. A continuous reaper
+  would be expensive and noisy.
+- **A "deleted memories" trash folder.** Memories are markdown — easy
+  to write back via `remember()` if a mistake happens. Trash adds
+  complexity for a problem that doesn't materialize.
+
+### The honest takeaway
+
+**There's no magic auto-pruner.** The same is true at the Claude Code
+scale. The strategy that works is: be careful when writing, verify
+when reading, prune occasionally with judgment. We now have all three.
+
+The "hard cap on index lines" is the safety net: even if hygiene
+completely fails, only the 15 most-recently-touched memories make it
+into the prompt. Older entries become silent and harmless.
