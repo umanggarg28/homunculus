@@ -4,7 +4,7 @@
 > **Phase 2.5** (daily logs + age awareness), **Phase 3** (autonomous
 > heartbeat), **Phase 4** (Telegram bridge), **Phase 5.0** (token
 > efficiency: compaction, model override, index cap), **Phase 5.1**
-> (self-scheduling heartbeat).
+> (self-scheduling heartbeat), **Phase 5.2** (web research).
 
 A reference doc for understanding every piece of this project. Written to be
 useful months from now when you've forgotten the details. If you only read
@@ -923,11 +923,60 @@ that knows when to act."
 
 ---
 
+## Phase 5.2 — Web Research
+
+Two new tools — the agent can now actually research things.
+
+### `web_search(query)`
+
+Wraps Tavily (https://tavily.com, 1000 free searches/month). Returns:
+- An auto-generated answer summary (when Tavily judges it useful)
+- Up to 5 results: title, URL, content snippet
+
+Why Tavily over Serper: Tavily is built for agents. Its snippets are
+content-extracted, not just metadata, so a single search often
+finishes the research. Serper-style Google results would require a
+follow-up `web_fetch` for almost every query, doubling API roundtrips.
+The dispatcher is provider-agnostic (`WEB_SEARCH_PROVIDER` env var),
+so we can swap later.
+
+### `web_fetch(url)`
+
+Downloads a page and returns its main text content. Uses
+BeautifulSoup to strip noise (script, style, nav, footer, aside,
+header, noscript), then collapses blank lines. Capped at
+`READ_FILE_MAX_CHARS` (16K) — the LLM rarely needs more, and bigger
+blobs blow up the context window.
+
+### Why both tools, not just one
+
+Tavily snippets are good but truncated (~500 chars each). For a deep
+read — full article, documentation page — the agent needs `web_fetch`.
+The natural workflow:
+
+1. `web_search("groq pricing 2026")` → 5 snippets with URLs
+2. Agent picks the most authoritative URL
+3. `web_fetch(url)` → full page text
+4. Agent cites it in the response
+
+### Setup
+
+Sign up for a Tavily key (free), put it in `.env`:
+
+```
+TAVILY_API_KEY=tvly-...
+```
+
+If unset, `web_search` returns a clear "key not configured" message —
+the agent learns the tool isn't available this session and stops
+trying it.
+
+---
+
 ## What's Next
 
-5.0 and 5.1 are done. The next planned features (5.2 web research,
-5.3 code execution, 5.4 self-improvement loop, 5.5 calendar, 5.6
-email) are documented in `IDEAS.md`.
+Up next from `IDEAS.md`: 5.3 (code execution sandbox), 5.4 (self-
+improvement loop), 5.5 (calendar), 5.6 (email triage).
 
 ### Highlights of `IDEAS.md`
 
