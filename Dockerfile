@@ -6,6 +6,15 @@
 # The container is the sandbox: shell_exec runs INSIDE it, so commands
 # can only touch the container's filesystem, not your host.
 
+FROM node:20-slim AS web-build
+
+WORKDIR /web
+COPY web/package*.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
+
 FROM python:3.12-slim
 
 # Copy the uv binary from Astral's official image — avoids a curl/install step.
@@ -29,9 +38,11 @@ COPY pyproject.toml ./
 RUN uv sync --no-install-project
 
 # Copy the source code into the image.
-COPY core.py tools.py memory.py main.py heartbeat.py telegram_bot.py events.py feed.py ./
+COPY core.py memory.py tasks.py heartbeat.py events.py homunculus.yaml ./
+COPY tools/ ./tools/
+COPY transports/ ./transports/
+COPY --from=web-build /web/dist /app/web-dist
 
-# uv run picks up the project's venv automatically (at .venv/).
-# Absolute path so this works regardless of working_dir (compose sets cwd
-# to /app/workspace so the agent's relative paths land there).
-CMD ["uv", "run", "--project", "/app", "python", "/app/main.py"]
+# Default command is the REPL transport. docker-compose overrides per
+# service (telegram, web_api, heartbeat) — see docker-compose.yml.
+CMD ["uv", "run", "--project", "/app", "python", "-m", "transports.repl"]

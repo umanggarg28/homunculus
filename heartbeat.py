@@ -27,21 +27,24 @@ from dotenv import load_dotenv
 import tools
 from core import Agent
 from memory import Memory
+from tasks import TaskStore
 
 
 HEARTBEAT_PROMPT_TEMPLATE = """It's a scheduled heartbeat tick — no user is
 talking to you right now. The current time is {now_iso}.
 
-Look at your MEMORY INDEX (already in your system prompt) and decide if
-there's anything proactive worth doing RIGHT NOW.
+Python already checked structured task state and found these due tasks:
+
+{due_tasks}
+
+Handle ONLY the due task(s). Do not invent unrelated proactive work.
 
 Examples of useful proactive actions:
-- Notice a follow-up the user mentioned and leave a `remember()` note
-  about it.
-- Draft a short summary of recent work and save it (a simple filename
-  like `summary.md` lands in the workspace).
-- For time-sensitive memories (e.g. a deadline tomorrow), use `notify()`
-  to push a message to the user's Telegram. Use sparingly.
+- For notification tasks, use `notify()` with a concise message.
+- For research/delivery tasks, do the minimal needed work and save or
+  notify the result as the task description asks.
+- When a task is handled, call `complete_task(task_id, result)` so
+  one-shot tasks stop firing and recurring tasks advance.
 
 Scheduling: by default the next tick is in ~10 minutes. If you'd like
 to adjust that (e.g. wake at 8am tomorrow before a deadline, or in
@@ -52,8 +55,7 @@ Important rules:
 - DO NOT read the daily log files unless you have a specific recall
   task. Logs contain your own previous heartbeat output and reading
   them every tick creates a feedback loop. Trust your memory index.
-- If nothing genuinely useful comes to mind, say so in ONE line and
-  STOP. Doing nothing is fine. Don't invent busywork.
+- If a due task cannot be completed, leave it active and briefly say why.
 - shell_exec is disabled. If a task would need shell access, call
   remember() to leave a note for the user.
 """
@@ -76,6 +78,14 @@ Step 2 — Look for PATTERNS worth carrying forward:
   you should avoid? → save as a "feedback" memory phrased as a rule.
 - Did the user confirm a non-obvious choice worked well? → save as a
   "feedback" memory so future-you keeps doing it.
+- Did you successfully complete a NON-TRIVIAL multi-step workflow
+  (e.g. "deliver daily LeetCode" = read tracker → pick problem →
+  fetch solution → notify → update tracker → complete task)? → save
+  as a "skill" memory with name `skill_<slug>` listing the steps in
+  order. This is how you learn your own job: next time the same
+  trigger fires, read the skill and replay. A skill memory's body
+  should start with "Trigger:" (when to use it) and then numbered
+  steps. Keep it short — the procedure, not the prose.
 
 Step 3 — Save AT MOST 3 new memories via remember(). Fewer is fine.
 Skip anything trivial or already covered by an existing memory in your
@@ -129,10 +139,10 @@ def tick(memory: Memory, model: str | None) -> None:
     last = memory.get_last_reflection_date()
     do_reflection = last is None or last < today
 
-    agent = Agent(memory=memory, model=model)
     now_iso = datetime.now().isoformat(timespec="seconds")
 
     if do_reflection:
+        agent = Agent(memory=memory, model=model)
         yesterday_iso, yesterday_path = _yesterday_iso_and_path()
         print(f"\n[heartbeat] REFLECTION tick at {now_iso} "
               f"(reviewing {yesterday_iso}, model={agent.model})", flush=True)
@@ -146,10 +156,51 @@ def tick(memory: Memory, model: str | None) -> None:
         print(f"[agent] {response}", flush=True)
         return
 
-    print(f"\n[heartbeat] tick at {now_iso} (model={agent.model})", flush=True)
-    prompt = HEARTBEAT_PROMPT_TEMPLATE.format(now_iso=now_iso)
-    response = agent.chat(prompt)
+    tasks = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
+    due_tasks = tasks.due()
+    if not due_tasks:
+        print(f"\n[heartbeat] tick at {now_iso}: no due tasks; skipping LLM", flush=True)
+        return
+
+    agent = Agent(memory=memory, model=model)
+    print(
+        f"\n[heartbeat] tick at {now_iso}: {len(due_tasks)} due task(s) "
+        f"(model={agent.model})",
+        flush=True,
+    )
+    prompt = HEARTBEAT_PROMPT_TEMPLATE.format(
+        now_iso=now_iso,
+        due_tasks=_format_due_tasks(due_tasks),
+    )
+    started = datetime.now()
+    try:
+        response = agent.chat(prompt)
+    except Exception as e:
+        # Record per-task failure so reliability is auditable. Status
+        # stays active; heartbeat retries on next tick.
+        duration = (datetime.now() - started).total_seconds()
+        err = f"{type(e).__name__}: {e}"
+        for task in due_tasks:
+            try:
+                tasks.record_failure(task["id"], err, duration_s=duration)
+            except Exception:
+                pass
+        raise
     print(f"[agent] {response}", flush=True)
+
+
+def _format_due_tasks(tasks: list[dict]) -> str:
+    lines = []
+    for task in tasks:
+        lines.append(
+            f"- id: {task.get('id')}\n"
+            f"  title: {task.get('title')}\n"
+            f"  due_at: {task.get('due_at')}\n"
+            f"  recurrence: {task.get('recurrence', 'none')}\n"
+            f"  notify: {task.get('notify', False)}\n"
+            f"  description: {task.get('description', '')}"
+        )
+    return "\n".join(lines)
 
 
 def main() -> None:
@@ -189,14 +240,16 @@ def _compute_sleep(memory: Memory, default_seconds: float) -> float:
     Pops the scheduled time so each tick decides independently — if the
     agent forgets to schedule next time, we don't reuse a stale value.
     """
+    task_store = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
+    next_task = task_store.next_due_seconds()
     scheduled = memory.pop_next_tick()
     if scheduled is None:
-        return default_seconds
+        return min(default_seconds, next_task) if next_task is not None else default_seconds
     try:
         target = datetime.fromisoformat(scheduled)
     except ValueError:
         print(f"[heartbeat] could not parse scheduled time '{scheduled}', using default", flush=True)
-        return default_seconds
+        return min(default_seconds, next_task) if next_task is not None else default_seconds
     # Defense-in-depth: schedule_next_tick now persists naive local time,
     # but older stored values might be timezone-aware. Normalize before
     # comparing to datetime.now() (which is naive).
@@ -205,13 +258,13 @@ def _compute_sleep(memory: Memory, default_seconds: float) -> float:
     delta = (target - datetime.now()).total_seconds()
     if delta <= 0:
         print(f"[heartbeat] scheduled time {scheduled} is in the past, using default", flush=True)
-        return default_seconds
+        return min(default_seconds, next_task) if next_task is not None else default_seconds
     # The schedule_next_tick tool already caps at 24h on the way in, but
     # double-check here as a defense-in-depth.
     capped = min(delta, 24 * 3600)
     if capped < delta:
         print(f"[heartbeat] capping {delta:.0f}s schedule to 24h", flush=True)
-    return capped
+    return min(capped, next_task) if next_task is not None else capped
 
 
 if __name__ == "__main__":

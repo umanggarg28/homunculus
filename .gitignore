@@ -2,10 +2,20 @@
 __pycache__/
 *.pyc
 .venv/
+_events.jsonl
+
+# Frontend dependencies and build output.
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts
 
 # Runtime state — agent's working files and memory are user-specific.
 workspace/*
 !workspace/.gitkeep
+tasks/
+cache/
 
 # Obsidian per-user state — if you open workspace/memory as a vault,
 # Obsidian creates these. Already covered by `workspace/*` but listed

@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 import events
 import tools
 from memory import Memory
+from tasks import TaskStore
 
 # Load .env at module import so config reads below see its values. Safe
 # to call twice (main.py also calls it) — load_dotenv won't overwrite
@@ -53,8 +54,9 @@ MODEL = os.environ.get("HOMUNCULUS_MODEL", "openai/gpt-oss-120b")
 #
 # Slot 1 (HOMUNCULUS_API_KEY_FALLBACK): Gemini's OpenAI-compatible
 #   endpoint — 1M TPM free tier (vs Groq's 8K), but 15 RPM / 1500 RPD.
-# Slot 2 (HOMUNCULUS_API_KEY_FALLBACK_2): OpenRouter — many free models,
-#   ~20 RPM, ~200 RPD per model. Get key at openrouter.ai/keys.
+# Slot 2 (HOMUNCULUS_API_KEY_FALLBACK_2): OpenRouter — free endpoints
+#   can disappear or rate-limit upstream. We accept a comma-separated
+#   list and try each model before moving to the next provider.
 # Slot 3 (HOMUNCULUS_API_KEY_FALLBACK_3): Cerebras — fast inference,
 #   generous TPM. Get key at cloud.cerebras.ai.
 API_URL_FALLBACK = os.environ.get(
@@ -68,7 +70,7 @@ API_URL_FALLBACK_2 = os.environ.get(
     "https://openrouter.ai/api/v1/chat/completions",
 )
 MODEL_FALLBACK_2 = os.environ.get(
-    "HOMUNCULUS_MODEL_FALLBACK_2", "deepseek/deepseek-chat:free"
+    "HOMUNCULUS_MODEL_FALLBACK_2", "qwen/qwen3-coder:free,openrouter/free"
 )
 
 API_URL_FALLBACK_3 = os.environ.get(
@@ -82,9 +84,10 @@ MODEL_FALLBACK_3 = os.environ.get("HOMUNCULUS_MODEL_FALLBACK_3", "llama-3.3-70b"
 # is long enough for most rate-limit windows to refill (Groq TPM is
 # per-minute, Gemini RPM is per-minute).
 PROVIDER_COOLDOWN_SECONDS = 60.0
+PROVIDER_UNAVAILABLE_COOLDOWN_SECONDS = 10 * 60.0
 
-# Module-level cooldown cache: url -> wall-clock expiry timestamp.
-# A provider is "cooled" if time.time() < its expiry.
+# Module-level cooldown cache: url|model -> wall-clock expiry timestamp.
+# A provider/model pair is "cooled" if time.time() < its expiry.
 _PROVIDER_COOLDOWN: dict[str, float] = {}
 
 # Hard cap on tool-use iterations per user turn. Without this, a broken
@@ -100,61 +103,46 @@ COMPACT_TRIGGER = 15
 COMPACT_KEEP_RECENT = 6
 
 
-SYSTEM_PROMPT = """You are Homunculus, a minimal autonomous personal assistant.
+SYSTEM_PROMPT = """You are Homunculus — an autonomous personal assistant with persistent memory.
 
-Working directory: your current directory IS already the workspace. Use
-plain relative filenames like `summary.md` or `notes/today.md`. Do NOT
-prefix paths with `workspace/` — that would create a nested
-workspace/workspace/ folder by mistake. Memory lives at `memory/`,
-daily logs at `memory/logs/YYYY/MM/YYYY-MM-DD.md` (these paths are
-correct as-is).
+Paths: your cwd IS the workspace. Use plain relative paths like `notes.md` or
+`memory/logs/2026/05/2026-05-19.md`. Never prefix with `workspace/`.
 
-You have these tools available:
-- read_file(path): read a UTF-8 text file
-- write_file(path, content): write text to a file (overwrites)
-- shell_exec(command): run a shell command (user must approve each one)
-- remember(name, description, type, body, related=None): save a durable fact to long-term memory. `related` is an optional list of memory slugs (e.g. ["user_role", "project_homunculus"]) when this memory naturally connects to existing ones — they render as Obsidian [[wikilinks]] so the graph view shows the relationship.
-- forget(name): delete an outdated, contradicted, or irrelevant memory by name or filename. Use sparingly; see the "Memory hygiene" rules below.
-- python(code): run Python code in a sandbox container (no network, 256MB cap, 30s timeout). Returns stdout/stderr. Use for math, parsing, computation, verification. Cannot persist files.
-- web_search(query): search the web. Returns titles, URLs, snippets, and often an answer summary. Use for current/external info not in your memory. When you use results, ALWAYS cite the full URL (https://...), never just the positional index like "result 1" — positional refs are useless to the user.
-- web_fetch(url): download a URL and return its main text. Use to read a full article after web_search identifies it.
-- notify(text): push a message to the user via Telegram. INTERRUPTS them — use sparingly, only for time-sensitive things (a deadline tomorrow, a question that blocks progress). Routine summaries belong in files, not notifications.
+Memory:
+- Your MEMORY INDEX appears below. Each entry links to a file; read_file
+  it when relevant. Entries marked "⚠ may be stale" — verify before
+  acting on them.
+- Before remember(), check if an entry already covers the fact. If so,
+  reuse the same `name` to overwrite, don't create duplicates.
+- If a memory is contradicted or obsolete, forget() it. Be conservative —
+  carrying old facts is better than losing context.
+- Types: user (about the user) · feedback (rules to follow) · project
+  (active work) · reference (external pointers) · skill (procedures —
+  how to do a thing, saved during reflection).
 
-Memory works like this: every session you receive a "Your memory" section
-below containing an index of everything you've remembered before. Each
-entry is a short link to a detail file, annotated with how old it is
-("today", "3 days ago", etc.). Entries marked "may be stale" should be
-double-checked against current code before you act on them. When an entry
-looks relevant to the current task, use read_file to load its full body.
+Scheduling:
+- For "every day at X" / "every week" / any RECURRING commitment, use
+  create_task(recurrence="daily"|"weekly") — NEVER schedule_next_tick.
+- schedule_next_tick is for one-shot wake timers only.
 
-Conversation logs: every user message and your final reply are appended
-to memory/logs/YYYY/MM/YYYY-MM-DD.md (append-only). During end-of-session
-reflection, you may use read_file on recent log files to remind yourself
-what happened before saving durable facts via remember(). Memory types:
-- "user": facts about the user (role, expertise, preferences)
-- "feedback": collaboration rules the user has set
-- "project": ongoing work context
-- "reference": pointers to external resources
+Self-extension (Pi-style):
+- For non-trivial Python you'll want again later — data parsing, a
+  fetch+transform, a report builder — write the code to
+  `scripts/<slug>.py` with write_file, then run it via:
+      code = read_file("scripts/<slug>.py")
+      python(code)
+  The sandbox is ephemeral, but scripts/ persists across sessions.
+  Treat scripts/ as your toolbox. Refine in place; reuse next time.
 
-Memory hygiene (important — keeps the index small and signal-rich):
-1. BEFORE calling remember(), scan your memory index for an existing
-   entry that covers the same fact. If one exists, call remember() with
-   the SAME `name` as that entry — that overwrites it in place rather
-   than creating a duplicate (`user_role` vs `user_role_2`).
-2. If you encounter a memory that is contradicted by current reality
-   or by a newer memory, call forget() on the outdated one. Don't
-   leave conflicting entries — they confuse future you.
-3. Before acting on a memory marked "⚠ may be stale", verify it
-   against current state (file exists, fact is still true). If the
-   memory is plainly wrong, forget() it. If still valid, just trust
-   and proceed (the staleness flag is a hint, not a problem).
-4. Be conservative with forget(). When in doubt, leave the memory
-   alone — losing context is worse than carrying a slightly old fact.
-
-Think step by step. Use a tool when you need information from disk or
-the system; otherwise answer directly. When a task is complete, reply with
-a short summary instead of calling another tool. Don't call tools you
-don't need.
+Behaviour:
+- Cite full URLs (https://…) when you use web_search results — never
+  "result 1".
+- If web_fetch is blocked (401/403/429), do NOT retry the same URL.
+  Use snippets, your knowledge, or a different source.
+- notify() interrupts the user's phone. Reserve for time-sensitive
+  things; routine output goes in files.
+- Short, direct replies. When a task is complete, summarise in one or
+  two lines — don't call more tools.
 """
 
 
@@ -175,21 +163,66 @@ def _providers(model_override: str | None) -> list[tuple[str, str, str]]:
     crash on empty list — the call will likely 429 again and we'll
     re-cool, which is fine.
     """
-    raw = [
+    raw_slots = [
         (API_URL, os.environ.get("HOMUNCULUS_API_KEY", ""), model_override or MODEL),
         (API_URL_FALLBACK, os.environ.get("HOMUNCULUS_API_KEY_FALLBACK", ""), MODEL_FALLBACK),
         (API_URL_FALLBACK_2, os.environ.get("HOMUNCULUS_API_KEY_FALLBACK_2", ""), MODEL_FALLBACK_2),
         (API_URL_FALLBACK_3, os.environ.get("HOMUNCULUS_API_KEY_FALLBACK_3", ""), MODEL_FALLBACK_3),
     ]
+    raw = [
+        (url, key, model_id)
+        for url, key, model_spec in raw_slots
+        for model_id in _expand_model_spec(model_spec)
+    ]
     have_keys = [p for p in raw if p[1]]
     now = time.time()
-    fresh = [p for p in have_keys if _PROVIDER_COOLDOWN.get(p[0], 0) <= now]
+    fresh = [p for p in have_keys if _PROVIDER_COOLDOWN.get(_provider_key(p[0], p[2]), 0) <= now]
     return fresh or have_keys[:1]  # never return empty if any keys are set
 
 
-def _cool_provider(url: str) -> None:
-    """Mark a provider as 429'd; skip it for PROVIDER_COOLDOWN_SECONDS."""
-    _PROVIDER_COOLDOWN[url] = time.time() + PROVIDER_COOLDOWN_SECONDS
+def _expand_model_spec(model_spec: str) -> list[str]:
+    """Split comma-separated model ids, preserving a single-model default."""
+    models = [m.strip() for m in model_spec.split(",") if m.strip()]
+    return models or [model_spec]
+
+
+def _provider_key(url: str, model_id: str) -> str:
+    return f"{url}|{model_id}"
+
+
+def _cool_provider(
+    url: str,
+    model_id: str,
+    seconds: float = PROVIDER_COOLDOWN_SECONDS,
+) -> None:
+    """Mark a provider as temporarily unavailable; skip until expiry."""
+    _PROVIDER_COOLDOWN[_provider_key(url, model_id)] = time.time() + seconds
+
+
+def _is_transient_provider_error(response: httpx.Response) -> bool:
+    """Return True for provider/model-routing errors worth falling back from.
+
+    OpenRouter free endpoints can disappear or be temporarily unavailable.
+    Their 404 "No endpoints found..." is a routing condition, not a bug
+    in the user request, so we bench that provider and try the next slot.
+    """
+    if response.status_code == 429:
+        return True
+    if response.status_code in {404, 502, 503, 504}:
+        # `.text` on a streaming response that hasn't been .read() yet
+        # raises ResponseNotRead. .read() is idempotent for buffered
+        # responses, so it's safe to call unconditionally.
+        try:
+            response.read()
+        except Exception:
+            pass
+        body = response.text.lower()
+        return (
+            "no endpoints found" in body
+            or "no endpoint" in body
+            or response.status_code in {502, 503, 504}
+        )
+    return False
 
 
 def call_llm(
@@ -234,13 +267,22 @@ def call_llm(
             )
         except httpx.HTTPError as e:
             last_err = f"{type(e).__name__}: {e}"
-            _cool_provider(url)
+            _cool_provider(url, model_id)
             continue
 
         if response.status_code == 429:
             last_err = response.text
-            _cool_provider(url)
+            _cool_provider(url, model_id)
             print(f"[call_llm] {model_id} 429 → cooling 60s, trying next", flush=True)
+            continue
+        if _is_transient_provider_error(response):
+            last_err = response.text
+            _cool_provider(url, model_id, PROVIDER_UNAVAILABLE_COOLDOWN_SECONDS)
+            print(
+                f"[call_llm] {model_id} unavailable ({response.status_code}) "
+                "→ cooling 10m, trying next",
+                flush=True,
+            )
             continue
         if response.status_code >= 400:
             raise RuntimeError(f"API error {response.status_code}: {response.text}")
@@ -266,7 +308,11 @@ def call_llm(
             timeout=60.0,
         )
         if response.status_code == 429:
-            _cool_provider(url)
+            _cool_provider(url, model_id)
+            continue
+        if _is_transient_provider_error(response):
+            last_err = response.text
+            _cool_provider(url, model_id, PROVIDER_UNAVAILABLE_COOLDOWN_SECONDS)
             continue
         if response.status_code >= 400:
             raise RuntimeError(f"API error {response.status_code}: {response.text}")
@@ -337,7 +383,7 @@ def call_llm_stream(
             response = response_ctx.__enter__()
         except httpx.HTTPError as e:
             last_err = f"{type(e).__name__}: {e}"
-            _cool_provider(url)
+            _cool_provider(url, model_id)
             response_ctx = None
             response = None
             continue
@@ -347,8 +393,21 @@ def call_llm_stream(
             response_ctx.__exit__(None, None, None)
             response_ctx = None
             response = None
-            _cool_provider(url)
+            _cool_provider(url, model_id)
             print(f"[call_llm_stream] {model_id} 429 → cooling 60s, trying next", flush=True)
+            continue
+        if _is_transient_provider_error(response):
+            response.read()
+            last_err = response.text
+            response_ctx.__exit__(None, None, None)
+            response_ctx = None
+            response = None
+            _cool_provider(url, model_id, PROVIDER_UNAVAILABLE_COOLDOWN_SECONDS)
+            print(
+                f"[call_llm_stream] {model_id} unavailable ({response.status_code}) "
+                "→ cooling 10m, trying next",
+                flush=True,
+            )
             continue
         if response.status_code >= 400:
             response.read()
@@ -449,11 +508,12 @@ class Agent:
     ) -> None:
         self.memory = memory
         self.model = model or MODEL
-        # If memory is provided, paste the index into the system prompt so
-        # the LLM sees what's already been remembered.
+        # If memory is provided, paste a small index into the system prompt so
+        # the LLM knows what memories exist. Full relevant snippets are
+        # retrieved per user turn, without being saved into session history.
         full_prompt = system_prompt
         if memory is not None:
-            full_prompt += "\n\n# Your memory\n\n" + memory.load_index()
+            full_prompt += "\n\n# Your memory index\n\n" + memory.load_index(max_entries=8)
         self.history: list[dict] = [{"role": "system", "content": full_prompt}]
 
     def reset(self) -> None:
@@ -500,60 +560,73 @@ class Agent:
         number of times before producing a final answer. We cap at
         MAX_TURNS as a safety net.
         """
+        local = self._handle_local_command(user_message)
+        if local is not None:
+            if self.memory is not None:
+                self.memory.log_turn("user", user_message)
+                self.memory.log_turn("assistant", local)
+            events.emit("user_message", text=events.truncate_preview(user_message))
+            events.emit("assistant_reply", text=events.truncate_preview(local))
+            return local
+
         self._maybe_compact()  # bound history growth before adding more
 
+        memory_context_index = self._inject_relevant_memory(user_message)
         self.history.append({"role": "user", "content": user_message})
         if self.memory is not None:
             self.memory.log_turn("user", user_message)
         events.emit("user_message", text=events.truncate_preview(user_message))
 
-        for _ in range(MAX_TURNS):
-            assistant_msg = call_llm(self.history, tools.SCHEMAS, model=self.model)
-            # Keep only fields the API accepts on the request side. Groq
-            # returns extras like `reasoning`, sometimes `executed_tools`,
-            # and explicit `null` fields — replaying those triggers 400s.
-            cleaned: dict[str, Any] = {"role": "assistant"}
-            if assistant_msg.get("content"):
-                cleaned["content"] = assistant_msg["content"]
-            if assistant_msg.get("tool_calls"):
-                cleaned["tool_calls"] = assistant_msg["tool_calls"]
-            # An assistant message must have at least one of content/tool_calls.
-            if "content" not in cleaned and "tool_calls" not in cleaned:
-                cleaned["content"] = ""
-            self.history.append(cleaned)
+        try:
+            for _ in range(MAX_TURNS):
+                assistant_msg = call_llm(self.history, tools.SCHEMAS, model=self.model)
+                # Keep only fields the API accepts on the request side. Groq
+                # returns extras like `reasoning`, sometimes `executed_tools`,
+                # and explicit `null` fields — replaying those triggers 400s.
+                cleaned: dict[str, Any] = {"role": "assistant"}
+                if assistant_msg.get("content"):
+                    cleaned["content"] = assistant_msg["content"]
+                if assistant_msg.get("tool_calls"):
+                    cleaned["tool_calls"] = assistant_msg["tool_calls"]
+                # An assistant message must have at least one of content/tool_calls.
+                if "content" not in cleaned and "tool_calls" not in cleaned:
+                    cleaned["content"] = ""
+                self.history.append(cleaned)
 
-            tool_calls = assistant_msg.get("tool_calls")
-            if not tool_calls:
-                # No tool call → this is the final answer.
-                reply = assistant_msg.get("content") or "(empty response)"
-                if self.memory is not None:
-                    self.memory.log_turn("assistant", reply)
-                events.emit("assistant_reply", text=events.truncate_preview(reply))
-                return reply
+                tool_calls = assistant_msg.get("tool_calls")
+                if not tool_calls:
+                    # No tool call → this is the final answer.
+                    reply = assistant_msg.get("content") or "(empty response)"
+                    if self.memory is not None:
+                        self.memory.log_turn("assistant", reply)
+                    events.emit("assistant_reply", text=events.truncate_preview(reply))
+                    return reply
 
-            # Otherwise: run each requested tool, append result, loop.
-            for call in tool_calls:
-                name = call["function"]["name"]
-                args = json.loads(call["function"]["arguments"])
-                self._log_tool_call(name, args)
-                events.emit(
-                    "tool_call",
-                    name=name,
-                    args=events.truncate_preview(json.dumps(args, ensure_ascii=False)),
-                )
-                result = tools.execute(name, args)
-                events.emit(
-                    "tool_result",
-                    name=name,
-                    result=events.truncate_preview(result),
-                )
-                self.history.append({
-                    "role": "tool",
-                    "tool_call_id": call["id"],
-                    "content": result,
-                })
+                # Otherwise: run each requested tool, append result, loop.
+                for call in tool_calls:
+                    name = call["function"]["name"]
+                    args = json.loads(call["function"]["arguments"])
+                    self._log_tool_call(name, args)
+                    events.emit(
+                        "tool_call",
+                        name=name,
+                        args=events.truncate_preview(json.dumps(args, ensure_ascii=False)),
+                    )
+                    result = tools.execute(name, args)
+                    events.emit(
+                        "tool_result",
+                        name=name,
+                        result=events.truncate_preview(result),
+                    )
+                    self.history.append({
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "content": result,
+                    })
 
-        return "(hit MAX_TURNS without a final answer)"
+            return "(hit MAX_TURNS without a final answer)"
+        finally:
+            self._drop_message(memory_context_index)
 
     def chat_stream(self, user_message: str):
         """Streaming variant of chat() for the web UI.
@@ -567,7 +640,18 @@ class Agent:
         This is a *sync* generator (httpx.stream is sync); FastAPI is
         happy to consume sync generators in StreamingResponse.
         """
+        local = self._handle_local_command(user_message)
+        if local is not None:
+            if self.memory is not None:
+                self.memory.log_turn("user", user_message)
+                self.memory.log_turn("assistant", local)
+            events.emit("user_message", text=events.truncate_preview(user_message))
+            events.emit("assistant_reply", text=events.truncate_preview(local))
+            yield local
+            return
+
         self._maybe_compact()
+        memory_context_index = self._inject_relevant_memory(user_message)
         self.history.append({"role": "user", "content": user_message})
         if self.memory is not None:
             self.memory.log_turn("user", user_message)
@@ -575,63 +659,66 @@ class Agent:
 
         final_reply_parts: list[str] = []
 
-        for _ in range(MAX_TURNS):
-            assistant_msg: dict[str, Any] | None = None
-            for kind, payload in call_llm_stream(self.history, tools.SCHEMAS, model=self.model):
-                if kind == "content":
-                    final_reply_parts.append(payload)
-                    yield payload
-                elif kind == "done":
-                    assistant_msg = payload
-                # tool_call_delta is accumulated inside call_llm_stream;
-                # we don't need to act on it per-chunk here.
+        try:
+            for _ in range(MAX_TURNS):
+                assistant_msg: dict[str, Any] | None = None
+                for kind, payload in call_llm_stream(self.history, tools.SCHEMAS, model=self.model):
+                    if kind == "content":
+                        final_reply_parts.append(payload)
+                        yield payload
+                    elif kind == "done":
+                        assistant_msg = payload
+                    # tool_call_delta is accumulated inside call_llm_stream;
+                    # we don't need to act on it per-chunk here.
 
-            if assistant_msg is None:
-                yield "\n(empty stream)\n"
-                return
+                if assistant_msg is None:
+                    yield "\n(empty stream)\n"
+                    return
 
-            cleaned: dict[str, Any] = {"role": "assistant"}
-            if assistant_msg.get("content"):
-                cleaned["content"] = assistant_msg["content"]
-            if assistant_msg.get("tool_calls"):
-                cleaned["tool_calls"] = assistant_msg["tool_calls"]
-            if "content" not in cleaned and "tool_calls" not in cleaned:
-                cleaned["content"] = ""
-            self.history.append(cleaned)
+                cleaned: dict[str, Any] = {"role": "assistant"}
+                if assistant_msg.get("content"):
+                    cleaned["content"] = assistant_msg["content"]
+                if assistant_msg.get("tool_calls"):
+                    cleaned["tool_calls"] = assistant_msg["tool_calls"]
+                if "content" not in cleaned and "tool_calls" not in cleaned:
+                    cleaned["content"] = ""
+                self.history.append(cleaned)
 
-            tool_calls = assistant_msg.get("tool_calls")
-            if not tool_calls:
-                reply = assistant_msg.get("content") or "(empty response)"
-                if self.memory is not None:
-                    self.memory.log_turn("assistant", reply)
-                events.emit("assistant_reply", text=events.truncate_preview(reply))
-                return
+                tool_calls = assistant_msg.get("tool_calls")
+                if not tool_calls:
+                    reply = assistant_msg.get("content") or "(empty response)"
+                    if self.memory is not None:
+                        self.memory.log_turn("assistant", reply)
+                    events.emit("assistant_reply", text=events.truncate_preview(reply))
+                    return
 
-            for call in tool_calls:
-                name = call["function"]["name"]
-                args = json.loads(call["function"]["arguments"] or "{}")
-                self._log_tool_call(name, args)
-                events.emit(
-                    "tool_call",
-                    name=name,
-                    args=events.truncate_preview(json.dumps(args, ensure_ascii=False)),
-                )
-                result = tools.execute(name, args)
-                events.emit(
-                    "tool_result",
-                    name=name,
-                    result=events.truncate_preview(result),
-                )
-                self.history.append({
-                    "role": "tool",
-                    "tool_call_id": call["id"],
-                    "content": result,
-                })
-            # Loop — next turn starts a fresh stream.
-            # Reset content accumulator for next turn's text (if any).
-            final_reply_parts = []
+                for call in tool_calls:
+                    name = call["function"]["name"]
+                    args = json.loads(call["function"]["arguments"] or "{}")
+                    self._log_tool_call(name, args)
+                    events.emit(
+                        "tool_call",
+                        name=name,
+                        args=events.truncate_preview(json.dumps(args, ensure_ascii=False)),
+                    )
+                    result = tools.execute(name, args)
+                    events.emit(
+                        "tool_result",
+                        name=name,
+                        result=events.truncate_preview(result),
+                    )
+                    self.history.append({
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "content": result,
+                    })
+                # Loop — next turn starts a fresh stream.
+                # Reset content accumulator for next turn's text (if any).
+                final_reply_parts = []
 
-        yield "\n(hit MAX_TURNS without a final answer)\n"
+            yield "\n(hit MAX_TURNS without a final answer)\n"
+        finally:
+            self._drop_message(memory_context_index)
 
     @staticmethod
     def _log_tool_call(name: str, args: dict[str, Any]) -> None:
@@ -639,6 +726,102 @@ class Agent:
         user can see what the agent is doing."""
         preview = ", ".join(f"{k}={repr(v)[:40]}" for k, v in args.items())
         print(f"  -> {name}({preview})")
+
+    def _inject_relevant_memory(self, user_message: str) -> int | None:
+        """Temporarily add relevant memory snippets for this turn only."""
+        if self.memory is None:
+            return None
+        snippets = self.memory.search(user_message, limit=3, max_chars=900)
+        if not snippets:
+            return None
+        msg = {
+            "role": "system",
+            "content": (
+                "# Relevant memory snippets for this turn\n\n"
+                f"{snippets}\n\n"
+                "Use these if relevant. If they conflict with the current "
+                "user message or current files, trust the newer/current state."
+            ),
+        }
+        self.history.append(msg)
+        return len(self.history) - 1
+
+    def _drop_message(self, index: int | None) -> None:
+        """Remove a temporary history message if it is still present."""
+        if index is None:
+            return
+        if 0 <= index < len(self.history):
+            del self.history[index]
+
+    def _handle_local_command(self, user_message: str) -> str | None:
+        """Handle explicit local commands without an LLM call.
+
+        This is intentionally small and conservative. It is command plumbing,
+        not a natural-language classifier. Ambiguous text falls through to
+        the normal agent loop.
+        """
+        text = user_message.strip()
+        lowered = text.lower()
+
+        if lowered in {"/help", "help commands"}:
+            return (
+                "Local commands:\n"
+                "- /tasks [active|completed|cancelled|all]\n"
+                "- /memory\n"
+                "- /status\n"
+                "- /help\n"
+                "Everything else goes to the normal agent."
+            )
+
+        if lowered.startswith("/tasks") or lowered in {"list tasks", "list active tasks"}:
+            parts = lowered.split()
+            status = parts[1] if len(parts) > 1 and parts[0] == "/tasks" else "active"
+            if status not in {"active", "completed", "cancelled", "all"}:
+                return "Usage: /tasks [active|completed|cancelled|all]"
+            return self._format_tasks(status)
+
+        if lowered in {"/memory", "list memories", "list my memories"}:
+            if self.memory is None:
+                return "Memory is not initialized."
+            return self.memory.load_index(max_entries=20)
+
+        if lowered in {"/status", "status"}:
+            return self._local_status()
+
+        return None
+
+    def _format_tasks(self, status: str) -> str:
+        store = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
+        tasks = store.list(status)
+        if not tasks:
+            return f"No {status} tasks."
+        lines = [f"{status.title()} tasks:"]
+        for task in tasks:
+            due = task.get("due_at") or "no due date"
+            recurrence = task.get("recurrence", "none")
+            lines.append(
+                f"- `{task.get('id')}`: {task.get('title')} "
+                f"(due: {due}, recurrence: {recurrence})"
+            )
+        return "\n".join(lines)
+
+    def _local_status(self) -> str:
+        store = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
+        active = len(store.list("active"))
+        due = len(store.due())
+        memories = 0
+        if self.memory is not None:
+            memories = len([
+                p for p in self.memory.root.glob("*.md")
+                if p.name not in {"MEMORY.md", "README.md"} and not p.name.startswith("_")
+            ])
+        return (
+            "Homunculus status:\n"
+            f"- model: `{self.model}`\n"
+            f"- active tasks: {active}\n"
+            f"- due tasks: {due}\n"
+            f"- memory entries: {memories}"
+        )
 
     # --- Mid-session compaction -----------------------------------------
 
