@@ -29,6 +29,10 @@ services:
     environment:
       # Identifies which service emitted each event in the live feed.
       HOMUNCULUS_SERVICE: repl
+      # /app contains the agent package; cwd is /app/workspace for data
+      # paths. PYTHONPATH lets `python -m transports.repl` find the
+      # package without changing the working_dir convention.
+      PYTHONPATH: /app
     working_dir: /app/workspace # The agent's "current directory" inside the container
     volumes:
       # Mount a host directory as the agent's workspace, so files the
@@ -39,6 +43,7 @@ services:
       # docker daemon. Only our code uses this; the LLM only sees
       # stdout/stderr of the code it runs.
       - /var/run/docker.sock:/var/run/docker.sock
+    command: ["uv", "run", "--project", "/app", "python", "-m", "transports.repl"]
 
   heartbeat:
     build: .
@@ -46,6 +51,7 @@ services:
     env_file: .env
     environment:
       HOMUNCULUS_SERVICE: heartbeat
+      PYTHONPATH: /app
     working_dir: /app/workspace
     volumes:
       - ./workspace:/app/workspace  # Same workspace mount → shared memory
@@ -63,20 +69,22 @@ services:
     env_file: .env
     environment:
       HOMUNCULUS_SERVICE: telegram
+      PYTHONPATH: /app
     working_dir: /app/workspace
     volumes:
       - ./workspace:/app/workspace  # Same workspace mount → shared memory
       - /var/run/docker.sock:/var/run/docker.sock  # for python_exec sandbox
-    command: ["uv", "run", "--project", "/app", "python", "/app/telegram_bot.py"]
+    command: ["uv", "run", "--project", "/app", "python", "-m", "transports.telegram"]
     restart: unless-stopped
     # No stdin_open/tty — daemon that long-polls Telegram for messages.
 
   feed:
     build: .
     image: homunculus:phase1
-    env_file: .env              # Phase 6.3: chat endpoint needs the LLM API key
+    env_file: .env              # chat endpoint needs the LLM API key
     environment:
       HOMUNCULUS_SERVICE: feed
+      PYTHONPATH: /app
     working_dir: /app/workspace  # so _events.jsonl resolves to workspace/_events.jsonl
     volumes:
       - ./workspace:/app/workspace  # read the shared events file + memory
@@ -85,6 +93,6 @@ services:
     # for the full web UI. (8000 is a popular dev port and tends to
     # collide — 8765 avoids common defaults.)
     ports:
-      - "8765:8765"
-    command: ["uv", "run", "--project", "/app", "uvicorn", "feed:app", "--host", "0.0.0.0", "--port", "8765", "--app-dir", "/app"]
+      - "127.0.0.1:8765:8765"
+    command: ["uv", "run", "--project", "/app", "uvicorn", "transports.web_api:app", "--host", "0.0.0.0", "--port", "8765", "--app-dir", "/app"]
     restart: unless-stopped

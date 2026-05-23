@@ -1,0 +1,29 @@
+# Homunculus runtime config
+#
+# Single source of truth for MCP servers. Edit this file and the running
+# agent picks up changes on the next turn — no restart required (hot
+# reload watches this path).
+#
+# Each server is launched as a subprocess; the manager talks to it over
+# stdio using the MCP protocol. Tools surface to the LLM namespaced as
+# `{server_name}.{tool_name}` so collisions are impossible and traces
+# show provenance.
+
+servers:
+
+  # Homunculus's own tools (filesystem, memory, web, sandbox, scheduling,
+  # notify). Runs in-tree but as its own process for symmetry with
+  # external servers.
+  builtin:
+    command: ["python", "-m", "tools.mcp_server"]
+    permissions:
+      mutating: true        # can write_file, remember, python, schedule, ...
+
+  # HTTP fetching server from the official MCP servers collection.
+  # Read-only by definition. Tools surface namespaced as `fetch__*`.
+  # Installed as a Python dep so `python -m` is reliable; no network
+  # downloads on first call.
+  fetch:
+    command: ["python", "-m", "mcp_server_fetch"]
+    permissions:
+      mutating: false

@@ -9,13 +9,14 @@ The memory layout:
         feedback_<slug>.md  # collaboration rules from user corrections
         project_<slug>.md   # ongoing work context (decays over time)
         reference_<slug>.md # pointers to external resources
+        skill_<slug>.md     # learned procedures — "how to do X"
 
 Each memory file has YAML-ish frontmatter:
 
     ---
     name: <title>
     description: <one-line summary>
-    type: user|feedback|project|reference
+    type: user|feedback|project|reference|skill
     ---
 
     <body>
@@ -32,7 +33,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-ALLOWED_TYPES = {"user", "feedback", "project", "reference"}
+ALLOWED_TYPES = {"user", "feedback", "project", "reference", "skill"}
 
 _INDEX_HEADER = "# Memory\n\nThis index lists every durable fact I've remembered. Full bodies live in the linked files; use read_file to fetch one when relevant.\n\n"
 
@@ -187,13 +188,30 @@ class Memory:
         return self.root / "_session.json"
 
     def save_session(self, history: list[dict]) -> None:
-        """Persist the conversation history (excluding the system prompt).
+        """Persist the conversation history (excluding system prompt and
+        transient error replies).
 
         The system prompt is regenerated fresh each time an agent starts
         (with current memory index, etc.), so we don't save it.
+
+        Assistant messages whose content starts with "[error:" are
+        transient failures — they should never re-enter context on the
+        next turn (poisons the LLM's understanding of what happened).
         """
-        body = [msg for msg in history if msg.get("role") != "system"]
-        self.session_path.write_text(json.dumps(body), encoding="utf-8")
+        body = []
+        for msg in history:
+            if msg.get("role") == "system":
+                continue
+            if (
+                msg.get("role") == "assistant"
+                and isinstance(msg.get("content"), str)
+                and msg["content"].lstrip().startswith("[error:")
+            ):
+                continue
+            body.append(msg)
+        tmp = self.session_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(body), encoding="utf-8")
+        tmp.replace(self.session_path)
 
     def load_session(self) -> list[dict]:
         """Return the previously-saved messages, or [] if no session file."""
@@ -272,6 +290,63 @@ class Memory:
         matching = [p for p in logs_root.rglob("*.md") if p.stat().st_mtime >= cutoff]
         matching.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         return matching
+
+    def search(self, query: str, limit: int = 3, max_chars: int = 900) -> str:
+        """Return the most relevant memory snippets for a user message.
+
+        This is intentionally simple keyword retrieval. No embeddings,
+        no database, no extra model call. It gives the agent a few likely
+        relevant memories without stuffing every recent memory into the
+        system prompt.
+        """
+        terms = self._query_terms(query)
+        if not terms:
+            return ""
+
+        scored: list[tuple[int, float, Path, str]] = []
+        for path in self.root.glob("*.md"):
+            if path.name in {"MEMORY.md", "README.md"} or path.name.startswith("_"):
+                continue
+            text = path.read_text(encoding="utf-8")
+            haystack = f"{path.stem}\n{text}".lower()
+            score = sum(haystack.count(term) for term in terms)
+            if score:
+                scored.append((score, path.stat().st_mtime, path, text))
+
+        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        snippets: list[str] = []
+        for _, _, path, text in scored[:limit]:
+            body = self._strip_frontmatter(text).strip()
+            if len(body) > max_chars:
+                body = body[:max_chars].rstrip() + "\n[...truncated]"
+            snippets.append(f"## {path.name}\n{body}")
+        return "\n\n".join(snippets)
+
+    @staticmethod
+    def _query_terms(query: str) -> list[str]:
+        words = re.findall(r"[a-z0-9_]{3,}", query.lower())
+        stop = {
+            "the", "and", "for", "that", "this", "you", "your", "are",
+            "can", "what", "when", "where", "how", "why", "with",
+            "from", "about", "remember", "know",
+        }
+        seen: set[str] = set()
+        terms: list[str] = []
+        for word in words:
+            if word in stop or word in seen:
+                continue
+            seen.add(word)
+            terms.append(word)
+        return terms[:12]
+
+    @staticmethod
+    def _strip_frontmatter(text: str) -> str:
+        if not text.startswith("---\n"):
+            return text
+        end = text.find("\n---\n", 4)
+        if end == -1:
+            return text
+        return text[end + 5:]
 
     # ---- write side ----------------------------------------------------
 

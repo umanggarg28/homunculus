@@ -1,0 +1,270 @@
+@import "tailwindcss";
+
+/* ===========================================================
+ * HOMUNCULUS · DESIGN TOKENS — Linear-flavoured dark.
+ *
+ * Dense, designerly, modern devtool aesthetic. One accent
+ * (indigo). Neutral grays for the rest. Sans-serif throughout
+ * (Inter); mono for code, IDs, timestamps.
+ * =========================================================== */
+@theme {
+  /* Surfaces (darkest → lightest) */
+  --color-bg:        #08090A;   /* page background */
+  --color-surface-1: #0E0F11;   /* sidebar / topbar */
+  --color-surface-2: #16171A;   /* cards, primary content blocks */
+  --color-surface-3: #1C1D21;   /* hover, modal, raised */
+  --color-surface-4: #25262B;   /* selected / active row */
+
+  /* Borders */
+  --color-border:        #1F2024;
+  --color-border-strong: #2A2B30;
+  --color-border-bright: #3A3B42;
+
+  /* Text */
+  --color-text:       #E4E5E7;
+  --color-text-dim:   #B0B2B8;
+  --color-text-muted: #75777E;
+  --color-text-faint: #4E5057;
+
+  /* Bioluminescent accent — the agent's living glow */
+  --color-accent:        #5EEAD4;   /* mint — primary, "agent thinking/acting" */
+  --color-accent-hover:  #7FF0DD;
+  --color-accent-dim:    rgba(94, 234, 212, 0.14);
+  --color-accent-faint:  rgba(94, 234, 212, 0.06);
+  --color-accent-glow:   rgba(94, 234, 212, 0.55);
+
+  /* Secondary lights */
+  --color-amber:         #F59E0B;   /* scheduled / heartbeat tick */
+  --color-amber-dim:     rgba(245, 158, 11, 0.14);
+  --color-indigo:        #818CF8;   /* user-initiated / chat input */
+  --color-indigo-dim:    rgba(129, 140, 248, 0.14);
+
+  /* Semantic */
+  --color-success:  #4ADE80;
+  --color-warning:  #F59E0B;
+  --color-danger:   #F87171;
+  --color-info:     #60A5FA;
+
+  /* Fonts */
+  --font-display: "Geist", "Inter", system-ui, sans-serif;
+  --font-sans:    "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono:    "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* Radius (Linear-style: small, consistent) */
+  --radius-sm: 4px;
+  --radius:    6px;
+  --radius-lg: 10px;
+}
+
+/* ---------- Base ---------- */
+html, body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 14px;
+  line-height: 1.5;
+  font-feature-settings: "cv11", "ss03", "ss04";
+}
+
+#root { min-height: 100vh; }
+::selection { background: var(--color-accent-dim); color: var(--color-text); }
+
+/* Legacy class name kept so existing components don't break.
+   Now means "the dark dashboard surface" instead of "parchment". */
+.vellum {
+  background: var(--color-bg);
+}
+
+/* ---------- Scrollbar — Linear-ish ---------- */
+* { scrollbar-width: thin; scrollbar-color: var(--color-border-bright) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--color-border-bright);
+  border-radius: 4px;
+  border: 2px solid var(--color-bg);
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
+
+/* ---------- Focus / caret ---------- */
+*:focus { outline: none; }
+*:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+input, textarea { caret-color: var(--color-accent); }
+
+/* ===========================================================
+ * TYPOGRAPHY UTILITIES — sans-serif, restrained.
+ * =========================================================== */
+
+.display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+}
+
+/* Big readout numbers — for stat cards on Overview */
+.readout {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-feature-settings: "ss01", "tnum";
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Bioluminescent glow ring — used on the heartbeat indicator and
+   anywhere we want to mark "the agent is alive right now". */
+.glow-mint {
+  box-shadow:
+    0 0 0 1px rgba(94, 234, 212, 0.35),
+    0 0 12px 0 rgba(94, 234, 212, 0.55),
+    0 0 32px 0 rgba(94, 234, 212, 0.18);
+}
+.glow-amber {
+  box-shadow:
+    0 0 0 1px rgba(245, 158, 11, 0.35),
+    0 0 12px 0 rgba(245, 158, 11, 0.45);
+}
+
+.display-italic {
+  font-family: var(--font-sans);
+  font-style: italic;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.opening-line {
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-weight: 400;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--color-text-dim);
+}
+
+/* Small caps now means "small uppercase tag" — used for labels */
+.label {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.small-caps { /* alias kept for legacy components */
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.folio {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.prose {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--color-text);
+}
+
+.mono { font-family: var(--font-mono); }
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* ===========================================================
+ * MARKDOWN — used inside chat messages.
+ * Compact, sans-serif, code blocks get proper treatment.
+ * =========================================================== */
+.markdown-message > * + * { margin-top: 0.75rem; }
+
+.markdown-message h1,
+.markdown-message h2,
+.markdown-message h3 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  color: var(--color-text);
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+.markdown-message h1 { font-size: 18px; }
+.markdown-message h2 { font-size: 16px; }
+.markdown-message h3 { font-size: 15px; }
+
+.markdown-message p,
+.markdown-message li {
+  font-family: var(--font-sans);
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--color-text);
+}
+
+.markdown-message ul, .markdown-message ol { padding-left: 1.25rem; }
+.markdown-message ul { list-style: disc; }
+.markdown-message ul li::marker { color: var(--color-text-muted); }
+.markdown-message ol { list-style: decimal; }
+.markdown-message ol li::marker { color: var(--color-text-muted); }
+
+.markdown-message a {
+  color: var(--color-accent);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(99, 102, 241, 0.4);
+}
+.markdown-message a:hover { border-bottom-color: var(--color-accent); }
+
+.markdown-message pre {
+  overflow-x: auto;
+  max-width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  white-space: pre;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  border-radius: var(--radius);
+}
+.markdown-message pre code { background: transparent; padding: 0; }
+
+.markdown-message code,
+.markdown-message p code,
+.markdown-message li code {
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 0.88em;
+  background: var(--color-surface-3);
+  color: var(--color-text);
+  padding: 1px 5px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.markdown-message pre code {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 12.5px;
+  white-space: pre;
+}
+
+.markdown-message blockquote {
+  border-left: 2px solid var(--color-border-bright);
+  padding-left: 12px;
+  color: var(--color-text-dim);
+  font-size: 14px;
+}
+.markdown-message strong {
+  font-weight: 600;
+  color: var(--color-text);
+}
+.markdown-message em { font-style: italic; }
