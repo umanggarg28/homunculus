@@ -67,7 +67,7 @@ export function ChatPage() {
           }
       />
 
-      <div className="max-w-[860px] mx-auto" style={{ paddingBottom: 180 }}>
+      <div className="max-w-[860px] mx-auto" style={{ paddingBottom: 120 }}>
         <BrutalistChatLog
           messages={messages}
           toolTimeline={toolTimeline}

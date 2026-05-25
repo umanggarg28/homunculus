@@ -45,7 +45,7 @@ export function BrutalistChatInput({ sending, onSend, onCancel }: Props) {
 
   return (
     <div
-      className="fixed bottom-0 right-0 z-20 pt-6 pb-4"
+      className="fixed bottom-0 right-0 z-20 pt-3 pb-4"
       style={{
         left: 220,
         background:

@@ -54,10 +54,28 @@ def emit(event: str, **fields) -> None:
 
 
 def truncate_preview(text: str, limit: int = 240) -> str:
-    """Shorten a string for display in the feed. Multi-line → single line."""
+    """Shorten a string for display in the feed. Multi-line → single line.
+
+    Use a large limit for events where full content matters for observability
+    (assistant_reply, user_message). Use the default for tool args/results
+    which can be megabytes.
+    """
     if text is None:
         return ""
     s = " ".join(str(text).split())
     if len(s) <= limit:
         return s
     return s[:limit] + f"… (+{len(s) - limit} chars)"
+
+
+def full_text(text: str) -> str:
+    """Store the full text for events where complete content is needed.
+
+    assistant_reply and user_message should always be queryable in full
+    from the traces UI. Tool results are intentionally capped via
+    truncate_preview() since they can be megabytes.
+    """
+    if text is None:
+        return ""
+    # Collapse multi-line into single-line (JSON-safe) but keep full length.
+    return " ".join(str(text).split())

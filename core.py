@@ -695,8 +695,8 @@ class Agent:
             if self.memory is not None:
                 self.memory.log_turn("user", user_message)
                 self.memory.log_turn("assistant", local)
-            events.emit("user_message", text=events.truncate_preview(user_message))
-            events.emit("assistant_reply", text=events.truncate_preview(local))
+            events.emit("user_message", text=events.full_text(user_message))
+            events.emit("assistant_reply", text=events.full_text(local))
             yield local
             return
 
@@ -704,7 +704,7 @@ class Agent:
         self.history.append({"role": "user", "content": user_message})
         if self.memory is not None:
             self.memory.log_turn("user", user_message)
-        events.emit("user_message", text=events.truncate_preview(user_message))
+        events.emit("user_message", text=events.full_text(user_message))
 
         tool_names_used: set[str] = set()
 
@@ -750,7 +750,7 @@ class Agent:
 
                 if self.memory is not None:
                     self.memory.log_turn("assistant", reply)
-                events.emit("assistant_reply", text=events.truncate_preview(reply))
+                events.emit("assistant_reply", text=events.full_text(reply))
                 return
 
             for call in tool_calls:
