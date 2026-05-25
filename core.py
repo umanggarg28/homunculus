@@ -832,7 +832,11 @@ class Agent:
         """
         violations: list[str] = []
 
-        if _GUARD_MEMORY_FILENAME_RE.search(reply):
+        # Strip inline code spans before checking — filenames inside backticks
+        # are intentional technical references (procedure steps, tool calls),
+        # not internal-path leaks. Bare filenames in prose still trigger.
+        reply_no_code = re.sub(r"`[^`\n]+`", "", reply)
+        if _GUARD_MEMORY_FILENAME_RE.search(reply_no_code):
             violations.append("memory_filename_leak")
 
         if any(p in reply for p in _GUARD_INTERNAL_PATHS):
