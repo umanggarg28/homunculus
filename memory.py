@@ -27,11 +27,16 @@ existing read_file tool) when the agent decides a specific memory is
 relevant. This keeps context usage tiny even as memory grows.
 """
 
+import errno
+import fcntl
 import json
+import os
 import re
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Iterator
 
 ALLOWED_TYPES = {"user", "feedback", "project", "reference", "skill"}
 
@@ -103,6 +108,41 @@ class Memory:
             readme_path.write_text(_README_CONTENT, encoding="utf-8")
 
     # ---- read side -----------------------------------------------------
+
+    def load_core_block(
+        self,
+        max_per_type: int = 3,
+        max_chars_per_entry: int = 300,
+    ) -> str:
+        """Return pinned always-in-context facts: user profile + key feedback rules.
+
+        These go directly into the system prompt so the agent always knows the
+        user's name, timezone, and top preferences without needing a recall()
+        call. Capped tightly so the system prompt stays small even as the
+        memory vault grows.
+
+        Ordered: user_* memories first (newest-first by mtime), then
+        feedback_* memories (newest-first), up to max_per_type each.
+        """
+        pinned: list[str] = []
+        for prefix in ("user", "feedback"):
+            paths = sorted(
+                (p for p in self.root.glob(f"{prefix}_*.md")),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )[:max_per_type]
+            for path in paths:
+                text = path.read_text(encoding="utf-8")
+                body = self._strip_frontmatter(text).strip()
+                if not body:
+                    continue
+                if len(body) > max_chars_per_entry:
+                    body = body[:max_chars_per_entry].rstrip() + " [...]"
+                # Pull the human name from frontmatter for the label.
+                name_match = re.search(r"^name:\s*(.+)$", text, re.MULTILINE)
+                label = name_match.group(1).strip() if name_match else path.stem
+                pinned.append(f"**{label}**: {body}")
+        return "\n\n".join(pinned)
 
     def load_index(self, max_entries: int = 15) -> str:
         """Return MEMORY.md content with age annotations on each entry.
@@ -187,6 +227,31 @@ class Memory:
         # It also keeps the file out of the MEMORY.md index pattern.
         return self.root / "_session.json"
 
+    @contextmanager
+    def _file_lock(self, lock_path: Path) -> Iterator[None]:
+        """Exclusive fcntl flock on `lock_path` (sidecar).
+
+        Used around read-modify-write sequences so that two writers
+        (e.g., Telegram and Web both saving session) don't clobber
+        each other. Blocks up to 5s before raising.
+        """
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a") as f:
+            for _ in range(50):
+                try:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError as e:
+                    if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
+                        raise
+                    time.sleep(0.1)
+            else:
+                raise RuntimeError(f"could not acquire {lock_path.name} after 5s")
+            try:
+                yield
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
     def save_session(self, history: list[dict]) -> None:
         """Persist the conversation history (excluding system prompt and
         transient error replies).
@@ -209,24 +274,149 @@ class Memory:
             ):
                 continue
             body.append(msg)
-        tmp = self.session_path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(body), encoding="utf-8")
-        tmp.replace(self.session_path)
+        # Lock the session file before the atomic rename so that two
+        # writers don't race between read-modify-write across services.
+        with self._file_lock(self.session_path.with_suffix(".json.lock")):
+            tmp = self.session_path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(body), encoding="utf-8")
+            tmp.replace(self.session_path)
 
     def load_session(self) -> list[dict]:
-        """Return the previously-saved messages, or [] if no session file."""
+        """Return the previously-saved messages, or [] if no session file.
+
+        Validates each message has a valid role and content/tool_calls
+        shape. Invalid messages are dropped rather than letting them
+        propagate and crash the next LLM call. This is a defense against
+        partial writes (we already use atomic rename, but belt + braces)
+        and against schema drift over time.
+        """
         if not self.session_path.exists():
             return []
         try:
-            return json.loads(self.session_path.read_text(encoding="utf-8"))
+            raw = json.loads(self.session_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            # File got corrupted somehow — pretend it doesn't exist
             return []
+        if not isinstance(raw, list):
+            return []
+        valid_roles = {"user", "assistant", "tool", "system"}
+        clean: list[dict] = []
+        for msg in raw:
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role")
+            if role not in valid_roles:
+                continue
+            # An assistant message needs content OR tool_calls; tool
+            # messages need tool_call_id; user/system need content.
+            if role == "assistant":
+                if msg.get("content") is None and not msg.get("tool_calls"):
+                    continue
+            elif role == "tool":
+                if not msg.get("tool_call_id"):
+                    continue
+            elif role in ("user", "system"):
+                if msg.get("content") is None:
+                    continue
+            clean.append(msg)
+        return clean
 
     def clear_session(self) -> None:
         """Delete the saved session. Called when the user types reset."""
         if self.session_path.exists():
             self.session_path.unlink()
+
+    # ---- pending notifications queue -----------------------------------
+    # When `notify()` fires (typically from the heartbeat daemon), it sends
+    # a Telegram message but doesn't touch the Telegram bot's in-memory
+    # `_agent.history`. Without bridging, a follow-up like "explain it"
+    # arrives with zero context and the agent confabulates an unrelated
+    # answer. We append every notification to this jsonl queue; the
+    # Telegram bot drains entries newer than `_notifications_consumed_ts`
+    # into its history before processing the next user message.
+
+    @property
+    def notifications_path(self) -> Path:
+        return self.root / "_notifications.jsonl"
+
+    @property
+    def _notifications_pointer_path(self) -> Path:
+        return self.root / "_notifications_consumed_ts.txt"
+
+    @property
+    def _notifications_lock_path(self) -> Path:
+        return self.root / "_notifications.lock"
+
+    def queue_notification(self, text: str) -> None:
+        """Append a notification to the persistent queue.
+
+        Safe to call from any process (heartbeat, telegram bot, web).
+        The Telegram bot (and web API) drain via
+        `drain_pending_notifications` before processing each user message.
+
+        POSIX O_APPEND on a single line is atomic up to PIPE_BUF (4096
+        bytes), so concurrent appenders won't interleave for normal-
+        sized messages. Locking is only needed for the drain pointer.
+        """
+        self.notifications_path.parent.mkdir(parents=True, exist_ok=True)
+        entry = {"ts": time.time(), "text": text}
+        with self.notifications_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def drain_pending_notifications(self) -> list[dict]:
+        """Return notifications sent since the last drain.
+
+        Reads the consumption pointer (a unix-timestamp string), returns
+        entries newer than that pointer, then advances the pointer to the
+        timestamp of the newest returned entry.
+
+        Atomically protected by a lock so two drainers (Telegram bot and
+        Web API both running) don't both see the same entries and double-
+        inject them.
+
+        Each returned dict has keys `ts` (float) and `text` (str).
+        Returns [] if the queue is empty or all entries are already
+        consumed.
+        """
+        if not self.notifications_path.exists():
+            return []
+        with self._file_lock(self._notifications_lock_path):
+            last_ts = 0.0
+            if self._notifications_pointer_path.exists():
+                try:
+                    last_ts = float(self._notifications_pointer_path.read_text(encoding="utf-8").strip())
+                except (ValueError, OSError):
+                    last_ts = 0.0
+            fresh: list[dict] = []
+            try:
+                with self.notifications_path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            entry = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(entry, dict):
+                            continue
+                        try:
+                            ts = float(entry.get("ts", 0))
+                        except (TypeError, ValueError):
+                            continue
+                        if ts > last_ts:
+                            fresh.append(entry)
+            except OSError:
+                return []
+            if not fresh:
+                return []
+            new_ts = max(float(e["ts"]) for e in fresh)
+            tmp = self._notifications_pointer_path.with_suffix(".tmp")
+            try:
+                tmp.write_text(f"{new_ts}\n", encoding="utf-8")
+                tmp.replace(self._notifications_pointer_path)
+            except OSError:
+                pass
+            return fresh
 
     # ---- self-scheduled heartbeat --------------------------------------
     # The heartbeat daemon can be told (by the agent itself, via the
@@ -240,6 +430,15 @@ class Memory:
     def set_next_tick(self, iso_datetime: str) -> None:
         """Persist the target wake time."""
         self.next_tick_path.write_text(iso_datetime.strip(), encoding="utf-8")
+
+    def peek_next_tick(self) -> str | None:
+        """Read the target wake time without consuming it (UI display)."""
+        if not self.next_tick_path.exists():
+            return None
+        try:
+            return self.next_tick_path.read_text(encoding="utf-8").strip() or None
+        except Exception:
+            return None
 
     def pop_next_tick(self) -> str | None:
         """Return the target wake time and delete the file.
@@ -300,7 +499,14 @@ class Memory:
         system prompt.
         """
         terms = self._query_terms(query)
+        # Skip memory injection on vague follow-ups (e.g. "explain it",
+        # "yes", "more"). A single short term matches too liberally and
+        # the LLM ends up grounding the answer in unrelated memory rather
+        # than the recent conversation. We require at least 2 distinct
+        # meaningful terms OR one long-ish (5+ char) term to inject.
         if not terms:
+            return ""
+        if len(terms) < 2 and not any(len(t) >= 5 for t in terms):
             return ""
 
         scored: list[tuple[int, float, Path, str]] = []
@@ -315,11 +521,17 @@ class Memory:
 
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
         snippets: list[str] = []
-        for _, _, path, text in scored[:limit]:
+        now_ts = time.time()
+        for _, mtime, path, text in scored[:limit]:
             body = self._strip_frontmatter(text).strip()
             if len(body) > max_chars:
                 body = body[:max_chars].rstrip() + "\n[...truncated]"
-            snippets.append(f"## {path.name}\n{body}")
+            age_days = max(0, int((now_ts - mtime) / 86400))
+            age_tag = (
+                f"updated {age_days}d ago" if age_days > 0 else "updated today"
+            )
+            stale = " · ⚠ stale" if age_days >= 30 else ""
+            snippets.append(f"## {path.name} ({age_tag}{stale})\n{body}")
         return "\n\n".join(snippets)
 
     @staticmethod

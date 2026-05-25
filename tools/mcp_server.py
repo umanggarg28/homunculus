@@ -85,6 +85,28 @@ def forget(
     return memory_tools.forget(name)
 
 
+@mcp.tool(annotations={"readOnlyHint": True})
+def recall(
+    query: Annotated[
+        str,
+        Field(
+            description=(
+                "Keywords to search long-term memory for. Be specific — use "
+                "names, topics, or phrases you expect to appear in the memory "
+                "body. Returns up to 3 matching snippets with age tags."
+            )
+        ),
+    ],
+) -> str:
+    """Search long-term memory for relevant entries matching a query.
+
+    Call this when you need facts the user may have shared in a previous
+    session, or when the index hints at a relevant memory but you need its
+    full body. Nothing is injected automatically — you decide when to recall.
+    """
+    return memory_tools.search_memory(query)
+
+
 # ── web ───────────────────────────────────────────────────────────────
 
 
@@ -199,10 +221,32 @@ def schedule_task(
 
 @mcp.tool(annotations={"readOnlyHint": False})
 def notify(
-    text: Annotated[str, Field(description="Message text. Keep concise.")],
+    text: Annotated[
+        str,
+        Field(
+            description=(
+                "Plain-text message. Sent to Telegram, which does NOT render "
+                "markdown the way the chat UI does. Do NOT use heading hashes "
+                "(##), `**bold**`, or markdown tables — they show as literal "
+                "characters. Use short sentences, line breaks, and bullet "
+                "lines starting with `- ` (we convert those to • automatically)."
+            )
+        ),
+    ],
+    preview: Annotated[
+        bool,
+        Field(
+            description=(
+                "When True, returns the rendered HTML body that WOULD be sent "
+                "instead of pushing. Useful for rare cases where you want to "
+                "double-check formatting before interrupting the user. Default "
+                "is False — most calls should just send."
+            ),
+        ),
+    ] = False,
 ) -> str:
-    """Push a Telegram message. INTERRUPTS the user — use only for time-sensitive things. Routine summaries belong in files."""
-    return notify_mod.notify(text)
+    """Push a plain-text Telegram message. INTERRUPTS the user — use only for time-sensitive things. Routine summaries belong in files."""
+    return notify_mod.notify(text, preview=preview)
 
 
 # ── entrypoint ────────────────────────────────────────────────────────
