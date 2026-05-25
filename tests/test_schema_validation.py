@@ -141,7 +141,16 @@ def test_valid_enum_value():
 # Unknown tool
 # ---------------------------------------------------------------------------
 
-def test_unknown_tool_returns_none():
-    # Unknown tools are handled by execute(), not the validator.
+def test_unknown_tool_returns_error():
+    # Unknown tools now return an error so the LLM gets corrective feedback
+    # instead of silently dispatching to execute() where it will also fail.
     err = _validate_tool_args("nonexistent_tool", {"anything": "goes"})
-    assert err is None
+    assert err is not None
+    assert "nonexistent_tool" in err
+    assert "does not exist" in err
+
+
+def test_unknown_tool_lists_available():
+    # The error message names available tools so the LLM can self-correct.
+    err = _validate_tool_args("search_file", {})
+    assert "fake_tool" in err  # fake_tool is the only tool in the test schema
