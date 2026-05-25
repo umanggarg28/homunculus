@@ -30,6 +30,7 @@ relevant. This keeps context usage tiny even as memory grows.
 import errno
 import fcntl
 import json
+import math
 import os
 import re
 import time
@@ -490,50 +491,159 @@ class Memory:
         matching.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         return matching
 
-    def search(self, query: str, limit: int = 3, max_chars: int = 900) -> str:
-        """Return the most relevant memory snippets for a user message.
+    # ---- embedding-based search ----------------------------------------
+    # Uses Gemini text-embedding-004 (free tier: 1500 RPD, 768-dim vectors).
+    # Vectors are cached as .vec sidecar files next to each .md entry so
+    # search only costs ONE API call (the query) per invocation.
+    # Falls back to keyword search if the Gemini key is missing or the
+    # API is unavailable.
 
-        This is intentionally simple keyword retrieval. No embeddings,
-        no database, no extra model call. It gives the agent a few likely
-        relevant memories without stuffing every recent memory into the
-        system prompt.
+    _EMBED_URL = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        "text-embedding-004:embedContent?key={key}"
+    )
+    _EMBED_DIM = 768
+
+    def _embed(self, text: str) -> list[float] | None:
+        """Call Gemini embedding API. Returns a float vector or None on failure."""
+        key = os.environ.get("HOMUNCULUS_API_KEY", "")
+        if not key:
+            return None
+        try:
+            import httpx
+            resp = httpx.post(
+                self._EMBED_URL.format(key=key),
+                json={"model": "models/text-embedding-004", "content": {"parts": [{"text": text[:8000]}]}},
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                return None
+            return resp.json()["embedding"]["values"]
+        except Exception:
+            return None
+
+    @staticmethod
+    def _cosine(a: list[float], b: list[float]) -> float:
+        dot = sum(x * y for x, y in zip(a, b))
+        mag_a = math.sqrt(sum(x * x for x in a))
+        mag_b = math.sqrt(sum(x * x for x in b))
+        if mag_a == 0 or mag_b == 0:
+            return 0.0
+        return dot / (mag_a * mag_b)
+
+    def _vec_path(self, md_path: Path) -> Path:
+        return md_path.with_suffix(".vec")
+
+    def _load_vec(self, md_path: Path) -> list[float] | None:
+        vp = self._vec_path(md_path)
+        if not vp.exists():
+            return None
+        try:
+            return json.loads(vp.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    def _save_vec(self, md_path: Path, vec: list[float]) -> None:
+        try:
+            self._vec_path(md_path).write_text(json.dumps(vec), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _embed_entry(self, path: Path, text: str) -> None:
+        """Compute and cache the embedding for a memory file if not already cached."""
+        if self._vec_path(path).exists():
+            return
+        name_match = re.search(r"^name:\s*(.+)$", text, re.MULTILINE)
+        desc_match = re.search(r"^description:\s*(.+)$", text, re.MULTILINE)
+        body = self._strip_frontmatter(text).strip()
+        embed_text = "\n".join(filter(None, [
+            name_match.group(1).strip() if name_match else "",
+            desc_match.group(1).strip() if desc_match else "",
+            body[:2000],
+        ]))
+        vec = self._embed(embed_text)
+        if vec:
+            self._save_vec(path, vec)
+
+    def search(self, query: str, limit: int = 3, max_chars: int = 900) -> str:
+        """Return the most relevant memory snippets for a query.
+
+        Uses semantic embedding similarity (Gemini text-embedding-004) when
+        available. Falls back to keyword overlap when the API is unreachable.
+        Vectors are pre-computed on write and cached as .vec sidecars, so
+        this method only costs one embedding API call (the query).
         """
+        # Guard: skip injection on vague follow-ups ("yes", "ok", "more").
         terms = self._query_terms(query)
-        # Skip memory injection on vague follow-ups (e.g. "explain it",
-        # "yes", "more"). A single short term matches too liberally and
-        # the LLM ends up grounding the answer in unrelated memory rather
-        # than the recent conversation. We require at least 2 distinct
-        # meaningful terms OR one long-ish (5+ char) term to inject.
         if not terms:
             return ""
         if len(terms) < 2 and not any(len(t) >= 5 for t in terms):
             return ""
 
-        scored: list[tuple[int, float, Path, str]] = []
+        candidates: list[tuple[Path, str]] = []
         for path in self.root.glob("*.md"):
             if path.name in {"MEMORY.md", "README.md"} or path.name.startswith("_"):
                 continue
-            text = path.read_text(encoding="utf-8")
+            try:
+                text = path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            candidates.append((path, text))
+
+        if not candidates:
+            return ""
+
+        # Attempt embedding search.
+        query_vec = self._embed(query[:2000])
+        if query_vec:
+            # Backfill any entries that don't have vectors yet (lazy migration).
+            for path, text in candidates:
+                self._embed_entry(path, text)
+
+            scored_embed: list[tuple[float, float, Path, str]] = []
+            for path, text in candidates:
+                vec = self._load_vec(path)
+                if vec is None:
+                    continue
+                sim = self._cosine(query_vec, vec)
+                scored_embed.append((sim, path.stat().st_mtime, path, text))
+
+            # Only keep results above a minimum similarity threshold.
+            # Below 0.65 the match is likely irrelevant noise.
+            MIN_SIM = 0.65
+            scored_embed = [s for s in scored_embed if s[0] >= MIN_SIM]
+            scored_embed.sort(key=lambda s: (s[0], s[1]), reverse=True)
+
+            if scored_embed:
+                return self._format_snippets(scored_embed[:limit], max_chars)
+
+        # Fallback: keyword overlap (original approach).
+        scored_kw: list[tuple[int, float, Path, str]] = []
+        for path, text in candidates:
             haystack = f"{path.stem}\n{text}".lower()
             score = sum(haystack.count(term) for term in terms)
             if score:
-                scored.append((score, path.stat().st_mtime, path, text))
+                scored_kw.append((score, path.stat().st_mtime, path, text))
+        scored_kw.sort(key=lambda s: (s[0], s[1]), reverse=True)
+        return self._format_snippets(scored_kw[:limit], max_chars)
 
-        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    def _format_snippets(
+        self,
+        scored: list[tuple],
+        max_chars: int,
+    ) -> str:
+        """Render top-k scored entries as labelled markdown snippets."""
         snippets: list[str] = []
         now_ts = time.time()
-        for _, mtime, path, text in scored[:limit]:
+        for row in scored:
+            path, text = row[-2], row[-1]
             body = self._strip_frontmatter(text).strip()
             if len(body) > max_chars:
                 body = body[:max_chars].rstrip() + "\n[...truncated]"
+            mtime = path.stat().st_mtime
             age_days = max(0, int((now_ts - mtime) / 86400))
-            age_tag = (
-                f"updated {age_days}d ago" if age_days > 0 else "updated today"
-            )
+            age_tag = f"updated {age_days}d ago" if age_days > 0 else "updated today"
             stale = " · ⚠ stale" if age_days >= 30 else ""
-            # Use the human-readable name from frontmatter, not the filename.
-            # The filename is an internal implementation detail — the LLM
-            # should never see it so it can't echo it back to the user.
             name_match = re.search(r"^name:\s*(.+)$", text, re.MULTILINE)
             label = name_match.group(1).strip() if name_match else path.stem
             snippets.append(f"## {label} ({age_tag}{stale})\n{body}")
@@ -633,11 +743,17 @@ class Memory:
             wikilinks = "\n".join(f"- [[{r}]]" for r in rel_clean)
             related_section = f"\n\n## Related\n{wikilinks}"
 
-        path.write_text(
+        content = (
             f"---\nname: {name}\ndescription: {description}\ntype: {type}\n"
-            f"{frontmatter_related}---\n\n{body.strip()}{related_section}\n",
-            encoding="utf-8",
+            f"{frontmatter_related}---\n\n{body.strip()}{related_section}\n"
         )
+        path.write_text(content, encoding="utf-8")
+        # Pre-compute and cache the embedding so the first search is instant.
+        # We invalidate any stale .vec file first (content changed on upsert).
+        vec_p = self._vec_path(path)
+        if vec_p.exists():
+            vec_p.unlink()
+        self._embed_entry(path, content)
         self._upsert_index_entry(name, description, filename)
         return f"Saved memory '{name}' to {filename}"
 
@@ -661,6 +777,10 @@ class Memory:
             path = self.root / filename
             if path.exists():
                 path.unlink()
+            # Clean up the embedding sidecar too.
+            vec_p = self._vec_path(path)
+            if vec_p.exists():
+                vec_p.unlink()
             self._remove_index_entry(filename)
             removed.append(filename)
         return f"Forgot memory: {', '.join(removed)}"
