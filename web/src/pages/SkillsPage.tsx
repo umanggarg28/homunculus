@@ -43,7 +43,7 @@ export function SkillsPage() {
   return (
     <PageShell>
       <PageHeader
-        title="Skills"
+        title="Tools"
         subtitle={
           skills
             ? `${skills.length} tools registered · ${totalCalls} calls`

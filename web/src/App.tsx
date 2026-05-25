@@ -25,7 +25,7 @@ export default function App() {
             {/* /live merged into /traces — same SSE stream, no value in two routes */}
             <Route path="/traces"  element={<FeedPage />} />
             <Route path="/tasks"   element={<TasksPage />} />
-            <Route path="/skills"  element={<SkillsPage />} />
+            <Route path="/tools"   element={<SkillsPage />} />
             <Route path="/memory"  element={<MemoryPage />} />
             <Route path="/memory/:filename" element={<MemoryEntryPage />} />
             <Route path="/logs"    element={<LogsPage />} />
