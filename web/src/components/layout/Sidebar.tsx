@@ -25,7 +25,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     items: [
       { to: "/tasks",  label: "TASKS" },
       { to: "/memory", label: "MEMORY" },
-      { to: "/skills", label: "SKILLS" },
+      { to: "/tools", label: "TOOLS" },
     ],
   },
   {

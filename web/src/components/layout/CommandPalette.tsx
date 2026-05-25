@@ -26,7 +26,7 @@ export function CommandPalette() {
       { id: "chat",     label: "open chat",       hint: "/chat",     run: () => navigate("/chat")     },
       { id: "tasks",    label: "open tasks",      hint: "/tasks",    run: () => navigate("/tasks")    },
       { id: "memory",   label: "browse memory",   hint: "/memory",   run: () => navigate("/memory")   },
-      { id: "skills",   label: "browse skills",   hint: "/skills",   run: () => navigate("/skills")   },
+      { id: "tools",    label: "browse tools",    hint: "/tools",    run: () => navigate("/tools")    },
       { id: "traces",   label: "open traces",     hint: "/traces",   run: () => navigate("/traces")   },
       { id: "logs",     label: "open logs",       hint: "/logs",     run: () => navigate("/logs")     },
       { id: "lab",      label: "open design lab", hint: "/lab",      run: () => navigate("/lab")      },
