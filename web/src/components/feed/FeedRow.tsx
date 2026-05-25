@@ -90,8 +90,12 @@ export function FeedRow({ event: e }: Props) {
         ) : null}
       </span>
 
-      {/* Detail — expandable */}
-      <div style={{ minWidth: 0 }}>
+      {/* Detail — click anywhere to expand/collapse */}
+      <div
+        style={{ minWidth: 0, cursor: isTruncatable ? "pointer" : "default" }}
+        onClick={isTruncatable ? () => setExpanded((v) => !v) : undefined}
+        title={isTruncatable ? (expanded ? "Click to collapse" : "Click to expand") : undefined}
+      >
         <span
           className="break-words whitespace-pre-wrap"
           style={{ color: isErr ? "var(--color-danger)" : "var(--color-text-dim)" }}
@@ -99,26 +103,19 @@ export function FeedRow({ event: e }: Props) {
           {displayDetail}
         </span>
 
-        {/* Expand / collapse toggle */}
         {isTruncatable && (
-          <button
-            onClick={() => setExpanded((v) => !v)}
-            className="inline-block ml-2 text-[10px] uppercase tracking-[0.14em] transition-colors"
+          <span
+            className="text-[10px] uppercase tracking-[0.14em]"
             style={{
-              background: "transparent",
-              border: "none",
-              cursor: "pointer",
+              display: "block",
+              marginTop: 4,
               color: "var(--color-accent)",
-              padding: 0,
-              verticalAlign: "middle",
+              fontFamily: "var(--font-mono)",
+              letterSpacing: "0.14em",
             }}
-            onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.opacity = "0.7")}
-            onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.opacity = "1")}
           >
-            {expanded
-              ? "[▲ collapse]"
-              : `[+${fullDetail.length - COMPACT_LEN} chars ▼]`}
-          </button>
+            {expanded ? "▲ collapse" : `▼ +${fullDetail.length - COMPACT_LEN} chars`}
+          </span>
         )}
       </div>
     </div>
