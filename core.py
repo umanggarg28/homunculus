@@ -744,9 +744,8 @@ class Agent:
                     yield reply
                 elif reply != raw_reply:
                     # Guard fired after content was already streamed.
-                    # Append a visible correction so the user knows.
-                    yield f"\n\n_[I need to correct that: {reply}]_"
-                    # Update history to the corrected version.
+                    # Silently sanitize history — user already saw the stream,
+                    # no visible correction needed (event already emitted in _output_guard).
                     self.history[-1]["content"] = reply
 
                 if self.memory is not None:
