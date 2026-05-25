@@ -83,6 +83,17 @@ export const api = {
       body: JSON.stringify({ stream_id }),
     }).then(async (r) => r.json() as Promise<{ ok: boolean; reason?: string }>),
 
+  memoryUpdate: (filename: string, body: string) =>
+    fetch(`${API_BASE}/memory/${encodeURIComponent(filename)}/raw`, {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "text/plain" },
+      body,
+    }).then((r) => {
+      if (!r.ok) throw new Error(`Update memory failed: ${r.status}`);
+      return r.json() as Promise<{ ok: boolean; bytes: number }>;
+    }),
+
   memoryDelete: (filename: string) =>
     fetch(`${API_BASE}/memory/${encodeURIComponent(filename)}`, {
       method: "DELETE",
@@ -112,6 +123,12 @@ export const api = {
     jsonGet<Task[]>(`/tasks?status=${status}`),
 
   tasksMeta: () => jsonGet<TasksMeta>("/tasks/meta"),
+
+  agentUpcoming: () => jsonGet<{
+    next_tick: string | null;
+    default_interval_min: number;
+    next_task: { id: string; title: string; due_at: string; recurrence: string } | null;
+  }>("/agent/upcoming"),
 
   tasksCreate: (body: {
     title: string;

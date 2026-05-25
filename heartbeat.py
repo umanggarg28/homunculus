@@ -24,6 +24,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+import events
 import tools
 from core import Agent
 from memory import Memory
@@ -168,6 +169,17 @@ def tick(memory: Memory, model: str | None) -> None:
         f"(model={agent.model})",
         flush=True,
     )
+
+    # Stamp `last_fired_at` BEFORE running the agent. This is the dedupe
+    # token: if heartbeat crashes mid-tick, the next tick sees a recent
+    # fire stamp and suppresses the same task. Without this, the same
+    # task would re-fire on every restart until completion.
+    for task in due_tasks:
+        try:
+            tasks.mark_fired(task["id"])
+        except Exception as e:
+            print(f"[heartbeat] mark_fired failed for {task['id']}: {e}", flush=True)
+
     prompt = HEARTBEAT_PROMPT_TEMPLATE.format(
         now_iso=now_iso,
         due_tasks=_format_due_tasks(due_tasks),
@@ -177,14 +189,25 @@ def tick(memory: Memory, model: str | None) -> None:
         response = agent.chat(prompt)
     except Exception as e:
         # Record per-task failure so reliability is auditable. Status
-        # stays active; heartbeat retries on next tick.
+        # stays active until CONSECUTIVE_FAILURE_LIMIT (set in tasks.py)
+        # which auto-cancels the task; emit a task_failure event for
+        # each so the /traces UI can show what went wrong.
         duration = (datetime.now() - started).total_seconds()
         err = f"{type(e).__name__}: {e}"
         for task in due_tasks:
             try:
-                tasks.record_failure(task["id"], err, duration_s=duration)
-            except Exception:
-                pass
+                updated = tasks.record_failure(task["id"], err, duration_s=duration)
+                events.emit(
+                    "task_failure",
+                    name=task["id"],
+                    text=events.truncate_preview(err),
+                    result=(
+                        f"consecutive_failures={updated.get('consecutive_failures', '?')} "
+                        f"status={updated.get('status', '?')}"
+                    ),
+                )
+            except Exception as inner:
+                print(f"[heartbeat] record_failure failed for {task['id']}: {inner}", flush=True)
         raise
     print(f"[agent] {response}", flush=True)
 

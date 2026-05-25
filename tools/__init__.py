@@ -18,11 +18,30 @@ tools is whatever the configured MCP servers expose on connect.
 
 from __future__ import annotations
 
+import concurrent.futures
+import os
+
 from ._state import get_mode, init as _init_state, set_mode
 from . import mcp_manager as _mgr_mod
 
 _manager = _mgr_mod.manager
 _started = False
+
+# Per-tool wall-clock timeout. Without this, a hung tool (DNS hang,
+# blocked HTTP, deadlocked subprocess) freezes the entire agent loop
+# indefinitely. Override via HOMUNCULUS_TOOL_TIMEOUT_S.
+DEFAULT_TOOL_TIMEOUT_S = float(os.environ.get("HOMUNCULUS_TOOL_TIMEOUT_S", "60"))
+
+# Hard cap on the tool-result string we feed back into history. Without
+# a cap, a chatty tool (HTML dump, giant log file) can push us past the
+# LLM context limit and 413 the next call. The truncation marker tells
+# the LLM what happened so it can ask for less or retry differently.
+TOOL_RESULT_MAX_CHARS = int(os.environ.get("HOMUNCULUS_TOOL_RESULT_MAX_CHARS", "8000"))
+
+# Single shared executor so we don't spin up a thread per tool call.
+_tool_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="tool-exec"
+)
 
 
 def init(memory, autonomous: bool = False, mode: str = "build") -> None:
@@ -95,9 +114,37 @@ def execute(name: str, arguments: dict) -> str:
             f"call; switch to build mode if action is needed."
         )
     try:
-        return _manager.call(name, arguments)
+        future = _tool_executor.submit(_manager.call, name, arguments)
+        result = future.result(timeout=DEFAULT_TOOL_TIMEOUT_S)
+    except concurrent.futures.TimeoutError:
+        # The tool call is still running in the worker thread but the
+        # agent loop has given up. We can't cancel an in-flight MCP
+        # call without ripping the connection, so we return the timeout
+        # error and let the worker finish in the background (it'll get
+        # GC'd once it returns).
+        return (
+            f"ERROR: tool '{name}' exceeded {DEFAULT_TOOL_TIMEOUT_S:.0f}s timeout. "
+            f"It may still be running. Try a different approach or "
+            f"narrower arguments."
+        )
     except Exception as e:
-        return f"ERROR running {name}: {type(e).__name__}: {e}"
+        result = f"ERROR running {name}: {type(e).__name__}: {e}"
+    # Coerce non-string returns so json.dumps over history doesn't blow
+    # up later (some tool implementations return bytes / dicts by accident).
+    if not isinstance(result, str):
+        try:
+            result = str(result)
+        except Exception:
+            result = "ERROR: tool returned an unrepresentable value"
+    # Truncate to keep the LLM context bounded.
+    if len(result) > TOOL_RESULT_MAX_CHARS:
+        original_len = len(result)
+        dropped = original_len - TOOL_RESULT_MAX_CHARS
+        result = (
+            result[:TOOL_RESULT_MAX_CHARS]
+            + f"\n\n[... truncated {dropped} chars; result was {original_len} bytes total]"
+        )
+    return result
 
 
 __all__ = [

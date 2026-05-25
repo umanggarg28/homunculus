@@ -1,59 +1,89 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useChatStream } from "@/hooks/useChatStream";
-import { ChatLog } from "@/components/chat/ChatLog";
-import { ChatInput } from "@/components/chat/ChatInput";
-import { Toast } from "@/components/ui/Toast";
-import { Button } from "@/components/ui/Button";
+import { useChatToolCalls } from "@/hooks/useChatToolCalls";
+import { BrutalistChatLog } from "@/components/chat/BrutalistChatLog";
+import { BrutalistChatInput } from "@/components/chat/BrutalistChatInput";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { PageShell } from "@/components/ui/PageShell";
 import { api } from "@/lib/api";
 
 export function ChatPage() {
   const { messages, sending, send, cancel, reset } = useChatStream();
-  const [toast, setToast] = useState<string | null>(null);
+  const toolTimeline = useChatToolCalls();
+  const [sessionId] = useState(() => crypto.randomUUID().slice(0, 6));
   const [closing, setClosing] = useState(false);
+  const [bootDone, setBootDone] = useState(false);
+
+  useEffect(() => {
+    const t = setTimeout(() => setBootDone(true), 380);
+    return () => clearTimeout(t);
+  }, []);
 
   const closeChapter = async () => {
     if (closing || messages.length === 0) return;
-    if (!confirm("Archive this conversation and start fresh?")) return;
+    if (!confirm("ARCHIVE THIS SESSION AND OPEN A NEW ONE?")) return;
     setClosing(true);
     try {
       await api.chapterClose();
       reset();
-      setToast("Conversation archived. Starting fresh.");
     } catch {
-      setToast("Couldn't close conversation. Try again.");
+      // surfaced via status bar otherwise
     } finally {
       setClosing(false);
     }
   };
 
-  return (
-    <>
-      {messages.length > 0 && (
-        <div
-          className="sticky top-0 z-10 flex items-center justify-between px-8 h-12"
-          style={{
-            background: "rgba(8, 9, 10, 0.85)",
-            backdropFilter: "blur(8px)",
-            borderBottom: "1px solid var(--color-border)",
-          }}
-        >
-          <div className="text-[13px] font-medium text-[var(--color-text-dim)]">
-            Current conversation · {messages.length} messages
-          </div>
-          <Button size="sm" variant="ghost" onClick={closeChapter} disabled={closing}>
-            {closing ? "Archiving…" : "Close conversation"}
-          </Button>
-        </div>
-      )}
+  const subtitle = `session ${sessionId} · turn ${messages.length}` +
+    (sending ? " · ● working" : "");
 
-      <div
-        className="max-w-[760px] mx-auto px-8 pt-10"
-        style={{ paddingBottom: 160 }}
-      >
-        <ChatLog messages={messages} onPickPrompt={send} />
+  return (
+    <PageShell>
+      <PageHeader
+          title="Chat"
+          subtitle={subtitle}
+          actions={
+            messages.length > 0 ? (
+              <button
+                onClick={closeChapter}
+                disabled={closing}
+                className="text-[10px] uppercase tracking-[0.16em] transition-colors disabled:opacity-50"
+                style={{
+                  background: "transparent",
+                  color: "var(--color-text-muted)",
+                  border: "none",
+                  padding: 0,
+                  cursor: closing ? "default" : "pointer",
+                }}
+                onMouseEnter={(e) => {
+                  if (!closing) (e.currentTarget as HTMLButtonElement).style.color = "var(--color-accent)";
+                }}
+                onMouseLeave={(e) => {
+                  if (!closing) (e.currentTarget as HTMLButtonElement).style.color = "var(--color-text-muted)";
+                }}
+              >
+                [{closing ? "archiving…" : "close session"}]
+              </button>
+            ) : undefined
+          }
+      />
+
+      <div className="max-w-[860px] mx-auto" style={{ paddingBottom: 180 }}>
+        <BrutalistChatLog
+          messages={messages}
+          toolTimeline={toolTimeline}
+          sending={sending}
+          bootDone={bootDone}
+          onPickPrompt={send}
+        />
       </div>
-      <ChatInput sending={sending} onSend={send} onCancel={cancel} />
-      <Toast message={toast} onDismiss={() => setToast(null)} />
-    </>
+
+      <BrutalistChatInput
+        sending={sending}
+        onSend={send}
+        onCancel={cancel}
+        lastToolName={toolTimeline.at(-1)?.name}
+        toolCount={toolTimeline.length}
+      />
+    </PageShell>
   );
 }

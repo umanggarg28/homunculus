@@ -1,59 +1,129 @@
 @import "tailwindcss";
 
 /* ===========================================================
- * HOMUNCULUS · DESIGN TOKENS — Linear-flavoured dark.
+ * HOMUNCULUS · DESIGN TOKENS — Brutalist Phosphor.
  *
- * Dense, designerly, modern devtool aesthetic. One accent
- * (indigo). Neutral grays for the rest. Sans-serif throughout
- * (Inter); mono for code, IDs, timestamps.
+ * Phosphor CRT terminal aesthetic. Green on near-black. All
+ * type is JetBrains Mono. Hard rectangles only — radius is 0
+ * everywhere. Accent is reserved for "the agent is talking",
+ * tool call labels, and live signals.
  * =========================================================== */
 @theme {
   /* Surfaces (darkest → lightest) */
-  --color-bg:        #08090A;   /* page background */
-  --color-surface-1: #0E0F11;   /* sidebar / topbar */
-  --color-surface-2: #16171A;   /* cards, primary content blocks */
-  --color-surface-3: #1C1D21;   /* hover, modal, raised */
-  --color-surface-4: #25262B;   /* selected / active row */
+  --color-bg:        #050505;   /* page background */
+  --color-surface-1: #080A08;   /* sidebar / topbar */
+  --color-surface-2: #0A0F0A;   /* cards, primary content blocks */
+  --color-surface-3: #0F140F;   /* hover, raised */
+  --color-surface-4: #152015;   /* selected / active row */
 
-  /* Borders */
-  --color-border:        #1F2024;
-  --color-border-strong: #2A2B30;
-  --color-border-bright: #3A3B42;
+  /* Borders — phosphor-tinted hairlines */
+  --color-border:        #1A2E1A;
+  --color-border-strong: #2D4A2D;
+  --color-border-bright: #3F6B3F;
 
-  /* Text */
-  --color-text:       #E4E5E7;
-  --color-text-dim:   #B0B2B8;
-  --color-text-muted: #75777E;
-  --color-text-faint: #4E5057;
+  /* Text — phosphor cream-green */
+  --color-text:       #C8E6C9;
+  --color-text-dim:   #8EB88E;
+  --color-text-muted: #4D6B4D;
+  --color-text-faint: #2D4A2D;
 
-  /* Bioluminescent accent — the agent's living glow */
-  --color-accent:        #5EEAD4;   /* mint — primary, "agent thinking/acting" */
-  --color-accent-hover:  #7FF0DD;
-  --color-accent-dim:    rgba(94, 234, 212, 0.14);
-  --color-accent-faint:  rgba(94, 234, 212, 0.06);
-  --color-accent-glow:   rgba(94, 234, 212, 0.55);
+  /* Phosphor accent — the agent's signal */
+  --color-accent:        #7CFE00;
+  --color-accent-hover:  #9CFF40;
+  --color-accent-dim:    rgba(124, 254, 0, 0.12);
+  --color-accent-faint:  rgba(124, 254, 0, 0.05);
+  --color-accent-glow:   rgba(124, 254, 0, 0.55);
 
-  /* Secondary lights */
-  --color-amber:         #F59E0B;   /* scheduled / heartbeat tick */
-  --color-amber-dim:     rgba(245, 158, 11, 0.14);
-  --color-indigo:        #818CF8;   /* user-initiated / chat input */
-  --color-indigo-dim:    rgba(129, 140, 248, 0.14);
+  /* Secondary lights — borrowed from the other CRT palettes */
+  --color-amber:         #FFB000;   /* scheduled / warnings */
+  --color-amber-dim:     rgba(255, 176, 0, 0.14);
+  --color-indigo:        #00D4FF;   /* user-initiated / info */
+  --color-indigo-dim:    rgba(0, 212, 255, 0.14);
 
   /* Semantic */
-  --color-success:  #4ADE80;
-  --color-warning:  #F59E0B;
-  --color-danger:   #F87171;
-  --color-info:     #60A5FA;
+  --color-success:  #7CFE00;
+  --color-warning:  #FFB000;
+  --color-danger:   #FF4D2E;
+  --color-info:     #00D4FF;
 
-  /* Fonts */
-  --font-display: "Geist", "Inter", system-ui, sans-serif;
-  --font-sans:    "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono:    "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  /* Fonts — mono everywhere. The whole UI is a terminal. */
+  --font-display: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --font-sans:    "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 
-  /* Radius (Linear-style: small, consistent) */
-  --radius-sm: 4px;
-  --radius:    6px;
-  --radius-lg: 10px;
+  /* Radius — hard rectangles. No rounding. */
+  --radius-sm: 0;
+  --radius:    0;
+  --radius-lg: 0;
+}
+
+/* ===========================================================
+ * TYPE SCALE — strict 6-step ladder. Use these everywhere.
+ * Inline `style={{ fontSize: 14 }}` is a smell; use a class.
+ * =========================================================== */
+.brut-hero {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: clamp(96px, 14vw, 192px);
+  line-height: 0.82;
+  letter-spacing: -0.05em;
+  font-variant-numeric: tabular-nums;
+}
+.brut-display {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: clamp(40px, 5vw, 64px);
+  line-height: 0.85;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+.brut-h1 {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 20px;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.brut-h2 {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.3;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.brut-body {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.brut-body-sm {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.brut-label {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 10px;
+  line-height: 1.4;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.brut-meta {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 9px;
+  line-height: 1.4;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+.brut-num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 
 /* ---------- Base ---------- */
@@ -68,7 +138,54 @@ html, body {
   font-feature-settings: "cv11", "ss03", "ss04";
 }
 
-#root { min-height: 100vh; }
+#root { min-height: 100vh; position: relative; }
+
+/* ---------- CRT scanline overlay ----------
+ * Subtle horizontal scanline pattern layered over the entire UI.
+ * Drawn via a fixed pseudo-element so it doesn't intercept clicks
+ * (pointer-events: none) and stays above everything visually.
+ * Adds the phosphor-CRT signature without dimming content. */
+body::before {
+  /* Static scanlines — barely-there texture. */
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0) 0px,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(124, 254, 0, 0.018) 2px,
+    rgba(124, 254, 0, 0.018) 3px
+  );
+  mix-blend-mode: screen;
+}
+body::after {
+  /* The vertical-hold roll — soft band sweeping every ~18s.
+     Ambient, only catches the eye when you stop looking. */
+  content: "";
+  position: fixed;
+  left: 0; right: 0; top: 0;
+  height: 28px;
+  z-index: 100;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgba(124, 254, 0, 0)    0%,
+    rgba(124, 254, 0, 0.015) 35%,
+    rgba(124, 254, 0, 0.04) 50%,
+    rgba(124, 254, 0, 0.015) 65%,
+    rgba(124, 254, 0, 0)    100%
+  );
+  animation: crt-roll 18s linear infinite;
+  filter: blur(0.4px);
+  mix-blend-mode: screen;
+}
+@keyframes crt-roll {
+  0%   { transform: translateY(-28px); }
+  100% { transform: translateY(calc(100vh + 14px)); }
+}
 ::selection { background: var(--color-accent-dim); color: var(--color-text); }
 
 /* Legacy class name kept so existing components don't break.
@@ -182,89 +299,172 @@ input, textarea { caret-color: var(--color-accent); }
 .tabular { font-variant-numeric: tabular-nums; }
 
 /* ===========================================================
- * MARKDOWN — used inside chat messages.
- * Compact, sans-serif, code blocks get proper treatment.
+ * MARKDOWN — brut-md* classes used in agent replies.
+ *
+ * Prose at 14px for readability. Code blocks get the phosphor
+ * terminal treatment. Syntax highlighting via hljs (see below).
  * =========================================================== */
-.markdown-message > * + * { margin-top: 0.75rem; }
 
-.markdown-message h1,
-.markdown-message h2,
-.markdown-message h3 {
-  font-family: var(--font-sans);
-  font-weight: 600;
+.brut-md { font-family: var(--font-mono); font-size: 13px; line-height: 1.7; color: var(--color-text); }
+.brut-md > * + * { margin-top: 14px; }
+
+/* Headings — sized so there's real hierarchy, not just 12px everything */
+.brut-md h1 {
+  font-size: 15px; font-weight: 700;
+  letter-spacing: 0.06em; text-transform: uppercase;
   color: var(--color-text);
-  line-height: 1.3;
-  letter-spacing: -0.01em;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--color-border-strong);
+  margin-bottom: 10px;
 }
-.markdown-message h1 { font-size: 18px; }
-.markdown-message h2 { font-size: 16px; }
-.markdown-message h3 { font-size: 15px; }
-
-.markdown-message p,
-.markdown-message li {
-  font-family: var(--font-sans);
-  font-size: 14.5px;
-  line-height: 1.6;
+.brut-md h2 {
+  font-size: 13px; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase;
   color: var(--color-text);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--color-border);
+}
+.brut-md h3 {
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--color-text-dim);
 }
 
-.markdown-message ul, .markdown-message ol { padding-left: 1.25rem; }
-.markdown-message ul { list-style: disc; }
-.markdown-message ul li::marker { color: var(--color-text-muted); }
-.markdown-message ol { list-style: decimal; }
-.markdown-message ol li::marker { color: var(--color-text-muted); }
+/* Paragraphs */
+.brut-md p { margin: 0; }
 
-.markdown-message a {
+/* Strong / em */
+.brut-md strong { color: var(--color-accent); font-weight: 600; }
+.brut-md em    { color: var(--color-text-dim); font-style: normal; text-decoration: underline; text-decoration-color: var(--color-border-strong); text-underline-offset: 3px; }
+
+/* Lists — custom ▸ bullets, decimal-leading-zero for ordered */
+.brut-md ul, .brut-md ol { list-style: none; padding-left: 0; margin: 4px 0; }
+.brut-md li             { padding-left: 20px; position: relative; margin: 3px 0; }
+.brut-md ul > li::before {
+  content: "▸";
+  position: absolute; left: 2px;
   color: var(--color-accent);
-  text-decoration: none;
-  border-bottom: 1px solid rgba(99, 102, 241, 0.4);
+  font-size: 11px; line-height: 1.7;
 }
-.markdown-message a:hover { border-bottom-color: var(--color-accent); }
-
-.markdown-message pre {
-  overflow-x: auto;
-  max-width: 100%;
-  padding: 12px 14px;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface-2);
-  color: var(--color-text);
-  white-space: pre;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  line-height: 1.6;
-  border-radius: var(--radius);
+.brut-md ol             { counter-reset: brut-ol; }
+.brut-md ol > li        { counter-increment: brut-ol; }
+.brut-md ol > li::before {
+  content: counter(brut-ol, decimal-leading-zero) ".";
+  position: absolute; left: 0; min-width: 18px;
+  color: var(--color-accent);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
 }
-.markdown-message pre code { background: transparent; padding: 0; }
+.brut-md li li { padding-left: 16px; }
+.brut-md li li::before { content: "·" !important; color: var(--color-text-muted) !important; }
 
-.markdown-message code,
-.markdown-message p code,
-.markdown-message li code {
-  font-family: var(--font-mono);
-  font-style: normal;
-  font-size: 0.88em;
+/* Inline code */
+.brut-md-inline-code {
   background: var(--color-surface-3);
-  color: var(--color-text);
+  color: var(--color-accent);
   padding: 1px 5px;
   border: 1px solid var(--color-border);
-  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
   white-space: nowrap;
 }
-.markdown-message pre code {
-  border: none;
-  background: transparent;
-  padding: 0;
-  font-size: 12.5px;
+
+/* Code block: dark well with top-label strip */
+.brut-md-pre {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  overflow-x: auto;
+  margin: 10px 0;
+  position: relative;
+}
+.brut-md-code-block {
+  display: block;
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
   white-space: pre;
+  background: transparent;
 }
 
-.markdown-message blockquote {
-  border-left: 2px solid var(--color-border-bright);
+/* Horizontal rule */
+.brut-md hr { border: 0; border-top: 1px solid var(--color-border); margin: 12px 0; }
+
+/* Blockquote */
+.brut-md blockquote {
+  border-left: 2px solid var(--color-accent);
   padding-left: 12px;
   color: var(--color-text-dim);
-  font-size: 14px;
+  margin: 8px 0;
 }
-.markdown-message strong {
+
+/* Links */
+.brut-md a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-bright);
+  text-underline-offset: 3px;
+}
+.brut-md a:hover { text-decoration-color: var(--color-accent); }
+
+/* Tables */
+.brut-md-table-wrap { overflow-x: auto; margin: 10px 0; }
+.brut-md-table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.brut-md-table th, .brut-md-table td {
+  border: 1px solid var(--color-border);
+  padding: 7px 12px;
+  text-align: left;
+  font-family: var(--font-mono);
+}
+.brut-md-table th {
+  background: var(--color-surface-2);
+  color: var(--color-accent);
   font-weight: 600;
-  color: var(--color-text);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.14em;
 }
-.markdown-message em { font-style: italic; }
+.brut-md-table td { color: var(--color-text-dim); }
+.brut-md-table tr:hover td { background: var(--color-surface-3); }
+
+/* ===========================================================
+ * HLJS — Phosphor CRT syntax theme.
+ * Mapped to the design-token palette so it stays in sync.
+ * =========================================================== */
+.hljs                { background: transparent; color: var(--color-text); }
+.hljs-comment,
+.hljs-quote          { color: var(--color-text-muted); font-style: italic; }
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-addition       { color: #7CFE00; font-weight: 600; }      /* accent green */
+.hljs-number,
+.hljs-literal,
+.hljs-deletion       { color: #FF8C00; }                        /* amber-orange */
+.hljs-string,
+.hljs-doctag,
+.hljs-attr           { color: #FFD580; }                        /* warm amber */
+.hljs-title,
+.hljs-section,
+.hljs-built_in       { color: #00D4FF; }                        /* cyan */
+.hljs-name,
+.hljs-tag            { color: #7CFE00; }
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable { color: #C8E6C9; }
+.hljs-type,
+.hljs-class          { color: #B8FFB8; font-style: italic; }
+.hljs-symbol,
+.hljs-bullet         { color: #FFB000; }
+.hljs-subst,
+.hljs-meta           { color: var(--color-text-dim); }
+.hljs-emphasis       { font-style: italic; }
+.hljs-strong         { font-weight: bold; }
+.hljs-regexp,
+.hljs-link           { color: #00D4FF; }
+.hljs-selector-id,
+.hljs-selector-class { color: #7CFE00; }
+.hljs-operator       { color: #C8E6C9; }
+.hljs-params         { color: #D4E8FF; }
+
+/* Legacy .markdown-message kept in case any non-brut-md components still use it */
+.markdown-message { font-family: var(--font-mono); font-size: 13px; line-height: 1.6; color: var(--color-text); }

@@ -1,41 +1,182 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { BackLink } from "@/components/ui/BackLink";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { PageShell } from "@/components/ui/PageShell";
 
+/** Memory entry view + inline edit.
+ *
+ *  View mode: rendered as a mono pre block (brutalist).
+ *  Edit mode: same block becomes a textarea; ⌘S / Ctrl+S to save,
+ *  Esc to cancel. The agent writes here, the user can edit — symmetric.
+ */
 export function MemoryEntryPage() {
   const { filename = "" } = useParams();
-  const [text, setText] = useState<string | null>(null);
+  const [original, setOriginal] = useState<string | null>(null);
+  const [draft, setDraft] = useState<string>("");
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (!filename) return;
-    api.memoryEntry(filename).then(setText).catch((e) => setError(String(e)));
+    api.memoryEntry(filename)
+      .then((t) => { setOriginal(t); setDraft(t); })
+      .catch((e) => setError(String(e)));
   }, [filename]);
 
+  useEffect(() => {
+    if (!editing) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")) {
+        e.preventDefault();
+        save();
+      } else if (e.key === "Escape") {
+        cancel();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, draft]);
+
+  const startEdit = () => {
+    setEditing(true);
+    setTimeout(() => textareaRef.current?.focus(), 10);
+  };
+  const cancel = () => {
+    setEditing(false);
+    if (original !== null) setDraft(original);
+  };
+  const save = async () => {
+    if (!draft.trim() || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.memoryUpdate(filename, draft);
+      setOriginal(draft);
+      setEditing(false);
+      setSavedAt(Date.now());
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const dirty = editing && original !== null && draft !== original;
+  const justSaved = savedAt && Date.now() - savedAt < 4000;
+
   return (
-    <div className="max-w-[860px] mx-auto px-8 pt-10 pb-16">
+    <PageShell>
       <BackLink to="/memory" label="Memory" />
-      <PageHeader title={filename} />
-      {error ? (
+      <PageHeader
+        title={filename}
+        subtitle={editing ? (dirty ? "editing · unsaved" : "editing") : justSaved ? "saved" : "view"}
+        actions={
+          editing ? (
+            <ActionGroup>
+              <Bracketed onClick={save} disabled={!dirty || saving} color="var(--color-accent)">
+                {saving ? "saving…" : "save ⌘s"}
+              </Bracketed>
+              <Bracketed onClick={cancel} color="var(--color-text-muted)">cancel</Bracketed>
+            </ActionGroup>
+          ) : original !== null ? (
+            <Bracketed onClick={startEdit} color="var(--color-accent)">edit</Bracketed>
+          ) : undefined
+        }
+      />
+
+      {error && (
         <div
-          className="text-[12.5px]"
-          style={{ color: "var(--color-danger)", fontFamily: "var(--font-mono)" }}
+          className="mb-4 px-4 py-2 text-[11px] uppercase tracking-[0.14em]"
+          style={{
+            border: "1px solid var(--color-danger)",
+            color: "var(--color-danger)",
+            fontFamily: "var(--font-mono)",
+          }}
         >
-          {error}
+          ● error · {error}
         </div>
-      ) : text === null ? null : (
+      )}
+
+      {original === null && !error ? null : editing ? (
+        <textarea
+          ref={textareaRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          spellCheck={false}
+          className="block w-full bg-transparent resize-y outline-none"
+          style={{
+            border: `1px solid ${dirty ? "var(--color-accent)" : "var(--color-border)"}`,
+            padding: "16px 18px",
+            color: "var(--color-text)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 13,
+            lineHeight: 1.65,
+            minHeight: "60vh",
+            caretColor: "var(--color-accent)",
+          }}
+        />
+      ) : (
         <pre
-          className="rounded-[8px] p-4 mono whitespace-pre-wrap break-words leading-relaxed"
+          className="whitespace-pre-wrap break-words"
           style={{
             border: "1px solid var(--color-border)",
-            background: "var(--color-surface-2)",
+            background: "var(--color-surface-1)",
             color: "var(--color-text)",
-            fontSize: 12.5,
+            fontFamily: "var(--font-mono)",
+            fontSize: 13,
+            lineHeight: 1.65,
+            padding: "16px 18px",
+            margin: 0,
           }}
-        >{text}</pre>
+        >{original}</pre>
       )}
-    </div>
+    </PageShell>
+  );
+}
+
+function ActionGroup({ children }: { children: React.ReactNode }) {
+  return <div className="flex items-center gap-2">{children}</div>;
+}
+
+function Bracketed({
+  onClick, disabled, color, children,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  color: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="text-[10px] uppercase tracking-[0.14em] px-2 py-1 transition-colors disabled:opacity-30"
+      style={{
+        background: "transparent",
+        color,
+        border: `1px solid ${color}`,
+        fontFamily: "var(--font-mono)",
+      }}
+      onMouseEnter={(e) => {
+        if (disabled) return;
+        const el = e.currentTarget as HTMLButtonElement;
+        el.style.background = color;
+        el.style.color = "var(--color-bg)";
+      }}
+      onMouseLeave={(e) => {
+        if (disabled) return;
+        const el = e.currentTarget as HTMLButtonElement;
+        el.style.background = "transparent";
+        el.style.color = color;
+      }}
+    >
+      [{children}]
+    </button>
   );
 }

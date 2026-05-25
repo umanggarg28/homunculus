@@ -1,7 +1,7 @@
 // Shape of records flowing from FastAPI to the browser.
 // Kept narrow and explicit — every field that's optional is marked.
 
-export type ServiceName = "repl" | "heartbeat" | "telegram" | "feed";
+export type ServiceName = "repl" | "heartbeat" | "telegram" | "web" | "feed";
 export type MemoryType = "user" | "feedback" | "project" | "reference";
 
 export interface MemoryEntry {
@@ -82,6 +82,7 @@ export interface Skill {
   failure_count: number;
   last_used: string | null;
   last_status: "success" | "failure" | null;
+  recent_calls?: string[]; // ISO timestamps in last 24h
 }
 
 /** Event kinds emitted into _events.jsonl by every Homunculus service. */

@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { BackLink } from "@/components/ui/BackLink";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { PageShell } from "@/components/ui/PageShell";
 
 export function LogEntryPage() {
   const { "*": rel = "" } = useParams();
@@ -15,27 +16,38 @@ export function LogEntryPage() {
   }, [rel]);
 
   return (
-    <div className="max-w-[860px] mx-auto px-8 pt-10 pb-16">
+    <PageShell>
       <BackLink to="/logs" label="Logs" />
-      <PageHeader title={rel} />
+      <PageHeader
+        title={rel}
+        subtitle={text ? `${(text.length / 1024).toFixed(1)} kb · ${text.split("\n").length} lines` : ""}
+      />
       {error ? (
         <div
-          className="text-[12.5px]"
-          style={{ color: "var(--color-danger)", fontFamily: "var(--font-mono)" }}
+          className="px-4 py-3 text-[11px] uppercase tracking-[0.14em]"
+          style={{
+            border: "1px solid var(--color-danger)",
+            color: "var(--color-danger)",
+            fontFamily: "var(--font-mono)",
+          }}
         >
-          {error}
+          ● error · {error}
         </div>
       ) : text === null ? null : (
         <pre
-          className="rounded-[8px] p-4 mono whitespace-pre-wrap break-words leading-relaxed"
+          className="whitespace-pre-wrap break-words"
           style={{
             border: "1px solid var(--color-border)",
-            background: "var(--color-surface-2)",
+            background: "var(--color-surface-1)",
             color: "var(--color-text)",
+            fontFamily: "var(--font-mono)",
             fontSize: 12.5,
+            lineHeight: 1.65,
+            padding: "16px 18px",
+            margin: 0,
           }}
         >{text}</pre>
       )}
-    </div>
+    </PageShell>
   );
 }

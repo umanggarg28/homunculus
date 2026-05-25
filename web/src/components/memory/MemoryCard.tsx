@@ -1,26 +1,27 @@
 import { Link } from "react-router-dom";
 import { useState, type MouseEvent } from "react";
 import { api } from "@/lib/api";
-import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
 import type { MemoryEntry } from "@/lib/types";
-
-const TYPE_TONE: Record<string, "accent" | "amber" | "indigo" | "muted" | "default" | "success"> = {
-  user: "indigo",
-  feedback: "amber" as const,
-  project: "default",
-  reference: "muted",
-  skill: "accent",
-} as Record<string, "accent" | "amber" | "indigo" | "muted" | "default" | "success">;
 
 interface Props {
   entry: MemoryEntry;
   onDeleted: (filename: string) => void;
 }
 
+const TYPE_COLOR: Record<string, string> = {
+  user:      "var(--color-info)",
+  feedback:  "var(--color-amber)",
+  project:   "var(--color-text-dim)",
+  reference: "var(--color-text-muted)",
+  skill:     "var(--color-accent)",
+};
+
+/** Brutalist memory row — hairline border, mono everywhere, type as
+ *  text tag (no chip), bracketed [delete] on hover. */
 export function MemoryCard({ entry, onDeleted }: Props) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const typeColor = TYPE_COLOR[entry.type] ?? "var(--color-text-muted)";
 
   const startDelete = (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); setConfirming(true); };
   const cancel = (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); setConfirming(false); };
@@ -33,44 +34,83 @@ export function MemoryCard({ entry, onDeleted }: Props) {
 
   return (
     <div
-      className="group flex items-start gap-4 px-4 py-3 hover:bg-[var(--color-surface-3)] transition-colors"
-      style={{ borderBottom: "1px solid var(--color-border)" }}
+      className="group transition-colors"
+      style={{
+        borderBottom: "1px solid var(--color-border)",
+        fontFamily: "var(--font-mono)",
+      }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "var(--color-surface-2)"; }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "transparent"; }}
     >
-      <Link to={`/memory/${entry.filename}`} className="flex-1 min-w-0 flex items-start gap-3">
-        <div className="shrink-0 mt-0.5">
-          <Badge tone={(TYPE_TONE[entry.type] ?? "muted") as "accent" | "amber" | "indigo" | "muted" | "default" | "success"}>
-            {entry.type}
-          </Badge>
-        </div>
-        <div className="min-w-0">
-          <div className="text-[13.5px] font-medium text-[var(--color-text)] truncate group-hover:text-[var(--color-accent)] transition-colors">
-            {entry.name}
+      <Link
+        to={`/memory/${entry.filename}`}
+        className="block px-4 py-2"
+      >
+        <div className="grid items-baseline gap-5" style={{ gridTemplateColumns: "auto 1fr auto" }}>
+          <span className="brut-label shrink-0" style={{ color: typeColor, minWidth: 64 }}>
+            [{entry.type}]
+          </span>
+          <div className="min-w-0">
+            <div className="brut-body truncate" style={{ color: "var(--color-text)" }}>
+              {entry.name}
+            </div>
+            <div className="mt-1 brut-body-sm truncate" style={{ color: "var(--color-text-muted)" }}>
+              {entry.description}
+            </div>
           </div>
-          <div className="mt-0.5 text-[12.5px] text-[var(--color-text-muted)] line-clamp-1">
-            {entry.description}
+          <div className="shrink-0 flex items-center gap-2">
+            {!confirming ? (
+              <button
+                onClick={startDelete}
+                className="text-[10px] uppercase tracking-[0.14em] px-2 py-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                style={{
+                  background: "transparent",
+                  color: "var(--color-text-muted)",
+                  border: "1px solid var(--color-border)",
+                }}
+                onMouseEnter={(e) => {
+                  const el = e.currentTarget as HTMLButtonElement;
+                  el.style.color = "var(--color-danger)";
+                  el.style.borderColor = "var(--color-danger)";
+                }}
+                onMouseLeave={(e) => {
+                  const el = e.currentTarget as HTMLButtonElement;
+                  el.style.color = "var(--color-text-muted)";
+                  el.style.borderColor = "var(--color-border)";
+                }}
+              >
+                [delete]
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={confirm}
+                  disabled={busy}
+                  className="text-[10px] uppercase tracking-[0.14em] px-2 py-1 disabled:opacity-40"
+                  style={{
+                    background: "var(--color-danger)",
+                    color: "var(--color-bg)",
+                    border: "1px solid var(--color-danger)",
+                  }}
+                >
+                  [{busy ? "…" : "confirm"}]
+                </button>
+                <button
+                  onClick={cancel}
+                  className="text-[10px] uppercase tracking-[0.14em] px-2 py-1"
+                  style={{
+                    background: "transparent",
+                    color: "var(--color-text-muted)",
+                    border: "1px solid var(--color-border)",
+                  }}
+                >
+                  [cancel]
+                </button>
+              </>
+            )}
           </div>
         </div>
       </Link>
-
-      <div className="shrink-0 self-center">
-        {!confirming ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={startDelete}
-            className="opacity-0 group-hover:opacity-100 transition-opacity"
-          >
-            Delete
-          </Button>
-        ) : (
-          <div className="flex gap-1">
-            <Button size="sm" variant="danger" onClick={confirm} disabled={busy}>
-              {busy ? "…" : "Confirm"}
-            </Button>
-            <Button size="sm" variant="ghost" onClick={cancel}>Cancel</Button>
-          </div>
-        )}
-      </div>
     </div>
   );
 }

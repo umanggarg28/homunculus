@@ -1,17 +1,18 @@
 import type { ReactNode } from "react";
 
+/** Brutalist empty state — hairline box, terminal voice. */
 export function Empty({ children }: { children: ReactNode }) {
   return (
     <div
-      className="rounded-[8px] p-10 text-center"
+      className="p-8 text-center text-[11px] uppercase tracking-[0.16em]"
       style={{
-        background: "var(--color-surface-2)",
-        border: "1px dashed var(--color-border-strong)",
+        background: "transparent",
+        border: "1px solid var(--color-border)",
         color: "var(--color-text-muted)",
-        fontSize: 13.5,
+        fontFamily: "var(--font-mono)",
       }}
     >
-      {children}
+      ─ {children} ─
     </div>
   );
 }
