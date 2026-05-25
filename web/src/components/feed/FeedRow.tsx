@@ -49,6 +49,7 @@ export function FeedRow({ event: e }: Props) {
   return (
     <div
       className="grid py-1.5 px-4"
+      onClick={isTruncatable ? () => setExpanded((v) => !v) : undefined}
       style={{
         gridTemplateColumns: "90px 80px 18px 110px 1fr",
         gap: "0 16px",
@@ -58,6 +59,7 @@ export function FeedRow({ event: e }: Props) {
         fontFamily: "var(--font-mono)",
         fontSize: 12,
         background: isErr ? "rgba(255,77,46,0.04)" : "transparent",
+        cursor: isTruncatable ? "pointer" : "default",
       }}
     >
       {/* Time */}
@@ -90,12 +92,8 @@ export function FeedRow({ event: e }: Props) {
         ) : null}
       </span>
 
-      {/* Detail — click anywhere to expand/collapse */}
-      <div
-        style={{ minWidth: 0, cursor: isTruncatable ? "pointer" : "default" }}
-        onClick={isTruncatable ? () => setExpanded((v) => !v) : undefined}
-        title={isTruncatable ? (expanded ? "Click to collapse" : "Click to expand") : undefined}
-      >
+      {/* Detail */}
+      <div style={{ minWidth: 0 }}>
         <span
           className="break-words whitespace-pre-wrap"
           style={{ color: isErr ? "var(--color-danger)" : "var(--color-text-dim)" }}
