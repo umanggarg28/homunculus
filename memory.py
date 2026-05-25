@@ -531,7 +531,12 @@ class Memory:
                 f"updated {age_days}d ago" if age_days > 0 else "updated today"
             )
             stale = " · ⚠ stale" if age_days >= 30 else ""
-            snippets.append(f"## {path.name} ({age_tag}{stale})\n{body}")
+            # Use the human-readable name from frontmatter, not the filename.
+            # The filename is an internal implementation detail — the LLM
+            # should never see it so it can't echo it back to the user.
+            name_match = re.search(r"^name:\s*(.+)$", text, re.MULTILINE)
+            label = name_match.group(1).strip() if name_match else path.stem
+            snippets.append(f"## {label} ({age_tag}{stale})\n{body}")
         return "\n\n".join(snippets)
 
     @staticmethod
