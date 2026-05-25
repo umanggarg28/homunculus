@@ -1,7 +1,7 @@
-import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 
+/** Brutalist plan-mode banner — hairline strip in amber. */
 export function PlanModeBanner() {
   const [isPlan, setIsPlan] = useState(false);
 
@@ -13,36 +13,21 @@ export function PlanModeBanner() {
     return () => clearInterval(id);
   }, []);
 
+  if (!isPlan) return null;
+
   return (
-    <AnimatePresence>
-      {isPlan && (
-        <motion.div
-          initial={{ opacity: 0, height: 0 }}
-          animate={{ opacity: 1, height: "auto" }}
-          exit={{ opacity: 0, height: 0 }}
-          transition={{ duration: 0.2 }}
-          style={{
-            background: "var(--color-accent-faint)",
-            borderBottom: "1px solid rgba(99,102,241,0.32)",
-            overflow: "hidden",
-          }}
-        >
-          <div className="px-8 py-2 flex items-center gap-2.5">
-            <span
-              className="text-[11px] font-semibold uppercase tracking-wider"
-              style={{ color: "var(--color-accent)" }}
-            >
-              Plan mode
-            </span>
-            <span
-              className="text-[13px]"
-              style={{ color: "var(--color-text-dim)" }}
-            >
-              Read-only. The agent will describe what it would do, not execute.
-            </span>
-          </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+    <div
+      className="px-10 py-2 flex items-center gap-3 text-[10px] uppercase tracking-[0.14em]"
+      style={{
+        background: "var(--color-bg)",
+        borderBottom: "1px solid var(--color-amber)",
+        color: "var(--color-text-dim)",
+        fontFamily: "var(--font-mono)",
+      }}
+    >
+      <span style={{ color: "var(--color-amber)" }}>● plan mode</span>
+      <span style={{ color: "var(--color-border-strong)" }}>──</span>
+      <span>read-only · agent will describe what it would do, not execute</span>
+    </div>
   );
 }

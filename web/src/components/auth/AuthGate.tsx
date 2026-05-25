@@ -5,6 +5,8 @@ import { Field, Input } from "@/components/ui/Input";
 
 interface Props { children: ReactNode; }
 
+/** Brutalist auth gate — terminal-style login. Same hairline-bordered
+ *  box, mono everywhere, accent prompt. */
 export function AuthGate({ children }: Props) {
   const [loading, setLoading] = useState(true);
   const [authRequired, setAuthRequired] = useState(false);
@@ -25,40 +27,40 @@ export function AuthGate({ children }: Props) {
 
   if (loading) {
     return (
-      <div className="min-h-screen grid place-items-center" style={{ background: "var(--color-bg)" }}>
-        <div className="text-[12px] text-[var(--color-text-muted)]">Loading…</div>
+      <div
+        className="min-h-screen grid place-items-center"
+        style={{ background: "var(--color-bg)", fontFamily: "var(--font-mono)" }}
+      >
+        <div className="text-[10px] uppercase tracking-[0.22em]" style={{ color: "var(--color-text-muted)" }}>
+          ── loading
+        </div>
       </div>
     );
   }
 
   if (authRequired && !getWebToken()) {
     return (
-      <div className="min-h-screen grid place-items-center px-6" style={{ background: "var(--color-bg)" }}>
+      <div
+        className="min-h-screen grid place-items-center px-6"
+        style={{ background: "var(--color-bg)", fontFamily: "var(--font-mono)" }}
+      >
         <form
           onSubmit={submit}
-          className="w-full max-w-[380px] p-8 rounded-[10px]"
+          className="w-full max-w-[420px] p-7"
           style={{
-            background: "var(--color-surface-2)",
-            border: "1px solid var(--color-border-strong)",
+            background: "var(--color-bg)",
+            border: "1px solid var(--color-accent)",
+            boxShadow: "0 0 32px var(--color-accent-glow)",
           }}
         >
-          <div className="flex items-center gap-2.5 mb-6">
-            <div
-              className="w-6 h-6 rounded-[5px] grid place-items-center"
-              style={{ background: "var(--color-accent)", color: "white", fontWeight: 700, fontSize: 13 }}
-            >
-              H
-            </div>
-            <span className="text-[16px] font-semibold tracking-tight text-[var(--color-text)]">
-              Homunculus
-            </span>
+          <div className="mb-2 text-[14px] font-bold uppercase tracking-[0.04em]" style={{ color: "var(--color-text)" }}>
+            <span style={{ color: "var(--color-accent)" }}>$</span> homunculus
+          </div>
+          <div className="mb-7 text-[10px] uppercase tracking-[0.22em]" style={{ color: "var(--color-text-muted)" }}>
+            ── auth required · paste your token to continue
           </div>
 
-          <p className="text-[13px] mb-5 text-[var(--color-text-dim)]">
-            Enter your access token to continue.
-          </p>
-
-          <Field label="Access token">
+          <Field label="access token">
             <Input
               value={token}
               onChange={(e) => setToken(e.target.value)}
@@ -69,7 +71,7 @@ export function AuthGate({ children }: Props) {
           </Field>
 
           <Button type="submit" variant="primary" disabled={!token.trim()} className="w-full">
-            Sign in
+            [sign in ↵]
           </Button>
         </form>
       </div>

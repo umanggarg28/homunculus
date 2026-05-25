@@ -98,6 +98,10 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 # send is one turn in an ongoing conversation. /reset starts fresh.
 _agent: Agent | None = None
 
+# When set to a future timestamp, the bot replies with a brief "paused"
+# notice instead of routing messages to the agent. Cleared by /resume.
+_paused_until_ts: float | None = None
+
 
 def get_allowed_user_id() -> int | None:
     """Read the allowed user ID from env. Returns None if unset/invalid."""
@@ -142,8 +146,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not user_text.strip():
         return
 
-    global _agent
+    global _agent, _paused_until_ts
     assert _agent is not None, "agent should be set up in main()"
+
+    # Paused? Tell the user (so they know the bot is alive) and bail.
+    now_ts = __import__("time").time()
+    if _paused_until_ts and now_ts < _paused_until_ts:
+        wait_s = int(_paused_until_ts - now_ts)
+        wait_human = f"{wait_s}s" if wait_s < 60 else f"{wait_s // 60}m"
+        await update.message.reply_text(
+            f"(paused, resuming in {wait_human} — send /resume to wake me up)"
+        )
+        return
+
+    # Drain any notifications sent by other processes (heartbeat, web)
+    # since the last user turn. Without this, follow-ups like "explain
+    # it" arrive with no context because the heartbeat's notify() runs
+    # in a different process and never touches our in-memory history.
+    _drain_notifications_into_history(_agent)
 
     # Optional: show "typing..." while we think.
     await update.message.chat.send_action("typing")
@@ -164,10 +184,49 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Clean markdown artifacts before sending (LLM ignores prompt rules).
     reply = _clean_for_plaintext(reply)
 
-    # Telegram message limit is 4096 chars. Truncate if necessary.
+    # Telegram message limit is 4096 chars. If the agent replied with
+    # something longer, send the first chunk and let the user know
+    # there's more (rather than silently truncating).
     if len(reply) > 4000:
-        reply = reply[:4000] + "\n\n[...truncated]"
+        truncated_len = len(reply) - 4000
+        reply = reply[:4000] + f"\n\n[…truncated {truncated_len} chars · open the web UI for full]"
+        logging.info("agent reply truncated by %d chars", truncated_len)
     await update.message.reply_text(reply)
+
+
+def _drain_notifications_into_history(agent: Agent) -> None:
+    """Pull any pending notifications into the agent's in-memory history.
+
+    Notifications are written by `notify()` from any process. Each one
+    becomes an `assistant` message in history so the LLM sees "earlier
+    I sent you X" and can ground follow-ups against it. The drain is
+    idempotent — a persistent pointer in memory/ tracks what's been
+    consumed.
+    """
+    if agent.memory is None:
+        return
+    try:
+        fresh = agent.memory.drain_pending_notifications()
+    except Exception as e:
+        logging.warning("notification drain failed: %s", e)
+        return
+    if not fresh:
+        return
+    for entry in fresh:
+        text = entry.get("text", "")
+        ts = entry.get("ts")
+        try:
+            from datetime import datetime
+            when = datetime.fromtimestamp(float(ts)).strftime("%H:%M")
+        except Exception:
+            when = "earlier"
+        # Marker prefix tells the LLM this is a notification we
+        # proactively sent — not a normal assistant reply mid-conversation.
+        agent.history.append({
+            "role": "assistant",
+            "content": f"[notification I sent you at {when}]\n\n{text}",
+        })
+    logging.info("drained %d pending notification(s) into history", len(fresh))
 
 
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -177,6 +236,38 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if _agent is not None:
         _agent.reset()
     await update.message.reply_text("History cleared. Memory still intact.")
+
+
+async def pause_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Pause the bot for N minutes (default 60).
+
+    Usage: `/pause 30` to pause for 30 minutes, or `/pause` for 1 hour.
+    Useful when the agent is misbehaving and you need it silenced
+    without restarting the container.
+    """
+    assert update.message is not None
+    global _paused_until_ts
+    args = (update.message.text or "").split()
+    minutes = 60
+    if len(args) > 1:
+        try:
+            minutes = max(1, min(24 * 60, int(args[1])))
+        except ValueError:
+            await update.message.reply_text("Usage: /pause [minutes] (default 60, max 1440)")
+            return
+    import time as _time
+    _paused_until_ts = _time.time() + minutes * 60
+    await update.message.reply_text(
+        f"Paused for {minutes} minute(s). /resume to wake me up."
+    )
+
+
+async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Resume the bot before the pause expires."""
+    assert update.message is not None
+    global _paused_until_ts
+    _paused_until_ts = None
+    await update.message.reply_text("Awake.")
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -224,6 +315,8 @@ def main() -> None:
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("reset", reset_command))
+    app.add_handler(CommandHandler("pause", pause_command))
+    app.add_handler(CommandHandler("resume", resume_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logging.info("Telegram bot starting (long-polling)...")

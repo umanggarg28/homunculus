@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { Empty } from "@/components/ui/Empty";
+import { PageShell } from "@/components/ui/PageShell";
+import { BrutalistEmpty } from "@/components/ui/BrutalistEmpty";
 import { MemoryGrid } from "@/components/memory/MemoryGrid";
+import { MemoryHero } from "@/components/ui/HeroBand";
 import type { MemoryEntry } from "@/lib/types";
 
 export function MemoryPage() {
@@ -13,14 +15,26 @@ export function MemoryPage() {
   }, []);
 
   return (
-    <div className="max-w-[1000px] mx-auto px-8 pt-10 pb-16">
+    <PageShell>
       <PageHeader
         title="Memory"
         subtitle={entries ? `${entries.length} entries · grouped by type` : ""}
       />
+      {entries && entries.length > 0 && <MemoryHero entries={entries} />}
       {entries === null ? null
-        : entries.length === 0 ? <Empty>No memory entries yet. The agent writes here as it learns.</Empty>
+        : entries.length === 0 ? (
+            <BrutalistEmpty
+              header="MEMORY EMPTY"
+              body={<>the agent writes here as it learns — preferences, project context, references, feedback. it&apos;ll start populating after a few conversations.</>}
+              samplesHeader="── SEED IT BY TELLING IT"
+              samples={[
+                "remember that I prefer terse responses with no trailing summaries",
+                "I'm a senior engineer working on a real-time agent system",
+                "the project root for homunculus is ~/Projects/homunculus",
+              ]}
+            />
+          )
         : <MemoryGrid entries={entries} />}
-    </div>
+    </PageShell>
   );
 }

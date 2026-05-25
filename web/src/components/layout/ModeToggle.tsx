@@ -3,6 +3,7 @@ import { api } from "@/lib/api";
 
 type Mode = "plan" | "build";
 
+/** Brutalist mode toggle. Hard-edged, accent-inverted on active. */
 export function ModeToggle() {
   const [mode, setMode] = useState<Mode | null>(null);
   const [busy, setBusy] = useState(false);
@@ -26,15 +27,11 @@ export function ModeToggle() {
 
   return (
     <div
-      className="flex p-0.5 rounded-[6px]"
-      style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}
+      className="flex"
+      style={{ border: "1px solid var(--color-border)", fontFamily: "var(--font-mono)" }}
     >
-      <ToggleBtn active={mode === "plan"} onClick={() => switchTo("plan")}>
-        Plan
-      </ToggleBtn>
-      <ToggleBtn active={mode === "build"} onClick={() => switchTo("build")}>
-        Build
-      </ToggleBtn>
+      <ToggleBtn active={mode === "plan"} onClick={() => switchTo("plan")}>PLAN</ToggleBtn>
+      <ToggleBtn active={mode === "build"} onClick={() => switchTo("build")}>BUILD</ToggleBtn>
     </div>
   );
 }
@@ -45,10 +42,11 @@ function ToggleBtn({
   return (
     <button
       onClick={onClick}
-      className="flex-1 h-6 text-[11px] font-medium rounded-[4px] transition-colors"
+      className="flex-1 h-6 text-[10px] uppercase tracking-[0.16em] transition-colors"
       style={{
-        background: active ? "var(--color-surface-4)" : "transparent",
-        color: active ? "var(--color-text)" : "var(--color-text-muted)",
+        background: active ? "var(--color-accent)" : "transparent",
+        color: active ? "var(--color-bg)" : "var(--color-text-muted)",
+        border: "none",
       }}
     >
       {children}

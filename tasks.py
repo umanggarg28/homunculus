@@ -2,15 +2,25 @@
 
 Tasks are operational state, not semantic memory. Memory says "what is true";
 tasks say "what should happen, when, and whether it is done."
+
+Concurrency: the JSON file is read-modify-write, which races between
+heartbeat (firing tasks) and the web UI / Telegram (creating / editing
+them). All mutators go through `_with_lock()` which holds an exclusive
+fcntl flock on a sidecar lock file for the duration of the RMW.
 """
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import json
+import os
 import re
+import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 ALLOWED_RECURRENCE = {"none", "daily", "weekly"}
@@ -20,6 +30,21 @@ ALLOWED_STATUS = {"active", "completed", "cancelled"}
 # tasks.json stays small even after a year of daily firings.
 RUN_HISTORY_CAP = 20
 
+# After N consecutive failures the task auto-cancels. Without a circuit
+# breaker, a broken task fires every heartbeat tick forever and spams
+# the logs / wastes LLM quota.
+CONSECUTIVE_FAILURE_LIMIT = 3
+
+# A task that already fired within this window is suppressed from a
+# subsequent `due()` call. Prevents heartbeat-restart double-fires:
+# heartbeat crashes mid-tick → next tick sees the same overdue task →
+# fires it again without this check.
+RE_FIRE_SUPPRESSION_SECONDS = 5 * 60  # 5 minutes
+
+# `_advance_due()` can in theory loop forever if `recurrence_step` is
+# 0 or if `now` keeps advancing during a slow operation. Cap iterations.
+ADVANCE_DUE_MAX_ITERS = 366 * 2  # ~2 years of daily steps
+
 
 class TaskStore:
     """Tiny JSON-backed task database."""
@@ -28,8 +53,38 @@ class TaskStore:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = root / "tasks.json"
+        self.lock_path = root / "tasks.json.lock"
         if not self.path.exists():
             self._write([])
+
+    @contextmanager
+    def _locked(self) -> Iterator[None]:
+        """Hold an exclusive flock on the sidecar lock file.
+
+        Used around every read-modify-write so that concurrent updates
+        (heartbeat completing a task while the user edits its due date
+        from the web UI) don't clobber each other.
+        """
+        # Open in append-mode so we don't truncate the file. Closing
+        # releases the lock.
+        with self.lock_path.open("a") as f:
+            for attempt in range(50):  # ~5s total at 100ms sleep
+                try:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError as e:
+                    if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
+                        raise
+                    time.sleep(0.1)
+            else:
+                raise RuntimeError(
+                    "Could not acquire tasks.json lock after 5s — "
+                    "another process is holding it too long."
+                )
+            try:
+                yield
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     def all(self) -> list[dict[str, Any]]:
         try:
@@ -49,25 +104,29 @@ class TaskStore:
         recurrence = recurrence or "none"
         if recurrence not in ALLOWED_RECURRENCE:
             raise ValueError(f"recurrence must be one of {sorted(ALLOWED_RECURRENCE)}")
-        now = datetime.now().isoformat(timespec="seconds")
-        tasks = self.all()
-        task = {
-            "id": self._unique_id(title, tasks),
-            "title": title.strip(),
-            "description": description.strip(),
-            "status": "active",
-            "due_at": self._normalize_datetime(due_at) if due_at else None,
-            "recurrence": recurrence,
-            "notify": bool(notify),
-            "created_at": now,
-            "updated_at": now,
-            "completed_at": None,
-            "last_result": "",
-            "last_runs": [],
-        }
-        tasks.append(task)
-        self._write(tasks)
-        return task
+        with self._locked():
+            now = datetime.now().isoformat(timespec="seconds")
+            tasks = self.all()
+            task = {
+                "id": self._unique_id(title, tasks),
+                "title": title.strip(),
+                "description": description.strip(),
+                "status": "active",
+                "due_at": self._normalize_datetime(due_at) if due_at else None,
+                "recurrence": recurrence,
+                "notify": bool(notify),
+                "created_at": now,
+                "updated_at": now,
+                "completed_at": None,
+                "last_result": "",
+                "last_runs": [],
+                # Dedupe + circuit breaker fields.
+                "last_fired_at": None,
+                "consecutive_failures": 0,
+            }
+            tasks.append(task)
+            self._write(tasks)
+            return task
 
     def list(self, status: str = "active") -> list[dict[str, Any]]:
         if status != "all" and status not in ALLOWED_STATUS:
@@ -78,16 +137,48 @@ class TaskStore:
         return sorted(tasks, key=lambda t: t.get("due_at") or "9999")
 
     def due(self, now: datetime | None = None) -> list[dict[str, Any]]:
+        """Return active tasks whose due_at is <= now AND haven't fired
+        recently (within RE_FIRE_SUPPRESSION_SECONDS). The suppression
+        check prevents heartbeat-restart double-fires.
+        """
         now = now or datetime.now()
         due_tasks: list[dict[str, Any]] = []
         for task in self.list("active"):
             due_at = task.get("due_at")
             if not due_at:
                 continue
-            target = datetime.fromisoformat(due_at)
-            if target <= now:
-                due_tasks.append(task)
+            try:
+                target = datetime.fromisoformat(due_at)
+            except ValueError:
+                continue  # malformed due_at — skip rather than crash
+            if target > now:
+                continue
+            last_fired = task.get("last_fired_at")
+            if last_fired:
+                try:
+                    last_fired_dt = datetime.fromisoformat(last_fired)
+                except ValueError:
+                    last_fired_dt = None
+                if last_fired_dt is not None:
+                    age = (now - last_fired_dt).total_seconds()
+                    if age < RE_FIRE_SUPPRESSION_SECONDS:
+                        continue
+            due_tasks.append(task)
         return due_tasks
+
+    def mark_fired(self, task_id: str, now: datetime | None = None) -> dict[str, Any]:
+        """Stamp `last_fired_at` so the same task doesn't re-fire on the
+        next heartbeat tick. Must be called BEFORE the agent runs the
+        task — otherwise a slow agent or a heartbeat crash mid-task will
+        leave the task without a fire stamp and it'll fire again.
+        """
+        now = now or datetime.now()
+        with self._locked():
+            tasks = self.all()
+            task = self._find(tasks, task_id)
+            task["last_fired_at"] = now.isoformat(timespec="seconds")
+            self._write(tasks)
+            return task
 
     def next_due_seconds(self, now: datetime | None = None) -> float | None:
         now = now or datetime.now()
@@ -96,45 +187,64 @@ class TaskStore:
             due_at = task.get("due_at")
             if not due_at:
                 continue
-            target = datetime.fromisoformat(due_at)
+            try:
+                target = datetime.fromisoformat(due_at)
+            except ValueError:
+                continue
             delta = (target - now).total_seconds()
             if delta > 0:
                 seconds.append(delta)
         return min(seconds) if seconds else None
 
     def complete(self, task_id: str, result: str = "", duration_s: float | None = None) -> dict[str, Any]:
-        tasks = self.all()
-        task = self._find(tasks, task_id)
-        now = datetime.now()
-        task["last_result"] = result.strip()
-        task["updated_at"] = now.isoformat(timespec="seconds")
-        task["completed_at"] = now.isoformat(timespec="seconds")
-        self._append_run(task, now, "success", result, duration_s)
+        with self._locked():
+            tasks = self.all()
+            task = self._find(tasks, task_id)
+            now = datetime.now()
+            task["last_result"] = result.strip()
+            task["updated_at"] = now.isoformat(timespec="seconds")
+            task["completed_at"] = now.isoformat(timespec="seconds")
+            task["consecutive_failures"] = 0  # successful run resets counter
+            self._append_run(task, now, "success", result, duration_s)
 
-        recurrence = task.get("recurrence", "none")
-        if recurrence in {"daily", "weekly"}:
-            task["due_at"] = self._advance_due(task.get("due_at"), recurrence, now)
-            task["status"] = "active"
-        else:
-            task["status"] = "completed"
-        self._write(tasks)
-        return task
+            recurrence = task.get("recurrence", "none")
+            if recurrence in {"daily", "weekly"}:
+                task["due_at"] = self._advance_due(task.get("due_at"), recurrence, now)
+                task["status"] = "active"
+            else:
+                task["status"] = "completed"
+            self._write(tasks)
+            return task
 
     def record_failure(self, task_id: str, error: str, duration_s: float | None = None) -> dict[str, Any]:
-        """Log a failed run without changing status or advancing recurrence.
+        """Log a failed run.
 
-        Use this when a due task throws or the agent couldn't deliver.
-        Status stays active (heartbeat will retry on next tick) but the
-        failure shows up in last_runs so reliability is auditable.
+        Increments `consecutive_failures`. If the counter reaches
+        CONSECUTIVE_FAILURE_LIMIT the task auto-cancels — a broken task
+        otherwise fires every tick forever, burning quota and spamming
+        logs.
+
+        Status stays active until the limit hits (heartbeat retries on
+        next tick). At the limit, status flips to cancelled with a
+        descriptive last_result.
         """
-        tasks = self.all()
-        task = self._find(tasks, task_id)
-        now = datetime.now()
-        task["updated_at"] = now.isoformat(timespec="seconds")
-        task["last_result"] = error.strip()
-        self._append_run(task, now, "failure", error, duration_s)
-        self._write(tasks)
-        return task
+        with self._locked():
+            tasks = self.all()
+            task = self._find(tasks, task_id)
+            now = datetime.now()
+            task["updated_at"] = now.isoformat(timespec="seconds")
+            task["last_result"] = error.strip()
+            failures = int(task.get("consecutive_failures", 0)) + 1
+            task["consecutive_failures"] = failures
+            self._append_run(task, now, "failure", error, duration_s)
+            if failures >= CONSECUTIVE_FAILURE_LIMIT:
+                task["status"] = "cancelled"
+                task["last_result"] = (
+                    f"auto-cancelled after {failures} consecutive failures · "
+                    f"last error: {error.strip()[:200]}"
+                )
+            self._write(tasks)
+            return task
 
     def update(
         self,
@@ -146,50 +256,59 @@ class TaskStore:
         notify: bool | None = None,
     ) -> dict[str, Any]:
         """Edit task metadata. None means "don't change this field"."""
-        tasks = self.all()
-        task = self._find(tasks, task_id)
-        if title is not None:
-            task["title"] = title.strip()
-        if description is not None:
-            task["description"] = description.strip()
-        if due_at is not None:
-            task["due_at"] = self._normalize_datetime(due_at)
-        if recurrence is not None:
-            if recurrence not in ALLOWED_RECURRENCE:
-                raise ValueError(f"recurrence must be one of {sorted(ALLOWED_RECURRENCE)}")
-            task["recurrence"] = recurrence
-        if notify is not None:
-            task["notify"] = bool(notify)
-        task["updated_at"] = datetime.now().isoformat(timespec="seconds")
-        self._write(tasks)
-        return task
+        with self._locked():
+            tasks = self.all()
+            task = self._find(tasks, task_id)
+            if title is not None:
+                task["title"] = title.strip()
+            if description is not None:
+                task["description"] = description.strip()
+            if due_at is not None:
+                task["due_at"] = self._normalize_datetime(due_at)
+                # User-edited due_at clears the fire stamp so the new
+                # schedule isn't suppressed by an old fire.
+                task["last_fired_at"] = None
+            if recurrence is not None:
+                if recurrence not in ALLOWED_RECURRENCE:
+                    raise ValueError(f"recurrence must be one of {sorted(ALLOWED_RECURRENCE)}")
+                task["recurrence"] = recurrence
+            if notify is not None:
+                task["notify"] = bool(notify)
+            task["updated_at"] = datetime.now().isoformat(timespec="seconds")
+            self._write(tasks)
+            return task
 
     def delete(self, task_id: str) -> None:
-        tasks = self.all()
-        remaining = [t for t in tasks if t.get("id") != task_id]
-        if len(remaining) == len(tasks):
-            raise KeyError(f"task '{task_id}' not found")
-        self._write(remaining)
+        with self._locked():
+            tasks = self.all()
+            remaining = [t for t in tasks if t.get("id") != task_id]
+            if len(remaining) == len(tasks):
+                raise KeyError(f"task '{task_id}' not found")
+            self._write(remaining)
 
     def run_now(self, task_id: str) -> dict[str, Any]:
         """Set due_at to now so heartbeat fires on its next tick."""
-        tasks = self.all()
-        task = self._find(tasks, task_id)
-        task["due_at"] = datetime.now().isoformat(timespec="seconds")
-        task["status"] = "active"
-        task["updated_at"] = task["due_at"]
-        self._write(tasks)
-        return task
+        with self._locked():
+            tasks = self.all()
+            task = self._find(tasks, task_id)
+            now_iso = datetime.now().isoformat(timespec="seconds")
+            task["due_at"] = now_iso
+            task["status"] = "active"
+            task["updated_at"] = now_iso
+            task["last_fired_at"] = None  # clear so it fires immediately
+            self._write(tasks)
+            return task
 
     def cancel(self, task_id: str, reason: str = "") -> dict[str, Any]:
-        tasks = self.all()
-        task = self._find(tasks, task_id)
-        now = datetime.now().isoformat(timespec="seconds")
-        task["status"] = "cancelled"
-        task["updated_at"] = now
-        task["last_result"] = reason.strip()
-        self._write(tasks)
-        return task
+        with self._locked():
+            tasks = self.all()
+            task = self._find(tasks, task_id)
+            now = datetime.now().isoformat(timespec="seconds")
+            task["status"] = "cancelled"
+            task["updated_at"] = now
+            task["last_result"] = reason.strip()
+            self._write(tasks)
+            return task
 
     @staticmethod
     def _append_run(
@@ -217,22 +336,35 @@ class TaskStore:
         due_at: str,
         recurrence: str | None = None,
     ) -> dict[str, Any]:
-        tasks = self.all()
-        task = self._find(tasks, task_id)
-        if recurrence is not None:
-            if recurrence not in ALLOWED_RECURRENCE:
-                raise ValueError(f"recurrence must be one of {sorted(ALLOWED_RECURRENCE)}")
-            task["recurrence"] = recurrence
-        task["due_at"] = self._normalize_datetime(due_at)
-        task["status"] = "active"
-        task["updated_at"] = datetime.now().isoformat(timespec="seconds")
-        self._write(tasks)
-        return task
+        with self._locked():
+            tasks = self.all()
+            task = self._find(tasks, task_id)
+            if recurrence is not None:
+                if recurrence not in ALLOWED_RECURRENCE:
+                    raise ValueError(f"recurrence must be one of {sorted(ALLOWED_RECURRENCE)}")
+                task["recurrence"] = recurrence
+            task["due_at"] = self._normalize_datetime(due_at)
+            task["status"] = "active"
+            task["updated_at"] = datetime.now().isoformat(timespec="seconds")
+            task["last_fired_at"] = None  # rescheduled tasks fire fresh
+            self._write(tasks)
+            return task
 
     def _write(self, tasks: list[dict[str, Any]]) -> None:
         tmp = self.path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(tasks, indent=2), encoding="utf-8")
+        # Atomic rename + fsync the parent dir so the new metadata is
+        # durable. Without dirfsync, a crash between rename and flush
+        # can leave the directory entry pointing to the old inode.
         tmp.replace(self.path)
+        try:
+            dir_fd = os.open(str(self.root), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass  # best-effort; tmpfs / non-POSIX may not support this
 
     def _find(self, tasks: list[dict[str, Any]], task_id: str) -> dict[str, Any]:
         for task in tasks:
@@ -251,11 +383,21 @@ class TaskStore:
 
     @staticmethod
     def _advance_due(due_at: str | None, recurrence: str, now: datetime) -> str:
+        """Advance the next due timestamp until it lands past `now`.
+
+        Capped at ADVANCE_DUE_MAX_ITERS to guard against pathological
+        inputs (zero step, broken clock skew, etc.) so we don't loop
+        forever inside a `complete()` call holding the file lock.
+        """
         base = datetime.fromisoformat(due_at) if due_at else now
         step = timedelta(days=1 if recurrence == "daily" else 7)
-        while base <= now:
+        for _ in range(ADVANCE_DUE_MAX_ITERS):
+            if base > now:
+                return base.isoformat(timespec="seconds")
             base += step
-        return base.isoformat(timespec="seconds")
+        # If we somehow couldn't advance past `now`, fall back to a step
+        # ahead of now so the next fire is in the future.
+        return (now + step).isoformat(timespec="seconds")
 
     @staticmethod
     def _unique_id(title: str, tasks: list[dict[str, Any]]) -> str:

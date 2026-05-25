@@ -78,12 +78,12 @@ services:
     restart: unless-stopped
     # No stdin_open/tty — daemon that long-polls Telegram for messages.
 
-  feed:
+  web:
     build: .
     image: homunculus:phase1
     env_file: .env              # chat endpoint needs the LLM API key
     environment:
-      HOMUNCULUS_SERVICE: feed
+      HOMUNCULUS_SERVICE: web
       PYTHONPATH: /app
     working_dir: /app/workspace  # so _events.jsonl resolves to workspace/_events.jsonl
     volumes:

@@ -1,4 +1,3 @@
-import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, type ReactNode } from "react";
 
 interface Props {
@@ -12,11 +11,13 @@ interface Props {
 }
 
 const sizes: Record<"sm" | "md" | "lg", string> = {
-  sm: "w-[400px]",
-  md: "w-[520px]",
-  lg: "w-[680px]",
+  sm: "w-[420px]",
+  md: "w-[540px]",
+  lg: "w-[720px]",
 };
 
+/** Brutalist modal — hard edges, accent border, no rounded corners,
+ *  no float animation. Title rendered as `$ TITLE`. */
 export function Modal({ open, onClose, title, description, children, footer, size = "md" }: Props) {
   useEffect(() => {
     if (!open) return;
@@ -25,59 +26,56 @@ export function Modal({ open, onClose, title, description, children, footer, siz
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  if (!open) return null;
+
   return (
-    <AnimatePresence>
-      {open && (
-        <>
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.15 }}
-            className="fixed inset-0 z-50"
-            style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(2px)" }}
-            onClick={onClose}
-          />
-          <div className="fixed inset-0 z-50 flex items-center justify-center px-6 pointer-events-none">
-            <motion.div
-              initial={{ opacity: 0, y: 8, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 4, scale: 0.98 }}
-              transition={{ duration: 0.18, ease: [0.2, 0.8, 0.2, 1] }}
-              className={`${sizes[size]} max-w-[92vw] max-h-[85vh] flex flex-col pointer-events-auto`}
-              style={{
-                background: "var(--color-surface-2)",
-                border: "1px solid var(--color-border-strong)",
-                borderRadius: 10,
-                boxShadow: "0 24px 48px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.02) inset",
-              }}
+    <>
+      <div
+        className="fixed inset-0 z-50"
+        style={{ background: "rgba(5,5,5,0.78)", backdropFilter: "blur(2px)" }}
+        onClick={onClose}
+      />
+      <div className="fixed inset-0 z-50 flex items-center justify-center px-6 pointer-events-none">
+        <div
+          className={`${sizes[size]} max-w-[92vw] max-h-[85vh] flex flex-col pointer-events-auto`}
+          style={{
+            background: "var(--color-bg)",
+            border: "1px solid var(--color-accent)",
+            boxShadow: "0 0 32px var(--color-accent-glow)",
+            fontFamily: "var(--font-mono)",
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {(title || description) && (
+            <div
+              className="px-5 pt-4 pb-3"
+              style={{ borderBottom: "1px solid var(--color-border)" }}
             >
-              {(title || description) && (
-                <div className="px-6 pt-5 pb-4 border-b border-[var(--color-border)]">
-                  {title && (
-                    <h2 className="text-[16px] font-semibold text-[var(--color-text)] leading-tight">
-                      {title}
-                    </h2>
-                  )}
-                  {description && (
-                    <p className="mt-1 text-[13px] text-[var(--color-text-dim)] leading-relaxed">
-                      {description}
-                    </p>
-                  )}
-                </div>
+              {title && (
+                <h2 className="text-[14px] font-bold uppercase tracking-[0.04em]" style={{ color: "var(--color-text)", margin: 0 }}>
+                  <span style={{ color: "var(--color-accent)" }}>$</span> {title}
+                </h2>
               )}
-
-              <div className="px-6 py-5 overflow-y-auto flex-1">{children}</div>
-
-              {footer && (
-                <div className="px-6 py-4 border-t border-[var(--color-border)] flex justify-end gap-2">
-                  {footer}
-                </div>
+              {description && (
+                <p className="mt-2 text-[11px] uppercase tracking-[0.12em]" style={{ color: "var(--color-text-muted)" }}>
+                  ── {description}
+                </p>
               )}
-            </motion.div>
-          </div>
-        </>
-      )}
-    </AnimatePresence>
+            </div>
+          )}
+
+          <div className="px-5 py-4 overflow-y-auto flex-1">{children}</div>
+
+          {footer && (
+            <div
+              className="px-5 py-3 flex justify-end gap-2"
+              style={{ borderTop: "1px solid var(--color-border)" }}
+            >
+              {footer}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
   );
 }

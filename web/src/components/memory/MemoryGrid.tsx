@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
 import { MemoryCard } from "./MemoryCard";
-import { Card } from "@/components/ui/Card";
 import type { MemoryEntry } from "@/lib/types";
 
 const TYPE_ORDER = ["user", "feedback", "project", "skill", "reference"];
 
+/** Brutalist memory grid — sections labelled with `── TYPE`, hairline
+ *  borders between rows, no rounded card wrapper. */
 export function MemoryGrid({ entries }: { entries: MemoryEntry[] }) {
   const [removed, setRemoved] = useState<Set<string>>(new Set());
   const onDeleted = (filename: string) =>
@@ -24,20 +25,23 @@ export function MemoryGrid({ entries }: { entries: MemoryEntry[] }) {
   }, [entries, removed]);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8" style={{ fontFamily: "var(--font-mono)" }}>
       {grouped.map(([type, list]) => (
         <div key={type}>
-          <div className="flex items-baseline gap-2 mb-2 px-1">
-            <span className="text-[11px] font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
-              {type}
+          <div
+            className="flex items-baseline gap-3 mb-3 text-[10px] uppercase tracking-[0.22em]"
+            style={{ color: "var(--color-text-muted)" }}
+          >
+            <span>── {type}</span>
+            <span style={{ color: "var(--color-text-faint)" }}>
+              {list.length.toString().padStart(2, "0")} entr{list.length === 1 ? "y" : "ies"}
             </span>
-            <span className="text-[11px] text-[var(--color-text-faint)]">{list.length}</span>
           </div>
-          <Card className="overflow-hidden p-0">
+          <div style={{ borderTop: "1px solid var(--color-border)" }}>
             {list.map((e) => (
               <MemoryCard key={e.filename} entry={e} onDeleted={onDeleted} />
             ))}
-          </Card>
+          </div>
         </div>
       ))}
     </div>

@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { Empty } from "@/components/ui/Empty";
+import { PageShell } from "@/components/ui/PageShell";
+import { BrutalistEmpty } from "@/components/ui/BrutalistEmpty";
+import { SkillsHero } from "@/components/ui/HeroBand";
 import type { Skill } from "@/lib/types";
 
 export function SkillsPage() {
@@ -39,7 +41,7 @@ export function SkillsPage() {
   }, [skills]);
 
   return (
-    <div className="max-w-[820px] mx-auto px-10 pt-12 pb-20">
+    <PageShell>
       <PageHeader
         title="Skills"
         subtitle={
@@ -50,8 +52,13 @@ export function SkillsPage() {
         }
       />
 
+      {skills && skills.length > 0 && <SkillsHero skills={skills} />}
+
       {skills === null ? null : skills.length === 0 ? (
-        <Empty>No tools registered. (Unexpected — check tools/__init__.py.)</Empty>
+        <BrutalistEmpty
+          header="NO TOOLS REGISTERED"
+          body={<>this is unexpected — the agent should always mount at least the core tools (memory, python_exec, web_fetch). check <code style={{ color: "var(--color-text)" }}>tools/__init__.py</code> on the backend.</>}
+        />
       ) : (
         <>
           {used.length > 0 && (
@@ -70,7 +77,7 @@ export function SkillsPage() {
           )}
         </>
       )}
-    </div>
+    </PageShell>
   );
 }
 
@@ -86,50 +93,40 @@ function Section({ label, children }: { label: string; children: React.ReactNode
 function SkillRow({ skill }: { skill: Skill }) {
   const total = skill.success_count + skill.failure_count;
   const rate = total > 0 ? Math.round((skill.success_count / total) * 100) : null;
+  // High success = phosphor; <80% drops to amber; <50% goes red.
   const rateColor =
     rate === null ? "var(--color-text-muted)" :
-    rate >= 95 ? "var(--color-warning)" :
-    rate >= 75 ? "var(--color-text-dim)" :
-                 "var(--color-accent)";
+    rate >= 80 ? "var(--color-accent)" :
+    rate >= 50 ? "var(--color-warning)" :
+                 "var(--color-danger)";
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25 }}
-      className="py-4 px-1"
+      className="py-[10px] px-1"
       style={{ borderBottom: "1px solid var(--color-border)" }}
     >
       <div className="flex items-baseline justify-between gap-4">
-        <code
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: 14.5,
-            color: "var(--color-text)",
-          }}
-        >
+        <code className="brut-body" style={{ color: "var(--color-text)" }}>
           {skill.name}
         </code>
-        <div className="flex items-baseline gap-3 text-[12.5px]" style={{ color: "var(--color-text-muted)" }}>
+        <div className="flex items-baseline gap-4 brut-label" style={{ color: "var(--color-text-muted)" }}>
           {skill.call_count > 0 && (
             <>
-              <span>
-                {skill.call_count} call{skill.call_count === 1 ? "" : "s"}
+              <span className="brut-num">
+                {skill.call_count.toString().padStart(2, "0")} call{skill.call_count === 1 ? "" : "s"}
               </span>
               {rate !== null && (
-                <span style={{ color: rateColor }}>{rate}% success</span>
+                <span className="brut-num" style={{ color: rateColor }}>{rate}%</span>
               )}
-              {skill.last_used && (
-                <span>last {formatAge(skill.last_used)}</span>
-              )}
+              {skill.last_used && <span>{formatAge(skill.last_used)}</span>}
             </>
           )}
         </div>
       </div>
-      <div
-        className="mt-1.5 text-[14.5px] leading-relaxed"
-        style={{ fontFamily: "var(--font-sans)", color: "var(--color-text-dim)" }}
-      >
+      <div className="mt-2 brut-body" style={{ color: "var(--color-text-dim)" }}>
         {skill.description || <em style={{ color: "var(--color-text-muted)" }}>(no description)</em>}
       </div>
     </motion.div>

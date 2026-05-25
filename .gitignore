@@ -14,7 +14,7 @@ web/vite.config.d.ts
 # Runtime state — agent's working files and memory are user-specific.
 workspace/*
 !workspace/.gitkeep
-tasks/
+workspace/tasks/
 cache/
 
 # Obsidian per-user state — if you open workspace/memory as a vault,

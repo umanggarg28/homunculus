@@ -15,7 +15,7 @@ import asyncio
 import json
 import os
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -51,20 +51,21 @@ STATUS_STALE_SECONDS = 60 * 60
 
 app = FastAPI(title="Homunculus API")
 
-# Lazy-init agent + memory for the chat endpoint. Memory() opens lazily
-# so the service starts cleanly even before any conversation exists.
-_chat_memory: Memory | None = None
+# Memory + tools are initialised eagerly at process start so the
+# /skills endpoint (and anything else that introspects tools.SCHEMAS)
+# returns the real catalog before any chat has happened. The Agent
+# itself is still lazy — it requires session-restoration which is
+# cheaper to do on first chat call.
+_chat_memory: Memory = Memory(MEMORY_DIR)
+# Treat browser chat like Telegram/heartbeat: no interactive stdin,
+# so shell_exec is disabled rather than hanging on a prompt.
+tools.init(_chat_memory, autonomous=True)
 _chat_agent: Agent | None = None
 
 
 def _get_chat_agent() -> Agent:
-    global _chat_agent, _chat_memory
+    global _chat_agent
     if _chat_agent is None:
-        _chat_memory = Memory(MEMORY_DIR)
-        # The web service has no interactive stdin. If shell_exec prompted
-        # here, the request would hang forever, so treat browser chat like
-        # Telegram/heartbeat until an explicit approval UI exists.
-        tools.init(_chat_memory, autonomous=True)
         _chat_agent = Agent(memory=_chat_memory)
         _chat_agent.restore_session()
     return _chat_agent
@@ -97,7 +98,7 @@ def config() -> JSONResponse:
 @app.get("/api/status", dependencies=[Depends(require_web_auth)])
 def status() -> JSONResponse:
     """Per-service liveness inferred from event-stream freshness."""
-    services = ["repl", "heartbeat", "telegram", "feed"]
+    services = ["repl", "heartbeat", "telegram", "web"]
     last_seen: dict[str, float | None] = {s: None for s in services}
 
     if EVENTS_PATH.exists():
@@ -153,6 +154,25 @@ def memory_entry_raw(filename: str) -> PlainTextResponse:
     if safe is None or not safe.exists() or not safe.is_file():
         raise HTTPException(404, "Memory entry not found")
     return PlainTextResponse(safe.read_text(encoding="utf-8"))
+
+
+@app.put(
+    "/api/memory/{filename}/raw",
+    dependencies=[Depends(require_web_auth)],
+)
+async def memory_entry_update(filename: str, request: Request) -> JSONResponse:
+    """Overwrite a memory entry's raw markdown. Used by inline edit."""
+    safe = _safe_subpath(filename, MEMORY_DIR)
+    if safe is None:
+        raise HTTPException(400, "invalid path")
+    if not safe.exists() or not safe.is_file():
+        raise HTTPException(404, "Memory entry not found")
+    body = (await request.body()).decode("utf-8")
+    # Refuse zero-length writes; the agent or user should use delete instead.
+    if not body.strip():
+        raise HTTPException(400, "empty body — use DELETE to remove an entry")
+    safe.write_text(body, encoding="utf-8")
+    return JSONResponse({"ok": True, "bytes": len(body.encode("utf-8"))})
 
 
 @app.delete(
@@ -274,6 +294,7 @@ def skills_list() -> JSONResponse:
             "failure_count": 0,
             "last_used": None,
             "last_status": None,
+            "recent_calls": [],  # ISO ts of tool_call events in the last 24h
         }
 
     if EVENTS_PATH.exists():
@@ -295,8 +316,10 @@ def skills_list() -> JSONResponse:
                 ts = rec.get("ts")
                 if rec["event"] == "tool_call":
                     entry["call_count"] += 1
-                    if ts and (entry["last_used"] is None or ts > entry["last_used"]):
-                        entry["last_used"] = ts
+                    if ts:
+                        if entry["last_used"] is None or ts > entry["last_used"]:
+                            entry["last_used"] = ts
+                        entry["recent_calls"].append(ts)
                 else:  # tool_result
                     result = rec.get("result") or ""
                     is_failure = result.lstrip().startswith("ERROR")
@@ -309,6 +332,12 @@ def skills_list() -> JSONResponse:
                     if ts and (entry["last_used"] is None or ts >= entry["last_used"]):
                         entry["last_used"] = ts
                         entry["last_status"] = status
+
+    # Trim recent_calls to last 24h to keep the payload small.
+    cutoff_dt = datetime.now()
+    cutoff_iso = (cutoff_dt - timedelta(days=1)).isoformat(timespec="seconds")
+    for entry in by_name.values():
+        entry["recent_calls"] = [t for t in entry["recent_calls"] if t >= cutoff_iso]
 
     return JSONResponse(list(by_name.values()))
 
@@ -413,6 +442,40 @@ def tasks_meta() -> JSONResponse:
     })
 
 
+@app.get("/api/agent/upcoming", dependencies=[Depends(require_web_auth)])
+def agent_upcoming() -> JSONResponse:
+    """What the agent is set to do next.
+
+    Returns:
+      - next_tick: ISO datetime the heartbeat will fire (one-shot if
+        scheduled, otherwise default-interval estimate from last tick),
+      - default_interval_min: the heartbeat's fallback cadence,
+      - next_task: earliest-due active task (id, title, due_at), if any.
+    """
+    mem = _chat_memory or Memory(MEMORY_DIR)
+    interval_min = int(os.environ.get("HEARTBEAT_INTERVAL_MINUTES", "60"))
+    explicit_tick = mem.peek_next_tick()
+
+    # Earliest active task by due_at.
+    store = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
+    next_task = None
+    earliest_iso: str | None = None
+    for t in store.list("active"):
+        due = t.get("due_at")
+        if not due:
+            continue
+        if earliest_iso is None or due < earliest_iso:
+            earliest_iso = due
+            next_task = {"id": t["id"], "title": t["title"], "due_at": due,
+                          "recurrence": t.get("recurrence", "none")}
+
+    return JSONResponse({
+        "next_tick": explicit_tick,
+        "default_interval_min": interval_min,
+        "next_task": next_task,
+    })
+
+
 # --- API: logs ------------------------------------------------------------
 
 @app.get("/api/logs", dependencies=[Depends(require_web_auth)])
@@ -461,6 +524,34 @@ _active_streams: set[str] = set()
 _cancelled_streams: set[str] = set()
 
 
+def _drain_notifications_for_chat(agent) -> None:
+    """Pull pending notifications into the web chat agent's history.
+    Mirrors the same function in transports/telegram.py so a follow-up
+    on the web ("explain it") has the notification text in context.
+    """
+    if getattr(agent, "memory", None) is None:
+        return
+    try:
+        fresh = agent.memory.drain_pending_notifications()
+    except Exception as e:
+        print(f"[web] notification drain failed: {e}", flush=True)
+        return
+    if not fresh:
+        return
+    from datetime import datetime as _dt
+    for entry in fresh:
+        text = entry.get("text", "")
+        ts = entry.get("ts")
+        try:
+            when = _dt.fromtimestamp(float(ts)).strftime("%H:%M")
+        except Exception:
+            when = "earlier"
+        agent.history.append({
+            "role": "assistant",
+            "content": f"[notification I sent you at {when}]\n\n{text}",
+        })
+
+
 @app.post("/api/chat/send", dependencies=[Depends(require_web_auth)])
 async def chat_send(request: Request):
     """SSE stream of the agent's reply to a posted user message.
@@ -476,6 +567,11 @@ async def chat_send(request: Request):
 
     stream_id = (payload or {}).get("stream_id") or secrets.token_urlsafe(12)
     agent = _get_chat_agent()
+
+    # Drain any notifications fired by heartbeat (or other processes)
+    # since the last chat turn, so follow-ups like "explain it" arrive
+    # with context. Same mechanism the Telegram bot uses.
+    _drain_notifications_for_chat(agent)
 
     def gen():
         _active_streams.add(stream_id)

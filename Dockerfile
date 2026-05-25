@@ -41,6 +41,7 @@ RUN uv sync --no-install-project
 COPY core.py memory.py tasks.py heartbeat.py events.py homunculus.yaml ./
 COPY tools/ ./tools/
 COPY transports/ ./transports/
+COPY scripts/ ./scripts/
 COPY --from=web-build /web/dist /app/web-dist
 
 # Default command is the REPL transport. docker-compose overrides per
