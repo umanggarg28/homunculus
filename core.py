@@ -46,23 +46,23 @@ load_dotenv(Path(__file__).parent / ".env")
 # --- Config ---------------------------------------------------------------
 
 # API endpoint and model are configurable via env vars so you can swap
-# providers/models without code edits. Defaults target Groq's free tier
-# with openai/gpt-oss-120b — the most reliable free tool-use model as
-# of 2026. To experiment with others, set HOMUNCULUS_API_URL and/or
+# providers/models without code edits. Defaults target Gemini 2.5 Flash —
+# the highest-quality free model with 1M context and strong tool use.
+# To experiment with others, set HOMUNCULUS_API_URL and/or
 # HOMUNCULUS_MODEL in .env.
 API_URL = os.environ.get(
     "HOMUNCULUS_API_URL",
-    "https://api.groq.com/openai/v1/chat/completions",
+    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
 )
-MODEL = os.environ.get("HOMUNCULUS_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+MODEL = os.environ.get("HOMUNCULUS_MODEL", "gemini-2.5-flash")
 
 # Fallback provider chain. Each slot is independent — set only the keys
 # you have. On 429 from one provider, we move to the next; a 429'd
 # provider is benched for PROVIDER_COOLDOWN_SECONDS so we don't hammer
 # a throttled endpoint.
 #
-# Slot 1 (HOMUNCULUS_API_KEY_FALLBACK): Gemini's OpenAI-compatible
-#   endpoint — 1M TPM free tier (vs Groq's 8K), but 15 RPM / 1500 RPD.
+# Slot 1 (HOMUNCULUS_API_KEY_FALLBACK): Groq — llama-4-scout has 10M
+#   context but lower quality than Gemini. Good rate-limit backup.
 # Slot 2 (HOMUNCULUS_API_KEY_FALLBACK_2): OpenRouter — free endpoints
 #   can disappear or rate-limit upstream. We accept a comma-separated
 #   list and try each model before moving to the next provider.
@@ -70,9 +70,9 @@ MODEL = os.environ.get("HOMUNCULUS_MODEL", "meta-llama/llama-4-scout-17b-16e-ins
 #   generous TPM. Get key at cloud.cerebras.ai.
 API_URL_FALLBACK = os.environ.get(
     "HOMUNCULUS_API_URL_FALLBACK",
-    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    "https://api.groq.com/openai/v1/chat/completions",
 )
-MODEL_FALLBACK = os.environ.get("HOMUNCULUS_MODEL_FALLBACK", "gemini-2.0-flash")
+MODEL_FALLBACK = os.environ.get("HOMUNCULUS_MODEL_FALLBACK", "meta-llama/llama-4-scout-17b-16e-instruct")
 
 API_URL_FALLBACK_2 = os.environ.get(
     "HOMUNCULUS_API_URL_FALLBACK_2",

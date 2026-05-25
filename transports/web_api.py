@@ -28,7 +28,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 
 import tools
-from core import Agent
+from core import Agent, API_URL, MODEL
 from memory import Memory
 from tasks import ALLOWED_RECURRENCE, TaskStore
 
@@ -93,6 +93,17 @@ def require_web_auth(
 @app.get("/api/config")
 def config() -> JSONResponse:
     return JSONResponse({"auth_required": bool(WEB_AUTH_TOKEN)})
+
+
+@app.get("/api/model")
+def model_info() -> JSONResponse:
+    """Return the configured primary model and API host for the UI."""
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(API_URL).netloc
+    except Exception:
+        host = API_URL
+    return JSONResponse({"model": MODEL, "host": host})
 
 
 @app.get("/api/status", dependencies=[Depends(require_web_auth)])
