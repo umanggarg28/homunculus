@@ -93,31 +93,110 @@ the first time: `core.py` → `tools/` → `memory.py` → `heartbeat.py` →
 
 ## 4. The Agent Loop
 
-`Agent.chat()` in `core.py` is the whole loop. The streaming variant
-is `Agent.chat_stream()` (same control flow, yields deltas instead of
-returning a final string). Stripped to its essence:
+`Agent.chat()` returns a final string. `Agent.chat_stream()` yields
+content chunks for real-time display. Both are thin wrappers around a
+single shared generator `Agent._run_loop()`:
 
 ```python
 def chat(self, user_text: str) -> str:
-    self.history.append({"role": "user", "content": user_text})
-    for _ in range(MAX_TURNS):
-        msg = call_llm(self.history, tools.SCHEMAS, model=self.model)
-        self.history.append(msg)
-        if not msg.get("tool_calls"):
-            return msg["content"]
-        for call in msg["tool_calls"]:
-            result = tools.execute(call["function"]["name"],
-                                   json.loads(call["function"]["arguments"]))
-            self.history.append({
-                "role": "tool",
-                "tool_call_id": call["id"],
-                "content": result,
-            })
-    return "[hit max turns]"
+    return "".join(self._run_loop(user_text, streaming=False))
+
+def chat_stream(self, user_text: str):
+    yield from self._run_loop(user_text, streaming=True)
 ```
 
-That's it. The streaming variant `chat_stream()` yields content/tool
-deltas as the LLM produces them, but the control flow is identical.
+`_run_loop()` stripped to its essence:
+
+```python
+def _run_loop(self, user_message, streaming):
+    self.history.append({"role": "user", "content": user_message})
+    tool_names_used = set()
+
+    for _ in range(MAX_TURNS):
+        if streaming:
+            # Yields content chunks in real-time; assembles assistant_msg.
+            assistant_msg = yield_from_stream(...)
+        else:
+            assistant_msg = call_llm(self.history, tools.SCHEMAS)
+
+        self.history.append(clean(assistant_msg))
+
+        if not assistant_msg.get("tool_calls"):
+            # Final reply — run output guard before returning.
+            reply = self._output_guard(assistant_msg["content"], tool_names_used)
+            yield reply
+            return
+
+        for call in assistant_msg["tool_calls"]:
+            name = call["function"]["name"]
+            args = json.loads(call["function"]["arguments"])
+            tool_names_used.add(name)
+
+            # Schema-validate args before dispatch.
+            if err := _validate_tool_args(name, args):
+                result = f"ERROR: bad args for {name}: {err}. Retry."
+            else:
+                result = tools.execute(name, args)
+
+            self.history.append({"role": "tool", "content": result, ...})
+```
+
+**Why one loop instead of two?** When `chat()` and `chat_stream()` were
+separate methods (~100 lines each), any bug fix or new feature had to
+land twice — and they drifted apart. Single code path = bugs fixed once,
+everywhere.
+
+### The output guard
+
+Every final reply passes through `Agent._output_guard()` before reaching
+the user. It catches four deterministic failure modes:
+
+| Rule | What it catches | Example |
+|---|---|---|
+| `memory_filename_leak` | Internal `*.md` filenames in the reply | `project_foo.md does not exist` |
+| `internal_path_leak` | `workspace/memory/` paths in the reply | `memory/logs/2026/05/...` |
+| `error_echo` | LLM echoed a tool ERROR verbatim as its reply | `ERROR: read_file timed out` |
+| `example_com_confabulation` | example.com cited without a web tool call | The "Explain" → example.com bug |
+
+If any rule fires, the reply is replaced with a safe fallback and an
+`output_guard` event is emitted (visible in the live feed). The original
+bad reply never reaches the user.
+
+```python
+reply = self._output_guard(raw_reply, tool_names_used)
+# → original reply, or "I don't have enough context..."
+```
+
+**Why a guard instead of more prompt rules?** Prompt rules are "hope the
+LLM follows it". The guard is a deterministic check that runs regardless
+of model quality or hallucination. It works better on weaker free-tier
+models precisely because those are the ones that need it most.
+
+### Tool-argument validation
+
+Before any tool call, `_validate_tool_args(name, args)` checks the
+arguments against the JSON schema from `tools.SCHEMAS`. It catches:
+- Missing required arguments
+- Wrong types (string vs integer vs boolean vs array)
+- Invalid enum values
+
+On failure, a structured error goes back to the LLM so it can correct
+and retry — rather than crashing the loop or running the tool with
+garbage arguments.
+
+### Multi-provider fallback
+
+Free tiers throttle aggressively. `_providers()` and `_cool_provider()`
+in `core.py` define a chain (Groq → Gemini → OpenRouter → Cerebras)
+backed by a per-provider cooldown cache. On 429 (or transient 502/503),
+the current provider is benched and the next is tried. This is the right
+layer to handle free-tier limits — the agent loop itself doesn't know or
+care which provider answered.
+
+`SYSTEM_PROMPT` at the top of `core.py` shapes behaviour. It's shorter
+than it used to be: structural mechanisms (guard, recall tool, schema
+validation) replaced several prompt rules that were just "hope the LLM
+follows it."
 
 ### The HTTP protocol
 
@@ -223,7 +302,7 @@ type: user
 User goes by **Umang**.
 ```
 
-### Four memory types
+### Five memory types
 
 | type | what for | examples |
 |---|---|---|
@@ -231,30 +310,60 @@ User goes by **Umang**.
 | `feedback` | corrections / preferences | "no emojis", "always ask first" |
 | `project` | active work | "daily leetcode at 9am", "Tokyo trip cancelled" |
 | `reference` | pointers to external resources | dashboards, vaults, repos |
+| `skill` | learned multi-step procedures | "how to deliver daily leetcode" |
 
-Why typed: it makes the index navigable and lets the agent prioritize
-when context is tight ("recall feedback before answering").
+Why typed: it makes the index navigable and lets the agent reason about
+staleness differently by type (project memories go stale fast; user
+memories rarely change).
+
+### Three-tier memory (Letta/MemGPT pattern)
+
+Homunculus uses a three-tier approach learned from production agent
+research:
+
+**Tier 1 — Core block (always in context).**
+`Memory.load_core_block()` reads the bodies of the top `user_*` and
+`feedback_*` memories and injects them directly into the system prompt
+at startup. These are small (capped at 300 chars each) and cover the
+user's identity, timezone, and key rules. Always available, no tool call
+needed.
+
+**Tier 2 — Index (always in context, compact).**
+`MEMORY.md` is one line per entry — just names and descriptions. The
+agent sees the full catalog every turn and knows what to recall.
+
+**Tier 3 — Archival (on demand via `recall()`).**
+Full memory bodies are fetched only when the agent decides they're
+relevant, by calling the `recall(query)` tool with specific keywords.
+
+### Why explicit recall instead of auto-injection?
+
+The old approach (`_inject_relevant_memory`) ran a fuzzy keyword search
+on every user message and pasted the top matches into the prompt. This
+caused the "Explain → example.com" bug: the query "Explain" fuzzily
+matched some memory, which got injected and the agent explained *that*
+instead of asking for clarification.
+
+The fix is structural: nothing is injected automatically. The agent
+decides when it needs context and calls `recall(query)`. Vague queries
+produce no injection, so no confabulation.
 
 ### Memory tools
 
 - `remember(name, description, type, body)` — write or overwrite an entry.
 - `forget(identifier)` — delete an entry by name or filename.
-- `search_memory(query)` — substring + keyword match across all entries.
-
-`MEMORY.md` is auto-regenerated by `_upsert_index_entry()` whenever an
-entry is added/edited/forgotten. It's the only file the *system prompt*
-always includes — concise summaries are how the agent stays
-context-aware without us paying for the full vault each turn.
+- `recall(query)` — **the new retrieval tool**. Search memory by keywords
+  and get the full bodies of matching entries.
 
 ### Compaction
 
-The agent's running message history (`workspace/_session.json`) is
-capped at ~15 turns. When it grows, oldest turns are summarised into a
-project memory and dropped from the rolling window. The relationship
-persists in memory; the conversation buffer stays cheap.
+The agent's running message history is capped at 15 *user turns* (not
+raw messages). When it grows, oldest turns are summarised into a tight
+paragraph and replaced. The count is user-turns, not raw messages,
+because a tool-heavy turn (one user message → 5 tool calls → 5 tool
+results) inflates raw count by 10× without adding new user context.
 
-See `_compact_history()` in `core.py`. The summarisation prompt is
-literal — read it before tuning compaction.
+See `Agent._maybe_compact()` in `core.py`.
 
 ---
 
@@ -262,42 +371,52 @@ literal — read it before tuning compaction.
 
 `tools/__init__.py` exposes two things to `core.py`:
 
-- **`SCHEMAS`** — the list of OpenAI-format tool definitions the LLM
-  sees in every `call_llm` request.
-- **`execute(name, args) -> str`** — single dispatch entry point. All
-  exceptions are caught and stringified so a broken tool turns into
-  information the LLM can recover from, not a crashed loop.
+- **`SCHEMAS`** — the live list of OpenAI-format tool definitions the LLM
+  sees in every `call_llm` request. This is a proxy that re-reads from
+  the MCP manager on every access so hot-reloads are picked up.
+- **`execute(name, args) -> str`** — dispatch entry point. Exceptions are
+  caught and stringified so a broken tool turns into information the LLM
+  can recover from, not a crashed loop.
 
-Each tool category lives in its own file under `tools/`:
+All tools are exposed via the built-in MCP server (`tools/mcp_server.py`,
+runs as a subprocess over stdio). Each tool is a `@mcp.tool()` function
+with typed parameters and a rich docstring — these become the schema the
+LLM sees.
 
-| file | tools | purpose |
+| category | tools | purpose |
 |---|---|---|
-| `filesystem.py` | read_file, write_file, list_files | local disk |
-| `memory_tools.py` | remember, forget, search_memory | the §5 store |
-| `web.py` | web_search, web_fetch | research |
-| `sandbox.py` | python, shell_exec | code execution |
-| `scheduling.py` | schedule_next_tick, tasks_create, tasks_list, complete_task, cancel_task | autonomy (§7) |
-| `notify.py` | notify | sends a message to the user's Telegram |
+| filesystem | `read_file`, `write_file` | local disk reads/writes |
+| memory | `remember`, `forget`, `recall` | the §5 store |
+| web | `web_search`, `web_fetch` | research |
+| sandbox | `python`, `shell_exec` | code execution |
+| scheduling | `schedule_next_tick`, `create_task`, `list_tasks`, `complete_task`, `cancel_task`, `schedule_task` | autonomy (§7) |
+| notify | `notify` | Telegram push notification |
 
-### Two structures bridge LLM-world and Python-world
+### recall() — the explicit memory retrieval tool
 
-- `SCHEMAS` (LLM-facing): JSON schema list. Names + descriptions +
-  parameter types.
-- `TOOLS` (Python-facing): `dict[name → callable]`.
+```
+recall(query: str) -> str
+```
 
-Names in `SCHEMAS` must match keys in `TOOLS` exactly. Schema parameter
-names must match Python keyword arguments exactly. This is the only
-brittle invariant in the system — if you rename a tool, edit both.
+Call this when you need facts from long-term memory. Pass keywords you
+expect to appear in the memory body. Returns up to 3 matching entries
+with age tags.
+
+**Nothing is auto-injected.** The agent decides when it needs context
+and asks for it. This is the key change from the old `_inject_relevant_memory()`
+approach — see §5 for why.
 
 ### Adding a new tool
 
-1. Write the Python function in the appropriate `tools/*.py` file.
-2. Append the matching JSON schema to that file's `SCHEMAS_LOCAL`.
-3. Register both in `tools/__init__.py` via the per-file registry.
-4. Update the system prompt only if the tool's purpose isn't obvious
-   from its description.
+1. Write the implementation in `tools/<category>.py`.
+2. Add a `@mcp.tool()` wrapper in `tools/mcp_server.py` with typed
+   parameters and a clear docstring. The schema comes from the types and
+   Field annotations — no separate JSON needed.
+3. Done. The MCP manager discovers it on next server start.
 
-That's it — the loop in `core.py` doesn't need to change.
+The `_validate_tool_args()` function in `core.py` will automatically
+enforce the schema for the new tool — required fields, type checks, enum
+values — without any extra wiring.
 
 ---
 
@@ -419,7 +538,53 @@ talks MCP, the existing `tools/*.py` files become one builtin server
 
 ---
 
-## 10. Roadmap
+## 10. Test Harness
+
+The `tests/` directory covers the deterministic parts of the agent —
+the parts that don't require a live LLM or network:
+
+```
+tests/
+├── test_output_guard.py      # Agent._output_guard() — all four rules
+├── test_schema_validation.py # _validate_tool_args() — required/type/enum
+└── test_memory.py            # Memory.search, load_core_block, CRUD
+```
+
+Run with:
+
+```bash
+uv run python -m pytest tests/ -v
+```
+
+### Why test these specifically?
+
+These are the deterministic seams in the system — the parts where
+correctness doesn't depend on an LLM making good choices:
+
+- **Output guard**: pure function, four regex/string rules. If these
+  break, bad output reaches the user. Easy to test, high value.
+- **Schema validation**: pure function against a JSON schema. Protects
+  against tool-arg bugs without needing a real tool call.
+- **Memory**: file I/O with well-defined contracts. If search or CRUD
+  breaks, the agent loses its memory silently.
+
+The LLM behaviour itself (does it make good tool choices? does it stay
+on topic?) is harder to test automatically — that's what the live
+heartbeat and Telegram integration are for. But the *harness* around the
+LLM can and should be tested.
+
+### What's NOT tested here
+
+- Live LLM calls (use the REPL or heartbeat for smoke testing)
+- MCP server connections (tested by running the service)
+- UI (see the web frontend — test with the Vite dev server)
+
+The goal is a fast, zero-network suite that catches regressions on every
+code change without needing API keys.
+
+---
+
+## 11. Roadmap
 
 The four phases below take Homunculus from "useful personal agent"
 toward production-shape (OpenClaw-style) architecture, without

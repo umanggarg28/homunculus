@@ -16,6 +16,7 @@ No SDK, no framework. Just httpx and JSON.
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,14 @@ import events
 import tools
 from memory import Memory
 from tasks import TaskStore
+
+# Output guard — compiled once at module load.
+_GUARD_MEMORY_FILENAME_RE = re.compile(
+    r"\b(?:user|feedback|project|reference|skill)_[a-z0-9_]+\.md\b"
+)
+_GUARD_INTERNAL_PATHS = ("workspace/memory/", "memory/logs/", "memory/_")
+_GUARD_ERROR_PREFIXES = ("ERROR:", "ERROR running ")
+_GUARD_CONFABULATION_TERMS = ("example.com", "example domain")
 
 # Load .env at module import so config reads below see its values. Safe
 # to call twice (main.py also calls it) — load_dotenv won't overwrite
@@ -94,11 +103,15 @@ _PROVIDER_COOLDOWN: dict[str, float] = {}
 # LLM could call tools forever. 20 is plenty for any realistic task.
 MAX_TURNS = 20
 
-# Mid-session compaction thresholds. When history grows past
-# COMPACT_TRIGGER messages, we summarize all but the last
-# COMPACT_KEEP_RECENT into a single system-role summary. This bounds
-# context usage on long-running conversations (especially the Telegram
-# bot which keeps state across days).
+# Mid-session compaction thresholds.
+#
+# COMPACT_TRIGGER counts USER turns (not raw messages). When we exceed
+# this many user turns we summarize older ones into a single system-role
+# summary. COMPACT_KEEP_RECENT is the number of recent user turns kept
+# verbatim. We count user turns because tool-heavy assistant responses
+# can balloon raw message count by 10× without adding any new user
+# context — compacting on raw count was dropping context way too
+# aggressively (2-3 conversational turns triggered it).
 COMPACT_TRIGGER = 15
 COMPACT_KEEP_RECENT = 6
 
@@ -109,16 +122,14 @@ Paths: your cwd IS the workspace. Use plain relative paths like `notes.md` or
 `memory/logs/2026/05/2026-05-19.md`. Never prefix with `workspace/`.
 
 Memory:
-- Your MEMORY INDEX appears below. Each entry links to a file; read_file
-  it when relevant. Entries marked "⚠ may be stale" — verify before
-  acting on them.
-- Before remember(), check if an entry already covers the fact. If so,
-  reuse the same `name` to overwrite, don't create duplicates.
-- If a memory is contradicted or obsolete, forget() it. Be conservative —
-  carrying old facts is better than losing context.
-- Types: user (about the user) · feedback (rules to follow) · project
-  (active work) · reference (external pointers) · skill (procedures —
-  how to do a thing, saved during reflection).
+- Your MEMORY INDEX appears below — one line per entry. Pinned facts (user
+  profile, key rules) are included directly above the index.
+- To read the full body of any memory, call recall(query) with relevant keywords.
+  Nothing is injected automatically — you decide when context is needed.
+- Before remember(), check if an entry already covers the fact. Reuse the same
+  `name` to overwrite rather than create a duplicate.
+- If a memory is contradicted or obsolete, forget() it.
+- Types: user · feedback · project · reference · skill (learned procedures)
 
 Scheduling:
 - For "every day at X" / "every week" / any RECURRING commitment, use
@@ -143,6 +154,8 @@ Behaviour:
   things; routine output goes in files.
 - Short, direct replies. When a task is complete, summarise in one or
   two lines — don't call more tools.
+- If a follow-up is ambiguous and you have no grounded context from
+  this conversation to answer it, ask for clarification. One sentence.
 """
 
 
@@ -272,8 +285,16 @@ def call_llm(
 
         if response.status_code == 429:
             last_err = response.text
-            _cool_provider(url, model_id)
-            print(f"[call_llm] {model_id} 429 → cooling 60s, trying next", flush=True)
+            # Honor the server's Retry-After hint if it sent one; else
+            # use our default cooldown.
+            retry_after = _parse_retry_after(response)
+            cool_for = retry_after if retry_after else PROVIDER_COOLDOWN_SECONDS
+            _cool_provider(url, model_id, cool_for)
+            print(f"[call_llm] {model_id} 429 → cooling {cool_for:.0f}s, trying next", flush=True)
+            try:
+                events.emit("provider_cooled", name=model_id, host=_url_host(url), result=f"429 · cooling {cool_for:.0f}s")
+            except Exception:
+                pass
             continue
         if _is_transient_provider_error(response):
             last_err = response.text
@@ -390,11 +411,13 @@ def call_llm_stream(
         if response.status_code == 429:
             response.read()
             last_err = response.text
+            retry_after = _parse_retry_after(response)
+            cool_for = retry_after if retry_after else PROVIDER_COOLDOWN_SECONDS
             response_ctx.__exit__(None, None, None)
             response_ctx = None
             response = None
-            _cool_provider(url, model_id)
-            print(f"[call_llm_stream] {model_id} 429 → cooling 60s, trying next", flush=True)
+            _cool_provider(url, model_id, cool_for)
+            print(f"[call_llm_stream] {model_id} 429 → cooling {cool_for:.0f}s, trying next", flush=True)
             continue
         if _is_transient_provider_error(response):
             response.read()
@@ -467,6 +490,30 @@ def call_llm_stream(
         response_ctx.__exit__(None, None, None)
 
     # Assemble the final assistant message in the shape the loop expects.
+    # Validate tool-call arguments parse as JSON — sometimes a stream
+    # ends mid-arguments (network drop, provider error) and we'd hand
+    # the agent a half-baked tool call that crashes on json.loads later.
+    # Repair by clearing the bad arguments string to "{}" so the tool
+    # runs with no args (the LLM will see the empty result and retry).
+    if tool_calls_acc:
+        for slot in tool_calls_acc.values():
+            args = slot["function"].get("arguments") or ""
+            if not args.strip():
+                slot["function"]["arguments"] = "{}"
+                continue
+            try:
+                json.loads(args)
+            except json.JSONDecodeError:
+                # Truncated/broken JSON. Best we can do is hand the
+                # model an empty-args call so it surfaces the issue
+                # rather than crashing the whole turn.
+                print(
+                    f"[stream] tool {slot['function'].get('name','?')} args "
+                    f"didn't parse, defaulting to {{}}: {args[:120]!r}",
+                    flush=True,
+                )
+                slot["function"]["arguments"] = "{}"
+
     assistant_msg: dict[str, Any] = {"role": "assistant"}
     if content_acc:
         assistant_msg["content"] = "".join(content_acc)
@@ -491,6 +538,59 @@ def _parse_retry_after(response: httpx.Response) -> float | None:
         return None
 
 
+# --- Tool argument validation ---------------------------------------------
+
+def _validate_tool_args(name: str, arguments: dict) -> str | None:
+    """Schema-validate tool arguments before dispatch.
+
+    Returns an error string if validation fails, None if clean.
+    Checks: required fields present, primitive types match.
+    Does NOT do deep recursive validation — the goal is catching the most
+    common LLM mistake (missing required arg, wrong type) cheaply.
+    """
+    # tools.SCHEMAS is a live proxy; iterate each call so we always see
+    # the current schema set even after a hot-reload.
+    schema = None
+    for s in tools.SCHEMAS:
+        if s.get("function", {}).get("name") == name:
+            schema = s
+            break
+    if schema is None:
+        return None  # unknown tool handled separately by execute()
+
+    params = schema.get("function", {}).get("parameters", {})
+    required = params.get("required") or []
+    properties = params.get("properties") or {}
+
+    missing = [k for k in required if k not in arguments]
+    if missing:
+        return f"missing required argument(s): {', '.join(missing)}"
+
+    errors: list[str] = []
+    type_map = {
+        "string": str,
+        "boolean": bool,
+        "integer": int,
+        "number": (int, float),
+        "array": list,
+        "object": dict,
+    }
+    for key, value in arguments.items():
+        prop = properties.get(key)
+        if prop is None:
+            continue
+        expected = prop.get("type")
+        py_type = type_map.get(expected)
+        if py_type and not isinstance(value, py_type):
+            errors.append(f"'{key}' must be {expected}, got {type(value).__name__}")
+            continue
+        enum_vals = prop.get("enum")
+        if enum_vals is not None and value not in enum_vals:
+            errors.append(f"'{key}' must be one of {enum_vals!r}, got {value!r}")
+
+    return "; ".join(errors) if errors else None
+
+
 # --- The agent ------------------------------------------------------------
 
 class Agent:
@@ -508,12 +608,17 @@ class Agent:
     ) -> None:
         self.memory = memory
         self.model = model or MODEL
-        # If memory is provided, paste a small index into the system prompt so
-        # the LLM knows what memories exist. Full relevant snippets are
-        # retrieved per user turn, without being saved into session history.
         full_prompt = system_prompt
         if memory is not None:
-            full_prompt += "\n\n# Your memory index\n\n" + memory.load_index(max_entries=8)
+            # Pinned core block: user profile + key feedback rules (full bodies,
+            # capped small). Always in context so the agent knows who it's
+            # talking to without needing a recall() call every turn.
+            core_block = memory.load_core_block()
+            if core_block:
+                full_prompt += "\n\n# Pinned facts (user profile + key rules)\n\n" + core_block
+            # Index: one-line-per-entry so the agent knows what memories exist.
+            # Full bodies fetched on demand via recall(query).
+            full_prompt += "\n\n# Memory index\n\n" + memory.load_index(max_entries=8)
         self.history: list[dict] = [{"role": "system", "content": full_prompt}]
 
     def reset(self) -> None:
@@ -554,91 +659,36 @@ class Agent:
         )
 
     def chat(self, user_message: str) -> str:
-        """Send a user message; return the agent's final text reply.
-
-        Internally runs the tool-use loop: the LLM may call tools any
-        number of times before producing a final answer. We cap at
-        MAX_TURNS as a safety net.
-        """
-        local = self._handle_local_command(user_message)
-        if local is not None:
-            if self.memory is not None:
-                self.memory.log_turn("user", user_message)
-                self.memory.log_turn("assistant", local)
-            events.emit("user_message", text=events.truncate_preview(user_message))
-            events.emit("assistant_reply", text=events.truncate_preview(local))
-            return local
-
-        self._maybe_compact()  # bound history growth before adding more
-
-        memory_context_index = self._inject_relevant_memory(user_message)
-        self.history.append({"role": "user", "content": user_message})
-        if self.memory is not None:
-            self.memory.log_turn("user", user_message)
-        events.emit("user_message", text=events.truncate_preview(user_message))
-
-        try:
-            for _ in range(MAX_TURNS):
-                assistant_msg = call_llm(self.history, tools.SCHEMAS, model=self.model)
-                # Keep only fields the API accepts on the request side. Groq
-                # returns extras like `reasoning`, sometimes `executed_tools`,
-                # and explicit `null` fields — replaying those triggers 400s.
-                cleaned: dict[str, Any] = {"role": "assistant"}
-                if assistant_msg.get("content"):
-                    cleaned["content"] = assistant_msg["content"]
-                if assistant_msg.get("tool_calls"):
-                    cleaned["tool_calls"] = assistant_msg["tool_calls"]
-                # An assistant message must have at least one of content/tool_calls.
-                if "content" not in cleaned and "tool_calls" not in cleaned:
-                    cleaned["content"] = ""
-                self.history.append(cleaned)
-
-                tool_calls = assistant_msg.get("tool_calls")
-                if not tool_calls:
-                    # No tool call → this is the final answer.
-                    reply = assistant_msg.get("content") or "(empty response)"
-                    if self.memory is not None:
-                        self.memory.log_turn("assistant", reply)
-                    events.emit("assistant_reply", text=events.truncate_preview(reply))
-                    return reply
-
-                # Otherwise: run each requested tool, append result, loop.
-                for call in tool_calls:
-                    name = call["function"]["name"]
-                    args = json.loads(call["function"]["arguments"])
-                    self._log_tool_call(name, args)
-                    events.emit(
-                        "tool_call",
-                        name=name,
-                        args=events.truncate_preview(json.dumps(args, ensure_ascii=False)),
-                    )
-                    result = tools.execute(name, args)
-                    events.emit(
-                        "tool_result",
-                        name=name,
-                        result=events.truncate_preview(result),
-                    )
-                    self.history.append({
-                        "role": "tool",
-                        "tool_call_id": call["id"],
-                        "content": result,
-                    })
-
-            return "(hit MAX_TURNS without a final answer)"
-        finally:
-            self._drop_message(memory_context_index)
+        """Send a user message; return the agent's final text reply."""
+        return "".join(self._run_loop(user_message, streaming=False))
 
     def chat_stream(self, user_message: str):
         """Streaming variant of chat() for the web UI.
 
-        Yields strings (content chunks) as they arrive from the LLM.
-        Tool calls happen silently in the background — their activity
-        is observable via the /events SSE feed. After all turns are
-        done, the final assembled reply is also stored in history and
-        memory exactly like chat() does.
+        Yields content strings as they arrive from the LLM. Tool calls
+        happen silently — their activity is visible via the /events SSE
+        feed. This is a sync generator; FastAPI is happy to consume it.
+        """
+        yield from self._run_loop(user_message, streaming=True)
 
-        This is a *sync* generator (httpx.stream is sync); FastAPI is
-        happy to consume sync generators in StreamingResponse.
+    def _run_loop(self, user_message: str, streaming: bool):
+        """Unified agent loop generator shared by chat() and chat_stream().
+
+        Structural improvements over the prior dual-path design:
+          - Single code path: bug fixes land for both modes at once.
+          - Output guard: validates each final reply before it reaches
+            the user; catches leaked internal paths, error echoes, and
+            confabulation from ungrounded tool calls.
+          - Tool-arg validation: schema-checks LLM arguments before
+            dispatching; hands a structured error back to the LLM so it
+            can correct and retry rather than crashing the loop.
+          - No auto memory injection: the agent calls recall(query)
+            explicitly instead of receiving fuzzy keyword matches it
+            didn't ask for. Eliminates the main confabulation vector.
+
+        Yields:
+          streaming=True  → content chunks in real-time as LLM produces
+          streaming=False → a single string (the final guarded reply)
         """
         local = self._handle_local_command(user_message)
         if local is not None:
@@ -651,107 +701,152 @@ class Agent:
             return
 
         self._maybe_compact()
-        memory_context_index = self._inject_relevant_memory(user_message)
         self.history.append({"role": "user", "content": user_message})
         if self.memory is not None:
             self.memory.log_turn("user", user_message)
         events.emit("user_message", text=events.truncate_preview(user_message))
 
-        final_reply_parts: list[str] = []
+        tool_names_used: set[str] = set()
 
-        try:
-            for _ in range(MAX_TURNS):
+        for _ in range(MAX_TURNS):
+            if streaming:
                 assistant_msg: dict[str, Any] | None = None
-                for kind, payload in call_llm_stream(self.history, tools.SCHEMAS, model=self.model):
+                for kind, payload in call_llm_stream(
+                    self.history, tools.SCHEMAS, model=self.model
+                ):
                     if kind == "content":
-                        final_reply_parts.append(payload)
                         yield payload
                     elif kind == "done":
                         assistant_msg = payload
-                    # tool_call_delta is accumulated inside call_llm_stream;
-                    # we don't need to act on it per-chunk here.
-
                 if assistant_msg is None:
                     yield "\n(empty stream)\n"
                     return
+            else:
+                assistant_msg = call_llm(self.history, tools.SCHEMAS, model=self.model)
 
-                cleaned: dict[str, Any] = {"role": "assistant"}
-                if assistant_msg.get("content"):
-                    cleaned["content"] = assistant_msg["content"]
-                if assistant_msg.get("tool_calls"):
-                    cleaned["tool_calls"] = assistant_msg["tool_calls"]
-                if "content" not in cleaned and "tool_calls" not in cleaned:
-                    cleaned["content"] = ""
-                self.history.append(cleaned)
+            # Strip provider-specific extras (reasoning, null fields) that
+            # the API rejects when replayed as part of the next request.
+            cleaned: dict[str, Any] = {"role": "assistant"}
+            if assistant_msg.get("content"):
+                cleaned["content"] = assistant_msg["content"]
+            if assistant_msg.get("tool_calls"):
+                cleaned["tool_calls"] = assistant_msg["tool_calls"]
+            if "content" not in cleaned and "tool_calls" not in cleaned:
+                cleaned["content"] = ""
+            self.history.append(cleaned)
 
-                tool_calls = assistant_msg.get("tool_calls")
-                if not tool_calls:
-                    reply = assistant_msg.get("content") or "(empty response)"
-                    if self.memory is not None:
-                        self.memory.log_turn("assistant", reply)
-                    events.emit("assistant_reply", text=events.truncate_preview(reply))
-                    return
+            tool_calls = assistant_msg.get("tool_calls")
+            if not tool_calls:
+                raw_reply = assistant_msg.get("content") or "(empty response)"
+                reply = self._output_guard(raw_reply, tool_names_used)
 
-                for call in tool_calls:
-                    name = call["function"]["name"]
-                    args = json.loads(call["function"]["arguments"] or "{}")
-                    self._log_tool_call(name, args)
-                    events.emit(
-                        "tool_call",
-                        name=name,
-                        args=events.truncate_preview(json.dumps(args, ensure_ascii=False)),
+                if not streaming:
+                    yield reply
+                elif reply != raw_reply:
+                    # Guard fired after content was already streamed.
+                    # Append a visible correction so the user knows.
+                    yield f"\n\n_[I need to correct that: {reply}]_"
+                    # Update history to the corrected version.
+                    self.history[-1]["content"] = reply
+
+                if self.memory is not None:
+                    self.memory.log_turn("assistant", reply)
+                events.emit("assistant_reply", text=events.truncate_preview(reply))
+                return
+
+            for call in tool_calls:
+                name = call["function"]["name"]
+                raw_args = call["function"].get("arguments") or "{}"
+                try:
+                    args = json.loads(raw_args)
+                except json.JSONDecodeError:
+                    args = {}
+
+                tool_names_used.add(name)
+                self._log_tool_call(name, args)
+                events.emit(
+                    "tool_call",
+                    name=name,
+                    args=events.truncate_preview(json.dumps(args, ensure_ascii=False)),
+                )
+
+                # Schema-validate args before dispatch. On failure the LLM
+                # gets a structured error and can correct + retry rather
+                # than running the tool with garbage arguments.
+                validation_error = _validate_tool_args(name, args)
+                if validation_error:
+                    result = (
+                        f"ERROR: invalid arguments for '{name}': {validation_error}. "
+                        f"Check the tool schema and retry with corrected arguments."
                     )
+                else:
                     result = tools.execute(name, args)
-                    events.emit(
-                        "tool_result",
-                        name=name,
-                        result=events.truncate_preview(result),
-                    )
-                    self.history.append({
-                        "role": "tool",
-                        "tool_call_id": call["id"],
-                        "content": result,
-                    })
-                # Loop — next turn starts a fresh stream.
-                # Reset content accumulator for next turn's text (if any).
-                final_reply_parts = []
 
-            yield "\n(hit MAX_TURNS without a final answer)\n"
-        finally:
-            self._drop_message(memory_context_index)
+                events.emit(
+                    "tool_result",
+                    name=name,
+                    result=events.truncate_preview(result),
+                )
+                self.history.append({
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": result,
+                })
+
+        fallback = "(hit MAX_TURNS without a final answer)"
+        if not streaming:
+            yield fallback
+        else:
+            yield f"\n{fallback}\n"
+
+    def _output_guard(self, reply: str, tool_names_used: set[str]) -> str:
+        """Validate a final reply before it reaches the user.
+
+        Catches four failure modes deterministically:
+          1. Memory filename leak — internal *.md paths exposed in reply
+          2. Internal path leak — workspace/memory/… strings in reply
+          3. Error echo — LLM forwarded a tool ERROR string verbatim
+          4. Example.com confabulation — placeholder site cited with no
+             web tool active this turn (the 'Explain' bug from the
+             auto-injection era)
+
+        Returns the original reply if clean, or a safe fallback and
+        emits an 'output_guard' event so the issue is observable.
+        """
+        violations: list[str] = []
+
+        if _GUARD_MEMORY_FILENAME_RE.search(reply):
+            violations.append("memory_filename_leak")
+
+        if any(p in reply for p in _GUARD_INTERNAL_PATHS):
+            violations.append("internal_path_leak")
+
+        if reply.lstrip().startswith("ERROR:") or "ERROR running " in reply:
+            violations.append("error_echo")
+
+        lower_reply = reply.lower().replace("\n", " ")
+        if any(t in lower_reply for t in _GUARD_CONFABULATION_TERMS):
+            if not (tool_names_used & {"web_fetch", "web_search"}):
+                violations.append("example_com_confabulation")
+
+        if not violations:
+            return reply
+
+        try:
+            events.emit(
+                "output_guard",
+                violations=",".join(violations),
+                preview=reply[:100].replace("\n", " "),
+            )
+        except Exception:
+            pass
+        print(f"[output_guard] blocked reply ({violations}): {reply[:80]!r}", flush=True)
+        return "I don't have enough context to answer that well. Could you give me more detail?"
 
     @staticmethod
     def _log_tool_call(name: str, args: dict[str, Any]) -> None:
-        """Print a short preview of each tool call as it happens, so the
-        user can see what the agent is doing."""
         preview = ", ".join(f"{k}={repr(v)[:40]}" for k, v in args.items())
         print(f"  -> {name}({preview})")
-
-    def _inject_relevant_memory(self, user_message: str) -> int | None:
-        """Temporarily add relevant memory snippets for this turn only."""
-        if self.memory is None:
-            return None
-        snippets = self.memory.search(user_message, limit=3, max_chars=900)
-        if not snippets:
-            return None
-        msg = {
-            "role": "system",
-            "content": (
-                "# Relevant memory snippets for this turn\n\n"
-                f"{snippets}\n\n"
-                "Use these if relevant. If they conflict with the current "
-                "user message or current files, trust the newer/current state."
-            ),
-        }
-        self.history.append(msg)
-        return len(self.history) - 1
-
-    def _drop_message(self, index: int | None) -> None:
-        """Remove a temporary history message if it is still present."""
-        if index is None:
-            return
-        if 0 <= index < len(self.history):
-            del self.history[index]
 
     def _handle_local_command(self, user_message: str) -> str | None:
         """Handle explicit local commands without an LLM call.
@@ -826,19 +921,25 @@ class Agent:
     # --- Mid-session compaction -----------------------------------------
 
     def _maybe_compact(self) -> None:
-        """If history is too long, replace its older portion with a summary.
+        """If history has too many *user turns*, replace older turns
+        with a summary.
+
+        Counting USER messages — not all messages — is important because
+        a tool-heavy turn (one user message → assistant calls 5 tools →
+        5 tool results) inflates raw message count by 10× without adding
+        any new user context. Compacting on raw count meant 2-3 normal
+        conversational turns triggered compaction and dropped recent
+        context the user clearly cared about.
 
         Cuts at a user-message boundary so we never split a paired
         (assistant tool_call → tool result) sequence — the API rejects
         orphaned tool messages.
         """
-        if len(self.history) < COMPACT_TRIGGER:
-            return
-
-        # User-message indices in history (the system prompt is at [0]).
         user_idxs = [i for i, m in enumerate(self.history) if m.get("role") == "user"]
+        if len(user_idxs) <= COMPACT_TRIGGER:
+            return
         if len(user_idxs) <= COMPACT_KEEP_RECENT:
-            return  # already small in terms of conversation turns
+            return  # nothing to summarize without dropping recent context
 
         cut_at = user_idxs[-COMPACT_KEEP_RECENT]
         # Slice [1:cut_at] = everything between system prompt and the
@@ -854,6 +955,16 @@ class Agent:
         }
         # New history: [original system prompt, summary, recent turns]
         self.history = [self.history[0], summary_msg] + self.history[cut_at:]
+        try:
+            events.emit(
+                "context_compacted",
+                text=events.truncate_preview(
+                    f"summarized {len(to_summarize)} older messages; "
+                    f"history now {len(self.history)}"
+                ),
+            )
+        except Exception:
+            pass
         print(
             f"[compact] summarized {len(to_summarize)} old messages "
             f"→ history now {len(self.history)} messages",
