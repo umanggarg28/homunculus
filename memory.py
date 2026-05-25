@@ -498,11 +498,12 @@ class Memory:
     # Falls back to keyword search if the Gemini key is missing or the
     # API is unavailable.
 
+    _EMBED_MODEL = "models/gemini-embedding-2"
     _EMBED_URL = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        "text-embedding-004:embedContent?key={key}"
+        "gemini-embedding-2:embedContent?key={key}"
     )
-    _EMBED_DIM = 768
+    _EMBED_DIM = 3072
 
     def _embed(self, text: str) -> list[float] | None:
         """Call Gemini embedding API. Returns a float vector or None on failure."""
@@ -513,7 +514,7 @@ class Memory:
             import httpx
             resp = httpx.post(
                 self._EMBED_URL.format(key=key),
-                json={"model": "models/text-embedding-004", "content": {"parts": [{"text": text[:8000]}]}},
+                json={"model": self._EMBED_MODEL, "content": {"parts": [{"text": text[:8000]}]}},
                 timeout=10.0,
             )
             if resp.status_code != 200:
