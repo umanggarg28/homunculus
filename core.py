@@ -54,7 +54,7 @@ API_URL = os.environ.get(
     "HOMUNCULUS_API_URL",
     "https://api.groq.com/openai/v1/chat/completions",
 )
-MODEL = os.environ.get("HOMUNCULUS_MODEL", "openai/gpt-oss-120b")
+MODEL = os.environ.get("HOMUNCULUS_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 
 # Fallback provider chain. Each slot is independent — set only the keys
 # you have. On 429 from one provider, we move to the next; a 429'd
@@ -112,8 +112,8 @@ MAX_TURNS = 20
 # can balloon raw message count by 10× without adding any new user
 # context — compacting on raw count was dropping context way too
 # aggressively (2-3 conversational turns triggered it).
-COMPACT_TRIGGER = 15
-COMPACT_KEEP_RECENT = 6
+COMPACT_TRIGGER = 8   # heartbeat sessions are short; compact sooner to stay under context limits
+COMPACT_KEEP_RECENT = 4
 
 
 SYSTEM_PROMPT = """You are Homunculus — an autonomous personal assistant with persistent memory.
@@ -215,25 +215,38 @@ def _cool_provider(
 def _is_transient_provider_error(response: httpx.Response) -> bool:
     """Return True for provider/model-routing errors worth falling back from.
 
-    OpenRouter free endpoints can disappear or be temporarily unavailable.
-    Their 404 "No endpoints found..." is a routing condition, not a bug
-    in the user request, so we bench that provider and try the next slot.
+    Covers three classes:
+    1. Rate-limit / quota  (429, 413 context-too-large) — try next provider.
+    2. Routing / infra     (404 "no endpoints", 502/503/504) — try next.
+    3. Model capability    (400 output_parse_failed, tool_use_failed) — the
+       model on this provider can't handle the request; next provider may do
+       better. Distinct from a genuinely bad request (wrong API key etc.)
+       which we still raise immediately.
     """
     if response.status_code == 429:
         return True
+    # 413: context exceeds this provider's token limit — try a larger one.
+    if response.status_code == 413:
+        return True
+    try:
+        response.read()
+    except Exception:
+        pass
     if response.status_code in {404, 502, 503, 504}:
-        # `.text` on a streaming response that hasn't been .read() yet
-        # raises ResponseNotRead. .read() is idempotent for buffered
-        # responses, so it's safe to call unconditionally.
-        try:
-            response.read()
-        except Exception:
-            pass
         body = response.text.lower()
         return (
             "no endpoints found" in body
             or "no endpoint" in body
             or response.status_code in {502, 503, 504}
+        )
+    if response.status_code == 400:
+        # Model capability failures — not a bug in our request, but the
+        # model on this slot can't output valid tool JSON. Try next.
+        body = response.text.lower()
+        return (
+            "output_parse_failed" in body
+            or "tool_use_failed" in body
+            or "tool call validation failed" in body
         )
     return False
 
@@ -556,7 +569,12 @@ def _validate_tool_args(name: str, arguments: dict) -> str | None:
             schema = s
             break
     if schema is None:
-        return None  # unknown tool handled separately by execute()
+        known = sorted(s.get("function", {}).get("name", "?") for s in tools.SCHEMAS)
+        return (
+            f"tool '{name}' does not exist. "
+            f"Available tools: {', '.join(known)}. "
+            "Retry using one of those exact names."
+        )
 
     params = schema.get("function", {}).get("parameters", {})
     required = params.get("required") or []

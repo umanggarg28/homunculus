@@ -141,3 +141,42 @@ class TestRememberForget:
     def test_forget_nonexistent_is_idempotent(self, mem):
         result = mem.forget("nonexistent_memory")
         assert "not found" in result.lower() or "forgot" in result.lower()
+
+    # ------------------------------------------------------------------
+    # Type-prefix normalization
+    # ------------------------------------------------------------------
+
+    def test_strips_single_type_prefix_from_name(self, mem):
+        # agent passes name="project_my_tracker", type="project"
+        # should create project_my_tracker.md, NOT project_project_my_tracker.md
+        mem.remember("project_my_tracker", "desc", "project", "body")
+        assert (mem.root / "project_my_tracker.md").exists()
+        assert not (mem.root / "project_project_my_tracker.md").exists()
+
+    def test_strips_double_type_prefix_from_name(self, mem):
+        # Handles the triple-prefix corruption case
+        mem.remember("project_project_delivered_problems", "desc", "project", "body")
+        assert (mem.root / "project_delivered_problems.md").exists()
+        assert not (mem.root / "project_project_project_delivered_problems.md").exists()
+
+    def test_clean_name_unchanged(self, mem):
+        # A name with no type prefix is not modified
+        mem.remember("delivered_problems", "desc", "project", "body")
+        assert (mem.root / "project_delivered_problems.md").exists()
+
+    # ------------------------------------------------------------------
+    # Failure-state guard
+    # ------------------------------------------------------------------
+
+    def test_rejects_failure_state_body(self, mem):
+        result = mem.remember("bad_note", "desc", "project", "Unable to locate the tracker file.")
+        assert "ERROR" in result
+        assert not (mem.root / "project_bad_note.md").exists()
+
+    def test_rejects_uncertainty_body(self, mem):
+        result = mem.remember("todo", "desc", "project", "Need to find where the list is stored.")
+        assert "ERROR" in result
+
+    def test_accepts_normal_body(self, mem):
+        result = mem.remember("good_note", "desc", "project", "Delivered Two Sum on 2026-05-20.")
+        assert "Saved" in result

@@ -589,7 +589,30 @@ class Memory:
         if type not in ALLOWED_TYPES:
             return f"ERROR: type must be one of {sorted(ALLOWED_TYPES)}, got '{type}'"
 
-        slug = self._slugify(name)
+        # Reject failure/confusion states — these are task scratch-notes, not durable facts.
+        # A real memory should state what IS true, not what the agent couldn't figure out.
+        _FAILURE_PHRASES = (
+            "unable to locate", "unable to find", "could not locate", "could not find",
+            "cannot find", "need to find", "need to locate", "need to check",
+            "please check for", "i need to", "we need to", "not sure where",
+        )
+        body_lower = body.lower()
+        for phrase in _FAILURE_PHRASES:
+            if phrase in body_lower:
+                return (
+                    f"ERROR: memory body looks like a failure state or an unresolved note "
+                    f"(contains '{phrase}'). Resolve the problem first, then save the result. "
+                    "Memories must record what IS true, not what you still need to do."
+                )
+
+        # Strip redundant type prefix from name if the LLM included it.
+        # e.g. name="project_delivered_problems", type="project"
+        # → slug="delivered_problems" → filename="project_delivered_problems.md"
+        clean_name = name
+        for t in ALLOWED_TYPES:
+            while clean_name.lower().startswith(f"{t}_"):
+                clean_name = clean_name[len(t) + 1:]
+        slug = self._slugify(clean_name)
         filename = f"{type}_{slug}.md"
         path = self.root / filename
 
