@@ -128,7 +128,8 @@ export function TracesTimeline() {
   );
 
   const laneCount = LANES.length;
-  const laneH = 56;
+  const laneH = 44;
+  const barH = 10;
   const rulerH = 28;
   const totalH = rulerH + laneCount * laneH;
 
@@ -275,14 +276,15 @@ export function TracesTimeline() {
                 <div
                   style={{
                     position: "absolute",
-                    left: 12, top: 10,
-                    fontSize: 9,
-                    letterSpacing: "0.20em",
+                    left: 12, top: 8,
+                    fontSize: 8,
+                    letterSpacing: "0.22em",
                     color: lane.color,
                     fontFamily: "var(--font-mono)",
                     fontWeight: 700,
                     textTransform: "uppercase",
-                    opacity: 0.55,
+                    opacity: 0.45,
+                    pointerEvents: "none",
                   }}
                 >
                   ── {lane.label}
@@ -304,14 +306,18 @@ export function TracesTimeline() {
             }}
           />
 
-          {/* Blocks */}
+          {/* Blocks — thin Gantt bars centered in each lane */}
           {blocks.map((b, i) => {
             const laneIdx = LANES.findIndex((l) => l.key === b.lane);
-            const top = rulerH + laneIdx * laneH + 14;
+            const top = rulerH + laneIdx * laneH + (laneH - barH) / 2;
             const left = xPct(b.startMs);
             const widthPct = (b.durationMs / windowMs) * 100;
             const isSelected = selected?.event === b.event;
             const color = b.isError ? "var(--color-danger)" : LANES[laneIdx].color;
+            // Pixel width is estimated from the container. At < 28px we
+            // drop text entirely and render a clean dot.
+            const widthStyle = `max(${widthPct}%, 6px)`;
+            const showLabel = widthPct * 10 > 3; // rough heuristic — hide at very small %
             return (
               <button
                 key={i}
@@ -319,29 +325,32 @@ export function TracesTimeline() {
                 style={{
                   position: "absolute",
                   left: `${left}%`,
-                  width: `max(${widthPct}%, 16px)`,
-                  top, height: laneH - 22,
-                  background: isSelected ? color : "rgba(0,0,0,0.55)",
+                  width: widthStyle,
+                  top,
+                  height: barH,
+                  background: isSelected
+                    ? color
+                    : `color-mix(in srgb, ${color} 28%, transparent)`,
                   border: `1px solid ${color}`,
-                  boxShadow: isSelected
-                    ? `0 0 14px ${color}, inset 0 0 8px ${color}`
-                    : `0 0 4px ${color}`,
-                  padding: "0 6px",
+                  boxShadow: isSelected ? `0 0 8px ${color}` : "none",
+                  borderRadius: 2,
+                  padding: "0 4px",
                   cursor: "pointer",
                   fontFamily: "var(--font-mono)",
-                  fontSize: 10,
+                  fontSize: 8,
                   color: isSelected ? "var(--color-bg)" : color,
                   textAlign: "left",
                   whiteSpace: "nowrap",
                   overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  fontWeight: 600,
-                  letterSpacing: "0.06em",
+                  textOverflow: "clip",
+                  fontWeight: 700,
+                  letterSpacing: "0.08em",
                   textTransform: "uppercase",
+                  lineHeight: `${barH}px`,
                 }}
                 title={`${b.label} · ${b.durationMs}ms · ${new Date(b.startMs).toLocaleTimeString()}`}
               >
-                {b.label}
+                {showLabel ? b.label : ""}
               </button>
             );
           })}
