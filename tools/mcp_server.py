@@ -114,7 +114,7 @@ def recall(
 def web_search(
     query: Annotated[str, Field(description="Search query.")],
 ) -> str:
-    """Search the web. Returns ~5 results + summary. Cite full URLs in your reply when you use results."""
+    """Search the web. Returns a DIRECT ANSWER (use this first) plus supporting snippets. Cite full URLs in your reply."""
     return web.web_search(query)
 
 
