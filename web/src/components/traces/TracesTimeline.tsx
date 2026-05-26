@@ -1,423 +1,443 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useEventStream } from "@/hooks/useEventStream";
 import type { FeedEvent } from "@/lib/types";
 
 /**
- * Turn-based waterfall trace view (LangSmith / Jaeger pattern).
- *
- * Each user_message starts a new "turn" row. Within the row, every
- * subsequent event (LLM call, tool call, guard, reply) is laid out on
- * a shared horizontal time axis as a colored pill. The causal chain is
- * immediately visible: message → LLM → tool → LLM → reply.
- *
- * Replaces the swimlane Gantt which left mostly-empty lanes and broke
- * the causal flow across disconnected rows.
+ * Swimlane timeline — horizontal time axis, 4 lanes (USER / LLM / TOOL / REPLY).
+ * Service filter isolates web (chat) from heartbeat (autonomous) activity.
+ * Blocks are thin horizontal bars; click for a detail panel.
  */
 
-interface TurnEvent {
+type LaneKey = "USER" | "LLM" | "TOOL" | "REPLY";
+
+const LANES: { key: LaneKey; label: string; color: string }[] = [
+  { key: "USER",  label: "USER",     color: "var(--color-indigo)"  },
+  { key: "LLM",   label: "LLM",      color: "var(--color-accent)"  },
+  { key: "TOOL",  label: "TOOL",     color: "var(--color-warning)"  },
+  { key: "REPLY", label: "REPLY",    color: "var(--color-accent)"  },
+];
+
+const WINDOWS = [
+  { label: "5M",  ms: 5  * 60 * 1000 },
+  { label: "15M", ms: 15 * 60 * 1000 },
+  { label: "1H",  ms: 60 * 60 * 1000 },
+  { label: "24H", ms: 24 * 60 * 60 * 1000 },
+];
+
+type ServiceFilter = "all" | "web" | "heartbeat";
+
+interface Block {
   event: FeedEvent;
+  lane: LaneKey;
   startMs: number;
   durationMs: number;
+  label: string;
+  isError: boolean;
 }
 
-interface Turn {
-  id: string;
-  userEvent: FeedEvent;
-  startMs: number;
-  endMs: number;
-  events: TurnEvent[];
-  service: string;
-}
-
-const EVENT_COLOR: Record<string, string> = {
-  user_message:    "var(--color-indigo)",
-  llm_call:        "var(--color-accent)",
-  tool_call:       "var(--color-warning)",
-  tool_result:     "var(--color-warning)",
-  assistant_reply: "var(--color-accent)",
-  output_guard:    "var(--color-danger)",
-  self_correction: "var(--color-amber)",
-  context_compacted: "var(--color-text-faint)",
-};
-
-const EVENT_LABEL: Record<string, string> = {
-  user_message:    "MSG",
-  llm_call:        "LLM",
-  tool_call:       "TOOL",
-  tool_result:     "RES",
-  assistant_reply: "REPLY",
-  output_guard:    "GUARD",
-  self_correction: "FIX",
-  context_compacted: "COMPACT",
-};
-
-function colorFor(e: FeedEvent): string {
-  if (e.event === "tool_result" && typeof e.result === "string" && /^error|fail/i.test(e.result)) {
-    return "var(--color-danger)";
+function laneFor(e: FeedEvent): LaneKey | null {
+  switch (e.event) {
+    case "user_message":    return "USER";
+    case "llm_call":        return "LLM";
+    case "tool_call":
+    case "tool_result":     return "TOOL";
+    case "assistant_reply": return "REPLY";
+    default:                return null;
   }
-  return EVENT_COLOR[e.event] ?? "var(--color-text-faint)";
 }
 
-function buildTurns(events: FeedEvent[]): Turn[] {
-  const sorted = [...events].sort(
-    (a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime(),
+function isErrorResult(e: FeedEvent): boolean {
+  return typeof e.result === "string" && /^error|✖|fail/i.test(e.result);
+}
+
+function labelFor(e: FeedEvent): string {
+  switch (e.event) {
+    case "user_message":    return "MSG";
+    case "llm_call":        return "LLM";
+    case "tool_call":       return (e.name ?? "TOOL").toUpperCase();
+    case "tool_result":     return (e.name ?? "RES").toUpperCase();
+    case "assistant_reply": return "REPLY";
+    default:                return (e.event ?? "EVT").toUpperCase();
+  }
+}
+
+function buildBlocks(events: FeedEvent[], windowStart: number, now: number, service: ServiceFilter): Block[] {
+  const filtered = service === "all" ? events : events.filter((e) => {
+    const svc = e.service ?? "";
+    if (service === "web") return svc === "web";
+    if (service === "heartbeat") return svc === "heartbeat";
+    return true;
+  });
+
+  const sorted = [...filtered].sort((a, b) =>
+    new Date(a.ts).getTime() - new Date(b.ts).getTime(),
   );
 
-  const turns: Turn[] = [];
-  let current: Turn | null = null;
-
+  const out: Block[] = [];
   for (let i = 0; i < sorted.length; i++) {
     const e = sorted[i];
+    const lane = laneFor(e);
+    if (!lane) continue;
     const t = new Date(e.ts).getTime();
+    if (t < windowStart - 60_000) continue;
 
-    if (e.event === "user_message") {
-      // Close previous turn
-      if (current) turns.push(current);
-      current = {
-        id: `${e.ts}-${i}`,
-        userEvent: e,
-        startMs: t,
-        endMs: t,
-        events: [{ event: e, startMs: t, durationMs: 0 }],
-        service: e.service ?? "?",
-      };
-    } else if (current) {
-      current.events.push({ event: e, startMs: t, durationMs: 0 });
-      current.endMs = t;
+    // Collapse tool_call + tool_result pairs into one block
+    if (e.event === "tool_result") {
+      const prev = out[out.length - 1];
+      if (prev && prev.event.event === "tool_call" && prev.event.name === e.name) {
+        prev.durationMs = Math.max(prev.durationMs, t - prev.startMs);
+        prev.isError = prev.isError || isErrorResult(e);
+        continue;
+      }
     }
+
+    const next = sorted[i + 1];
+    const tNext = next ? new Date(next.ts).getTime() : now;
+    const dur = Math.min(8000, Math.max(100, tNext - t));
+    out.push({ event: e, lane, startMs: t, durationMs: dur, label: labelFor(e), isError: isErrorResult(e) });
   }
-  if (current) turns.push(current);
+  return out;
+}
 
-  // Back-fill durations: each event's duration = next event's start - this start, capped at 8s
-  for (const turn of turns) {
-    const evts = turn.events;
-    for (let i = 0; i < evts.length; i++) {
-      const next = evts[i + 1];
-      const raw = next ? next.startMs - evts[i].startMs : 400;
-      evts[i].durationMs = Math.min(8000, Math.max(80, raw));
-    }
-    // Last event in turn: duration = turn end - last start, minimum 400ms
-    if (evts.length > 0) {
-      const last = evts[evts.length - 1];
-      last.durationMs = Math.max(400, turn.endMs - last.startMs + 400);
-    }
+function buildTicks(start: number, end: number, windowMs: number) {
+  const ticks: { ts: number; label: string }[] = [];
+  const step = windowMs / 5;
+  for (let i = 0; i <= 5; i++) {
+    const ts = start + step * i;
+    const ago = Math.max(0, end - ts);
+    let label = "now";
+    if (ago > 86_400_000)   label = `${Math.floor(ago / 86_400_000)}D AGO`;
+    else if (ago > 3_600_000) label = `${Math.floor(ago / 3_600_000)}H AGO`;
+    else if (ago > 60_000)    label = `${Math.floor(ago / 60_000)}M AGO`;
+    else if (ago > 1000)      label = `${Math.floor(ago / 1000)}S AGO`;
+    ticks.push({ ts, label });
   }
-
-  return turns.reverse(); // newest first
-}
-
-function formatAge(ms: number): string {
-  const s = Math.floor((Date.now() - ms) / 1000);
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
-}
-
-function formatTime(ms: number): string {
-  const d = new Date(ms);
-  return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`;
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
+  return ticks;
 }
 
 export function TracesTimeline() {
   const { events, connected } = useEventStream(500);
-  const [selected, setSelected] = useState<TurnEvent | null>(null);
-  const [expandedTurn, setExpandedTurn] = useState<string | null>(null);
+  const [windowMs, setWindowMs]     = useState(WINDOWS[1].ms); // default 15M
+  const [now, setNow]               = useState(() => Date.now());
+  const [selected, setSelected]     = useState<Block | null>(null);
+  const [paused, setPaused]         = useState(false);
+  const [service, setService]       = useState<ServiceFilter>("web"); // default: web only
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  const turns = useMemo(() => buildTurns(events), [events]);
+  useEffect(() => {
+    if (paused) return;
+    const id = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(id);
+  }, [paused]);
 
-  const totalTurnMs = (t: Turn) => Math.max(1, t.endMs - t.startMs + 400);
+  const windowStart = now - windowMs;
+  const blocks = useMemo(
+    () => buildBlocks(events, windowStart, now, service),
+    [events, windowStart, now, service],
+  );
+  const ticks = useMemo(() => buildTicks(windowStart, now, windowMs), [windowStart, now, windowMs]);
+
+  const laneH  = 48;
+  const barH   = 10;
+  const rulerH = 26;
+  const totalH = rulerH + LANES.length * laneH;
+
+  const xPct = (ts: number) => {
+    const p = ((ts - windowStart) / windowMs) * 100;
+    return Math.min(100, Math.max(0, p));
+  };
+
+  // Count blocks per lane for the header
+  const counts = useMemo(() => {
+    const c: Record<LaneKey, number> = { USER: 0, LLM: 0, TOOL: 0, REPLY: 0 };
+    for (const b of blocks) if (b.startMs >= windowStart) c[b.lane]++;
+    return c;
+  }, [blocks, windowStart]);
 
   return (
     <div>
-      {/* Header */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 16,
-          fontFamily: "var(--font-mono)",
-        }}
-      >
-        <span className="brut-meta" style={{ color: "var(--color-text-muted)" }}>
-          ── {turns.length} turn{turns.length !== 1 ? "s" : ""} · newest first
-        </span>
-        <span
-          style={{
-            color: connected ? "var(--color-accent)" : "var(--color-warning)",
-            fontSize: 10,
-            letterSpacing: "0.16em",
-            textShadow: connected ? "0 0 6px var(--color-accent-glow)" : "none",
-          }}
-        >
-          ● {connected ? "LIVE" : "OFFLINE"}
-        </span>
-      </div>
+      {/* Controls row */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 12, flexWrap: "wrap", fontFamily: "var(--font-mono)" }}>
 
-      {turns.length === 0 ? (
-        <div
-          style={{
-            padding: "32px 0",
-            textAlign: "center",
-            fontFamily: "var(--font-mono)",
-            fontSize: 11,
-            letterSpacing: "0.18em",
-            color: "var(--color-text-faint)",
-            border: "1px solid var(--color-border)",
-          }}
-        >
-          ── no turns yet — talk to the agent to populate ──
-        </div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          {turns.map((turn) => {
-            const spanMs = totalTurnMs(turn);
-            const isExpanded = expandedTurn === turn.id;
-            const turnDuration = turn.endMs - turn.startMs;
-            const hasError = turn.events.some(
-              (te) => te.event.event === "output_guard" ||
-                (te.event.event === "tool_result" && typeof te.event.result === "string" && /^error|fail/i.test(te.event.result))
-            );
-
+        {/* Left: window + pause */}
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <span className="brut-meta" style={{ color: "var(--color-text-muted)", marginRight: 4 }}>WINDOW</span>
+          {WINDOWS.map((w) => {
+            const active = w.ms === windowMs;
             return (
-              <div
-                key={turn.id}
-                style={{
-                  border: `1px solid ${hasError ? "var(--color-danger)" : "var(--color-border)"}`,
-                  borderLeft: `3px solid ${hasError ? "var(--color-danger)" : "var(--color-border-strong)"}`,
-                  background: hasError ? "rgba(255,77,46,0.03)" : "var(--color-surface-1)",
-                  fontFamily: "var(--font-mono)",
-                }}
-              >
-                {/* Turn header row */}
-                <div
-                  onClick={() => setExpandedTurn(isExpanded ? null : turn.id)}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "60px 80px 1fr auto",
-                    gap: "0 16px",
-                    alignItems: "center",
-                    padding: "8px 12px",
-                    cursor: "pointer",
-                    borderBottom: isExpanded ? "1px solid var(--color-border)" : "none",
-                  }}
-                >
-                  {/* Time */}
-                  <span style={{ fontSize: 10, color: "var(--color-text-faint)", fontVariantNumeric: "tabular-nums" }}>
-                    {formatTime(turn.startMs)}
-                  </span>
-
-                  {/* Service badge */}
-                  <span style={{ fontSize: 9, letterSpacing: "0.18em", color: "var(--color-text-muted)", textTransform: "uppercase" }}>
-                    {turn.service}
-                  </span>
-
-                  {/* Mini waterfall — the entire turn compressed to one line */}
-                  <div style={{ position: "relative", height: 16, overflow: "hidden" }}>
-                    {turn.events.map((te, i) => {
-                      const leftPct = ((te.startMs - turn.startMs) / spanMs) * 100;
-                      const widthPct = Math.max(0.5, (te.durationMs / spanMs) * 100);
-                      const color = colorFor(te.event);
-                      const isSelected_ = selected?.event === te.event;
-                      return (
-                        <div
-                          key={i}
-                          onClick={(ev) => { ev.stopPropagation(); setSelected(isSelected_ ? null : te); setExpandedTurn(turn.id); }}
-                          title={`${EVENT_LABEL[te.event.event] ?? te.event.event}${te.event.name ? ` · ${te.event.name}` : ""} · ${formatDuration(te.durationMs)}`}
-                          style={{
-                            position: "absolute",
-                            left: `${leftPct}%`,
-                            width: `max(${widthPct}%, 4px)`,
-                            top: 3,
-                            height: 10,
-                            borderRadius: 2,
-                            background: isSelected_
-                              ? color
-                              : `color-mix(in srgb, ${color} 35%, transparent)`,
-                            border: `1px solid ${color}`,
-                            boxShadow: isSelected_ ? `0 0 6px ${color}` : "none",
-                            cursor: "pointer",
-                          }}
-                        />
-                      );
-                    })}
-                  </div>
-
-                  {/* Duration + expand indicator */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, whiteSpace: "nowrap" }}>
-                    {turnDuration > 0 && (
-                      <span style={{ fontSize: 9, color: "var(--color-text-faint)", letterSpacing: "0.08em" }}>
-                        {formatDuration(turnDuration)}
-                      </span>
-                    )}
-                    <span style={{ fontSize: 9, color: "var(--color-text-faint)", letterSpacing: "0.08em" }}>
-                      {formatAge(turn.startMs)}
-                    </span>
-                    <span style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
-                      {isExpanded ? "▲" : "▼"}
-                    </span>
-                  </div>
-                </div>
-
-                {/* User message preview */}
-                <div
-                  onClick={() => setExpandedTurn(isExpanded ? null : turn.id)}
-                  style={{
-                    padding: "4px 12px 6px",
-                    fontSize: 11,
-                    color: "var(--color-text-dim)",
-                    borderBottom: isExpanded ? "1px solid var(--color-border)" : "none",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    cursor: "pointer",
-                  }}
-                >
-                  <span style={{ color: "var(--color-indigo)", marginRight: 8 }}>$</span>
-                  {turn.userEvent.text ?? "(no text)"}
-                </div>
-
-                {/* Expanded detail — event list + selected panel */}
-                {isExpanded && (
-                  <div style={{ display: "grid", gridTemplateColumns: selected ? "1fr 300px" : "1fr" }}>
-                    {/* Event list */}
-                    <div>
-                      {turn.events.map((te, i) => {
-                        const color = colorFor(te.event);
-                        const isSelected_ = selected?.event === te.event;
-                        const label = te.event.name
-                          ? `${te.event.event.replace(/_/g, " ")} · ${te.event.name}`
-                          : te.event.event.replace(/_/g, " ");
-                        const preview =
-                          te.event.text?.slice(0, 120) ??
-                          te.event.args?.slice(0, 120) ??
-                          te.event.result?.slice(0, 120) ??
-                          (te.event.model ? `${te.event.model} via ${te.event.host ?? ""}` : "");
-
-                        return (
-                          <div
-                            key={i}
-                            onClick={() => setSelected(isSelected_ ? null : te)}
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: "18px 110px 1fr 50px",
-                              gap: "0 10px",
-                              alignItems: "start",
-                              padding: "5px 12px",
-                              borderBottom: "1px solid var(--color-border)",
-                              cursor: "pointer",
-                              background: isSelected_ ? "rgba(255,255,255,0.03)" : "transparent",
-                              fontSize: 11,
-                            }}
-                          >
-                            <span style={{ color, paddingTop: 1 }}>
-                              {te.event.event === "user_message" ? "$"
-                                : te.event.event === "llm_call" ? "λ"
-                                : te.event.event === "tool_call" ? "→"
-                                : te.event.event === "tool_result" ? "←"
-                                : te.event.event === "assistant_reply" ? "›"
-                                : te.event.event === "output_guard" ? "⚠"
-                                : te.event.event === "self_correction" ? "↺"
-                                : "·"}
-                            </span>
-                            <span style={{ color, fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", paddingTop: 2 }}>
-                              {label}
-                            </span>
-                            <span style={{ color: "var(--color-text-faint)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                              {preview}
-                            </span>
-                            <span style={{ color: "var(--color-text-faint)", fontSize: 9, textAlign: "right" }}>
-                              {formatDuration(te.durationMs)}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Detail panel */}
-                    {selected && (() => {
-                      const e = selected.event;
-                      return (
-                        <div
-                          style={{
-                            borderLeft: "1px solid var(--color-border)",
-                            padding: 14,
-                            fontFamily: "var(--font-mono)",
-                            fontSize: 11,
-                            overflowY: "auto",
-                            maxHeight: 340,
-                            background: "rgba(0,0,0,0.25)",
-                          }}
-                        >
-                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-                            <span style={{ fontSize: 9, letterSpacing: "0.18em", color: "var(--color-accent)" }}>
-                              ── {(EVENT_LABEL[e.event] ?? e.event).toUpperCase()}
-                            </span>
-                            <button
-                              onClick={() => setSelected(null)}
-                              style={{ border: "none", background: "transparent", color: "var(--color-text-faint)", cursor: "pointer", fontSize: 11 }}
-                            >
-                              ✕
-                            </button>
-                          </div>
-                          <KV k="time" v={formatTime(selected.startMs)} />
-                          <KV k="service" v={e.service ?? "—"} />
-                          <KV k="duration" v={formatDuration(selected.durationMs)} />
-                          {e.model && <KV k="model" v={e.model} />}
-                          {e.host && <KV k="host" v={e.host} />}
-                          {e.name && <KV k="name" v={e.name} />}
-                          {e.text && <Pre label="text" text={e.text} />}
-                          {e.args && <Pre label="args" text={e.args} />}
-                          {e.result && <Pre label="result" text={e.result} />}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                )}
-              </div>
+              <button key={w.label} onClick={() => setWindowMs(w.ms)} className="brut-meta" style={{
+                padding: "4px 9px",
+                border: `1px solid ${active ? "var(--color-accent)" : "var(--color-border)"}`,
+                background: active ? "var(--color-accent)" : "transparent",
+                color: active ? "var(--color-bg)" : "var(--color-text-dim)",
+                cursor: "pointer", fontFamily: "var(--font-mono)",
+              }}>{w.label}</button>
             );
           })}
+          <button onClick={() => setPaused((p) => !p)} className="brut-meta" style={{
+            padding: "4px 9px", marginLeft: 6,
+            border: `1px solid ${paused ? "var(--color-warning)" : "var(--color-border)"}`,
+            background: paused ? "var(--color-warning)" : "transparent",
+            color: paused ? "var(--color-bg)" : "var(--color-text-muted)",
+            cursor: "pointer", fontFamily: "var(--font-mono)",
+          }}>{paused ? "▶ RESUME" : "⏸ PAUSE"}</button>
         </div>
+
+        {/* Right: service filter + live + lane counts */}
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          {/* Service filter */}
+          <div style={{ display: "flex", gap: 0, border: "1px solid var(--color-border)" }}>
+            {(["web", "heartbeat", "all"] as ServiceFilter[]).map((s) => {
+              const active = service === s;
+              return (
+                <button key={s} onClick={() => setService(s)} style={{
+                  padding: "3px 8px",
+                  border: "none",
+                  borderRight: s !== "all" ? "1px solid var(--color-border)" : "none",
+                  background: active ? "var(--color-border-strong)" : "transparent",
+                  color: active ? "var(--color-text)" : "var(--color-text-faint)",
+                  cursor: "pointer",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 9,
+                  letterSpacing: "0.16em",
+                  textTransform: "uppercase",
+                }}>{s}</button>
+              );
+            })}
+          </div>
+
+          {/* Lane counts */}
+          <div className="brut-meta" style={{ display: "flex", gap: 12, color: "var(--color-text-muted)" }}>
+            {LANES.map((l) => (
+              <span key={l.key} style={{ color: l.color }}>
+                {l.key} <span style={{ color: "var(--color-text-faint)" }}>{counts[l.key].toString().padStart(2, "0")}</span>
+              </span>
+            ))}
+          </div>
+
+          {/* Live indicator */}
+          <span style={{
+            color: connected ? "var(--color-accent)" : "var(--color-warning)",
+            fontSize: 10, letterSpacing: "0.16em",
+            textShadow: connected ? "0 0 6px var(--color-accent-glow)" : "none",
+          }}>● {connected ? "LIVE" : "OFFLINE"}</span>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: selected ? "1fr 340px" : "1fr", gap: 12 }}>
+        {/* Chart */}
+        <div ref={containerRef} style={{
+          border: "1px solid var(--color-border)",
+          background: "var(--color-surface-1)",
+          position: "relative", height: totalH, overflow: "hidden",
+        }}>
+          {/* Ruler */}
+          <div style={{
+            position: "absolute", left: 0, right: 0, top: 0, height: rulerH,
+            borderBottom: "1px solid var(--color-border)",
+            background: "rgba(0,0,0,0.3)",
+          }}>
+            {ticks.map((tk, i) => (
+              <div key={i} style={{
+                position: "absolute", left: `${xPct(tk.ts)}%`, top: 0, bottom: 0,
+                borderLeft: "1px solid var(--color-border)",
+                paddingLeft: 5, paddingTop: 6,
+                fontSize: 9, letterSpacing: "0.14em",
+                color: "var(--color-text-faint)", fontFamily: "var(--font-mono)",
+              }}>{tk.label}</div>
+            ))}
+          </div>
+
+          {/* Lane backgrounds + labels */}
+          {LANES.map((lane, i) => (
+            <div key={lane.key} style={{
+              position: "absolute", left: 0, right: 0,
+              top: rulerH + i * laneH, height: laneH,
+              borderBottom: i < LANES.length - 1 ? "1px dashed rgba(255,255,255,0.04)" : "none",
+            }}>
+              <div style={{
+                position: "absolute", left: 10, top: 7,
+                fontSize: 8, letterSpacing: "0.22em",
+                color: lane.color, fontFamily: "var(--font-mono)",
+                fontWeight: 700, textTransform: "uppercase", opacity: 0.4,
+                pointerEvents: "none",
+              }}>── {lane.label}</div>
+            </div>
+          ))}
+
+          {/* Now line */}
+          <div style={{
+            position: "absolute", left: `${xPct(now)}%`, top: rulerH, bottom: 0,
+            borderLeft: "1px solid var(--color-accent)",
+            boxShadow: "0 0 8px var(--color-accent-glow)",
+            pointerEvents: "none",
+          }} />
+
+          {/* Blocks */}
+          {blocks.map((b, i) => {
+            const laneIdx = LANES.findIndex((l) => l.key === b.lane);
+            const top = rulerH + laneIdx * laneH + (laneH - barH) / 2;
+            const left = xPct(b.startMs);
+            const widthPct = (b.durationMs / windowMs) * 100;
+            const isSelected = selected?.event === b.event;
+            const color = b.isError ? "var(--color-danger)" : LANES[laneIdx].color;
+
+            return (
+              <button key={i} onClick={() => setSelected(isSelected ? null : b)} style={{
+                position: "absolute",
+                left: `${left}%`,
+                width: `max(${widthPct}%, 5px)`,
+                top, height: barH,
+                background: isSelected ? color : `color-mix(in srgb, ${color} 30%, transparent)`,
+                border: `1px solid ${color}`,
+                boxShadow: isSelected ? `0 0 8px ${color}` : "none",
+                borderRadius: 2,
+                padding: 0,
+                cursor: "pointer",
+                overflow: "hidden",
+              }}
+              title={`${b.label}${b.event.name ? ` · ${b.event.name}` : ""} · ${b.durationMs < 1000 ? `${b.durationMs}ms` : `${(b.durationMs/1000).toFixed(1)}s`} · ${new Date(b.startMs).toLocaleTimeString()}`}
+              />
+            );
+          })}
+
+          {/* Empty state */}
+          {blocks.length === 0 && (
+            <EmptyState
+              events={events}
+              windowStart={windowStart}
+              windowMs={windowMs}
+              service={service}
+              rulerH={rulerH}
+              onWiden={() => setWindowMs(WINDOWS[WINDOWS.length - 1].ms)}
+              onShowAll={() => setService("all")}
+            />
+          )}
+        </div>
+
+        {/* Detail panel */}
+        {selected && <DetailPanel block={selected} onClose={() => setSelected(null)} />}
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({ events, windowStart, windowMs, service, rulerH, onWiden, onShowAll }: {
+  events: FeedEvent[]; windowStart: number; windowMs: number;
+  service: ServiceFilter; rulerH: number;
+  onWiden: () => void; onShowAll: () => void;
+}) {
+  let latest: FeedEvent | null = null;
+  let latestTs = -Infinity;
+  for (const e of events) {
+    if (!laneFor(e)) continue;
+    const t = new Date(e.ts).getTime();
+    if (t > latestTs) { latestTs = t; latest = e; }
+  }
+
+  const hasOlderEvents = latest !== null && latestTs < windowStart;
+  const windowLabel = windowMs <= 5*60*1000 ? "5 minutes" : windowMs <= 15*60*1000 ? "15 minutes" : windowMs <= 3600*1000 ? "1 hour" : "24 hours";
+  const ageMs = latest ? Date.now() - latestTs : null;
+  const ageLabel = ageMs === null ? null : ageMs < 60000 ? `${Math.floor(ageMs/1000)}s ago` : ageMs < 3600000 ? `${Math.floor(ageMs/60000)}m ago` : `${Math.floor(ageMs/3600000)}h ago`;
+
+  return (
+    <div style={{
+      position: "absolute", left: 0, right: 0, top: rulerH, bottom: 0,
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      gap: 10, color: "var(--color-text-faint)", fontFamily: "var(--font-mono)", textAlign: "center", padding: 24,
+    }}>
+      <div style={{ fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase" }}>
+        ── no {service !== "all" ? service + " " : ""}events in last {windowLabel}
+      </div>
+      {hasOlderEvents && (
+        <>
+          <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+            last activity <span style={{ color: "var(--color-accent)" }}>{ageLabel}</span>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <ActionBtn onClick={onWiden}>[ widen to 24h ]</ActionBtn>
+            {service !== "all" && <ActionBtn onClick={onShowAll}>[ show all services ]</ActionBtn>}
+          </div>
+        </>
       )}
+      {!latest && (
+        <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>talk to the agent to populate</div>
+      )}
+    </div>
+  );
+}
+
+function ActionBtn({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick} style={{
+      border: "1px solid var(--color-accent)", background: "transparent",
+      color: "var(--color-accent)", padding: "5px 10px",
+      fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: "0.16em",
+      textTransform: "uppercase", cursor: "pointer",
+    }}>{children}</button>
+  );
+}
+
+function DetailPanel({ block, onClose }: { block: Block; onClose: () => void }) {
+  const e = block.event;
+  const dur = block.durationMs < 1000 ? `${block.durationMs}ms` : `${(block.durationMs/1000).toFixed(1)}s`;
+
+  return (
+    <div style={{
+      border: "1px solid var(--color-border)",
+      background: "var(--color-surface-1)",
+      fontFamily: "var(--font-mono)", padding: 16,
+      maxHeight: "calc(100vh - 200px)", overflowY: "auto",
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <span style={{ fontSize: 9, letterSpacing: "0.20em", color: "var(--color-accent)" }}>
+          ── {block.label}
+        </span>
+        <button onClick={onClose} style={{
+          border: "1px solid var(--color-border)", padding: "3px 7px",
+          background: "transparent", color: "var(--color-text-muted)",
+          fontFamily: "var(--font-mono)", fontSize: 10, cursor: "pointer",
+        }}>[✕]</button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", rowGap: 5, columnGap: 10, marginBottom: 14 }}>
+        <KV k="event"    v={e.event} />
+        <KV k="service"  v={e.service ?? "—"} />
+        <KV k="time"     v={new Date(block.startMs).toLocaleTimeString()} />
+        <KV k="duration" v={dur} />
+        {e.name  && <KV k="name"  v={e.name} />}
+        {e.model && <KV k="model" v={e.model} />}
+        {e.host  && <KV k="host"  v={e.host} />}
+      </div>
+
+      {e.text   && <TextBlock label="TEXT"   text={e.text} />}
+      {e.args   && <TextBlock label="ARGS"   text={e.args} />}
+      {e.result && <TextBlock label="RESULT" text={e.result} />}
     </div>
   );
 }
 
 function KV({ k, v }: { k: string; v: string }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: "0 8px", marginBottom: 4 }}>
-      <span style={{ fontSize: 9, letterSpacing: "0.16em", color: "var(--color-text-faint)", textTransform: "uppercase" }}>{k}</span>
-      <span style={{ fontSize: 10, color: "var(--color-text-dim)", overflow: "hidden", textOverflow: "ellipsis" }}>{v}</span>
-    </div>
+    <>
+      <span style={{ fontSize: 9, letterSpacing: "0.18em", color: "var(--color-text-faint)", textTransform: "uppercase" }}>{k}</span>
+      <span style={{ fontSize: 11, color: "var(--color-text-dim)", overflow: "hidden", textOverflow: "ellipsis" }}>{v}</span>
+    </>
   );
 }
 
-function Pre({ label, text }: { label: string; text: string }) {
+function TextBlock({ label, text }: { label: string; text: string }) {
   return (
-    <div style={{ marginTop: 10 }}>
-      <div style={{ fontSize: 9, letterSpacing: "0.16em", color: "var(--color-text-faint)", marginBottom: 4, textTransform: "uppercase" }}>
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ fontSize: 9, letterSpacing: "0.18em", color: "var(--color-text-faint)", marginBottom: 4, textTransform: "uppercase" }}>
         ── {label}
       </div>
       <pre style={{
-        margin: 0, padding: 8,
-        background: "rgba(0,0,0,0.4)",
-        border: "1px solid var(--color-border)",
-        fontFamily: "var(--font-mono)",
-        fontSize: 10,
-        color: "var(--color-text)",
-        whiteSpace: "pre-wrap",
-        wordBreak: "break-word",
-        maxHeight: 200,
-        overflow: "auto",
-      }}>
-        {text}
-      </pre>
+        margin: 0, padding: 10,
+        background: "rgba(0,0,0,0.45)", border: "1px solid var(--color-border)",
+        fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text)",
+        whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 220, overflow: "auto",
+      }}>{text}</pre>
     </div>
   );
 }
