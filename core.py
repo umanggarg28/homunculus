@@ -18,8 +18,10 @@ import json
 import os
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from dotenv import load_dotenv
@@ -646,6 +648,7 @@ class Agent:
             # Index: one-line-per-entry so the agent knows what memories exist.
             # Full bodies fetched on demand via recall(query).
             full_prompt += "\n\n# Memory index\n\n" + memory.load_index(max_entries=8)
+        self._base_system_prompt = full_prompt
         self.history: list[dict] = [{"role": "system", "content": full_prompt}]
 
     def reset(self) -> None:
@@ -698,6 +701,17 @@ class Agent:
         """
         yield from self._run_loop(user_message, streaming=True)
 
+    def _current_system_prompt(self) -> str:
+        """Return the base system prompt with a fresh current-datetime line appended."""
+        tz_name = os.environ.get("TZ", "Asia/Kolkata")
+        try:
+            tz = ZoneInfo(tz_name)
+        except ZoneInfoNotFoundError:
+            tz = ZoneInfo("UTC")
+        now = datetime.now(tz=tz)
+        date_line = now.strftime("Current date/time: %A, %Y-%m-%d %H:%M %Z")
+        return self._base_system_prompt + f"\n\n{date_line}"
+
     def _run_loop(self, user_message: str, streaming: bool):
         """Unified agent loop generator shared by chat() and chat_stream().
 
@@ -726,6 +740,10 @@ class Agent:
             events.emit("assistant_reply", text=events.full_text(local))
             yield local
             return
+
+        # Refresh the system prompt with the current date/time each turn so
+        # the agent always has accurate temporal context (e.g. for scheduling).
+        self.history[0]["content"] = self._current_system_prompt()
 
         self._maybe_compact()
         self.history.append({"role": "user", "content": user_message})
@@ -768,7 +786,12 @@ class Agent:
 
             tool_calls = assistant_msg.get("tool_calls")
             if not tool_calls:
-                raw_reply = assistant_msg.get("content") or "(empty response)"
+                raw_reply = assistant_msg.get("content") or ""
+                if not raw_reply:
+                    # LLM returned empty content with no tool calls — nudge
+                    # it once (Letta empty-response recovery pattern).
+                    raw_reply = self._nudge_for_reply()
+                raw_reply = raw_reply or "(I'm not sure how to respond — could you rephrase?)"
                 clean, violations = self._output_guard(raw_reply, tool_names_used)
 
                 if clean is None:
@@ -890,6 +913,27 @@ class Agent:
         "plain language only — no filenames, no *.md paths, no ERROR prefixes. "
         "Describe what you do in terms the user understands."
     )
+
+    _NUDGE_PROMPT = (
+        "Please summarise what you just did and whether the task is complete. "
+        "One or two sentences."
+    )
+
+    def _nudge_for_reply(self) -> str:
+        """Retry after an empty response: inject a one-sentence nudge (no history pollution).
+
+        Used when the LLM returns empty content with no tool calls — typically
+        after a chain of tool results with no bridging text. The nudge is
+        pruned from history after the retry so conversation stays clean.
+        """
+        self.history.append({"role": "user", "content": self._NUDGE_PROMPT})
+        try:
+            nudged = call_llm(self.history, tools.SCHEMAS, model=self.model)
+            reply = nudged.get("content") or ""
+        except Exception:
+            reply = ""
+        self.history.pop()  # prune the injected nudge
+        return reply
 
     def _self_correct(self, tool_names_used: set[str]) -> str:
         """Inject a correction prompt and re-call the LLM once (non-streaming).

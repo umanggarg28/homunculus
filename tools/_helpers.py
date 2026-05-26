@@ -18,8 +18,8 @@ READ_FILE_MAX_CHARS = 16_000
 # Small disk cache for network tools. Saves quota and repeated fetches
 # during agent loops. Stored under workspace/cache/ in Docker.
 CACHE_DIR = Path(os.environ.get("HOMUNCULUS_CACHE_DIR", "./cache"))
-WEB_SEARCH_CACHE_SECONDS = int(os.environ.get("WEB_SEARCH_CACHE_SECONDS", str(24 * 3600)))
-WEB_FETCH_CACHE_SECONDS = int(os.environ.get("WEB_FETCH_CACHE_SECONDS", str(24 * 3600)))
+WEB_SEARCH_CACHE_SECONDS = int(os.environ.get("WEB_SEARCH_CACHE_SECONDS", str(3600)))  # 1h — real-time queries must be fresh
+WEB_FETCH_CACHE_SECONDS = int(os.environ.get("WEB_FETCH_CACHE_SECONDS", str(6 * 3600)))  # 6h — pages change less often
 
 
 def normalize_workspace_path(path: str) -> str:
