@@ -19,7 +19,7 @@ plus event-specific fields.
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -40,7 +40,7 @@ def emit(event: str, **fields) -> None:
     failure to break the agent's actual work.
     """
     record = {
-        "ts": datetime.now().isoformat(timespec="seconds"),
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "service": _SERVICE,
         "event": event,
         **fields,
