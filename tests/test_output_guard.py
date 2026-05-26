@@ -68,7 +68,9 @@ def _guard(reply: str, tool_names_used: set[str] | None = None) -> str:
     agent.memory = None
     agent.model = "test"
     agent.history = []
-    return agent._output_guard(reply, tool_names_used or set())
+    clean, _violations = agent._output_guard(reply, tool_names_used or set())
+    # Mirror the caller behaviour: None means guard fired → return FALLBACK
+    return clean if clean is not None else FALLBACK
 
 
 # ---------------------------------------------------------------------------
