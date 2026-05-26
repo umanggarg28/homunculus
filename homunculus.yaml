@@ -19,11 +19,5 @@ servers:
     permissions:
       mutating: true        # can write_file, remember, python, schedule, ...
 
-  # HTTP fetching server from the official MCP servers collection.
-  # Read-only by definition. Tools surface namespaced as `fetch__*`.
-  # Installed as a Python dep so `python -m` is reliable; no network
-  # downloads on first call.
-  fetch:
-    command: ["python", "-m", "mcp_server_fetch"]
-    permissions:
-      mutating: false
+  # fetch server removed — web_fetch in builtin covers the same need
+  # without the confusing description that leaked implementation notes.

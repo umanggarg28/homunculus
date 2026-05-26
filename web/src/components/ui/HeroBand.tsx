@@ -338,14 +338,14 @@ export function LogsHero({ logs }: { logs: LogFile[] }) {
   return (
     <HeroBandShell
       meta={`transcript archive · ${logs.length} days`}
-      bigNumber={totalKb >= 1000 ? `${(totalKb / 1000).toFixed(1)}` : totalKb.toString()}
+      bigNumber={totalKb >= 1000 ? `${(totalKb / 1000).toFixed(1)}` : totalKb.toFixed(1)}
       bigUnit={totalKb >= 1000 ? "MB" : "KB"}
       bigLabel={newest ? `LATEST · ${newest.toUpperCase()}` : "no transcripts yet"}
       trail={<Ridgeline buckets={buckets} label="last 30d · bytes/day" />}
       rightSlot={
         <div className="brut-meta" style={{ color: "var(--color-text-faint)", textAlign: "right" }}>
           <div>{logs.length.toString().padStart(3, "0")} DAYS</div>
-          <div style={{ marginTop: 4 }}>{Math.max(...logs.map((l) => l.size_kb), 0)}KB PEAK</div>
+          <div style={{ marginTop: 4 }}>{Math.max(...logs.map((l) => l.size_kb), 0).toFixed(1)}KB PEAK</div>
         </div>
       }
     />

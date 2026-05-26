@@ -31,7 +31,7 @@ export function LogList({ logs }: { logs: LogFile[] }) {
               {lf.date}
             </span>
             <span className="brut-label brut-num" style={{ color: "var(--color-text-faint)" }}>
-              {lf.size_kb} kb
+              {lf.size_kb.toFixed(1)} kb
             </span>
             <span
               className="brut-label opacity-0 group-hover:opacity-100 transition-opacity"
