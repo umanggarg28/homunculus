@@ -483,6 +483,10 @@ def call_llm_stream(
             choices = chunk.get("choices") or []
             if not choices:
                 continue
+            # Detect token-limit truncation — provider stopped mid-generation.
+            # Append a visible marker so the user knows the reply was cut off.
+            if choices[0].get("finish_reason") == "length":
+                content_acc.append("\n\n⚠️ *(response truncated — model hit token limit)*")
             delta = choices[0].get("delta") or {}
 
             if "content" in delta and delta["content"]:
@@ -804,7 +808,7 @@ class Agent:
                 events.emit(
                     "tool_call",
                     name=name,
-                    args=events.truncate_preview(json.dumps(args, ensure_ascii=False)),
+                    args=events.truncate_preview(json.dumps(args, ensure_ascii=False), limit=800),
                 )
 
                 # Schema-validate args before dispatch. On failure the LLM
@@ -822,7 +826,7 @@ class Agent:
                 events.emit(
                     "tool_result",
                     name=name,
-                    result=events.truncate_preview(result),
+                    result=events.truncate_preview(result, limit=2000),
                 )
                 self.history.append({
                     "role": "tool",
