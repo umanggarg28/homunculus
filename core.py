@@ -156,6 +156,10 @@ Behaviour:
   two lines — don't call more tools.
 - If a follow-up is ambiguous and you have no grounded context from
   this conversation to answer it, ask for clarification. One sentence.
+- NEVER mention internal file paths or memory filenames (*.md) in
+  replies to the user. Use plain language: "my delivery log" not
+  "project_delivered_leetcode_problems.md". File paths are
+  implementation details — the user doesn't need to see them.
 """
 
 
@@ -756,15 +760,25 @@ class Agent:
             tool_calls = assistant_msg.get("tool_calls")
             if not tool_calls:
                 raw_reply = assistant_msg.get("content") or "(empty response)"
-                reply = self._output_guard(raw_reply, tool_names_used)
+                clean, violations = self._output_guard(raw_reply, tool_names_used)
+
+                if clean is None:
+                    # Guard fired — self-correct (AutoGen/Letta pattern).
+                    # Re-call LLM with a correction prompt, prune that exchange,
+                    # patch history with the clean reply.
+                    reply = self._self_correct(tool_names_used)
+                    self.history[-1]["content"] = reply
+                else:
+                    reply = clean
+                    if violations:  # clean but guard emitted events — shouldn't happen, but guard
+                        self.history[-1]["content"] = reply
 
                 if not streaming:
                     yield reply
-                elif reply != raw_reply:
-                    # Guard fired after content was already streamed.
-                    # Silently sanitize history — user already saw the stream,
-                    # no visible correction needed (event already emitted in _output_guard).
-                    self.history[-1]["content"] = reply
+                else:
+                    if reply != raw_reply:
+                        # Content was already streamed; fix history silently.
+                        self.history[-1]["content"] = reply
 
                 if self.memory is not None:
                     self.memory.log_turn("assistant", reply)
@@ -816,27 +830,23 @@ class Agent:
         else:
             yield f"\n{fallback}\n"
 
-    def _output_guard(self, reply: str, tool_names_used: set[str]) -> str:
+    def _output_guard(self, reply: str, tool_names_used: set[str]) -> tuple[str | None, list[str]]:
         """Validate a final reply before it reaches the user.
 
         Catches four failure modes deterministically:
-          1. Memory filename leak — internal *.md paths exposed in reply
+          1. Memory filename leak — internal *.md paths in reply
           2. Internal path leak — workspace/memory/… strings in reply
           3. Error echo — LLM forwarded a tool ERROR string verbatim
           4. Example.com confabulation — placeholder site cited with no
-             web tool active this turn (the 'Explain' bug from the
-             auto-injection era)
+             web tool active this turn
 
-        Returns the original reply if clean, or a safe fallback and
-        emits an 'output_guard' event so the issue is observable.
+        Returns (reply, []) if clean, or (None, violations) if not.
+        None signals the caller to attempt self-correction before
+        falling back to a static error message.
         """
         violations: list[str] = []
 
-        # Strip inline code spans before checking — filenames inside backticks
-        # are intentional technical references (procedure steps, tool calls),
-        # not internal-path leaks. Bare filenames in prose still trigger.
-        reply_no_code = re.sub(r"`[^`\n]+`", "", reply)
-        if _GUARD_MEMORY_FILENAME_RE.search(reply_no_code):
+        if _GUARD_MEMORY_FILENAME_RE.search(reply):
             violations.append("memory_filename_leak")
 
         if any(p in reply for p in _GUARD_INTERNAL_PATHS):
@@ -851,7 +861,7 @@ class Agent:
                 violations.append("example_com_confabulation")
 
         if not violations:
-            return reply
+            return reply, []
 
         try:
             events.emit(
@@ -862,7 +872,49 @@ class Agent:
         except Exception:
             pass
         print(f"[output_guard] blocked reply ({violations}): {reply[:80]!r}", flush=True)
-        return "I don't have enough context to answer that well. Could you give me more detail?"
+        return None, violations
+
+    _SELF_CORRECTION_PROMPT = (
+        "Your previous reply mentioned internal file paths or system error strings "
+        "that should not be shown to the user. Please restate your answer using "
+        "plain language only — no filenames, no *.md paths, no ERROR prefixes. "
+        "Describe what you do in terms the user understands."
+    )
+
+    def _self_correct(self, tool_names_used: set[str]) -> str:
+        """Inject a correction prompt and re-call the LLM once (non-streaming).
+
+        This is the AutoGen / Letta self-correction pattern: when the guard
+        fires we tell the model *why* and ask it to rephrase, then prune the
+        correction exchange from history so the conversation stays clean.
+
+        Returns the corrected reply (or a safe static fallback on second failure).
+        """
+        self.history.append({
+            "role": "user",
+            "content": self._SELF_CORRECTION_PROMPT,
+        })
+        try:
+            corrected_msg = call_llm(self.history, tools.SCHEMAS, model=self.model)
+            corrected_reply = corrected_msg.get("content") or ""
+        except Exception:
+            corrected_reply = ""
+
+        # Prune the injected correction turn — it's an implementation detail,
+        # not a real user message. The final history will contain only the
+        # (possibly corrected) assistant turn.
+        self.history.pop()  # remove correction user msg
+
+        if not corrected_reply:
+            return "I can help with that — could you rephrase your question?"
+
+        clean, _ = self._output_guard(corrected_reply, tool_names_used)
+        if clean is not None:
+            return clean
+
+        # Second attempt also failed — return a neutral fallback rather than
+        # looping. The system prompt rule should prevent getting here in practice.
+        return "I can help with that — could you give me a bit more context?"
 
     @staticmethod
     def _log_tool_call(name: str, args: dict[str, Any]) -> None:
