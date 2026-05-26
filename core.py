@@ -81,7 +81,7 @@ API_URL_FALLBACK_2 = os.environ.get(
     "https://openrouter.ai/api/v1/chat/completions",
 )
 MODEL_FALLBACK_2 = os.environ.get(
-    "HOMUNCULUS_MODEL_FALLBACK_2", "qwen/qwq-32b:free,meta-llama/llama-3.3-70b-instruct:free"
+    "HOMUNCULUS_MODEL_FALLBACK_2", "deepseek/deepseek-chat-v3-0324:free,meta-llama/llama-3.3-70b-instruct:free"
 )
 
 API_URL_FALLBACK_3 = os.environ.get(
@@ -928,7 +928,9 @@ class Agent:
         """
         self.history.append({"role": "user", "content": self._NUDGE_PROMPT})
         try:
-            nudged = call_llm(self.history, tools.SCHEMAS, model=self.model)
+            # No tool schemas — we only want a plain text reply here, not tool calls.
+            # Sending schemas caused Groq to 400 ("tool call validation failed").
+            nudged = call_llm(self.history, None, model=self.model)
             reply = nudged.get("content") or ""
         except Exception:
             reply = ""
