@@ -86,7 +86,7 @@ export function FeedRow({ event: e }: Props) {
       {/* Kind + tool name */}
       <span
         className="uppercase tracking-[0.12em] pt-[2px]"
-        style={{ color: dotColor, fontSize: 10 }}
+        style={{ color: dotColor, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}
       >
         {e.event.replace(/_/g, " ")}
         {e.name ? (

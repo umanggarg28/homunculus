@@ -748,6 +748,23 @@ class Memory:
             f"---\nname: {name}\ndescription: {description}\ntype: {type}\n"
             f"{frontmatter_related}---\n\n{body.strip()}{related_section}\n"
         )
+
+        # Read old body BEFORE overwriting so we can echo it back.
+        # This lets the agent self-correct if it accidentally replaced a list
+        # with a single entry — it can see immediately what it overwrote.
+        old_body_preview: str | None = None
+        if path.exists():
+            try:
+                old_text = path.read_text(encoding="utf-8")
+                # Extract body (text after second "---\n")
+                parts = old_text.split("---\n", 2)
+                if len(parts) == 3:
+                    old_body = parts[2].strip()
+                    if old_body:
+                        old_body_preview = old_body[:200] + ("…" if len(old_body) > 200 else "")
+            except Exception:
+                pass
+
         path.write_text(content, encoding="utf-8")
         # Pre-compute and cache the embedding so the first search is instant.
         # We invalidate any stale .vec file first (content changed on upsert).
@@ -756,6 +773,12 @@ class Memory:
             vec_p.unlink()
         self._embed_entry(path, content)
         self._upsert_index_entry(name, description, filename)
+
+        if old_body_preview is not None:
+            return (
+                f"Saved memory '{name}' to {filename} (overwrote previous content: {old_body_preview!r}). "
+                "If you replaced a list, verify the new body includes all prior entries."
+            )
         return f"Saved memory '{name}' to {filename}"
 
     def forget(self, identifier: str) -> str:

@@ -131,9 +131,14 @@ def web_fetch(
 
 @mcp.tool(name="python", annotations={"readOnlyHint": False})
 def python_tool(
-    code: Annotated[str, Field(description="Python source to execute. Print results to stdout.")],
+    code: Annotated[str, Field(description="Python source to execute. Must print results to stdout — return values are not captured.")],
 ) -> str:
-    """Run Python in a sandbox (no network, 30s, ephemeral). Returns stdout/stderr. Pass data via the code itself."""
+    """Execute Python in a sandboxed subprocess (no network, 30s timeout, ephemeral filesystem).
+
+    Use this ONLY when you need to actually run code to obtain a result (compute a value,
+    parse data, test a function). Do NOT call this just to show or display code to the user —
+    write code blocks directly in your reply text instead.
+    """
     return sandbox.python_exec(code)
 
 
