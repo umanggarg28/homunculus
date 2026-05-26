@@ -56,16 +56,18 @@ def _search_tavily(query: str) -> str:
     data = response.json()
 
     lines: list[str] = []
+    # Direct answer comes first — use it if present, it's the most reliable signal.
     if data.get("answer"):
-        lines.append(f"Answer summary: {data['answer']}\n")
-    lines.append(f"Top results for '{query}':")
+        lines.append(f"DIRECT ANSWER: {data['answer']}")
+        lines.append("")
+    lines.append(f"Supporting results for '{query}':")
     for i, result in enumerate(data.get("results", []), 1):
         lines.append(f"\n[{i}] {result.get('title', '(no title)')}")
         lines.append(f"    URL: {result.get('url', '')}")
         snippet = (result.get("content") or "").strip()
         if snippet:
-            if len(snippet) > 500:
-                snippet = snippet[:500] + "..."
+            if len(snippet) > 400:
+                snippet = snippet[:400] + "..."
             lines.append(f"    {snippet}")
     return "\n".join(lines)
 

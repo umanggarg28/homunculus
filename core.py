@@ -63,8 +63,8 @@ MODEL = os.environ.get("HOMUNCULUS_MODEL", "gemini-2.5-flash")
 # provider is benched for PROVIDER_COOLDOWN_SECONDS so we don't hammer
 # a throttled endpoint.
 #
-# Slot 1 (HOMUNCULUS_API_KEY_FALLBACK): Groq — llama-4-scout has 10M
-#   context but lower quality than Gemini. Good rate-limit backup.
+# Slot 1 (HOMUNCULUS_API_KEY_FALLBACK): Groq — llama-3.3-70b-versatile has
+#   strong tool use and instruction following. Good rate-limit backup.
 # Slot 2 (HOMUNCULUS_API_KEY_FALLBACK_2): OpenRouter — free endpoints
 #   can disappear or rate-limit upstream. We accept a comma-separated
 #   list and try each model before moving to the next provider.
@@ -74,14 +74,14 @@ API_URL_FALLBACK = os.environ.get(
     "HOMUNCULUS_API_URL_FALLBACK",
     "https://api.groq.com/openai/v1/chat/completions",
 )
-MODEL_FALLBACK = os.environ.get("HOMUNCULUS_MODEL_FALLBACK", "meta-llama/llama-4-scout-17b-16e-instruct")
+MODEL_FALLBACK = os.environ.get("HOMUNCULUS_MODEL_FALLBACK", "llama-3.3-70b-versatile")
 
 API_URL_FALLBACK_2 = os.environ.get(
     "HOMUNCULUS_API_URL_FALLBACK_2",
     "https://openrouter.ai/api/v1/chat/completions",
 )
 MODEL_FALLBACK_2 = os.environ.get(
-    "HOMUNCULUS_MODEL_FALLBACK_2", "qwen/qwen3-coder:free,openrouter/free"
+    "HOMUNCULUS_MODEL_FALLBACK_2", "qwen/qwq-32b:free,meta-llama/llama-3.3-70b-instruct:free"
 )
 
 API_URL_FALLBACK_3 = os.environ.get(
