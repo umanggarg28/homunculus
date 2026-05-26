@@ -39,6 +39,28 @@ _GUARD_INTERNAL_PATHS = ("workspace/memory/", "memory/logs/", "memory/_")
 _GUARD_ERROR_PREFIXES = ("ERROR:", "ERROR running ")
 _GUARD_CONFABULATION_TERMS = ("example.com", "example domain")
 
+# Phrases that imply the agent performed a state-changing action (created a
+# task, saved memory, sent a notification). If the reply contains one of
+# these but no tools were called this turn, the agent hallucinated the action.
+_GUARD_UNGROUNDED_ACTION_PHRASES = (
+    "i've set a reminder",
+    "i have set a reminder",
+    "i've created a task",
+    "i have created a task",
+    "i've scheduled",
+    "i have scheduled",
+    "task has been created",
+    "reminder has been set",
+    "has been scheduled",
+    "i've saved",
+    "i have saved",
+    "i've updated your memory",
+    "i've added it to",
+    "i've sent",
+    "i have sent",
+    "notification has been sent",
+)
+
 # Load .env at module import so config reads below see its values. Safe
 # to call twice (main.py also calls it) — load_dotenv won't overwrite
 # env vars that are already set, e.g. by docker-compose's env_file.
@@ -893,6 +915,13 @@ class Agent:
             if not (tool_names_used & {"web_fetch", "web_search"}):
                 violations.append("example_com_confabulation")
 
+        # Ungrounded action: agent claims to have done something (created a
+        # task, saved memory, sent a notification) but called no tools this
+        # turn. Almost always hallucination — catch and self-correct.
+        if not tool_names_used:
+            if any(p in lower_reply for p in _GUARD_UNGROUNDED_ACTION_PHRASES):
+                violations.append("ungrounded_action_claim")
+
         if not violations:
             return reply, []
 
@@ -908,10 +937,11 @@ class Agent:
         return None, violations
 
     _SELF_CORRECTION_PROMPT = (
-        "Your previous reply mentioned internal file paths or system error strings "
-        "that should not be shown to the user. Please restate your answer using "
-        "plain language only — no filenames, no *.md paths, no ERROR prefixes. "
-        "Describe what you do in terms the user understands."
+        "Your previous reply had a problem — it either mentioned internal file paths, "
+        "system error strings, or claimed to have done something (created a task, saved "
+        "a reminder, sent a notification) without actually calling the relevant tool. "
+        "If you need to take an action, call the appropriate tool now. "
+        "Otherwise, reply in plain language without claiming actions you haven't performed."
     )
 
     _NUDGE_PROMPT = (
