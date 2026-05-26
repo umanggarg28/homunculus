@@ -2,7 +2,7 @@
 // Kept narrow and explicit — every field that's optional is marked.
 
 export type ServiceName = "repl" | "heartbeat" | "telegram" | "web" | "feed";
-export type MemoryType = "user" | "feedback" | "project" | "reference";
+export type MemoryType = "user" | "feedback" | "project" | "skill" | "reference";
 
 export interface MemoryEntry {
   filename: string;

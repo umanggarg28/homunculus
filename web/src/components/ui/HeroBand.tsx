@@ -208,11 +208,15 @@ export function MemoryHero({ entries }: { entries: MemoryEntry[] }) {
       trail={<Ridgeline buckets={buckets} label="last 14d · writes" />}
       rightSlot={
         <div className="brut-meta" style={{ color: "var(--color-text-faint)", textAlign: "right", lineHeight: 1.6 }}>
-          {(["user", "feedback", "project", "reference"] as const).map((t) => (
-            <div key={t}>
-              {(byType[t] ?? 0).toString().padStart(2, "0")} {t.toUpperCase()}
-            </div>
-          ))}
+          {(["user", "feedback", "project", "skill", "reference"] as const).map((t) => {
+            const n = byType[t] ?? 0;
+            if (n === 0) return null;
+            return (
+              <div key={t}>
+                {n.toString().padStart(2, "0")} {t.toUpperCase()}
+              </div>
+            );
+          })}
         </div>
       }
     />
