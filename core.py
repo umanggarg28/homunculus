@@ -915,8 +915,8 @@ class Agent:
     )
 
     _NUDGE_PROMPT = (
-        "Please summarise what you just did and whether the task is complete. "
-        "One or two sentences."
+        "You haven't replied to the user yet. "
+        "Answer their question now in plain language — one or two sentences."
     )
 
     def _nudge_for_reply(self) -> str:
