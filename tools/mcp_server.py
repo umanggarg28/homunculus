@@ -175,7 +175,7 @@ def create_task(
     ] = "none",
     notify: Annotated[bool, Field(description="Whether the due task is expected to notify the user.")] = False,
 ) -> str:
-    """Create structured task state for reminders or recurring heartbeat work. Use this for any 'every day' / 'every week' commitment."""
+    """Create a new task (reminder, recurring job, or one-shot). Use this first — then schedule_task only if you need to change an existing task's due time."""
     return scheduling.create_task(title, description, due_at, recurrence, notify)
 
 
@@ -217,7 +217,7 @@ def schedule_task(
         Field(description="Optional new recurrence."),
     ] = None,
 ) -> str:
-    """Set a task's due time and optionally recurrence."""
+    """Reschedule an EXISTING task. Requires a task_id from list_tasks(). To create a new reminder, use create_task() instead."""
     return scheduling.schedule_task(task_id, due_at, recurrence)
 
 
