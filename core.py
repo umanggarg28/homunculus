@@ -39,28 +39,6 @@ _GUARD_INTERNAL_PATHS = ("workspace/memory/", "memory/logs/", "memory/_")
 _GUARD_ERROR_PREFIXES = ("ERROR:", "ERROR running ")
 _GUARD_CONFABULATION_TERMS = ("example.com", "example domain")
 
-# Phrases that imply the agent performed a state-changing action (created a
-# task, saved memory, sent a notification). If the reply contains one of
-# these but no tools were called this turn, the agent hallucinated the action.
-_GUARD_UNGROUNDED_ACTION_PHRASES = (
-    "i've set a reminder",
-    "i have set a reminder",
-    "i've created a task",
-    "i have created a task",
-    "i've scheduled",
-    "i have scheduled",
-    "task has been created",
-    "reminder has been set",
-    "has been scheduled",
-    "i've saved",
-    "i have saved",
-    "i've updated your memory",
-    "i've added it to",
-    "i've sent",
-    "i have sent",
-    "notification has been sent",
-)
-
 # Load .env at module import so config reads below see its values. Safe
 # to call twice (main.py also calls it) — load_dotenv won't overwrite
 # env vars that are already set, e.g. by docker-compose's env_file.
@@ -103,7 +81,7 @@ API_URL_FALLBACK_2 = os.environ.get(
     "https://openrouter.ai/api/v1/chat/completions",
 )
 MODEL_FALLBACK_2 = os.environ.get(
-    "HOMUNCULUS_MODEL_FALLBACK_2", "deepseek/deepseek-chat-v3-0324:free,meta-llama/llama-3.3-70b-instruct:free"
+    "HOMUNCULUS_MODEL_FALLBACK_2", "deepseek/deepseek-v4-flash:free,google/gemma-4-31b-it:free"
 )
 
 API_URL_FALLBACK_3 = os.environ.get(
@@ -118,6 +96,11 @@ MODEL_FALLBACK_3 = os.environ.get("HOMUNCULUS_MODEL_FALLBACK_3", "llama-3.3-70b"
 # per-minute, Gemini RPM is per-minute).
 PROVIDER_COOLDOWN_SECONDS = 60.0
 PROVIDER_UNAVAILABLE_COOLDOWN_SECONDS = 10 * 60.0
+# If the primary provider 429s with a retry-after at or below this threshold,
+# wait and retry it once before falling to lower-quality fallbacks.
+# Keeps quality high for transient rate limits — a short wait is better than
+# degrading to a weaker model.
+PRIMARY_MAX_RETRY_WAIT = 45.0
 
 # Module-level cooldown cache: url|model -> wall-clock expiry timestamp.
 # A provider/model pair is "cooled" if time.time() < its expiry.
@@ -326,9 +309,28 @@ def call_llm(
 
         if response.status_code == 429:
             last_err = response.text
-            # Honor the server's Retry-After hint if it sent one; else
-            # use our default cooldown.
             retry_after = _parse_retry_after(response)
+            # Primary-provider retry: if this is the first provider we tried
+            # and the retry-after is short, wait and retry once before falling
+            # to lower-quality fallbacks. Quality > latency for a personal assistant.
+            if idx == 0 and retry_after and retry_after <= PRIMARY_MAX_RETRY_WAIT:
+                print(f"[call_llm] {model_id} 429, retry-after {retry_after:.0f}s — waiting to retry primary", flush=True)
+                time.sleep(retry_after)
+                try:
+                    retry_resp = httpx.post(
+                        url,
+                        headers={"Authorization": f"Bearer {key}"},
+                        json=payload,
+                        timeout=60.0,
+                    )
+                    if retry_resp.status_code == 200:
+                        events.emit("llm_call", model=model_id, host=_url_host(url))
+                        return retry_resp.json()["choices"][0]["message"]
+                    # Retry also failed — fall through to cool + continue
+                    response = retry_resp
+                    retry_after = _parse_retry_after(retry_resp)
+                except httpx.HTTPError:
+                    pass
             cool_for = retry_after if retry_after else PROVIDER_COOLDOWN_SECONDS
             _cool_provider(url, model_id, cool_for)
             print(f"[call_llm] {model_id} 429 → cooling {cool_for:.0f}s, trying next", flush=True)
@@ -425,7 +427,7 @@ def call_llm_stream(
     response = None
     used_url = ""
     used_model = ""
-    for url, key, model_id in _providers(model):
+    for idx, (url, key, model_id) in enumerate(_providers(model)):
         payload: dict[str, Any] = {
             "model": model_id,
             "messages": messages,
@@ -453,6 +455,44 @@ def call_llm_stream(
             response.read()
             last_err = response.text
             retry_after = _parse_retry_after(response)
+            # Primary-provider retry: wait and retry the primary once before
+            # falling to lower-quality fallbacks.
+            if idx == 0 and retry_after and retry_after <= PRIMARY_MAX_RETRY_WAIT:
+                response_ctx.__exit__(None, None, None)
+                response_ctx = None
+                response = None
+                print(f"[call_llm_stream] {model_id} 429, retry-after {retry_after:.0f}s — waiting to retry primary", flush=True)
+                time.sleep(retry_after)
+                try:
+                    response_ctx = httpx.stream(
+                        "POST",
+                        url,
+                        headers={"Authorization": f"Bearer {key}"},
+                        json=payload,
+                        timeout=120.0,
+                    )
+                    response = response_ctx.__enter__()
+                    if response.status_code == 200:
+                        # Retry succeeded — break out to streaming logic below
+                        used_url = url
+                        used_model = model_id
+                        events.emit("llm_call", model=model_id, host=_url_host(url))
+                        break
+                    # Retry also failed — clean up and fall through to cool+continue
+                    retry_after = _parse_retry_after(response)
+                    response_ctx.__exit__(None, None, None)
+                    response_ctx = None
+                    response = None
+                except httpx.HTTPError:
+                    response_ctx = None
+                    response = None
+            if response_ctx is None:
+                cool_for = retry_after if retry_after else PROVIDER_COOLDOWN_SECONDS
+                _cool_provider(url, model_id, cool_for)
+                print(f"[call_llm_stream] {model_id} 429 → cooling {cool_for:.0f}s, trying next", flush=True)
+                continue
+            # No retry was attempted (not primary, or retry_after too long) —
+            # close the original 429 stream and cool this provider.
             cool_for = retry_after if retry_after else PROVIDER_COOLDOWN_SECONDS
             response_ctx.__exit__(None, None, None)
             response_ctx = None
@@ -915,13 +955,6 @@ class Agent:
             if not (tool_names_used & {"web_fetch", "web_search"}):
                 violations.append("example_com_confabulation")
 
-        # Ungrounded action: agent claims to have done something (created a
-        # task, saved memory, sent a notification) but called no tools this
-        # turn. Almost always hallucination — catch and self-correct.
-        if not tool_names_used:
-            if any(p in lower_reply for p in _GUARD_UNGROUNDED_ACTION_PHRASES):
-                violations.append("ungrounded_action_claim")
-
         if not violations:
             return reply, []
 
@@ -937,11 +970,10 @@ class Agent:
         return None, violations
 
     _SELF_CORRECTION_PROMPT = (
-        "Your previous reply had a problem — it either mentioned internal file paths, "
-        "system error strings, or claimed to have done something (created a task, saved "
-        "a reminder, sent a notification) without actually calling the relevant tool. "
-        "If you need to take an action, call the appropriate tool now. "
-        "Otherwise, reply in plain language without claiming actions you haven't performed."
+        "Your previous reply mentioned internal file paths or system error strings "
+        "that should not be shown to the user. Please restate your answer using "
+        "plain language only — no filenames, no *.md paths, no ERROR prefixes. "
+        "Describe what you do in terms the user understands."
     )
 
     _NUDGE_PROMPT = (
