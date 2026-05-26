@@ -732,12 +732,16 @@ class Agent:
 
         for _ in range(MAX_TURNS):
             if streaming:
-                assistant_msg: dict[str, Any] | None = None
+                # Buffer the full stream before yielding — lets the output
+                # guard check the complete reply and self-correct if needed
+                # before anything reaches the client.
+                assistant_msg = None
+                stream_chunks: list[str] = []
                 for kind, payload in call_llm_stream(
                     self.history, tools.SCHEMAS, model=self.model
                 ):
                     if kind == "content":
-                        yield payload
+                        stream_chunks.append(payload)
                     elif kind == "done":
                         assistant_msg = payload
                 if assistant_msg is None:
@@ -764,21 +768,22 @@ class Agent:
 
                 if clean is None:
                     # Guard fired — self-correct (AutoGen/Letta pattern).
-                    # Re-call LLM with a correction prompt, prune that exchange,
-                    # patch history with the clean reply.
+                    events.emit(
+                        "self_correction",
+                        text=f"violations: {', '.join(violations)}",
+                        result=raw_reply[:80].replace("\n", " "),
+                    )
                     reply = self._self_correct(tool_names_used)
                     self.history[-1]["content"] = reply
                 else:
                     reply = clean
-                    if violations:  # clean but guard emitted events — shouldn't happen, but guard
-                        self.history[-1]["content"] = reply
+                    self.history[-1]["content"] = reply
 
-                if not streaming:
+                if streaming:
+                    # Stream was buffered — now flush the final reply.
                     yield reply
                 else:
-                    if reply != raw_reply:
-                        # Content was already streamed; fix history silently.
-                        self.history[-1]["content"] = reply
+                    yield reply
 
                 if self.memory is not None:
                     self.memory.log_turn("assistant", reply)

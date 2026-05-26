@@ -4,21 +4,23 @@ import type { FeedEvent } from "@/lib/types";
 interface Props { event: FeedEvent; }
 
 const KIND_COLOR: Record<string, string> = {
-  user_message:    "var(--color-text)",
-  assistant_reply: "var(--color-accent)",
-  tool_call:       "var(--color-accent)",
-  tool_result:     "var(--color-text-dim)",
-  llm_call:        "var(--color-amber)",
-  output_guard:    "var(--color-danger)",
+  user_message:     "var(--color-text)",
+  assistant_reply:  "var(--color-accent)",
+  tool_call:        "var(--color-accent)",
+  tool_result:      "var(--color-text-dim)",
+  llm_call:         "var(--color-amber)",
+  output_guard:     "var(--color-danger)",
+  self_correction:  "var(--color-warning)",
 };
 
 const KIND_GLYPH: Record<string, string> = {
-  user_message:    "$",
-  assistant_reply: "›",
-  tool_call:       "→",
-  tool_result:     "←",
-  llm_call:        "λ",
-  output_guard:    "⚠",
+  user_message:     "$",
+  assistant_reply:  "›",
+  tool_call:        "→",
+  tool_result:      "←",
+  llm_call:         "λ",
+  output_guard:     "⚠",
+  self_correction:  "↺",
 };
 
 const COMPACT_LEN = 280;
@@ -129,6 +131,7 @@ function getFullDetail(e: FeedEvent): string {
     case "tool_result":     return e.result ?? "";
     case "llm_call":        return `${e.model ?? ""} via ${e.host ?? ""}`;
     case "output_guard":    return e.text ?? e.result ?? "reply blocked by output guard";
+    case "self_correction": return `correcting: ${e.text ?? ""} | was: ${e.result ?? ""}`;
     default:                return JSON.stringify(e, null, 2);
   }
 }
