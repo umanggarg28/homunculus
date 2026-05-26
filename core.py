@@ -439,12 +439,13 @@ def call_llm_stream(
         if _is_transient_provider_error(response):
             response.read()
             last_err = response.text
+            _status = response.status_code
             response_ctx.__exit__(None, None, None)
             response_ctx = None
             response = None
             _cool_provider(url, model_id, PROVIDER_UNAVAILABLE_COOLDOWN_SECONDS)
             print(
-                f"[call_llm_stream] {model_id} unavailable ({response.status_code}) "
+                f"[call_llm_stream] {model_id} unavailable ({_status}) "
                 "→ cooling 10m, trying next",
                 flush=True,
             )
