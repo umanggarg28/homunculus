@@ -128,6 +128,13 @@ class TaskStore:
             self._write(tasks)
             return task
 
+    def get(self, task_id: str) -> dict[str, Any] | None:
+        """Return the task dict for task_id, or None if not found."""
+        for t in self.all():
+            if t.get("id") == task_id:
+                return t
+        return None
+
     def list(self, status: str = "active") -> list[dict[str, Any]]:
         if status != "all" and status not in ALLOWED_STATUS:
             raise ValueError("status must be active, completed, cancelled, or all")
