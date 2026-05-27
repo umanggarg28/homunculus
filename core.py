@@ -81,14 +81,14 @@ API_URL_FALLBACK_2 = os.environ.get(
     "https://openrouter.ai/api/v1/chat/completions",
 )
 MODEL_FALLBACK_2 = os.environ.get(
-    "HOMUNCULUS_MODEL_FALLBACK_2", "deepseek/deepseek-v4-flash:free,google/gemma-4-31b-it:free"
+    "HOMUNCULUS_MODEL_FALLBACK_2", "nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free"
 )
 
 API_URL_FALLBACK_3 = os.environ.get(
     "HOMUNCULUS_API_URL_FALLBACK_3",
     "https://api.cerebras.ai/v1/chat/completions",
 )
-MODEL_FALLBACK_3 = os.environ.get("HOMUNCULUS_MODEL_FALLBACK_3", "llama-3.3-70b")
+MODEL_FALLBACK_3 = os.environ.get("HOMUNCULUS_MODEL_FALLBACK_3", "gpt-oss-120b")
 
 # How long to bench a provider after it returns 429. During this window
 # we skip it entirely and route to the next provider in the chain. 60s
@@ -101,6 +101,9 @@ PROVIDER_UNAVAILABLE_COOLDOWN_SECONDS = 10 * 60.0
 # Keeps quality high for transient rate limits — a short wait is better than
 # degrading to a weaker model.
 PRIMARY_MAX_RETRY_WAIT = 45.0
+# When the primary 429s with no Retry-After header, wait this many seconds and
+# retry once before falling to weaker fallbacks. Gemini often omits the header.
+PRIMARY_DEFAULT_RETRY_WAIT = 8.0
 
 # Module-level cooldown cache: url|model -> wall-clock expiry timestamp.
 # A provider/model pair is "cooled" if time.time() < its expiry.
@@ -311,11 +314,12 @@ def call_llm(
             last_err = response.text
             retry_after = _parse_retry_after(response)
             # Primary-provider retry: if this is the first provider we tried
-            # and the retry-after is short, wait and retry once before falling
-            # to lower-quality fallbacks. Quality > latency for a personal assistant.
-            if idx == 0 and retry_after and retry_after <= PRIMARY_MAX_RETRY_WAIT:
-                print(f"[call_llm] {model_id} 429, retry-after {retry_after:.0f}s — waiting to retry primary", flush=True)
-                time.sleep(retry_after)
+            # and the retry-after is short (or absent — Gemini often omits it),
+            # wait and retry once before falling to lower-quality fallbacks.
+            wait_for = retry_after if (retry_after is not None) else PRIMARY_DEFAULT_RETRY_WAIT
+            if idx == 0 and wait_for <= PRIMARY_MAX_RETRY_WAIT:
+                print(f"[call_llm] {model_id} 429, waiting {wait_for:.0f}s — retrying primary", flush=True)
+                time.sleep(wait_for)
                 try:
                     retry_resp = httpx.post(
                         url,
@@ -456,13 +460,15 @@ def call_llm_stream(
             last_err = response.text
             retry_after = _parse_retry_after(response)
             # Primary-provider retry: wait and retry the primary once before
-            # falling to lower-quality fallbacks.
-            if idx == 0 and retry_after and retry_after <= PRIMARY_MAX_RETRY_WAIT:
+            # falling to lower-quality fallbacks. When no Retry-After header is
+            # present (Gemini often omits it), wait the short default instead.
+            wait_for = retry_after if (retry_after is not None) else PRIMARY_DEFAULT_RETRY_WAIT
+            if idx == 0 and wait_for <= PRIMARY_MAX_RETRY_WAIT:
                 response_ctx.__exit__(None, None, None)
                 response_ctx = None
                 response = None
-                print(f"[call_llm_stream] {model_id} 429, retry-after {retry_after:.0f}s — waiting to retry primary", flush=True)
-                time.sleep(retry_after)
+                print(f"[call_llm_stream] {model_id} 429, waiting {wait_for:.0f}s — retrying primary", flush=True)
+                time.sleep(wait_for)
                 try:
                     response_ctx = httpx.stream(
                         "POST",

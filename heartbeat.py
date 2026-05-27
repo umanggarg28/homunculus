@@ -47,10 +47,10 @@ Examples of useful proactive actions:
 - When a task is handled, call `complete_task(task_id, result)` so
   one-shot tasks stop firing and recurring tasks advance.
 
-Scheduling: by default the next tick is in ~10 minutes. If you'd like
-to adjust that (e.g. wake at 8am tomorrow before a deadline, or in
-2 hours to check progress), call `schedule_next_tick("YYYY-MM-DDTHH:MM:SS")`.
-Must be in the future, within 24h.
+Scheduling: by default the next tick is in ~60 minutes (or sooner if
+another task is due). If you'd like to adjust that (e.g. wake at 8am
+tomorrow before a deadline, or in 2 hours to check progress), call
+`schedule_next_tick("YYYY-MM-DDTHH:MM:SS")`. Must be in the future, within 24h.
 
 Important rules:
 - DO NOT read the daily log files unless you have a specific recall

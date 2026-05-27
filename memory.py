@@ -189,7 +189,7 @@ class Memory:
 
     def _entry_mtime(self, line: str) -> float:
         """Return the mtime of the file an index line links to, or 0."""
-        match = re.match(r"^- \[[^\]]+\]\(\./([^)]+)\)", line)
+        match = re.match(r"^- \[[^\]]+\]\((?:\./|memory/)([^)]+)\)", line)
         if not match:
             return 0.0
         path = self.root / match.group(1)
@@ -844,7 +844,7 @@ class Memory:
         current = self.index_path.read_text(encoding="utf-8")
         kept = [
             line for line in current.splitlines()
-            if f"({filename})" not in line and f"(./{filename})" not in line
+            if f"({filename})" not in line and f"(./{filename})" not in line and f"(memory/{filename})" not in line
         ]
         # Preserve header (non-entry lines) + remaining entries.
         self.index_path.write_text("\n".join(kept) + "\n", encoding="utf-8")
@@ -880,7 +880,7 @@ class Memory:
 
     def _annotate_entry(self, line: str) -> str:
         """Add an age tag and staleness marker to a memory index line."""
-        match = re.match(r"^- \[([^\]]+)\]\(\./([^)]+)\) — (.+)$", line)
+        match = re.match(r"^- \[([^\]]+)\]\((?:\./|memory/)([^)]+)\) — (.+)$", line)
         if not match:
             return line  # not an entry line — pass through unchanged
         title, filename, desc = match.groups()
@@ -890,7 +890,7 @@ class Memory:
         mtime = path.stat().st_mtime
         age = self._humanize_age(mtime)
         stale = " ⚠ may be stale" if (time.time() - mtime) > 30 * 86400 else ""
-        return f"- [{title}](./{filename}) *({age}{stale})* — {desc}"
+        return f"- [{title}](memory/{filename}) *({age}{stale})* — {desc}"
 
     def _upsert_index_entry(self, name: str, description: str, filename: str) -> None:
         """Add or replace this entry's line in MEMORY.md.
@@ -900,7 +900,7 @@ class Memory:
         backlink resolver / graph view). Two link styles, one line.
         """
         stem = filename[:-3] if filename.endswith(".md") else filename
-        line = f"- [{name}](./{filename}) — {description} [[{stem}]]"
+        line = f"- [{name}](memory/{filename}) — {description} [[{stem}]]"
         current = self.index_path.read_text(encoding="utf-8")
         # Drop any existing line referencing this filename (for upserts).
         kept = [
