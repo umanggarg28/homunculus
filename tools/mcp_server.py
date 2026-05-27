@@ -111,38 +111,51 @@ def recall(
 # ── datetime ─────────────────────────────────────────────────────────
 
 
+def _resolve_tz(timezone: str):
+    """Return (ZoneInfo, error_str). error_str is None on success."""
+    try:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        return ZoneInfo(timezone), None
+    except ImportError:
+        return None, "ERROR: zoneinfo not available (requires Python 3.9+)"
+    except (Exception,):
+        return None, (
+            f"Unknown timezone '{timezone}'. "
+            "Use IANA names like 'Asia/Tokyo', 'America/New_York', 'Europe/London', 'UTC'."
+        )
+
+
 @mcp.tool(annotations={"readOnlyHint": True})
 def get_current_time(
-    timezone: Annotated[
-        str,
+    timezones: Annotated[
+        list[str],
         Field(
             description=(
-                "IANA timezone name — REQUIRED, always specify explicitly. "
-                "Examples: 'Asia/Tokyo', 'America/New_York', 'Europe/London', "
-                "'Asia/Kolkata', 'UTC'. Never call without this argument."
+                "One or more IANA timezone names. Pass ALL needed timezones in one call "
+                "instead of calling this multiple times. "
+                "Examples: ['Asia/Tokyo'], ['Asia/Tokyo','Europe/London','America/New_York']. "
+                "Never pass an empty list."
             )
         ),
     ],
 ) -> str:
-    """Return the current date and time in the given IANA timezone.
+    """Return the current date and time for one or more IANA timezones in a single call.
 
-    Always call this for any 'what time is it' / 'current time' question —
-    it is instant and accurate. Do NOT use web_search for time queries.
-    For multiple timezones, call this once per timezone with a different timezone each time.
+    Use this for ANY time/timezone question — it is instant and accurate.
+    Pass all requested timezones together so one call handles the whole query.
+    Do NOT use web_search for time queries.
     """
-    try:
-        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-    except ImportError:
-        return "ERROR: zoneinfo not available (requires Python 3.9+)"
-    try:
-        tz = ZoneInfo(timezone)
-    except (ZoneInfoNotFoundError, KeyError):
-        return (
-            f"ERROR: Unknown timezone '{timezone}'. "
-            "Use IANA names like 'Asia/Tokyo', 'America/New_York', 'Europe/London', 'UTC'."
-        )
-    now = _dt.datetime.now(tz=tz)
-    return now.strftime("%Y-%m-%d %H:%M:%S %Z (UTC%z)")
+    if not timezones:
+        return "ERROR: 'timezones' list is empty — pass at least one IANA timezone name."
+    lines = []
+    for tz_name in timezones:
+        tz, err = _resolve_tz(tz_name)
+        if err:
+            lines.append(f"{tz_name}: ERROR — {err}")
+        else:
+            now = _dt.datetime.now(tz=tz)
+            lines.append(f"{tz_name}: {now.strftime('%Y-%m-%d %H:%M:%S %Z (UTC%z)')}")
+    return "\n".join(lines)
 
 
 # ── web ───────────────────────────────────────────────────────────────
