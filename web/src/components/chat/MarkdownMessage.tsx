@@ -3,19 +3,33 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import type { Components } from "react-markdown";
 
-/** Custom renderers that respect the phosphor CRT design language. */
+/** Extract language from rehype-highlight className e.g. "hljs language-python" → "python" */
+function parseLang(className?: string): string | null {
+  const m = /language-(\w+)/.exec(className ?? "");
+  return m ? m[1] : null;
+}
+
 const components: Components = {
-  // Code blocks: rendered as phosphor terminal panels.
-  // rehype-highlight adds className="hljs language-*" to <code>.
+  // Wrap <pre> to add a language badge + left accent border.
   pre({ children, ...props }) {
+    // Pull language out of nested <code> className if possible.
+    let lang: string | null = null;
+    if (children && typeof children === "object" && "props" in (children as object)) {
+      const codeEl = children as React.ReactElement<{ className?: string }>;
+      lang = parseLang(codeEl.props?.className);
+    }
     return (
-      <pre className="brut-md-pre" {...props}>
-        {children}
-      </pre>
+      <div className="brut-md-pre-wrap">
+        {lang && (
+          <div className="brut-md-lang-badge">{lang}</div>
+        )}
+        <pre className="brut-md-pre" {...props}>
+          {children}
+        </pre>
+      </div>
     );
   },
   code({ children, className, ...props }) {
-    // Block code (inside <pre>) vs inline code
     const isBlock = !!className;
     if (isBlock) {
       return (
@@ -42,8 +56,8 @@ const components: Components = {
 
 /** Markdown renderer for agent replies.
  *
- * Styling lives entirely in index.css under .brut-md* classes.
- * rehype-highlight adds .hljs classes for syntax coloring (also in index.css).
+ * Styling lives in index.css under .brut-md* classes.
+ * rehype-highlight adds .hljs classes for syntax coloring.
  */
 export function MarkdownMessage({ text }: { text: string }) {
   return (
