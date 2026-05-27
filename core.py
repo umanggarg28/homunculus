@@ -297,6 +297,7 @@ def call_llm(
         if tool_schemas is not None:
             payload["tools"] = tool_schemas
             payload["tool_choice"] = "auto"
+            payload["parallel_tool_calls"] = False
 
         try:
             response = httpx.post(
@@ -369,6 +370,7 @@ def call_llm(
         if tool_schemas is not None:
             payload["tools"] = tool_schemas
             payload["tool_choice"] = "auto"
+            payload["parallel_tool_calls"] = False
         response = httpx.post(
             url,
             headers={"Authorization": f"Bearer {key}"},
@@ -440,6 +442,7 @@ def call_llm_stream(
         if tool_schemas is not None:
             payload["tools"] = tool_schemas
             payload["tool_choice"] = "auto"
+            payload["parallel_tool_calls"] = False
         try:
             response_ctx = httpx.stream(
                 "POST",
