@@ -20,6 +20,7 @@ modern Claude / GPT models consume tool catalogs.
 
 from __future__ import annotations
 
+import datetime as _dt
 from typing import Annotated, Literal
 
 from mcp.server.fastmcp import FastMCP
@@ -105,6 +106,42 @@ def recall(
     full body. Nothing is injected automatically — you decide when to recall.
     """
     return memory_tools.search_memory(query)
+
+
+# ── datetime ─────────────────────────────────────────────────────────
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def get_current_time(
+    timezone: Annotated[
+        str,
+        Field(
+            description=(
+                "IANA timezone name, e.g. 'Asia/Tokyo', 'America/New_York', "
+                "'Europe/London', 'UTC'. Required."
+            )
+        ),
+    ] = "UTC",
+) -> str:
+    """Return the current date and time in the given IANA timezone.
+
+    Always call this for any 'what time is it' / 'current time' question —
+    it is instant and accurate. Do NOT use web_search for time queries.
+    Multiple timezones: call this once per timezone.
+    """
+    try:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    except ImportError:
+        return "ERROR: zoneinfo not available (requires Python 3.9+)"
+    try:
+        tz = ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, KeyError):
+        return (
+            f"ERROR: Unknown timezone '{timezone}'. "
+            "Use IANA names like 'Asia/Tokyo', 'America/New_York', 'Europe/London', 'UTC'."
+        )
+    now = _dt.datetime.now(tz=tz)
+    return now.strftime("%Y-%m-%d %H:%M:%S %Z (UTC%z)")
 
 
 # ── web ───────────────────────────────────────────────────────────────
