@@ -117,17 +117,18 @@ def get_current_time(
         str,
         Field(
             description=(
-                "IANA timezone name, e.g. 'Asia/Tokyo', 'America/New_York', "
-                "'Europe/London', 'UTC'. Required."
+                "IANA timezone name — REQUIRED, always specify explicitly. "
+                "Examples: 'Asia/Tokyo', 'America/New_York', 'Europe/London', "
+                "'Asia/Kolkata', 'UTC'. Never call without this argument."
             )
         ),
-    ] = "UTC",
+    ],
 ) -> str:
     """Return the current date and time in the given IANA timezone.
 
     Always call this for any 'what time is it' / 'current time' question —
     it is instant and accurate. Do NOT use web_search for time queries.
-    Multiple timezones: call this once per timezone.
+    For multiple timezones, call this once per timezone with a different timezone each time.
     """
     try:
         from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
