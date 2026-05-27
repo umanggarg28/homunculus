@@ -184,18 +184,30 @@ def tick(memory: Memory, model: str | None) -> None:
         now_iso=now_iso,
         due_tasks=_format_due_tasks(due_tasks),
     )
+    # Snapshot due_at for each task so we can detect if complete_task ran.
+    due_at_before = {t["id"]: t.get("due_at") for t in due_tasks}
+
     started = datetime.now()
     try:
         response = agent.chat(prompt)
     except Exception as e:
-        # Record per-task failure so reliability is auditable. Status
-        # stays active until CONSECUTIVE_FAILURE_LIMIT (set in tasks.py)
-        # which auto-cancels the task; emit a task_failure event for
-        # each so the /traces UI can show what went wrong.
+        # If the agent loop crashed AFTER complete_task already ran (e.g.,
+        # the final text-generation LLM call failed), don't record a failure —
+        # the task was delivered; we'd only be inflating consecutive_failures
+        # on a task that will correctly fire again tomorrow.
         duration = (datetime.now() - started).total_seconds()
         err = f"{type(e).__name__}: {e}"
         for task in due_tasks:
             try:
+                current = tasks.get(task["id"])
+                if current and current.get("due_at") != due_at_before.get(task["id"]):
+                    # due_at advanced → complete_task ran; skip failure recording.
+                    print(
+                        f"[heartbeat] {task['id']} due_at advanced — task was completed; "
+                        f"skipping record_failure",
+                        flush=True,
+                    )
+                    continue
                 updated = tasks.record_failure(task["id"], err, duration_s=duration)
                 events.emit(
                     "task_failure",
