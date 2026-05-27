@@ -52,6 +52,41 @@ def write_file(
     return filesystem.write_file(path, content)
 
 
+@mcp.tool(annotations={"readOnlyHint": False})
+def append_file(
+    path: Annotated[str, Field(description="Path to append to. Created if it doesn't exist.")],
+    content: Annotated[str, Field(description="Text to append.")],
+) -> str:
+    """Append text to a file without overwriting existing content. Creates the file if needed."""
+    return filesystem.append_file(path, content)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def list_files(
+    path: Annotated[str, Field(description="Directory to list. Defaults to workspace root '.'.")] = ".",
+) -> str:
+    """List files and subdirectories at the given path in the workspace.
+
+    Use this to discover what files exist before reading or writing.
+    Skips hidden files, cache, and node_modules.
+    """
+    return filesystem.list_files(path)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def search_files(
+    query: Annotated[str, Field(description="Text or regex to search for.")],
+    path: Annotated[str, Field(description="Directory to search under. Defaults to workspace root '.'.")] = ".",
+    case_sensitive: Annotated[bool, Field(description="Case-sensitive match. Default false.")] = False,
+) -> str:
+    """Search (grep) for text across all workspace files. Returns matching lines with file:line references.
+
+    Use this to find specific content, function names, or keywords across the workspace
+    without reading every file individually.
+    """
+    return filesystem.search_files(query, path, case_sensitive)
+
+
 # ── memory ────────────────────────────────────────────────────────────
 
 
