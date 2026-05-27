@@ -58,7 +58,7 @@ def chat(message: str, timeout: int = TIMEOUT) -> str:
                     break
                 if data:
                     chunks.append(data)
-    time.sleep(1)  # let the agent settle before the next turn
+    time.sleep(8)  # let the agent fully settle (rate limits + context flush)
     return "".join(chunks)
 
 
@@ -81,6 +81,8 @@ def check_server():
         httpx.get(f"{BASE_URL}/api/mode", timeout=5).raise_for_status()
     except Exception as e:
         pytest.skip(f"Homunculus web not reachable at {BASE_URL}: {e}")
+
+
 
 
 # ── 1. File discovery ────────────────────────────────────────────────────────
