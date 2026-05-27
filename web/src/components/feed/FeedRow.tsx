@@ -53,7 +53,7 @@ export function FeedRow({ event: e }: Props) {
       className="grid py-1.5 px-4"
       onClick={isTruncatable ? () => setExpanded((v) => !v) : undefined}
       style={{
-        gridTemplateColumns: "90px 80px 18px 110px 1fr",
+        gridTemplateColumns: "90px 80px 18px 150px 1fr",
         gap: "0 16px",
         alignItems: "start",
         borderBottom: "1px solid var(--color-border)",
@@ -83,16 +83,29 @@ export function FeedRow({ event: e }: Props) {
       {/* Glyph */}
       <span className="pt-[2px]" style={{ color: dotColor }}>{glyph}</span>
 
-      {/* Kind + tool name */}
-      <span
-        className="uppercase tracking-[0.12em] pt-[2px]"
-        style={{ color: dotColor, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}
-      >
-        {e.event.replace(/_/g, " ")}
-        {e.name ? (
-          <span style={{ color: "var(--color-text-muted)", marginLeft: 6 }}>· {e.name}</span>
-        ) : null}
-      </span>
+      {/* Kind + tool name (two lines so the name is always visible) */}
+      <div className="pt-[2px]" style={{ minWidth: 0 }}>
+        <div
+          className="uppercase tracking-[0.12em]"
+          style={{ color: dotColor, fontSize: 10 }}
+        >
+          {e.event.replace(/_/g, " ")}
+        </div>
+        {e.name && (
+          <div
+            className="tracking-[0.06em]"
+            style={{
+              color: "var(--color-text-muted)",
+              fontSize: 10,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {e.name}
+          </div>
+        )}
+      </div>
 
       {/* Detail */}
       <div style={{ minWidth: 0 }}>

@@ -573,8 +573,11 @@ def call_llm_stream(
                 if tc_delta.get("id"):
                     slot["id"] = tc_delta["id"]
                 fn = tc_delta.get("function") or {}
-                if fn.get("name"):
-                    slot["function"]["name"] += fn["name"]
+                if fn.get("name") and not slot["function"]["name"]:
+                    # Set name only once — some providers (Gemini) re-send the
+                    # full tool name in every streaming chunk instead of just
+                    # the first. Concatenating would give "web_searchweb_search".
+                    slot["function"]["name"] = fn["name"]
                 if fn.get("arguments"):
                     slot["function"]["arguments"] += fn["arguments"]
                 yield ("tool_call_delta", slot)
