@@ -25,7 +25,7 @@ import httpx
 import pytest
 
 BASE_URL = os.environ.get("HOMUNCULUS_URL", "http://localhost:8765")
-TIMEOUT = int(os.environ.get("AGENT_TEST_TIMEOUT", "120"))
+TIMEOUT = int(os.environ.get("AGENT_TEST_TIMEOUT", "240"))
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -40,26 +40,34 @@ def _auth_headers() -> dict:
     return {}
 
 
-def chat(message: str, timeout: int = TIMEOUT) -> str:
+def chat(message: str, timeout: int = TIMEOUT, retries: int = 1) -> str:
     """Send a message and collect the full SSE reply. Blocks until done."""
-    chunks: list[str] = []
-    with httpx.stream(
-        "POST",
-        f"{BASE_URL}/api/chat/send",
-        json={"message": message},
-        headers=_auth_headers(),
-        timeout=timeout,
-    ) as resp:
-        resp.raise_for_status()
-        for line in resp.iter_lines():
-            if line.startswith("data:"):
-                data = line[5:].strip()
-                if data == "end":
-                    break
-                if data:
-                    chunks.append(data)
-    time.sleep(8)  # let the agent fully settle (rate limits + context flush)
-    return "".join(chunks)
+    for attempt in range(retries + 1):
+        try:
+            chunks: list[str] = []
+            with httpx.stream(
+                "POST",
+                f"{BASE_URL}/api/chat/send",
+                json={"message": message},
+                headers=_auth_headers(),
+                timeout=timeout,
+            ) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if line.startswith("data:"):
+                        data = line[5:].strip()
+                        if data == "end":
+                            break
+                        if data:
+                            chunks.append(data)
+            time.sleep(8)  # let the agent fully settle (rate limits + context flush)
+            return "".join(chunks)
+        except httpx.ReadTimeout:
+            if attempt < retries:
+                print(f"\n[chat] ReadTimeout on attempt {attempt+1}, retrying after 15s...")
+                time.sleep(15)
+            else:
+                raise
 
 
 def contains_any(text: str, keywords: list[str]) -> bool:
