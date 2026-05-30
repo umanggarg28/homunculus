@@ -137,8 +137,9 @@ def recall(
     """Search long-term memory for relevant entries matching a query.
 
     Call this when you need facts the user may have shared in a previous
-    session, or when the index hints at a relevant memory but you need its
-    full body. Nothing is injected automatically — you decide when to recall.
+    session, when the index hints at a relevant memory but you need its
+    full body, or when the user asks what you know or remember about them.
+    Nothing is injected automatically — you decide when to recall.
     """
     return memory_tools.search_memory(query)
 

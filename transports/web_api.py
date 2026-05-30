@@ -260,7 +260,7 @@ def chapter_close() -> JSONResponse:
     )
     memory.clear_session()
     if _chat_agent is not None:
-        _chat_agent.history = []
+        _chat_agent.reset()
 
     return JSONResponse({"ok": True, "id": chapter_id, "title": title})
 
@@ -594,7 +594,13 @@ async def chat_send(request: Request):
                     break
                 yield _format_sse_data(chunk)
         except Exception as e:
-            yield _format_sse_data(f"[error: {type(e).__name__}: {e}]")
+            msg = str(e)
+            if "All providers exhausted" in msg or "token_quota_exceeded" in msg or "Tokens per minute" in msg:
+                yield _format_sse_data("[All AI providers are currently rate-limited. Wait a moment and try again.]")
+            elif "All providers exhausted" in type(e).__name__ or "RuntimeError" in type(e).__name__ and "provider" in msg.lower():
+                yield _format_sse_data("[All AI providers are currently unavailable. Try again shortly.]")
+            else:
+                yield _format_sse_data(f"[error: {type(e).__name__}: {e}]")
         finally:
             _active_streams.discard(stream_id)
             _cancelled_streams.discard(stream_id)

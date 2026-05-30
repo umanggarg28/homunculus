@@ -166,10 +166,14 @@ Behaviour:
   two lines — don't call more tools.
 - If a follow-up is ambiguous and you have no grounded context from
   this conversation to answer it, ask for clarification. One sentence.
-- NEVER mention internal file paths or memory filenames (*.md) in
-  replies to the user. Use plain language: "my delivery log" not
-  "project_delivered_leetcode_problems.md". File paths are
-  implementation details — the user doesn't need to see them.
+- Do not mention memory-internal filenames (e.g. feedback_*.md,
+  project_*.md) unprompted — use plain language like "my notes" or
+  "delivery log". Exception: when the user explicitly asks you to search
+  or list files, ALWAYS call search_files or list_files and report the
+  exact file paths and line numbers from the tool result — never
+  paraphrase or answer from context instead of running the tool.
+  Search from path="." (workspace root) unless the user names a specific
+  subfolder.
 """
 
 
@@ -329,7 +333,7 @@ def call_llm(
                         timeout=60.0,
                     )
                     if retry_resp.status_code == 200:
-                        events.emit("llm_call", model=model_id, host=_url_host(url))
+                        events.emit("llm_call", name=model_id, model=model_id, host=_url_host(url), request=_serialize_messages(messages))
                         return retry_resp.json()["choices"][0]["message"]
                     # Retry also failed — fall through to cool + continue
                     response = retry_resp
@@ -356,7 +360,7 @@ def call_llm(
         if response.status_code >= 400:
             raise RuntimeError(f"API error {response.status_code}: {response.text}")
         # Emit which model actually answered, so the live feed shows it.
-        events.emit("llm_call", model=model_id, host=_url_host(url))
+        events.emit("llm_call", name=model_id, model=model_id, host=_url_host(url), request=_serialize_messages(messages))
         return response.json()["choices"][0]["message"]
 
     # All providers in this attempt 429'd or errored. Honor a short sleep
@@ -386,7 +390,7 @@ def call_llm(
             continue
         if response.status_code >= 400:
             raise RuntimeError(f"API error {response.status_code}: {response.text}")
-        events.emit("llm_call", model=model_id, host=_url_host(url))
+        events.emit("llm_call", name=model_id, model=model_id, host=_url_host(url), request=_serialize_messages(messages))
         return response.json()["choices"][0]["message"]
 
     raise RuntimeError(f"All providers exhausted: {last_err}")
@@ -398,6 +402,28 @@ def _url_host(url: str) -> str:
         return url.split("://", 1)[1].split("/", 1)[0]
     except (IndexError, AttributeError):
         return url
+
+
+def _serialize_messages(messages: list[dict]) -> str:
+    """Serialize the last 6 messages to JSON for trace display.
+
+    Truncates very long content fields to keep the feed readable.
+    """
+    _MAX_CONTENT = 2000
+    trimmed = []
+    for m in messages[-6:]:
+        entry: dict = {"role": m.get("role", "?")}
+        content = m.get("content")
+        if isinstance(content, str) and len(content) > _MAX_CONTENT:
+            entry["content"] = content[:_MAX_CONTENT] + f"…[+{len(content)-_MAX_CONTENT}]"
+        elif content is not None:
+            entry["content"] = content
+        if m.get("tool_calls"):
+            entry["tool_calls"] = m["tool_calls"]
+        if m.get("tool_call_id"):
+            entry["tool_call_id"] = m["tool_call_id"]
+        trimmed.append(entry)
+    return json.dumps(trimmed, indent=2)
 
 
 def call_llm_stream(
@@ -485,7 +511,7 @@ def call_llm_stream(
                         # Retry succeeded — break out to streaming logic below
                         used_url = url
                         used_model = model_id
-                        events.emit("llm_call", model=model_id, host=_url_host(url))
+                        events.emit("llm_call", name=model_id, model=model_id, host=_url_host(url), request=_serialize_messages(messages))
                         break
                     # Retry also failed — clean up and fall through to cool+continue
                     retry_after = _parse_retry_after(response)
@@ -530,7 +556,7 @@ def call_llm_stream(
             raise RuntimeError(f"API error {response.status_code}: {err}")
         used_url = url
         used_model = model_id
-        events.emit("llm_call", model=model_id, host=_url_host(url))
+        events.emit("llm_call", name=model_id, model=model_id, host=_url_host(url), request=_serialize_messages(messages))
         break
 
     if response_ctx is None or response is None:
@@ -953,10 +979,14 @@ class Agent:
         """
         violations: list[str] = []
 
-        if _GUARD_MEMORY_FILENAME_RE.search(reply):
+        # File-path guards are intentionally bypassed when the agent explicitly
+        # searched or listed files — those results belong in the reply.
+        file_search_active = bool(tool_names_used & {"search_files", "list_files"})
+
+        if not file_search_active and _GUARD_MEMORY_FILENAME_RE.search(reply):
             violations.append("memory_filename_leak")
 
-        if any(p in reply for p in _GUARD_INTERNAL_PATHS):
+        if not file_search_active and any(p in reply for p in _GUARD_INTERNAL_PATHS):
             violations.append("internal_path_leak")
 
         if reply.lstrip().startswith("ERROR:") or "ERROR running " in reply:

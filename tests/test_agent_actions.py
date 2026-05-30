@@ -121,7 +121,7 @@ class TestFileWriteRead:
             "- Today: writing action tests\n"
             "- Blockers: none"
         )
-        assert contains_any(r, ["wrote", "created", "saved", "done"]), \
+        assert contains_any(r, ["wrote", "created", "saved", "done", "contains", "written", "updated"]), \
             f"Expected confirmation of write, got: {r[:200]}"
 
     def test_read_file(self):

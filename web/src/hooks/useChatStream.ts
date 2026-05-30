@@ -12,6 +12,7 @@ export interface ChatMessage {
 interface UseChatStream {
   messages: ChatMessage[];
   sending: boolean;
+  historyLoading: boolean;
   send: (text: string) => Promise<void>;
   cancel: () => void;
   reset: () => void;
@@ -24,6 +25,7 @@ interface UseChatStream {
 export function useChatStream(): UseChatStream {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(true);
   // Track the current request so cancel() can both notify the server
   // and abort the local fetch read loop.
   const activeStreamIdRef = useRef<string | null>(null);
@@ -33,7 +35,8 @@ export function useChatStream(): UseChatStream {
     let cancelled = false;
     api.chatHistory()
       .then((history) => { if (!cancelled) setMessages(history); })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => { if (!cancelled) setHistoryLoading(false); });
     return () => { cancelled = true; };
   }, []);
 
@@ -104,7 +107,7 @@ export function useChatStream(): UseChatStream {
 
   const reset = useCallback(() => { setMessages([]); }, []);
 
-  return { messages, sending, send, cancel, reset };
+  return { messages, sending, historyLoading, send, cancel, reset };
 }
 
 function appendToAssistant(

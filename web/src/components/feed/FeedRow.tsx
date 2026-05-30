@@ -142,7 +142,16 @@ function getFullDetail(e: FeedEvent): string {
     case "assistant_reply": return e.text ?? "";
     case "tool_call":       return formatArgs(e.args);
     case "tool_result":     return e.result ?? "";
-    case "llm_call":        return `${e.model ?? ""} via ${e.host ?? ""}`;
+    case "llm_call": {
+      const header = `${e.model ?? ""} via ${e.host ?? ""}`;
+      if (!e.request) return header;
+      try {
+        const parsed = JSON.parse(e.request);
+        return `${header}\n\n${JSON.stringify(parsed, null, 2)}`;
+      } catch {
+        return `${header}\n\n${e.request}`;
+      }
+    }
     case "output_guard":    return e.text ?? e.result ?? "reply blocked by output guard";
     case "self_correction": return `correcting: ${e.text ?? ""} | was: ${e.result ?? ""}`;
     default:                return JSON.stringify(e, null, 2);

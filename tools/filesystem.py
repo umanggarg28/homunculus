@@ -31,8 +31,14 @@ def write_file(path: str, content: str) -> str:
 def append_file(path: str, content: str) -> str:
     p = Path(normalize_workspace_path(path))
     p.parent.mkdir(parents=True, exist_ok=True)
+    # Ensure appended content starts on its own line.
+    prefix = ""
+    if p.exists() and p.stat().st_size > 0:
+        last_byte = p.read_bytes()[-1:]
+        if last_byte and last_byte != b"\n":
+            prefix = "\n"
     with p.open("a", encoding="utf-8") as f:
-        f.write(content)
+        f.write(prefix + content)
     return f"Appended {len(content)} bytes to {p} (total size: {p.stat().st_size} bytes)"
 
 
