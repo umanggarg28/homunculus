@@ -107,7 +107,7 @@ export function SidebarRobot() {
         onMouseEnter={onEnter}
         style={{
           width: 104,
-          height: 104,
+          height: 120,
           cursor: "pointer",
         }}
       >

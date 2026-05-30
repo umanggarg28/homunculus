@@ -2,8 +2,7 @@ import { NavLink } from "react-router-dom";
 import { ModeToggle } from "./ModeToggle";
 import { ProviderInline } from "./ProviderInline";
 import { SidebarBrand } from "./SidebarBrand";
-// Canvas robot kept in tree (SidebarRobot.tsx) — character now lives
-// inside SidebarBrand (top of sidebar), rendered as ASCII face.
+import { SidebarRobot } from "@/components/robot/SidebarRobot";
 
 interface NavItem { to: string; label: string; }
 
@@ -100,6 +99,8 @@ export function Sidebar() {
           </div>
         ))}
       </nav>
+
+      <SidebarRobot />
 
       {/* Footer */}
       <div className="px-3 pb-3 pt-3 flex flex-col gap-2" style={{ borderTop: "1px solid var(--color-border)" }}>

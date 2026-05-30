@@ -1,0 +1,127 @@
+/* ===========================================================
+ * HOMUNCULUS · ATMOSPHERE LAYER
+ * The global "awwwards feel" — additive to index.css.
+ *
+ * IMPORTANT: index.css already provides the static scanlines
+ * (body::before) and the 18s vertical roll (body::after). This
+ * file does NOT redefine those. It adds the missing depth +
+ * motion: vignette, phosphor flicker, bloom, page-reveal, and a
+ * CRT power-on wipe. Layers that can't use body pseudo-elements
+ * (already taken) are mounted by <Atmosphere/>.
+ *
+ * Import AFTER index.css:  import "@/styles/atmosphere.css";
+ * Then mount <Atmosphere/> once near the app root.
+ * =========================================================== */
+
+/* ---------- mounted overlay layers ---------- */
+.atmo-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 101; /* just above index.css scanlines (100) */
+}
+
+/* Vignette — radial darkening at the edges for CRT depth. */
+.atmo-vignette {
+  background: radial-gradient(
+    ellipse at 50% 48%,
+    transparent 52%,
+    rgba(0, 0, 0, 0.28) 82%,
+    rgba(0, 0, 0, 0.55) 100%
+  );
+}
+
+/* Phosphor flicker — whole-screen luminance flutter, very subtle.
+   Uses a translucent green wash whose opacity micro-animates. */
+.atmo-flicker {
+  background: rgba(124, 254, 0, 0.012);
+  mix-blend-mode: screen;
+  animation: atmo-flicker 5.5s steps(1) infinite;
+}
+@keyframes atmo-flicker {
+  0%, 100% { opacity: 0.30; }
+  3%   { opacity: 0.55; }
+  6%   { opacity: 0.22; }
+  9%   { opacity: 0.48; }
+  12%  { opacity: 0.30; }
+  48%  { opacity: 0.34; }
+  50%  { opacity: 0.62; } /* occasional brighter blip */
+  52%  { opacity: 0.30; }
+  70%  { opacity: 0.28; }
+  72%  { opacity: 0.44; }
+  74%  { opacity: 0.30; }
+}
+
+/* Corner brightness falloff already covered by vignette; add a faint
+   top glow so the "tube" feels lit from the scan band. */
+.atmo-toplight {
+  background: linear-gradient(180deg, rgba(124, 254, 0, 0.025), transparent 22%);
+  mix-blend-mode: screen;
+}
+
+/* ---------- bloom / glow utilities ---------- */
+/* Apply to accent text you want to feel emissive (countdowns, the
+   live readouts, the wordmark in hero contexts). */
+.atmo-glow-text {
+  text-shadow: 0 0 12px var(--color-accent-glow), 0 0 2px rgba(124, 254, 0, 0.6);
+}
+.atmo-glow-text-soft {
+  text-shadow: 0 0 18px var(--color-accent-glow);
+}
+.atmo-glow-box {
+  box-shadow: 0 0 0 1px var(--color-accent-glow), 0 0 18px -2px var(--color-accent-glow);
+}
+
+/* ---------- page reveal / stagger ----------
+   Put `data-reveal` on a container; children with `.reveal` fade+rise
+   in sequence. Toggle by adding `.in` to the container on mount. */
+.reveal {
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.6s cubic-bezier(0.2, 0.7, 0.2, 1),
+              transform 0.6s cubic-bezier(0.2, 0.7, 0.2, 1);
+  will-change: opacity, transform;
+}
+[data-reveal].in .reveal { opacity: 1; transform: none; }
+[data-reveal].in .reveal:nth-child(1) { transition-delay: 0.00s; }
+[data-reveal].in .reveal:nth-child(2) { transition-delay: 0.07s; }
+[data-reveal].in .reveal:nth-child(3) { transition-delay: 0.14s; }
+[data-reveal].in .reveal:nth-child(4) { transition-delay: 0.21s; }
+[data-reveal].in .reveal:nth-child(5) { transition-delay: 0.28s; }
+[data-reveal].in .reveal:nth-child(6) { transition-delay: 0.35s; }
+[data-reveal].in .reveal:nth-child(7) { transition-delay: 0.42s; }
+[data-reveal].in .reveal:nth-child(8) { transition-delay: 0.49s; }
+
+/* ---------- CRT power-on wipe ----------
+   Add `.atmo-poweron` to a view root on mount for a quick scan-in.
+   Self-clearing via animation; pair with a one-shot class toggle. */
+.atmo-poweron {
+  animation: atmo-poweron 0.5s ease-out;
+  transform-origin: center;
+}
+@keyframes atmo-poweron {
+  0%   { opacity: 0; transform: scaleY(0.004); filter: brightness(2.4); }
+  18%  { opacity: 1; transform: scaleY(0.02); }
+  40%  { transform: scaleY(1); filter: brightness(1.3); }
+  100% { filter: brightness(1); }
+}
+
+/* ---------- live elements ---------- */
+/* Pulsing "alive" dot — use next to live indicators. */
+.atmo-pip {
+  display: inline-block;
+  width: 5px; height: 5px;
+  background: var(--color-accent);
+  box-shadow: 0 0 6px var(--color-accent-glow);
+  animation: atmo-pip 1.6s ease-in-out infinite;
+}
+@keyframes atmo-pip { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* ---------- accessibility: kill all motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .atmo-flicker,
+  .atmo-poweron,
+  .atmo-pip { animation: none !important; }
+  .reveal { transition: none !important; opacity: 1 !important; transform: none !important; }
+  /* index.css crt-roll also respects this if you add the same guard there */
+}
