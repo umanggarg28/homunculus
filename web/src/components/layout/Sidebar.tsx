@@ -4,7 +4,7 @@ import { ProviderInline } from "./ProviderInline";
 import { SidebarBrand } from "./SidebarBrand";
 import { SidebarRobot } from "@/components/robot/SidebarRobot";
 
-interface NavItem { to: string; label: string; }
+interface NavItem { to: string; label: string; kbd?: string; }
 
 /** Brutalist nav. `>` prefix on the active item, mono uppercase labels,
  *  no rounded corners. Active row inverts to accent-on-black. Hover
@@ -14,17 +14,17 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
   {
     title: "WORK",
     items: [
-      { to: "/",         label: "HOME" },
-      { to: "/overview", label: "OVERVIEW" },
-      { to: "/chat",     label: "CHAT" },
+      { to: "/",         label: "HOME",     kbd: "H" },
+      { to: "/overview", label: "OVERVIEW", kbd: "O" },
+      { to: "/chat",     label: "CHAT",     kbd: "C" },
     ],
   },
   {
     title: "STATE",
     items: [
-      { to: "/tasks",  label: "TASKS" },
-      { to: "/memory", label: "MEMORY" },
-      { to: "/tools", label: "TOOLS" },
+      { to: "/tasks",  label: "TASKS",  kbd: "T" },
+      { to: "/memory", label: "MEMORY", kbd: "M" },
+      { to: "/tools",  label: "TOOLS" },
     ],
   },
   {
@@ -90,7 +90,19 @@ export function Sidebar() {
                       <span className="marker" style={{ width: 16, display: "inline-block" }}>
                         {isActive ? ">" : " "}
                       </span>
-                      <span>{item.label}</span>
+                      <span style={{ flex: 1 }}>{item.label}</span>
+                      {item.kbd && (
+                        <span
+                          className="kbd"
+                          style={{
+                            fontSize: 9,
+                            color: isActive ? "var(--color-bg)" : "var(--color-text-faint)",
+                            opacity: 0.7,
+                          }}
+                        >
+                          {item.kbd}
+                        </span>
+                      )}
                     </span>
                   )}
                 </NavLink>
