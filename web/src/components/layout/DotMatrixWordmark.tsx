@@ -22,6 +22,9 @@ interface Props {
   gap?: number;
   litColor?: string;
   dimColor?: string;
+  /** If set, only the first N columns are lit (for boot ignition).
+   *  Omit for normal fully-lit rendering. */
+  revealColumns?: number;
   /** Optional inline style on the outer grid. */
   style?: React.CSSProperties;
   className?: string;
@@ -33,6 +36,7 @@ export function DotMatrixWordmark({
   gap = 1,
   litColor = "var(--color-accent)",
   dimColor = "var(--color-text-faint)",
+  revealColumns,
   style,
   className,
 }: Props) {
@@ -61,7 +65,8 @@ export function DotMatrixWordmark({
     >
       {Array.from({ length: 5 }).map((_, r) =>
         cols.map((col, c) => {
-          const lit = col[r];
+          const revealed = revealColumns === undefined || c < revealColumns;
+          const lit = col[r] && revealed;
           return (
             <span
               key={`${r}-${c}`}
@@ -73,6 +78,7 @@ export function DotMatrixWordmark({
                 background: lit ? litColor : dimColor,
                 opacity: lit ? 0.95 : 0.18,
                 boxShadow: lit ? "0 0 4px var(--color-accent-glow)" : "none",
+                transition: "opacity 0.18s ease, background 0.18s ease",
               }}
             />
           );
