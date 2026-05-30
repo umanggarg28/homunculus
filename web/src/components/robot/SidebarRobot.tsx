@@ -34,6 +34,17 @@ interface BubbleMsg {
 const HI_PHRASES = ["hi.", "yeah?", "hm?", "yes?", "what's up?"];
 const IDLE_PHRASES = ["…zzz", "still here.", "anything?", "…thinking…"];
 
+const STATE_LABELS: Record<string, string> = {
+  idle: "ALIVE",
+  boot: "INIT",
+  listening: "LISTENING",
+  thinking: "THINKING",
+  working: "WORKING",
+  responding: "RESPONDING",
+  success: "DONE",
+  error: "FAULT",
+};
+
 export function SidebarRobot() {
   const robotState = useRobotState();
   const { events } = useEventStream(30);
@@ -90,35 +101,83 @@ export function SidebarRobot() {
     speak(phrase, { durationMs: 1800 });
   };
 
+  const stateLabel = STATE_LABELS[robotState] ?? robotState.toUpperCase();
+
   return (
     <div
       style={{
         position: "relative",
-        padding: "8px 12px 14px",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
+        padding: "8px 12px 12px",
       }}
     >
-      {/* Bubble — pops above the robot, breaks out of clip via z. */}
+      {/* Bubble — pops above, breaks out of clip via z. */}
       {bubble && <SpeechBubble key={bubble.id} text={bubble.text} color={bubble.color} />}
 
+      {/* Presence card — robot + name/state */}
       <div
         onMouseEnter={onEnter}
         style={{
-          width: 104,
-          height: 120,
+          border: "1px solid var(--color-border)",
+          background: "var(--color-surface-2)",
+          padding: "10px",
+          display: "grid",
+          gridTemplateColumns: "50px 1fr",
+          gap: 10,
+          alignItems: "center",
           cursor: "pointer",
         }}
       >
-        <HomunculusRobot
-          state={robotState}
-          detail="mid"
-          palette="cream"
-          filled
-          noDust
-          style={{ width: "100%", height: "100%", display: "block" }}
-        />
+        <div style={{ width: 50, height: 58 }}>
+          <HomunculusRobot
+            state={robotState}
+            detail="mid"
+            palette="cream"
+            filled
+            noDust
+            style={{ width: "100%", height: "100%", display: "block" }}
+          />
+        </div>
+        <div>
+          <div
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 10,
+              letterSpacing: "0.14em",
+              color: "var(--color-accent)",
+              fontWeight: 600,
+              textTransform: "uppercase",
+            }}
+          >
+            HOMUNCULUS
+          </div>
+          <div
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 9,
+              letterSpacing: "0.10em",
+              color: "var(--color-text-muted)",
+              textTransform: "uppercase",
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              marginTop: 3,
+            }}
+          >
+            <span
+              style={{
+                width: 4,
+                height: 4,
+                borderRadius: "50%",
+                background: "var(--color-accent)",
+                boxShadow: "0 0 5px var(--color-accent-glow)",
+                display: "inline-block",
+                animation: "sidebar-pip 1.6s ease-in-out infinite",
+              }}
+            />
+            <style>{`@keyframes sidebar-pip { 0%,100%{opacity:1} 50%{opacity:.3} }`}</style>
+            {stateLabel}
+          </div>
+        </div>
       </div>
     </div>
   );

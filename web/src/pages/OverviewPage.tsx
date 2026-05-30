@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useEventStream } from "@/hooks/useEventStream";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -7,12 +7,17 @@ import { UpcomingPanel } from "@/components/overview/UpcomingPanel";
 import { LiveTicker } from "@/components/overview/LiveTicker";
 import { SignatureHeartbeat } from "@/components/overview/SignatureHeartbeat";
 import { GrowthDeltas } from "@/components/overview/GrowthDeltas";
+import { HomunculusRobot } from "@/components/robot/HomunculusRobot";
+import { useRobotState } from "@/hooks/useRobotState";
 import type { MemoryEntry, Skill } from "@/lib/types";
 
 /** Brutalist Overview — one signature element (the full-bleed
  *  heartbeat strip), one hero number, then dense readouts. */
 export function OverviewPage() {
   const { events } = useEventStream(500);
+  const robotState = useRobotState();
+  const cycRef = useRef(0);
+  const [cyc, setCyc] = useState(0);
   const [memories, setMemories] = useState<MemoryEntry[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [tasks, setTasks] = useState<Array<{ status: string }>>([]);
@@ -21,6 +26,8 @@ export function OverviewPage() {
     api.memoryList().then(setMemories).catch(() => undefined);
     api.skillsList().then(setSkills).catch(() => undefined);
     api.tasksList("all").then(setTasks).catch(() => undefined);
+    const t = setInterval(() => setCyc((c) => { cycRef.current = c + 1; return c + 1; }), 100);
+    return () => clearInterval(t);
   }, []);
 
   const stats = useMemo(() => {
@@ -100,8 +107,8 @@ export function OverviewPage() {
             </div>
           </div>
 
-          {/* Upcoming — secondary anchor */}
-          <UpcomingPanel />
+          {/* Agent hero panel */}
+          <AgentPanel robotState={robotState} cyc={cyc} upcomingSlot={<UpcomingPanel />} />
         </div>
 
         {/* ── STATE ── */}
@@ -227,6 +234,81 @@ function ActivityRow({
         </span>
         {event.tool ?? (isErr ? truncate(event.result ?? "", 80) : "")}
       </span>
+    </div>
+  );
+}
+
+function AgentPanel({
+  robotState,
+  cyc,
+  upcomingSlot,
+}: {
+  robotState: string;
+  cyc: number;
+  upcomingSlot: React.ReactNode;
+}) {
+  const cycStr = String(cyc % 10000).padStart(4, "0");
+  const STATE_VERBS: Record<string, { verb: string; title: string }> = {
+    idle:       { verb: "STATUS",    title: "awaiting input" },
+    boot:       { verb: "BOOT",      title: "initialising" },
+    listening:  { verb: "AUDIO",     title: "listening" },
+    thinking:   { verb: "COGNITION", title: "thinking" },
+    working:    { verb: "TASK",      title: "executing" },
+    responding: { verb: "OUTPUT",    title: "responding" },
+    success:    { verb: "DONE",      title: "complete" },
+    error:      { verb: "ERROR",     title: "fault detected" },
+  };
+  const info = STATE_VERBS[robotState] ?? STATE_VERBS.idle;
+
+  return (
+    <div
+      style={{
+        border: "1px solid var(--color-border)",
+        background: "radial-gradient(ellipse at 50% 30%, rgba(124,254,0,0.03), transparent 70%)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "20px 16px",
+        gap: 16,
+      }}
+    >
+      {/* Framed robot */}
+      <div style={{ position: "relative", width: "100%", maxWidth: 240, aspectRatio: "3/4", border: "1px solid var(--color-border)", background: "var(--color-surface-1)" }}>
+        {/* HUD corners */}
+        {(["tl","tr","bl","br"] as const).map((c) => (
+          <span key={c} style={{
+            position: "absolute", width: 10, height: 10,
+            border: "1px solid var(--color-border-bright)",
+            top: c[0] === "t" ? 6 : undefined, bottom: c[0] === "b" ? 6 : undefined,
+            left: c[1] === "l" ? 6 : undefined, right: c[1] === "r" ? 6 : undefined,
+            borderRight: c[1] === "r" ? "none" : undefined, borderLeft: c[1] === "l" ? "none" : undefined,
+            borderBottom: c[0] === "t" ? "none" : undefined, borderTop: c[0] === "b" ? "none" : undefined,
+          }} />
+        ))}
+        {/* HUD top */}
+        <div style={{ position: "absolute", left: 10, right: 10, top: 9, display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 8, letterSpacing: "0.14em", color: "var(--color-text-muted)", textTransform: "uppercase", pointerEvents: "none" }}>
+          <span>UNIT · <b style={{ color: "var(--color-accent)", fontWeight: 500 }}>HMCL-01</b></span>
+          <span>UPLINK · <b style={{ color: "var(--color-accent)", fontWeight: 500 }}>OK</b></span>
+        </div>
+        <HomunculusRobot state={robotState as import("@/components/robot/HomunculusRobot").RobotState} detail="high" palette="cream" filled noDust style={{ width: "100%", height: "100%", display: "block" }} />
+        {/* HUD bottom */}
+        <div style={{ position: "absolute", left: 10, right: 10, bottom: 9, display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 8, letterSpacing: "0.14em", color: "var(--color-text-muted)", textTransform: "uppercase", pointerEvents: "none" }}>
+          <span>STATE · <b style={{ color: "var(--color-accent)", fontWeight: 500 }}>{robotState.toUpperCase()}</b></span>
+          <span>CYC · <b style={{ color: "var(--color-accent)", fontWeight: 500 }}>{cycStr}</b></span>
+        </div>
+      </div>
+
+      {/* Caption */}
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 9, letterSpacing: "0.28em", color: "var(--color-text-muted)", textTransform: "uppercase", marginBottom: 4 }}>{info.verb}</div>
+        <div style={{ fontSize: 14, letterSpacing: "0.04em", color: "var(--color-accent)", textShadow: "0 0 14px var(--color-accent-glow)" }}>{info.title}</div>
+      </div>
+
+      {/* Upcoming slot */}
+      <div style={{ width: "100%", borderTop: "1px solid var(--color-border)", paddingTop: 12 }}>
+        {upcomingSlot}
+      </div>
     </div>
   );
 }
