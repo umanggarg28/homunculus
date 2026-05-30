@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useRobotState } from "@/hooks/useRobotState";
 
 interface PageHeaderProps {
   /** @deprecated alias for title — kept for older pages. */
@@ -8,15 +9,25 @@ interface PageHeaderProps {
   actions?: ReactNode;
 }
 
-/** Brutalist page header — `$ TITLE` with subtitle on the right
- *  in small uppercase, hairline rule underneath. */
+const STATE_LABELS: Record<string, string> = {
+  idle: "IDLE", boot: "INIT", listening: "LISTENING",
+  thinking: "THINKING", working: "WORKING", responding: "RESPONDING",
+  success: "DONE", error: "FAULT",
+};
+
+/** Brutalist page header — `$ TITLE` with subtitle, unit crumb, and optional actions. */
 export function PageHeader({ latin, title, subtitle, actions }: PageHeaderProps) {
   const heading = title ?? latin;
+  const robotState = useRobotState();
+  const stateLabel = STATE_LABELS[robotState] ?? robotState.toUpperCase();
+  const isActive = !["idle", "boot"].includes(robotState);
+
   return (
     <div
       className="mb-6 flex items-baseline justify-between gap-6 pb-3"
       style={{ borderBottom: "1px solid var(--color-border)", fontFamily: "var(--font-mono)" }}
     >
+      {/* Left: title + subtitle */}
       <div className="flex items-baseline gap-3 min-w-0">
         {heading && (
           <h1 className="brut-h1 truncate" style={{ color: "var(--color-text)", margin: 0 }}>
@@ -29,7 +40,26 @@ export function PageHeader({ latin, title, subtitle, actions }: PageHeaderProps)
           </div>
         )}
       </div>
-      {actions && <div className="shrink-0 flex items-center gap-2">{actions}</div>}
+
+      {/* Right: unit crumb + actions */}
+      <div className="shrink-0 flex items-center gap-4">
+        <div
+          style={{
+            fontSize: 9,
+            letterSpacing: "0.18em",
+            color: "var(--color-text-muted)",
+            textTransform: "uppercase",
+            whiteSpace: "nowrap",
+          }}
+        >
+          UNIT · <span style={{ color: "var(--color-accent)" }}>HMCL-01</span>
+          {" · "}STATE ·{" "}
+          <span style={{ color: isActive ? "var(--color-accent)" : "var(--color-text-muted)" }}>
+            {stateLabel}
+          </span>
+        </div>
+        {actions && <div className="flex items-center gap-2">{actions}</div>}
+      </div>
     </div>
   );
 }
