@@ -165,14 +165,12 @@ function ThinkingDots() {
       style={{ color: "var(--color-text-muted)", fontFamily: "var(--font-mono)" }}
     >
       thinking
-      <span style={{ display: "inline-block", width: "2ch", overflow: "hidden" }}>
-        <motion.span
-          animate={{ opacity: [0.3, 1, 0.3] }}
-          transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
-        >
-          ···
-        </motion.span>
-      </span>
+      <motion.span
+        animate={{ opacity: [0.3, 1, 0.3] }}
+        transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
+      >
+        ···
+      </motion.span>
     </span>
   );
 }

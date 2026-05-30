@@ -104,4 +104,5 @@ export interface FeedEvent {
   result?: string;
   model?: string;
   host?: string;
+  request?: string;
 }

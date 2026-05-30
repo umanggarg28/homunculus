@@ -30,7 +30,8 @@ const components: Components = {
     );
   },
   code({ children, className, ...props }) {
-    const isBlock = !!className;
+    // Fenced blocks without a language tag have no className — detect by newlines.
+    const isBlock = !!className || String(children).includes("\n");
     if (isBlock) {
       return (
         <code className={`brut-md-code-block ${className ?? ""}`} {...props}>

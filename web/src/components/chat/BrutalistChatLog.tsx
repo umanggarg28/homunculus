@@ -1,4 +1,5 @@
 import { Fragment, useMemo } from "react";
+import { motion } from "framer-motion";
 import type { ChatMessage } from "@/hooks/useChatStream";
 import type { ToolCallEntry } from "./ToolCallCard";
 import { BrutalistMessage } from "./BrutalistMessage";
@@ -10,13 +11,14 @@ interface Props {
   toolTimeline: ToolCallEntry[];
   sending: boolean;
   bootDone: boolean;
+  historyLoading: boolean;
   onPickPrompt: (text: string) => void;
 }
 
 /** The brutalist chat surface: a single column of prompt rows
  *  and reasoning lines, with KEY|VAL|STATUS tool blocks between
  *  user turn and final agent reply. */
-export function BrutalistChatLog({ messages, toolTimeline, sending, bootDone, onPickPrompt }: Props) {
+export function BrutalistChatLog({ messages, toolTimeline, sending, bootDone, historyLoading, onPickPrompt }: Props) {
   // Tool calls belong to the most recent assistant message — for
   // earlier turns we only have the message text. (Same approach the
   // old ChatLog took.)
@@ -37,6 +39,10 @@ export function BrutalistChatLog({ messages, toolTimeline, sending, bootDone, on
   }, [messages, toolTimeline, sending]);
   useAutoScroll(scrollTrigger);
 
+  if (historyLoading) {
+    return <SessionLoader />;
+  }
+
   if (messages.length === 0) {
     return <BrutalistLanding bootDone={bootDone} onPick={onPickPrompt} />;
   }
@@ -56,5 +62,54 @@ export function BrutalistChatLog({ messages, toolTimeline, sending, bootDone, on
         );
       })}
     </div>
+  );
+}
+
+function SessionLoader() {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.2 }}
+      style={{
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        minHeight: 220,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: 12,
+          lineHeight: 1.8,
+          color: "var(--color-text-dim)",
+          padding: "18px 24px",
+          border: "1px solid var(--color-border)",
+          background: "rgba(0,0,0,0.35)",
+          minWidth: 280,
+        }}
+      >
+        <div style={{ color: "var(--color-accent)" }}>$ homunculus --restore-session</div>
+        <div>
+          <span style={{ color: "var(--color-accent)" }}>[OK]</span>
+          <span> loading session history</span>
+        </div>
+        <div style={{ marginTop: 4 }}>
+          <span style={{ color: "var(--color-text-muted)" }}>&gt; </span>
+          <motion.span
+            animate={{ opacity: [1, 0] }}
+            transition={{ duration: 0.55, repeat: Infinity, ease: "steps(1)" }}
+            style={{
+              display: "inline-block",
+              width: 8,
+              height: 13,
+              background: "var(--color-accent)",
+              verticalAlign: "middle",
+            }}
+          />
+        </div>
+      </div>
+    </motion.div>
   );
 }

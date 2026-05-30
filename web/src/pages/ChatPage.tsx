@@ -8,7 +8,7 @@ import { PageShell } from "@/components/ui/PageShell";
 import { api } from "@/lib/api";
 
 export function ChatPage() {
-  const { messages, sending, send, cancel, reset } = useChatStream();
+  const { messages, sending, historyLoading, send, cancel } = useChatStream();
   const toolTimeline = useChatToolCalls();
   const [sessionId] = useState(() => crypto.randomUUID().slice(0, 6));
   const [closing, setClosing] = useState(false);
@@ -25,11 +25,10 @@ export function ChatPage() {
     setClosing(true);
     try {
       await api.chapterClose();
-      reset();
     } catch {
-      // surfaced via status bar otherwise
+      // archive failed — still open a fresh session
     } finally {
-      setClosing(false);
+      window.location.reload();
     }
   };
 
@@ -73,6 +72,7 @@ export function ChatPage() {
           toolTimeline={toolTimeline}
           sending={sending}
           bootDone={bootDone}
+          historyLoading={historyLoading}
           onPickPrompt={send}
         />
       </div>
