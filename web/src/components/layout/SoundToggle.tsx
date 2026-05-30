@@ -1,5 +1,6 @@
 import { useAudio } from "@/hooks/useAudio";
 
+/** Inline sidebar sound toggle — same visual language as ModeToggle. */
 export function SoundToggle() {
   const audio = useAudio();
 
@@ -15,10 +16,7 @@ export function SoundToggle() {
     <button
       onClick={handleClick}
       style={{
-        position: "fixed",
-        top: 14,
-        right: 18,
-        zIndex: 50,
+        width: "100%",
         background: "transparent",
         border: `1px solid ${audio.enabled ? "var(--color-accent)" : "var(--color-border)"}`,
         color: audio.enabled ? "var(--color-accent)" : "var(--color-text-muted)",
@@ -26,15 +24,18 @@ export function SoundToggle() {
         fontSize: 9,
         fontWeight: 500,
         letterSpacing: "0.14em",
-        padding: "8px 10px",
+        padding: "6px 8px",
         cursor: "pointer",
         textTransform: "uppercase",
-        transition: "color 0.15s, border-color 0.15s",
+        textAlign: "left",
+        transition: "color 0.12s, border-color 0.12s",
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
       }}
-      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--color-border-bright)"; }}
-      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = audio.enabled ? "var(--color-accent)" : "var(--color-border)"; }}
     >
-      ♪ SOUND {audio.enabled ? "ON" : "OFF"}
+      <span style={{ opacity: 0.7 }}>♪</span>
+      <span>sound {audio.enabled ? "on" : "off"}</span>
     </button>
   );
 }

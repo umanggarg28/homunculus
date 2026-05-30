@@ -1,15 +1,13 @@
-import { NavLink } from "react-router-dom";
+import { useEffect } from "react";
+import { NavLink, useNavigate } from "react-router-dom";
 import { ModeToggle } from "./ModeToggle";
 import { ProviderInline } from "./ProviderInline";
 import { SidebarBrand } from "./SidebarBrand";
 import { SidebarRobot } from "@/components/robot/SidebarRobot";
+import { SoundToggle } from "./SoundToggle";
 
 interface NavItem { to: string; label: string; kbd?: string; }
 
-/** Brutalist nav. `>` prefix on the active item, mono uppercase labels,
- *  no rounded corners. Active row inverts to accent-on-black. Hover
- *  shifts the label color toward accent. Groups separated by ASCII
- *  section labels — like a directory listing. */
 const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
   {
     title: "WORK",
@@ -24,19 +22,36 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     items: [
       { to: "/tasks",  label: "TASKS",  kbd: "T" },
       { to: "/memory", label: "MEMORY", kbd: "M" },
-      { to: "/tools",  label: "TOOLS" },
+      { to: "/tools",  label: "TOOLS",  kbd: "X" },
     ],
   },
   {
     title: "LOGS",
     items: [
-      { to: "/traces", label: "TRACES" },
-      { to: "/logs",   label: "LOGS" },
+      { to: "/traces", label: "TRACES", kbd: "R" },
+      { to: "/logs",   label: "LOGS",   kbd: "L" },
     ],
   },
 ];
 
+const KBD_MAP: Record<string, string> = {};
+NAV_GROUPS.forEach(g => g.items.forEach(i => { if (i.kbd) KBD_MAP[i.kbd.toLowerCase()] = i.to; }));
+
 export function Sidebar() {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement).isContentEditable) return;
+      const dest = KBD_MAP[e.key.toLowerCase()];
+      if (dest) navigate(dest);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [navigate]);
+
   return (
     <aside
       className="fixed top-0 left-0 bottom-0 z-30 flex flex-col brut-sidebar"
@@ -51,26 +66,46 @@ export function Sidebar() {
         .brut-sidebar .nav-row {
           color: var(--color-text-dim);
           background: transparent;
-          transition: color 0.08s, background 0.08s;
+          border: 1px solid transparent;
+          position: relative;
+          overflow: hidden;
+          transition: color 0.15s, border-color 0.15s;
         }
-        .brut-sidebar .nav-row:hover { color: var(--color-accent); }
+        /* sweep shimmer on hover */
+        .brut-sidebar .nav-row::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(90deg, transparent, rgba(124,254,0,0.10), transparent);
+          transform: translateX(-100%);
+          transition: transform 0.5s ease;
+          pointer-events: none;
+        }
+        .brut-sidebar .nav-row:hover::after { transform: translateX(100%); }
+        .brut-sidebar .nav-row:hover { color: var(--color-text); }
         .brut-sidebar .nav-row.active {
-          color: var(--color-bg);
-          background: var(--color-accent);
+          color: var(--color-accent);
+          border-color: var(--color-accent);
         }
-        .brut-sidebar .nav-row.active:hover { color: var(--color-bg); }
-        .brut-sidebar .nav-row .marker { color: var(--color-text-faint); }
-        .brut-sidebar .nav-row.active .marker { color: var(--color-bg); }
+        .brut-sidebar .nav-row.active:hover { color: var(--color-accent); }
+        .brut-sidebar .nav-row .marker {
+          color: var(--color-text-faint);
+          opacity: 0;
+          transform: translateX(-3px);
+          transition: opacity 0.15s, transform 0.15s;
+        }
+        .brut-sidebar .nav-row:hover .marker { opacity: 1; transform: none; color: var(--color-text-muted); }
+        .brut-sidebar .nav-row.active .marker { opacity: 1; transform: none; color: var(--color-accent); }
       `}</style>
 
       <SidebarBrand />
 
       {/* Nav groups */}
-      <nav className="flex-1 px-3 pt-4 pb-2 flex flex-col gap-5 overflow-y-auto">
+      <nav className="flex-1 px-3 pt-3 pb-2 flex flex-col gap-3 overflow-y-auto">
         {NAV_GROUPS.map((group) => (
           <div key={group.title}>
             <div
-              className="text-[9px] uppercase tracking-[0.22em] mb-2 px-1"
+              className="text-[9px] uppercase tracking-[0.22em] mb-1 px-1"
               style={{ color: "var(--color-text-faint)" }}
             >
               ── {group.title}
@@ -82,7 +117,7 @@ export function Sidebar() {
                   to={item.to}
                   end={item.to === "/"}
                   className={({ isActive }) =>
-                    `nav-row block px-1 py-[5px] text-[12px] uppercase tracking-[0.05em] ${isActive ? "active" : ""}`
+                    `nav-row block px-1 py-[4px] text-[11px] uppercase tracking-[0.05em] ${isActive ? "active" : ""}`
                   }
                 >
                   {({ isActive }) => (
@@ -96,7 +131,7 @@ export function Sidebar() {
                           className="kbd"
                           style={{
                             fontSize: 9,
-                            color: isActive ? "var(--color-bg)" : "var(--color-text-faint)",
+                            color: "var(--color-text-faint)",
                             opacity: 0.7,
                           }}
                         >
@@ -115,7 +150,8 @@ export function Sidebar() {
       <SidebarRobot />
 
       {/* Footer */}
-      <div className="px-3 pb-3 pt-3 flex flex-col gap-2" style={{ borderTop: "1px solid var(--color-border)" }}>
+      <div className="px-3 pb-2 pt-2 flex flex-col gap-1" style={{ borderTop: "1px solid var(--color-border)" }}>
+        <SoundToggle />
         <ModeToggle />
         <ProviderInline />
       </div>

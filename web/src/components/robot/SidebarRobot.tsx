@@ -131,7 +131,7 @@ export function SidebarRobot() {
           <HomunculusRobot
             state={robotState}
             detail="mid"
-            palette="cream"
+            palette="phosphor"
             filled
             noDust
             style={{ width: "100%", height: "100%", display: "block" }}

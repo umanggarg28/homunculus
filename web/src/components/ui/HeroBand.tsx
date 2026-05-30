@@ -182,7 +182,6 @@ export function MemoryHero({ entries }: { entries: MemoryEntry[] }) {
   const byType: Record<string, number> = {};
   for (const e of entries) byType[e.type] = (byType[e.type] ?? 0) + 1;
 
-  // Build a 14-day write histogram from mtime
   const DAY = 86400 * 1000;
   const now = Date.now();
   const buckets = new Array(14).fill(0);
@@ -205,7 +204,7 @@ export function MemoryHero({ entries }: { entries: MemoryEntry[] }) {
           ? `NEWEST · ${newest.name.toUpperCase()}`
           : "no memories written yet"
       }
-      trail={<Ridgeline buckets={buckets} label="last 14d · writes" />}
+      trail={<MemoryHeatmap buckets={buckets} />}
       rightSlot={
         <div className="brut-meta" style={{ color: "var(--color-text-faint)", textAlign: "right", lineHeight: 1.6 }}>
           {(["user", "feedback", "project", "skill", "reference"] as const).map((t) => {
@@ -220,6 +219,42 @@ export function MemoryHero({ entries }: { entries: MemoryEntry[] }) {
         </div>
       }
     />
+  );
+}
+
+function MemoryHeatmap({ buckets }: { buckets: number[] }) {
+  const max = Math.max(1, ...buckets);
+  const dayLabels = buckets.map((_, i) => {
+    const d = new Date(Date.now() - (13 - i) * 86400 * 1000);
+    return `${d.toLocaleDateString("en", { month: "short", day: "numeric" })}`;
+  });
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div className="brut-meta" style={{ color: "var(--color-text-muted)" }}>
+        ── last 14d · write density
+      </div>
+      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+        {buckets.map((v, i) => {
+          const intensity = v > 0 ? 0.2 + 0.8 * (v / max) : 0;
+          return (
+            <div
+              key={i}
+              title={`${dayLabels[i]}: ${v} write${v !== 1 ? "s" : ""}`}
+              style={{
+                width: 18,
+                height: 18,
+                background: v > 0
+                  ? `rgba(124,254,0,${intensity})`
+                  : "var(--color-border)",
+                border: `1px solid ${v > 0 ? "rgba(124,254,0,0.3)" : "var(--color-border)"}`,
+                boxShadow: v > 0 ? `0 0 6px rgba(124,254,0,${intensity * 0.5})` : "none",
+                flexShrink: 0,
+              }}
+            />
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

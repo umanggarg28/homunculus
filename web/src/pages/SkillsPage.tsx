@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { motion } from "framer-motion";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -60,86 +60,87 @@ export function SkillsPage() {
           body={<>this is unexpected — the agent should always mount at least the core tools (memory, python_exec, web_fetch). check <code style={{ color: "var(--color-text)" }}>tools/__init__.py</code> on the backend.</>}
         />
       ) : (
-        <>
-          {used.length > 0 && (
-            <Section label="Used">
-              <div style={{ borderTop: "1px solid var(--color-border)" }}>
-                {used.map((s) => <SkillRow key={s.name} skill={s} />)}
-              </div>
-            </Section>
-          )}
-          {unused.length > 0 && (
-            <Section label="Never used">
-              <div style={{ borderTop: "1px solid var(--color-border)" }}>
-                {unused.map((s) => <SkillRow key={s.name} skill={s} />)}
-              </div>
-            </Section>
-          )}
-        </>
+        <div style={{ borderTop: "1px solid var(--color-border)" }}>
+          {[...used, ...unused].map((s) => <SkillRow key={s.name} skill={s} maxCalls={used[0]?.call_count ?? 1} />)}
+        </div>
       )}
     </PageShell>
   );
 }
 
-function Section({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="mb-10">
-      <div className="label mb-3">{label}</div>
-      {children}
-    </div>
-  );
-}
-
-function SkillRow({ skill }: { skill: Skill }) {
-  const total = skill.success_count + skill.failure_count;
-  const rate = total > 0 ? Math.round((skill.success_count / total) * 100) : null;
-  // High success = phosphor; <80% drops to amber; <50% goes red.
-  const rateColor =
-    rate === null ? "var(--color-text-muted)" :
-    rate >= 80 ? "var(--color-accent)" :
-    rate >= 50 ? "var(--color-warning)" :
-                 "var(--color-danger)";
+function SkillRow({ skill, maxCalls }: { skill: Skill; maxCalls: number }) {
+  const [open, setOpen] = useState(false);
+  const descRef = useRef<HTMLDivElement>(null);
+  const hasFailures = skill.failure_count > 0;
+  const barColor = skill.call_count === 0
+    ? "var(--color-border)"
+    : hasFailures
+      ? "var(--color-amber)"
+      : "var(--color-accent)";
+  const barGlow = skill.call_count === 0
+    ? "none"
+    : hasFailures
+      ? "0 0 5px rgba(255,176,0,0.4)"
+      : "0 0 5px var(--color-accent-glow)";
+  const barWidth = skill.call_count > 0 ? `${(skill.call_count / Math.max(1, maxCalls)) * 100}%` : "0%";
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.25 }}
-      className="py-[10px] px-1"
-      style={{ borderBottom: "1px solid var(--color-border)" }}
+      transition={{ duration: 0.2 }}
+      style={{ borderBottom: "1px solid var(--color-border)", fontFamily: "var(--font-mono)" }}
     >
-      <div className="flex items-baseline justify-between gap-4">
-        <code className="brut-body" style={{ color: "var(--color-text)" }}>
-          {skill.name}
-        </code>
-        <div className="flex items-baseline gap-4 brut-label" style={{ color: "var(--color-text-muted)" }}>
-          {skill.call_count > 0 && (
-            <>
-              <span className="brut-num">
-                {skill.call_count.toString().padStart(2, "0")} call{skill.call_count === 1 ? "" : "s"}
-              </span>
-              {rate !== null && (
-                <span className="brut-num" style={{ color: rateColor }}>{rate}%</span>
-              )}
-              {skill.last_used && <span>{formatAge(skill.last_used)}</span>}
-            </>
-          )}
+      <div
+        className="px-4 py-3 cursor-pointer"
+        onClick={() => setOpen((v) => !v)}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "rgba(124,254,0,0.02)"; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "transparent"; }}
+      >
+        <div style={{ display: "grid", gridTemplateColumns: "16px 180px 1fr 60px", gap: 12, alignItems: "center" }}>
+          {/* Expand toggle */}
+          <span style={{ fontSize: 9, color: "var(--color-text-faint)", userSelect: "none", transition: "transform 0.15s", display: "inline-block", transform: open ? "rotate(90deg)" : "none" }}>▶</span>
+
+          {/* Name */}
+          <span style={{ fontSize: 12, color: skill.call_count > 0 ? "var(--color-text)" : "var(--color-text-muted)", letterSpacing: "0.02em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {skill.name}
+          </span>
+
+          {/* Bar */}
+          <div style={{ position: "relative", height: 6, background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
+            <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: barWidth, background: barColor, boxShadow: barGlow, transition: "width 0.4s ease" }} />
+          </div>
+
+          {/* Count + status */}
+          <div style={{ textAlign: "right", fontSize: 11, color: barColor }}>
+            {skill.call_count > 0 ? (
+              <span>{skill.call_count.toString().padStart(2, "0")}</span>
+            ) : (
+              <span style={{ color: "var(--color-text-faint)" }}>—</span>
+            )}
+            {hasFailures && (
+              <span style={{ marginLeft: 4, fontSize: 9, color: "var(--color-amber)" }}>▴</span>
+            )}
+          </div>
         </div>
       </div>
-      <div className="mt-2 brut-body" style={{ color: "var(--color-text-dim)" }}>
-        {skill.description || <em style={{ color: "var(--color-text-muted)" }}>(no description)</em>}
+
+      {/* Expandable description */}
+      <div
+        ref={descRef}
+        style={{
+          overflow: "hidden",
+          maxHeight: open ? 120 : 0,
+          transition: "max-height 0.2s ease",
+        }}
+      >
+        <div className="px-4 pb-3" style={{ paddingLeft: 44 }}>
+          <div style={{ fontSize: 11, color: "var(--color-text-dim)", letterSpacing: "0.02em", lineHeight: 1.6, borderLeft: "2px solid var(--color-border)", paddingLeft: 12 }}>
+            {skill.description || <em style={{ color: "var(--color-text-faint)" }}>(no description)</em>}
+          </div>
+        </div>
       </div>
     </motion.div>
   );
 }
 
-function formatAge(iso: string): string {
-  const d = new Date(iso);
-  const diffMin = Math.floor((Date.now() - d.getTime()) / 60000);
-  if (diffMin < 1) return "just now";
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffH = Math.floor(diffMin / 60);
-  if (diffH < 24) return `${diffH}h ago`;
-  const diffD = Math.floor(diffH / 24);
-  return `${diffD}d ago`;
-}

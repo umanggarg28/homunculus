@@ -56,7 +56,6 @@ export function ThinkingIndicator({ active }: { active: boolean }) {
     if (!active) return;
     const next: TraceStep[] = [];
     for (const e of events) {
-      if (e.service !== "feed") continue;
       const id = `${e.ts}-${e.event}-${e.name ?? ""}`;
       if (seenRef.current.has(id)) continue;
       const ts = new Date(e.ts).getTime();

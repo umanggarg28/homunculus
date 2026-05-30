@@ -3,7 +3,6 @@ import { useEventStream } from "@/hooks/useEventStream";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
-import { UpcomingPanel } from "@/components/overview/UpcomingPanel";
 import { LiveTicker } from "@/components/overview/LiveTicker";
 import { SignatureHeartbeat } from "@/components/overview/SignatureHeartbeat";
 import { GrowthDeltas } from "@/components/overview/GrowthDeltas";
@@ -60,55 +59,18 @@ export function OverviewPage() {
       <div className="mx-[-40px]"><SignatureHeartbeat /></div>
       <GrowthDeltas />
 
-      {/* ── HERO ROW — one big anchor + upcoming countdown beside it ── */}
+      {/* ── HERO ROW — countdown + robot panel ── */}
       <div
-        className="grid gap-6 mb-10"
-        style={{ gridTemplateColumns: "minmax(0, 1.4fr) minmax(0, 1fr)" }}
+        className="grid gap-0 mb-10"
+        style={{ gridTemplateColumns: "1fr 320px", border: "1px solid var(--color-border)" }}
       >
-          {/* HERO — the one number that matters */}
-          <div
-            className="p-7 flex flex-col justify-between"
-            style={{ background: "var(--color-surface-1)", border: "1px solid var(--color-border)" }}
-          >
-            <div
-              className="text-[10px] uppercase tracking-[0.32em]"
-              style={{ color: "var(--color-text-muted)" }}
-            >
-              ── actions today
-            </div>
-            <div className="flex items-end gap-5 my-2">
-              <span
-                style={{
-                  color: "var(--color-accent)",
-                  fontSize: "clamp(96px, 16vw, 192px)",
-                  lineHeight: 0.82,
-                  fontWeight: 700,
-                  fontVariantNumeric: "tabular-nums",
-                  letterSpacing: "-0.05em",
-                  textShadow: "0 0 32px var(--color-accent-glow)",
-                }}
-              >
-                {stats.toolCalls.toString().padStart(2, "0")}
-              </span>
-              <span
-                className="pb-4 text-[10px] uppercase tracking-[0.18em]"
-                style={{ color: "var(--color-text-faint)", lineHeight: 1.5 }}
-              >
-                tool calls<br />since 00:00
-              </span>
-            </div>
-            <div
-              className="grid grid-cols-3 gap-6 text-[9px] uppercase tracking-[0.18em] pt-4"
-              style={{ borderTop: "1px solid var(--color-border)" }}
-            >
-              <Inline label="replies"  value={stats.replies} />
-              <Inline label="llm"      value={stats.llmCalls} />
-              <Inline label="failures" value={stats.failures} danger={stats.failures > 0} />
-            </div>
+          {/* LEFT — countdown as hero + stats */}
+          <div className="p-8 flex flex-col justify-center gap-0" style={{ borderRight: "1px solid var(--color-border)" }}>
+            <UpcomingHero stats={stats} lastEvent={lastEvent} />
           </div>
 
-          {/* Agent hero panel */}
-          <AgentPanel robotState={robotState} cyc={cyc} upcomingSlot={<UpcomingPanel />} />
+          {/* RIGHT — robot panel */}
+          <AgentPanel robotState={robotState} cyc={cyc} />
         </div>
 
         {/* ── STATE ── */}
@@ -117,11 +79,11 @@ export function OverviewPage() {
             ── state
           </div>
           <div
-            className="grid gap-x-12 gap-y-3"
-            style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}
+            className="grid gap-x-8 gap-y-3"
+            style={{ gridTemplateColumns: "repeat(4, 1fr)" }}
           >
             <KV label="mcp servers"  value="02" hint="builtin · fetch" />
-            <KV label="tools"        value={pad(skills.length)} hint={`${skillsCalled} ever called`} />
+            <KV label="tools"        value={pad(skills.length)} hint={skillsCalled === skills.length ? "all ever called" : `${skillsCalled} ever called`} />
             <KV label="memory"       value={pad(memories.length)} hint="entries" />
             <KV label="active tasks" value={pad(activeTasks)} />
           </div>
@@ -150,23 +112,6 @@ export function OverviewPage() {
 
 // ── helpers ─────────────────────────────────────────────────────────
 
-function Inline({ label, value, danger }: { label: string; value: number; danger?: boolean }) {
-  return (
-    <div>
-      <div style={{ color: "var(--color-text-faint)" }}>{label}</div>
-      <div
-        className="text-[22px] mt-1"
-        style={{
-          color: danger ? "var(--color-danger)" : "var(--color-text)",
-          fontVariantNumeric: "tabular-nums",
-          letterSpacing: "-0.02em",
-        }}
-      >
-        {value.toString().padStart(2, "0")}
-      </div>
-    </div>
-  );
-}
 
 function KV({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
@@ -241,11 +186,9 @@ function ActivityRow({
 function AgentPanel({
   robotState,
   cyc,
-  upcomingSlot,
 }: {
   robotState: string;
   cyc: number;
-  upcomingSlot: React.ReactNode;
 }) {
   const cycStr = String(cyc % 10000).padStart(4, "0");
   const STATE_VERBS: Record<string, { verb: string; title: string }> = {
@@ -291,7 +234,7 @@ function AgentPanel({
           <span>UNIT · <b style={{ color: "var(--color-accent)", fontWeight: 500 }}>HMCL-01</b></span>
           <span>UPLINK · <b style={{ color: "var(--color-accent)", fontWeight: 500 }}>OK</b></span>
         </div>
-        <HomunculusRobot state={robotState as import("@/components/robot/HomunculusRobot").RobotState} detail="high" palette="cream" filled noDust style={{ width: "100%", height: "100%", display: "block" }} />
+        <HomunculusRobot state={robotState as import("@/components/robot/HomunculusRobot").RobotState} detail="high" palette="phosphor" filled noDust style={{ width: "100%", height: "100%", display: "block" }} />
         {/* HUD bottom */}
         <div style={{ position: "absolute", left: 10, right: 10, bottom: 9, display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 8, letterSpacing: "0.14em", color: "var(--color-text-muted)", textTransform: "uppercase", pointerEvents: "none" }}>
           <span>STATE · <b style={{ color: "var(--color-accent)", fontWeight: 500 }}>{robotState.toUpperCase()}</b></span>
@@ -305,11 +248,168 @@ function AgentPanel({
         <div style={{ fontSize: 14, letterSpacing: "0.04em", color: "var(--color-accent)", textShadow: "0 0 14px var(--color-accent-glow)" }}>{info.title}</div>
       </div>
 
-      {/* Upcoming slot */}
-      <div style={{ width: "100%", borderTop: "1px solid var(--color-border)", paddingTop: 12 }}>
-        {upcomingSlot}
-      </div>
     </div>
+  );
+}
+
+// ── UpcomingHero ────────────────────────────────────────────────────
+
+interface Upcoming {
+  next_tick: string | null;
+  default_interval_min: number;
+  next_task: { id: string; title: string; due_at: string; recurrence: string } | null;
+}
+
+function parseIsoLocal(iso: string): number {
+  return new Date(iso).getTime();
+}
+
+function formatCountdown(ms: number): string {
+  if (ms <= 0) return "00:00";
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${pad(h)}:${pad(m)}:${pad(sec)}`;
+  return `${pad(m)}:${pad(sec)}`;
+}
+
+function fmtAbs(d: Date): string {
+  const dd = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const tt = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+  return `${dd} · ${tt}`.toLowerCase();
+}
+
+function nowNarration(lastEvent: { event: string; tool?: string } | undefined): string {
+  if (!lastEvent) return "─ no activity yet";
+  switch (lastEvent.event) {
+    case "llm_call": return "thinking…";
+    case "tool_call": return `calling ${(lastEvent.tool ?? "tool").toLowerCase()}…`;
+    case "tool_result": return "processing result…";
+    case "assistant_reply": return "replied.";
+    case "user_message": return "received input.";
+    default: return lastEvent.event.replace(/_/g, " ");
+  }
+}
+
+function UpcomingHero({
+  stats,
+  lastEvent,
+}: {
+  stats: { toolCalls: number; llmCalls: number; replies: number; failures: number };
+  lastEvent: { event: string; ts: string; tool?: string } | undefined;
+}) {
+  const [data, setData] = useState<Upcoming | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const fetchOnce = () => api.agentUpcoming().then(setData).catch(() => undefined);
+    fetchOnce();
+    const slow = setInterval(fetchOnce, 10_000);
+    const fast = setInterval(() => setNow(Date.now()), 1000);
+    return () => { clearInterval(slow); clearInterval(fast); };
+  }, []);
+
+  const target = (() => {
+    if (!data) return null;
+    const candidates: { ms: number; label: string; sub: string }[] = [];
+    if (data.next_tick) {
+      const ms = parseIsoLocal(data.next_tick);
+      candidates.push({ ms, label: "scheduled heartbeat", sub: `${data.default_interval_min}min default` });
+    }
+    if (data.next_task) {
+      const ms = parseIsoLocal(data.next_task.due_at);
+      candidates.push({
+        ms,
+        label: data.next_task.title.toLowerCase(),
+        sub: data.next_task.recurrence === "none" ? "one-shot" : data.next_task.recurrence,
+      });
+    }
+    candidates.sort((a, b) => a.ms - b.ms);
+    return candidates[0] ?? null;
+  })();
+
+  const STAT_COLS: { label: string; value: number; color: string }[] = [
+    { label: "tool calls", value: stats.toolCalls, color: "var(--color-accent)" },
+    { label: "replies",    value: stats.replies,   color: "#818cf8" },
+    { label: "llm calls",  value: stats.llmCalls,  color: "var(--color-accent)" },
+    { label: "failures",   value: stats.failures,  color: stats.failures > 0 ? "var(--color-danger)" : "var(--color-text-faint)" },
+  ];
+
+  return (
+    <>
+      <div className="text-[10px] uppercase tracking-[0.32em] mb-3" style={{ color: "var(--color-text-muted)" }}>
+        ── next autonomous fire
+      </div>
+
+      {/* Hero countdown */}
+      {target ? (() => {
+        const delta = target.ms - now;
+        const overdue = delta <= 0;
+        return (
+          <>
+            <div
+              style={{
+                fontSize: "clamp(54px, 8vw, 104px)",
+                lineHeight: 0.85,
+                fontVariantNumeric: "tabular-nums",
+                letterSpacing: "-0.04em",
+                color: overdue ? "var(--color-amber)" : "var(--color-accent)",
+                textShadow: overdue ? "0 0 24px rgba(255,176,0,0.4)" : "0 0 32px var(--color-accent-glow)",
+                fontFamily: "var(--font-mono)",
+                marginBottom: 12,
+              }}
+            >
+              {overdue ? "OVERDUE" : formatCountdown(delta)}
+            </div>
+            <div className="text-[14px] mb-1" style={{ color: "var(--color-text)", fontFamily: "var(--font-mono)" }}>
+              <span style={{ color: overdue ? "var(--color-amber)" : "var(--color-accent)" }}>›</span>{" "}{target.label}
+            </div>
+            <div className="text-[10px] uppercase tracking-[0.16em] mb-6" style={{ color: "var(--color-text-faint)", fontFamily: "var(--font-mono)" }}>
+              {target.sub} · {fmtAbs(new Date(target.ms))}
+            </div>
+          </>
+        );
+      })() : (
+        <div
+          style={{
+            fontSize: "clamp(54px, 8vw, 104px)",
+            lineHeight: 0.85,
+            color: "var(--color-text-faint)",
+            fontFamily: "var(--font-mono)",
+            letterSpacing: "-0.04em",
+            marginBottom: 20,
+          }}
+        >
+          --:--
+        </div>
+      )}
+
+      {/* Stats row — since midnight */}
+      <div style={{ borderTop: "1px solid var(--color-border)", paddingTop: 12, marginBottom: 6 }}>
+        <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: "0.22em", textTransform: "uppercase", color: "var(--color-text-faint)", marginBottom: 10 }}>
+          since midnight
+        </div>
+        <div className="grid grid-cols-4 gap-4" style={{ marginBottom: 16 }}>
+          {STAT_COLS.map(({ label, value, color }) => (
+            <div key={label}>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--color-text-faint)", marginBottom: 4 }}>
+                {label}
+              </div>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: 22, color, fontVariantNumeric: "tabular-nums", letterSpacing: "-0.02em" }}>
+                {value.toString().padStart(2, "0")}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* NOW narration */}
+      <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.08em", color: "var(--color-text-dim)", borderTop: "1px solid var(--color-border)", paddingTop: 12 }}>
+        <span style={{ color: "var(--color-text-faint)", marginRight: 8 }}>NOW</span>
+        {nowNarration(lastEvent)}
+      </div>
+    </>
   );
 }
 

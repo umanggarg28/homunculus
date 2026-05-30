@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { motion } from "framer-motion";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { BrutalistToolBlock } from "./BrutalistToolBlock";
+import { ThinkingIndicator } from "./ThinkingIndicator";
 import type { ChatMessage } from "@/hooks/useChatStream";
 import type { ToolCallEntry } from "./ToolCallCard";
 
@@ -119,61 +120,49 @@ interface AgentReplyProps {
 }
 
 function AgentReply({ message, toolCalls, inFlight, sending }: AgentReplyProps) {
+  const isWorking = inFlight && sending;
   return (
     <div>
-      {/* Tool call receipts above the final reply */}
+      {/* ThinkingIndicator: robot face + live trace while active;
+          collapses to "▸ thought for Xs · N tools" when the turn completes */}
+      <ThinkingIndicator active={isWorking} />
+
+      {/* Tool call receipts (legacy path, when toolCalls prop is populated) */}
       {toolCalls.length > 0 && (
-        <div className="mb-4">
+        <div className="mb-4 mt-2">
           {toolCalls.map((tc, i) => (
             <BrutalistToolBlock key={i} entry={tc} />
           ))}
         </div>
       )}
 
-      {/* Agent reply prefix + content */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "16px minmax(0, 1fr)",
-          columnGap: "10px",
-          alignItems: "start",
-        }}
-      >
-        <span
-          className="select-none pt-[2px]"
-          style={{ color: "var(--color-accent)", fontSize: 14, lineHeight: "1.7" }}
+      {/* Reply content — only once text starts streaming in */}
+      {message.content && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "16px minmax(0, 1fr)",
+            columnGap: "10px",
+            alignItems: "start",
+            marginTop: 6,
+          }}
         >
-          ›
-        </span>
-        <div style={{ minWidth: 0 }}>
-          {message.content ? (
+          <span
+            className="select-none pt-[2px]"
+            style={{ color: "var(--color-accent)", fontSize: 14, lineHeight: "1.7" }}
+          >
+            ›
+          </span>
+          <div style={{ minWidth: 0 }}>
             <MarkdownMessage text={message.content} />
-          ) : inFlight ? (
-            <ThinkingDots />
-          ) : null}
-          {inFlight && message.content && sending && <Cursor />}
+            {isWorking && <Cursor />}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
 
-function ThinkingDots() {
-  return (
-    <span
-      className="text-[13px] tracking-[0.06em] uppercase"
-      style={{ color: "var(--color-text-muted)", fontFamily: "var(--font-mono)" }}
-    >
-      thinking
-      <motion.span
-        animate={{ opacity: [0.3, 1, 0.3] }}
-        transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
-      >
-        ···
-      </motion.span>
-    </span>
-  );
-}
 
 function Cursor() {
   return (

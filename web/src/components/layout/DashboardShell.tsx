@@ -5,7 +5,6 @@ import { AlertBanner } from "./AlertBanner";
 import { CommandPalette } from "./CommandPalette";
 import { BootSequence } from "./BootSequence";
 import { Atmosphere } from "./Atmosphere";
-import { SoundToggle } from "./SoundToggle";
 
 /** App shell: fixed sidebar on the left, scrolling content on the right. */
 export function DashboardShell({ children }: { children: ReactNode }) {
@@ -20,7 +19,6 @@ export function DashboardShell({ children }: { children: ReactNode }) {
         {children}
       </main>
       <CommandPalette />
-      <SoundToggle />
     </div>
   );
 }
