@@ -74,7 +74,7 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
         {/* Icon */}
         <span style={{ fontSize: 13, color: iconColor, lineHeight: 1 }}>{icon}</span>
 
-        {/* Title + subtitle */}
+        {/* Title + subtitle + run sparkline */}
         <div>
           <div
             style={{
@@ -86,11 +86,16 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
           >
             {task.title}
           </div>
-          {subtitle && (
-            <div style={{ fontSize: 10, letterSpacing: "0.10em", textTransform: "uppercase", color: "var(--color-text-muted)", marginTop: 3 }}>
-              {subtitle}
-            </div>
-          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+            {subtitle && (
+              <div style={{ fontSize: 10, letterSpacing: "0.10em", textTransform: "uppercase", color: "var(--color-text-muted)" }}>
+                {subtitle}
+              </div>
+            )}
+            {task.last_runs?.length > 0 && (
+              <RunSparkline runs={task.last_runs} />
+            )}
+          </div>
         </div>
 
         {/* Badge */}
@@ -144,13 +149,33 @@ function buildSubtitle(task: Task, dueMs: number | null, nowMs: number, isOverdu
     parts.push(isOverdue ? `${timeStr} ago` : `next in ${timeStr}`);
   }
 
-  const runs = task.last_runs || [];
-  if (runs.length > 0) {
-    const ok = runs.filter((r) => r.status === "success").length;
-    parts.push(`${ok}/${runs.length} ok`);
-  }
-
   return parts.join(" · ");
+}
+
+function RunSparkline({ runs }: { runs: import("@/lib/types").TaskRun[] }) {
+  const last = runs.slice(-12);
+  const failures = last.filter((r) => r.status === "failure").length;
+  const label = `${last.length - failures}/${last.length} ok`;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 3 }} title={label}>
+      {last.map((r, i) => (
+        <div
+          key={i}
+          title={`${r.ts} · ${r.status}${r.duration_s != null ? ` · ${r.duration_s}s` : ""}`}
+          style={{
+            width: 5,
+            height: 10,
+            background: r.status === "success" ? "var(--color-accent)" : "var(--color-danger)",
+            opacity: 0.3 + 0.7 * ((i + 1) / last.length),
+            flexShrink: 0,
+          }}
+        />
+      ))}
+      <span style={{ fontSize: 9, letterSpacing: "0.08em", color: failures > 0 ? "var(--color-amber)" : "var(--color-text-faint)", marginLeft: 2 }}>
+        {label}
+      </span>
+    </div>
+  );
 }
 
 function Action({

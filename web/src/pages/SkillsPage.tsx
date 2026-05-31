@@ -111,32 +111,59 @@ function SkillRow({ skill, maxCalls }: { skill: Skill; maxCalls: number }) {
             <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: barWidth, background: barColor, boxShadow: barGlow, transition: "width 0.4s ease" }} />
           </div>
 
-          {/* Count + status */}
-          <div style={{ textAlign: "right", fontSize: 11, color: barColor }}>
+          {/* Count + error rate */}
+          <div style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
             {skill.call_count > 0 ? (
-              <span>{skill.call_count.toString().padStart(2, "0")}</span>
+              <div style={{ fontSize: 11, color: barColor }}>
+                {skill.call_count.toString().padStart(2, "0")}
+              </div>
             ) : (
-              <span style={{ color: "var(--color-text-faint)" }}>—</span>
+              <div style={{ fontSize: 11, color: "var(--color-text-faint)" }}>—</div>
             )}
-            {hasFailures && (
-              <span style={{ marginLeft: 4, fontSize: 9, color: "var(--color-amber)" }}>▴</span>
-            )}
-          </div>
+            {hasFailures && (() => {
+              const total = skill.success_count + skill.failure_count;
+              const errPct = total > 0 ? Math.round((skill.failure_count / total) * 100) : 0;
+              return (
+                <div style={{ fontSize: 9, color: "var(--color-amber)", letterSpacing: "0.06em" }}>
+                  ▴{errPct}%
+                </div>
+              );
+            })()}</div>
         </div>
       </div>
 
-      {/* Expandable description */}
+      {/* Expandable description + stats */}
       <div
         ref={descRef}
         style={{
           overflow: "hidden",
-          maxHeight: open ? 120 : 0,
+          maxHeight: open ? 160 : 0,
           transition: "max-height 0.2s ease",
         }}
       >
         <div className="px-4 pb-3" style={{ paddingLeft: 44 }}>
-          <div style={{ fontSize: 11, color: "var(--color-text-dim)", letterSpacing: "0.02em", lineHeight: 1.6, borderLeft: "2px solid var(--color-border)", paddingLeft: 12 }}>
-            {skill.description || <em style={{ color: "var(--color-text-faint)" }}>(no description)</em>}
+          <div style={{ borderLeft: "2px solid var(--color-border)", paddingLeft: 12 }}>
+            <div style={{ fontSize: 11, color: "var(--color-text-dim)", letterSpacing: "0.02em", lineHeight: 1.6 }}>
+              {skill.description || <em style={{ color: "var(--color-text-faint)" }}>(no description)</em>}
+            </div>
+            {skill.call_count > 0 && (
+              <div style={{ display: "flex", gap: 16, marginTop: 8, fontSize: 10, letterSpacing: "0.10em", textTransform: "uppercase" }}>
+                <span style={{ color: "var(--color-accent)" }}>{skill.success_count} ok</span>
+                {skill.failure_count > 0 && (
+                  <span style={{ color: "var(--color-danger)" }}>{skill.failure_count} failed</span>
+                )}
+                {skill.failure_count > 0 && (() => {
+                  const total = skill.success_count + skill.failure_count;
+                  const rate = total > 0 ? Math.round((skill.failure_count / total) * 100) : 0;
+                  return <span style={{ color: "var(--color-amber)" }}>{rate}% error rate</span>;
+                })()}
+                {skill.last_used && (
+                  <span style={{ color: "var(--color-text-faint)" }}>
+                    last: {new Date(skill.last_used).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

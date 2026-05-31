@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { Task } from "@/lib/types";
+import { parseServerIso } from "@/lib/api";
 
 interface Props { task: Task | null; onClose: () => void; }
 
@@ -66,9 +67,9 @@ export function TaskDetailDrawer({ task, onClose }: Props) {
           style={{ borderBottom: "1px solid var(--color-border)" }}
         >
           <KV label="id"        value={task.id} />
-          <KV label="due"       value={task.due_at ?? "—"} />
-          <KV label="created"   value={task.created_at} />
-          <KV label="updated"   value={task.updated_at} />
+          <KV label="due"       value={task.due_at ? fmtDateTime(task.due_at) : "—"} />
+          <KV label="created"   value={fmtDateTime(task.created_at)} />
+          <KV label="updated"   value={fmtDateTime(task.updated_at)} />
         </div>
 
         {/* Description */}
@@ -88,9 +89,30 @@ export function TaskDetailDrawer({ task, onClose }: Props) {
 
         {/* Last runs */}
         <div className="px-6 py-5">
-          <div className="text-[10px] uppercase tracking-[0.16em] mb-3" style={{ color: "var(--color-text-muted)" }}>
-            ── last runs · {(task.last_runs?.length ?? 0).toString().padStart(2, "0")}
-          </div>
+          {(() => {
+            const runs = task.last_runs ?? [];
+            const ok = runs.filter((r) => r.status === "success").length;
+            const errRate = runs.length > 0 ? Math.round(((runs.length - ok) / runs.length) * 100) : null;
+            return (
+              <div className="flex items-baseline gap-4 mb-3">
+                <span className="text-[10px] uppercase tracking-[0.16em]" style={{ color: "var(--color-text-muted)" }}>
+                  ── last runs · {runs.length.toString().padStart(2, "0")}
+                </span>
+                {runs.length > 0 && (
+                  <>
+                    <span className="text-[10px] uppercase tracking-[0.12em]" style={{ color: ok === runs.length ? "var(--color-accent)" : "var(--color-text-faint)" }}>
+                      {ok}/{runs.length} ok
+                    </span>
+                    {errRate !== null && errRate > 0 && (
+                      <span className="text-[10px] uppercase tracking-[0.12em]" style={{ color: "var(--color-danger)" }}>
+                        {errRate}% err
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })()}
           {!task.last_runs || task.last_runs.length === 0 ? (
             <div className="text-[11px] uppercase tracking-[0.16em]" style={{ color: "var(--color-text-faint)" }}>
               ─ never fired ─
@@ -107,8 +129,11 @@ export function TaskDetailDrawer({ task, onClose }: Props) {
                     <span style={{ color: r.status === "success" ? "var(--color-accent)" : "var(--color-danger)" }}>
                       ● {r.status}
                     </span>
-                    <span style={{ color: "var(--color-text-faint)", fontVariantNumeric: "tabular-nums" }}>
-                      {r.ts}
+                    <span style={{ color: "var(--color-text-faint)", fontVariantNumeric: "tabular-nums", display: "flex", gap: 8 }}>
+                      {r.duration_s != null && (
+                        <span>{r.duration_s}s</span>
+                      )}
+                      <span>{fmtDateTime(r.ts)}</span>
                     </span>
                   </div>
                   <div
@@ -125,6 +150,15 @@ export function TaskDetailDrawer({ task, onClose }: Props) {
       </aside>
     </>
   );
+}
+
+function fmtDateTime(iso: string): string {
+  const ms = parseServerIso(iso);
+  if (!Number.isFinite(ms)) return iso;
+  const d = new Date(ms);
+  return d.toLocaleString("en-US", {
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,
+  });
 }
 
 function KV({ label, value }: { label: string; value: string }) {
