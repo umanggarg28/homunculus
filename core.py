@@ -142,6 +142,10 @@ Memory:
 - Types: user · feedback · project · reference · skill (learned procedures)
 
 Scheduling:
+- Before create_task(), ALWAYS call list_tasks(status="all") first. If a
+  task with the same or similar title exists (any status), use schedule_task()
+  on that existing task_id instead of creating a duplicate. schedule_task()
+  reactivates completed/cancelled tasks automatically.
 - For "every day at X" / "every week" / any RECURRING commitment, use
   create_task(recurrence="daily"|"weekly") — NEVER schedule_next_tick.
 - schedule_next_tick is for one-shot wake timers only.

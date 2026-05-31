@@ -262,7 +262,7 @@ def create_task(
     ] = "none",
     notify: Annotated[bool, Field(description="Whether the due task is expected to notify the user.")] = False,
 ) -> str:
-    """Create a new task (reminder, recurring job, or one-shot). Use this first — then schedule_task only if you need to change an existing task's due time."""
+    """Create a new task (reminder, recurring job, or one-shot). IMPORTANT: Before calling this, always call list_tasks(status='all') and check if a task with a similar title already exists. If one does, use schedule_task() or update the existing task instead of creating a duplicate."""
     return scheduling.create_task(title, description, due_at, recurrence, notify)
 
 
