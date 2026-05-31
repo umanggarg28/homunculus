@@ -112,6 +112,8 @@ class Memory:
         readme_path = root / "README.md"
         if not readme_path.exists():
             readme_path.write_text(_README_CONTENT, encoding="utf-8")
+        self._init_db()
+        self._migrate_vec_sidecars()
 
     # ---- read side -----------------------------------------------------
 
@@ -497,9 +499,11 @@ class Memory:
         return matching
 
     # ---- embedding-based search ----------------------------------------
-    # Uses Gemini text-embedding-004 (free tier: 1500 RPD, 768-dim vectors).
-    # Vectors are cached as .vec sidecar files next to each .md entry so
-    # search only costs ONE API call (the query) per invocation.
+    # Uses Gemini embedding API (free tier: 1500 RPD, 3072-dim vectors).
+    # Vectors are stored in a single memory.db SQLite file (one row per
+    # memory entry) instead of scattered .vec sidecar files. The markdown
+    # files remain the canonical source of truth — memory.db is a pure
+    # index/cache and can be rebuilt from the .md files at any time.
     # Falls back to keyword search if the Gemini key is missing or the
     # API is unavailable.
 
@@ -509,6 +513,86 @@ class Memory:
         "gemini-embedding-2:embedContent?key={key}"
     )
     _EMBED_DIM = 3072
+
+    @property
+    def _db_path(self) -> Path:
+        return self.root / "memory.db"
+
+    def _init_db(self) -> None:
+        """Create memory.db and the embeddings table if they don't exist."""
+        import sqlite3
+        try:
+            con = sqlite3.connect(str(self._db_path))
+            con.execute("PRAGMA journal_mode=WAL")
+            con.execute(
+                "CREATE TABLE IF NOT EXISTS embeddings "
+                "(filename TEXT PRIMARY KEY, vec TEXT NOT NULL)"
+            )
+            con.commit()
+            con.close()
+        except Exception:
+            pass
+
+    def _migrate_vec_sidecars(self) -> None:
+        """One-time migration: move .vec sidecar files into memory.db."""
+        migrated = 0
+        for vp in list(self.root.glob("*.vec")):
+            try:
+                vec = json.loads(vp.read_text(encoding="utf-8"))
+                self._db_save_vec(vp.stem + ".md", vec)
+                vp.unlink()
+                migrated += 1
+            except Exception:
+                pass
+        if migrated:
+            print(f"[memory] migrated {migrated} .vec sidecars → memory.db", flush=True)
+
+    def _db_load_vec(self, filename: str) -> list[float] | None:
+        import sqlite3
+        try:
+            con = sqlite3.connect(str(self._db_path))
+            row = con.execute(
+                "SELECT vec FROM embeddings WHERE filename = ?", (filename,)
+            ).fetchone()
+            con.close()
+            return json.loads(row[0]) if row else None
+        except Exception:
+            return None
+
+    def _db_save_vec(self, filename: str, vec: list[float]) -> None:
+        import sqlite3
+        try:
+            con = sqlite3.connect(str(self._db_path))
+            con.execute("PRAGMA journal_mode=WAL")
+            con.execute(
+                "INSERT OR REPLACE INTO embeddings (filename, vec) VALUES (?, ?)",
+                (filename, json.dumps(vec)),
+            )
+            con.commit()
+            con.close()
+        except Exception:
+            pass
+
+    def _db_delete_vec(self, filename: str) -> None:
+        import sqlite3
+        try:
+            con = sqlite3.connect(str(self._db_path))
+            con.execute("DELETE FROM embeddings WHERE filename = ?", (filename,))
+            con.commit()
+            con.close()
+        except Exception:
+            pass
+
+    def _db_all_vecs(self) -> list[tuple[str, list[float]]]:
+        """Return all (filename, vec) rows from memory.db."""
+        import sqlite3
+        try:
+            con = sqlite3.connect(str(self._db_path))
+            rows = con.execute("SELECT filename, vec FROM embeddings").fetchall()
+            con.close()
+            return [(r[0], json.loads(r[1])) for r in rows]
+        except Exception:
+            return []
 
     def _embed(self, text: str) -> list[float] | None:
         """Call Gemini embedding API. Returns a float vector or None on failure."""
@@ -537,27 +621,9 @@ class Memory:
             return 0.0
         return dot / (mag_a * mag_b)
 
-    def _vec_path(self, md_path: Path) -> Path:
-        return md_path.with_suffix(".vec")
-
-    def _load_vec(self, md_path: Path) -> list[float] | None:
-        vp = self._vec_path(md_path)
-        if not vp.exists():
-            return None
-        try:
-            return json.loads(vp.read_text(encoding="utf-8"))
-        except Exception:
-            return None
-
-    def _save_vec(self, md_path: Path, vec: list[float]) -> None:
-        try:
-            self._vec_path(md_path).write_text(json.dumps(vec), encoding="utf-8")
-        except Exception:
-            pass
-
     def _embed_entry(self, path: Path, text: str) -> None:
-        """Compute and cache the embedding for a memory file if not already cached."""
-        if self._vec_path(path).exists():
+        """Compute and persist the embedding for a memory file if not cached."""
+        if self._db_load_vec(path.name) is not None:
             return
         name_match = re.search(r"^name:\s*(.+)$", text, re.MULTILINE)
         desc_match = re.search(r"^description:\s*(.+)$", text, re.MULTILINE)
@@ -569,15 +635,36 @@ class Memory:
         ]))
         vec = self._embed(embed_text)
         if vec:
-            self._save_vec(path, vec)
+            self._db_save_vec(path.name, vec)
+
+    def _dedup_check(self, filename: str, vec: list[float]) -> str | None:
+        """Warn if a near-duplicate memory already exists (cosine ≥ 0.92).
+
+        Called at write time so the agent can update an existing entry
+        rather than create a redundant duplicate.
+        """
+        candidates = [
+            (self._cosine(vec, v), fn)
+            for fn, v in self._db_all_vecs()
+            if fn != filename
+        ]
+        if not candidates:
+            return None
+        best_sim, best_fn = max(candidates, key=lambda x: x[0])
+        if best_sim >= 0.92:
+            return (
+                f"NOTE: a very similar memory already exists ({best_fn}, "
+                f"similarity={best_sim:.2f}). Consider calling remember() with "
+                f"name='{best_fn[:-3]}' to update it instead of creating a duplicate."
+            )
+        return None
 
     def search(self, query: str, limit: int = 3, max_chars: int = 900) -> str:
         """Return the most relevant memory snippets for a query.
 
-        Uses semantic embedding similarity (Gemini text-embedding-004) when
-        available. Falls back to keyword overlap when the API is unreachable.
-        Vectors are pre-computed on write and cached as .vec sidecars, so
-        this method only costs one embedding API call (the query).
+        Uses semantic embedding similarity (Gemini) when available. Vectors
+        are stored in memory.db — one row per entry, loaded in a single
+        query. Falls back to keyword overlap when the API is unreachable.
         """
         # Guard: skip injection on vague follow-ups ("yes", "ok", "more").
         terms = self._query_terms(query)
@@ -602,20 +689,22 @@ class Memory:
         # Attempt embedding search.
         query_vec = self._embed(query[:2000])
         if query_vec:
-            # Backfill any entries that don't have vectors yet (lazy migration).
+            # Backfill any entries missing from the DB (lazy migration).
             for path, text in candidates:
                 self._embed_entry(path, text)
 
+            # Load all vectors in one DB round-trip.
+            db_vecs = dict(self._db_all_vecs())
+            text_by_name = {p.name: t for p, t in candidates}
+
             scored_embed: list[tuple[float, float, Path, str]] = []
             for path, text in candidates:
-                vec = self._load_vec(path)
+                vec = db_vecs.get(path.name)
                 if vec is None:
                     continue
                 sim = self._cosine(query_vec, vec)
                 scored_embed.append((sim, path.stat().st_mtime, path, text))
 
-            # Only keep results above a minimum similarity threshold.
-            # Below 0.65 the match is likely irrelevant noise.
             MIN_SIM = 0.65
             scored_embed = [s for s in scored_embed if s[0] >= MIN_SIM]
             scored_embed.sort(key=lambda s: (s[0], s[1]), reverse=True)
@@ -623,7 +712,7 @@ class Memory:
             if scored_embed:
                 return self._format_snippets(scored_embed[:limit], max_chars)
 
-        # Fallback: keyword overlap (original approach).
+        # Fallback: keyword overlap.
         scored_kw: list[tuple[int, float, Path, str]] = []
         for path, text in candidates:
             haystack = f"{path.stem}\n{text}".lower()
@@ -771,12 +860,17 @@ class Memory:
                 pass
 
         path.write_text(content, encoding="utf-8")
-        # Pre-compute and cache the embedding so the first search is instant.
-        # We invalidate any stale .vec file first (content changed on upsert).
-        vec_p = self._vec_path(path)
-        if vec_p.exists():
-            vec_p.unlink()
+        # Re-embed: delete existing row so _embed_entry will recompute.
+        self._db_delete_vec(path.name)
         self._embed_entry(path, content)
+        # Dedup hint: if the new embedding is very similar to an existing entry,
+        # append a note so the agent knows it may have created a near-duplicate.
+        dedup_note = ""
+        new_vec = self._db_load_vec(path.name)
+        if new_vec:
+            warn = self._dedup_check(path.name, new_vec)
+            if warn:
+                dedup_note = f"\n\n{warn}"
         self._upsert_index_entry(name, description, filename)
 
         action = "updated" if old_body_preview is not None else "created"
@@ -787,9 +881,9 @@ class Memory:
         if old_body_preview is not None:
             return (
                 f"Saved memory '{name}' to {filename} (overwrote previous content: {old_body_preview!r}). "
-                "If you replaced a list, verify the new body includes all prior entries."
+                f"If you replaced a list, verify the new body includes all prior entries.{dedup_note}"
             )
-        return f"Saved memory '{name}' to {filename}"
+        return f"Saved memory '{name}' to {filename}{dedup_note}"
 
     def forget(self, identifier: str) -> str:
         """Delete a memory by name OR by filename. Returns a status string.
@@ -811,10 +905,7 @@ class Memory:
             path = self.root / filename
             if path.exists():
                 path.unlink()
-            # Clean up the embedding sidecar too.
-            vec_p = self._vec_path(path)
-            if vec_p.exists():
-                vec_p.unlink()
+            self._db_delete_vec(filename)
             self._remove_index_entry(filename)
             removed.append(filename)
         if _events and removed:
