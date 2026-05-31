@@ -96,6 +96,37 @@ Step 2 — Look for PATTERNS worth carrying forward:
   should start with "Trigger:" (when to use it) and then numbered
   steps. Keep it short — the procedure, not the prose.
 
+Step 2.5 — Skill evaluate+refine (do this BEFORE saving new memories):
+Read the task state file:
+    read_file("tasks/tasks.json")
+
+For each task in the file that has `last_runs` entries from yesterday
+({yesterday}), check if a skill memory exists for that task. To find
+a matching skill: look in your memory index for entries named
+`skill_<slug>` where the slug resembles the task title (e.g., task
+"Daily LeetCode" → skill_daily-leetcode). For each match:
+
+a) If the task's last_runs from yesterday show ONLY successes:
+   No action needed — the skill is working.
+
+b) If the task's last_runs from yesterday show ANY failures:
+   - Read the current skill memory body.
+   - Identify what step failed (look at the error in `result` field).
+   - Rewrite the skill with a corrected step or a "watch out" note
+     added to the failing step.
+   - Call remember() with the SAME name (e.g. `skill_daily-leetcode`)
+     to overwrite the existing skill in place — do NOT create a new one.
+   - The updated skill should include a "Last fixed: {yesterday}" note
+     at the top so you can track when it was last refined.
+
+c) If a task ran yesterday but has NO matching skill yet (task was
+   manually run or is new), AND it succeeded, treat it like Step 2 —
+   save a new skill memory if the workflow was non-trivial.
+
+This is how skills self-improve: each reflection tick patches the
+procedure based on real run data rather than leaving broken steps in
+place forever.
+
 Step 3 — Save AT MOST 3 new memories via remember(). Fewer is fine.
 Skip anything trivial or already covered by an existing memory in your
 index. Quality over quantity. If a new fact updates an existing memory,
