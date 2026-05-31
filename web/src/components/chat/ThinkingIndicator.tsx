@@ -1,20 +1,6 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { useEventStream } from "@/hooks/useEventStream";
-import { HomunculusRobot, type RobotState } from "@/components/robot/HomunculusRobot";
-
-/**
- * ThinkingIndicator — the agent's pixel face INHABITS the loading state.
- *
- * Drop-in replacement for the previous dot+label indicator. Same public
- * API: `<ThinkingIndicator active={boolean} />`. Reads the live SSE feed
- * to (a) drive the robot's state (thinking ↔ working) and (b) stream a
- * compact tool-trace beside the face. When `active` flips false, it
- * collapses into a quiet "thought for Ns · k tools" summary line.
- *
- * Why: a generic spinner says "wait"; a living face mid-task says
- * "the agent is doing something for you." That difference is the brand.
- */
 
 interface TraceStep {
   id: string;
@@ -27,40 +13,46 @@ interface TraceStep {
 export function ThinkingIndicator({ active }: { active: boolean }) {
   const { events } = useEventStream(40);
   const [steps, setSteps] = useState<TraceStep[]>([]);
-  const [robotState, setRobotState] = useState<RobotState>("thinking");
+  const [phase, setPhase] = useState<"thinking" | "working">("thinking");
   const [elapsed, setElapsed] = useState(0);
-  const startRef = useRef<number>(0);
+  const startPerfRef = useRef<number>(0);
+  const startWallRef = useRef<number>(0);
   const seenRef = useRef<Set<string>>(new Set());
   const toolCountRef = useRef(0);
 
-  // reset on each new "active" cycle
+  // Reset on each new turn.
   useEffect(() => {
     if (active) {
-      startRef.current = performance.now();
+      startPerfRef.current = performance.now();
+      startWallRef.current = Date.now();
       seenRef.current = new Set();
       toolCountRef.current = 0;
       setSteps([]);
-      setRobotState("thinking");
+      setPhase("thinking");
+      setElapsed(0);
     }
   }, [active]);
 
-  // elapsed timer
+  // Elapsed timer.
   useEffect(() => {
     if (!active) return;
-    const t = setInterval(() => setElapsed((performance.now() - startRef.current) / 1000), 100);
+    const t = setInterval(() => setElapsed((performance.now() - startPerfRef.current) / 1000), 100);
     return () => clearInterval(t);
   }, [active]);
 
-  // ingest feed events into the trace + drive robot state
+  // Ingest feed events — only events after the turn started.
   useEffect(() => {
     if (!active) return;
     const next: TraceStep[] = [];
     for (const e of events) {
+      const ts = new Date(e.ts).getTime();
+      // Skip events from before this turn started.
+      if (ts < startWallRef.current - 2000) continue;
       const id = `${e.ts}-${e.event}-${e.name ?? ""}`;
       if (seenRef.current.has(id)) continue;
-      const ts = new Date(e.ts).getTime();
+      seenRef.current.add(id);
       if (e.event === "llm_call") {
-        next.push({ id, ts, kind: "llm", label: "llm_call · reasoning" });
+        next.push({ id, ts, kind: "llm", label: "reasoning…" });
       } else if (e.event === "tool_call" && e.name) {
         toolCountRef.current += 1;
         next.push({ id, ts, kind: "tool_call", label: `${e.name}(…)` });
@@ -68,58 +60,46 @@ export function ThinkingIndicator({ active }: { active: boolean }) {
         const isError = typeof e.result === "string" && e.result.startsWith("ERROR");
         next.push({ id, ts, kind: "tool_result", label: isError ? "error" : "ok", isError });
       }
-      seenRef.current.add(id);
     }
     if (next.length) {
       setSteps((prev) => [...prev, ...next].slice(-5));
       const last = next[next.length - 1];
-      setRobotState(last.kind === "tool_call" ? "working" : "thinking");
+      setPhase(last.kind === "tool_call" ? "working" : "thinking");
     }
   }, [events, active]);
 
-  // ── collapsed summary (after the turn) ───────────────────────────
+  // Collapsed summary shown after the turn completes.
   if (!active) {
     if (steps.length === 0) return null;
+    const n = toolCountRef.current;
     return (
       <motion.div
         initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
         className="flex items-center gap-2 mt-2 text-[11px] uppercase tracking-[0.14em]"
         style={{ color: "var(--color-text-muted)" }}
       >
-        ▸ thought for {elapsed.toFixed(1)}s · {toolCountRef.current} tool{toolCountRef.current === 1 ? "" : "s"}
+        ▸ thought for {elapsed.toFixed(1)}s{n > 0 ? ` · ${n} tool${n === 1 ? "" : "s"}` : ""}
       </motion.div>
     );
   }
 
-  // ── active indicator: face + live trace ──────────────────────────
+  // Active indicator: status text + live trace (no duplicate robot — sidebar has one).
   return (
     <motion.div
       initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-      className="grid mt-3 gap-3"
-      style={{ gridTemplateColumns: "40px 1fr" }}
+      className="flex flex-col gap-2 mt-3 min-w-0"
     >
-      {/* the face IS the spinner */}
-      <div
-        style={{
-          width: 38, height: 44,
-          border: "1px solid var(--color-border)",
-          background: "var(--color-surface-1)",
-        }}
-      >
-        <HomunculusRobot state={robotState} detail="low" style={{ width: "100%", height: "100%" }} />
+      <div className="flex items-center gap-2.5">
+        <span className="text-[11px] uppercase tracking-[0.14em]" style={{ color: "var(--color-accent)" }}>
+          {phase === "working" ? "Working" : "Thinking"}
+        </span>
+        <ThinkDots />
+        <span className="ml-auto text-[10px] tracking-[0.12em]" style={{ color: "var(--color-text-muted)" }}>
+          {elapsed.toFixed(1)}s
+        </span>
       </div>
 
-      <div className="flex flex-col gap-2 pt-0.5 min-w-0">
-        <div className="flex items-center gap-2.5">
-          <span className="text-[11px] uppercase tracking-[0.14em]" style={{ color: "var(--color-accent)" }}>
-            {robotState === "working" ? "Working" : "Thinking"}
-          </span>
-          <ThinkDots />
-          <span className="ml-auto text-[10px] tracking-[0.12em]" style={{ color: "var(--color-text-muted)" }}>
-            {elapsed.toFixed(1)}s
-          </span>
-        </div>
-
+      {steps.length > 0 && (
         <div
           className="flex flex-col gap-1 pl-3 min-w-0"
           style={{ borderLeft: "1px solid var(--color-border-strong)" }}
@@ -129,10 +109,9 @@ export function ThinkingIndicator({ active }: { active: boolean }) {
               <motion.div
                 key={s.id}
                 initial={{ opacity: 0, x: -4 }}
-                animate={{ opacity: i === steps.length - 1 ? 1 : 0.5, x: 0 }}
+                animate={{ opacity: i === steps.length - 1 ? 1 : 0.45, x: 0 }}
                 exit={{ opacity: 0 }}
                 className="text-[11.5px] truncate"
-                style={{ color: "var(--color-text-muted)" }}
               >
                 <span style={{ color: "var(--color-text-faint)", marginRight: 8 }}>{fmtTime(s.ts)}</span>
                 <span style={{ color: glyphColor(s), marginRight: 6 }}>{glyph(s)}</span>
@@ -141,7 +120,7 @@ export function ThinkingIndicator({ active }: { active: boolean }) {
             ))}
           </AnimatePresence>
         </div>
-      </div>
+      )}
     </motion.div>
   );
 }
