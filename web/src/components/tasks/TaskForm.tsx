@@ -33,10 +33,15 @@ export function TaskForm({ open, onClose, onCreated }: Props) {
     if (!title.trim()) { setErr("Title is required."); return; }
     setBusy(true); setErr(null);
     try {
+      // datetime-local gives local time without timezone. Convert to UTC ISO
+      // so the server (running in UTC) stores the correct wall-clock time.
+      const due_at = dueAt
+        ? new Date(`${dueAt}:00`).toISOString().replace(".000Z", "Z")
+        : null;
       const task = await api.tasksCreate({
         title: title.trim(),
         description: description.trim(),
-        due_at: dueAt ? `${dueAt}:00` : null,
+        due_at,
         recurrence,
         notify,
       });

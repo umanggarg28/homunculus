@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, parseServerIso } from "@/lib/api";
 import type { Task } from "@/lib/types";
 
 interface Props {
@@ -38,7 +38,7 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
   };
 
   const isActive = task.status === "active";
-  const due = task.due_at ? new Date(task.due_at).getTime() : null;
+  const due = task.due_at ? parseServerIso(task.due_at) : null;
   const isOverdue = due !== null && due <= now && isActive;
   const lastRunFailed = task.last_runs?.length > 0 && task.last_runs[task.last_runs.length - 1]?.status === "failure";
 

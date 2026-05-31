@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "@/lib/api";
+import { api, parseServerIso } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import type { Task } from "@/lib/types";
@@ -59,8 +59,7 @@ export function UpNextList() {
 }
 
 function formatDue(iso: string): string {
-  const d = new Date(iso);
-  const diffMin = Math.floor((d.getTime() - Date.now()) / 60000);
+  const diffMin = Math.floor((parseServerIso(iso) - Date.now()) / 60000);
   if (diffMin < 0) return "overdue";
   if (diffMin < 60) return `in ${diffMin}m`;
   if (diffMin < 60 * 24) return `in ${Math.floor(diffMin / 60)}h`;

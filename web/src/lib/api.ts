@@ -1,6 +1,18 @@
 // Typed fetch wrappers. Every network call goes through here so route
 // changes are one-line edits and tests can mock a single module.
 
+/**
+ * Parse a naive ISO datetime string from the server as UTC.
+ * The server (Docker) runs in UTC and stores datetimes without timezone info.
+ * JavaScript's `new Date("2026-06-01T03:30:00")` treats no-timezone strings
+ * as LOCAL time — wrong. Appending "Z" forces UTC interpretation.
+ */
+export function parseServerIso(iso: string): number {
+  if (!iso) return NaN;
+  const hasZone = iso.endsWith("Z") || iso.includes("+") || /[+-]\d{2}:\d{2}$/.test(iso);
+  return new Date(hasZone ? iso : iso + "Z").getTime();
+}
+
 import type {
   Chapter,
   MemoryEntry,
