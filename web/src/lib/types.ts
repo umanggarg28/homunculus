@@ -91,7 +91,9 @@ export type EventKind =
   | "assistant_reply"
   | "tool_call"
   | "tool_result"
-  | "llm_call";
+  | "llm_call"
+  | "memory_write"
+  | "memory_forget";
 
 export interface FeedEvent {
   ts: string;

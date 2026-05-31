@@ -11,6 +11,8 @@ const KIND_COLOR: Record<string, string> = {
   llm_call:         "var(--color-amber)",
   output_guard:     "var(--color-danger)",
   self_correction:  "var(--color-warning)",
+  memory_write:     "#818cf8",
+  memory_forget:    "var(--color-text-faint)",
 };
 
 const KIND_GLYPH: Record<string, string> = {
@@ -21,6 +23,8 @@ const KIND_GLYPH: Record<string, string> = {
   llm_call:         "λ",
   output_guard:     "⚠",
   self_correction:  "↺",
+  memory_write:     "✦",
+  memory_forget:    "✕",
 };
 
 const COMPACT_LEN = 280;
@@ -154,6 +158,8 @@ function getFullDetail(e: FeedEvent): string {
     }
     case "output_guard":    return e.text ?? e.result ?? "reply blocked by output guard";
     case "self_correction": return `correcting: ${e.text ?? ""} | was: ${e.result ?? ""}`;
+    case "memory_write":    return `${(e as FeedEvent & { action?: string }).action ?? "saved"}: ${(e as FeedEvent & { memory_name?: string; description?: string }).memory_name ?? e.name ?? ""} — ${(e as FeedEvent & { description?: string }).description ?? ""}`;
+    case "memory_forget":   return e.text ?? e.name ?? "";
     default:                return JSON.stringify(e, null, 2);
   }
 }

@@ -39,6 +39,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
+try:
+    import events as _events
+except ImportError:
+    _events = None  # type: ignore
+
 ALLOWED_TYPES = {"user", "feedback", "project", "reference", "skill"}
 
 _INDEX_HEADER = "# Memory\n\nThis index lists every durable fact I've remembered. Full bodies live in the linked files; use read_file to fetch one when relevant.\n\n"
@@ -774,6 +779,11 @@ class Memory:
         self._embed_entry(path, content)
         self._upsert_index_entry(name, description, filename)
 
+        action = "updated" if old_body_preview is not None else "created"
+        if _events:
+            _events.emit("memory_write", name=filename, memory_name=name,
+                         description=description, memory_type=type, action=action)
+
         if old_body_preview is not None:
             return (
                 f"Saved memory '{name}' to {filename} (overwrote previous content: {old_body_preview!r}). "
@@ -807,6 +817,9 @@ class Memory:
                 vec_p.unlink()
             self._remove_index_entry(filename)
             removed.append(filename)
+        if _events and removed:
+            _events.emit("memory_forget", name=removed[0],
+                         text=f"forgot: {', '.join(removed)}")
         return f"Forgot memory: {', '.join(removed)}"
 
     def _resolve_filename(self, identifier: str) -> list[str]:

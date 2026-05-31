@@ -156,21 +156,56 @@ function RunSparkline({ runs }: { runs: import("@/lib/types").TaskRun[] }) {
   const last = runs.slice(-12);
   const failures = last.filter((r) => r.status === "failure").length;
   const label = `${last.length - failures}/${last.length} ok`;
+  const [tipIdx, setTipIdx] = useState<number | null>(null);
+
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 3 }} title={label}>
-      {last.map((r, i) => (
-        <div
-          key={i}
-          title={`${r.ts} · ${r.status}${r.duration_s != null ? ` · ${r.duration_s}s` : ""}`}
-          style={{
-            width: 5,
-            height: 10,
-            background: r.status === "success" ? "var(--color-accent)" : "var(--color-danger)",
-            opacity: 0.3 + 0.7 * ((i + 1) / last.length),
-            flexShrink: 0,
-          }}
-        />
-      ))}
+    <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+      {last.map((r, i) => {
+        const d = new Date(parseServerIso(r.ts));
+        const tipText = [
+          d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }),
+          r.status,
+          r.duration_s != null ? `${r.duration_s}s` : null,
+        ].filter(Boolean).join(" · ");
+
+        return (
+          <div
+            key={i}
+            onMouseEnter={(e) => { e.stopPropagation(); setTipIdx(i); }}
+            onMouseLeave={() => setTipIdx(null)}
+            style={{ position: "relative", flexShrink: 0 }}
+          >
+            <div
+              style={{
+                width: 6,
+                height: 12,
+                background: r.status === "success" ? "var(--color-accent)" : "var(--color-danger)",
+                opacity: 0.3 + 0.7 * ((i + 1) / last.length),
+                cursor: "default",
+              }}
+            />
+            {tipIdx === i && (
+              <div style={{
+                position: "absolute",
+                bottom: "calc(100% + 4px)",
+                left: "50%",
+                transform: "translateX(-50%)",
+                background: "var(--color-surface-2)",
+                border: "1px solid var(--color-border-strong)",
+                padding: "3px 7px",
+                fontSize: 9,
+                letterSpacing: "0.06em",
+                whiteSpace: "nowrap",
+                color: "var(--color-text)",
+                pointerEvents: "none",
+                zIndex: 50,
+              }}>
+                {tipText}
+              </div>
+            )}
+          </div>
+        );
+      })}
       <span style={{ fontSize: 9, letterSpacing: "0.08em", color: failures > 0 ? "var(--color-amber)" : "var(--color-text-faint)", marginLeft: 2 }}>
         {label}
       </span>

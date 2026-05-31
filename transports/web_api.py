@@ -489,6 +489,79 @@ def agent_upcoming() -> JSONResponse:
     })
 
 
+# --- API: stats -----------------------------------------------------------
+
+@app.get("/api/stats/today", dependencies=[Depends(require_web_auth)])
+def stats_today(since: str = "") -> JSONResponse:
+    """Return activity counts since a given UTC ISO timestamp (defaults to UTC midnight).
+
+    Returns events, unique tools used, tasks fired, memory writes/forgets.
+    Scans _events.jsonl from the end for efficiency — stops once past the cutoff.
+    """
+    from datetime import timezone
+    if since:
+        try:
+            cutoff = datetime.fromisoformat(since.replace("Z", "+00:00"))
+            if cutoff.tzinfo is None:
+                cutoff = cutoff.replace(tzinfo=timezone.utc)
+        except ValueError:
+            cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    events_path = Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
+    total_events = 0
+    unique_tools: set[str] = set()
+    tasks_fired = 0
+    memory_writes = 0
+    memory_forgets = 0
+
+    if events_path.exists():
+        try:
+            with events_path.open("r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+            for line in reversed(lines):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ts_raw = rec.get("ts", "")
+                try:
+                    ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+                if ts < cutoff:
+                    break
+                total_events += 1
+                evt = rec.get("event", "")
+                if evt == "tool_call":
+                    name = rec.get("name") or ""
+                    if name:
+                        unique_tools.add(name)
+                    if name == "complete_task":
+                        tasks_fired += 1
+                elif evt == "memory_write":
+                    memory_writes += 1
+                elif evt == "memory_forget":
+                    memory_forgets += 1
+        except OSError:
+            pass
+
+    return JSONResponse({
+        "since": cutoff.isoformat(),
+        "events": total_events,
+        "unique_tools": len(unique_tools),
+        "tasks_fired": tasks_fired,
+        "memory_writes": memory_writes,
+        "memory_forgets": memory_forgets,
+    })
+
+
 # --- API: logs ------------------------------------------------------------
 
 @app.get("/api/logs", dependencies=[Depends(require_web_auth)])
