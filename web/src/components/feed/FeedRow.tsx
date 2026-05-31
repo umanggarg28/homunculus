@@ -147,7 +147,12 @@ function getFullDetail(e: FeedEvent): string {
     case "tool_call":       return formatArgs(e.args);
     case "tool_result":     return e.result ?? "";
     case "llm_call": {
-      const header = `${e.model ?? ""} via ${e.host ?? ""}`;
+      const tokenParts: string[] = [];
+      if (e.input_tokens != null) tokenParts.push(`${e.input_tokens}in`);
+      if (e.output_tokens != null) tokenParts.push(`${e.output_tokens}out`);
+      if (e.cached_tokens) tokenParts.push(`${e.cached_tokens}cached`);
+      const tokenStr = tokenParts.length ? `  [${tokenParts.join(" · ")}]` : "";
+      const header = `${e.model ?? ""} via ${e.host ?? ""}${tokenStr}`;
       if (!e.request) return header;
       try {
         const parsed = JSON.parse(e.request);

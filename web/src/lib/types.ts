@@ -107,4 +107,7 @@ export interface FeedEvent {
   model?: string;
   host?: string;
   request?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  cached_tokens?: number;
 }

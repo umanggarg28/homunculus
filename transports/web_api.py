@@ -515,6 +515,9 @@ def stats_today(since: str = "") -> JSONResponse:
     tasks_fired = 0
     memory_writes = 0
     memory_forgets = 0
+    input_tokens = 0
+    output_tokens = 0
+    cached_tokens = 0
 
     if events_path.exists():
         try:
@@ -549,6 +552,10 @@ def stats_today(since: str = "") -> JSONResponse:
                     memory_writes += 1
                 elif evt == "memory_forget":
                     memory_forgets += 1
+                elif evt == "llm_call":
+                    input_tokens += rec.get("input_tokens") or 0
+                    output_tokens += rec.get("output_tokens") or 0
+                    cached_tokens += rec.get("cached_tokens") or 0
         except OSError:
             pass
 
@@ -559,6 +566,9 @@ def stats_today(since: str = "") -> JSONResponse:
         "tasks_fired": tasks_fired,
         "memory_writes": memory_writes,
         "memory_forgets": memory_forgets,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cached_tokens": cached_tokens,
     })
 
 

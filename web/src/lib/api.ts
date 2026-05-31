@@ -150,6 +150,9 @@ export const api = {
       tasks_fired: number;
       memory_writes: number;
       memory_forgets: number;
+      input_tokens: number;
+      output_tokens: number;
+      cached_tokens: number;
     }>(`/stats/today?since=${encodeURIComponent(sinceIso)}`),
 
   tasksCreate: (body: {

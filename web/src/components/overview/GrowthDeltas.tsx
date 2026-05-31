@@ -7,6 +7,16 @@ interface TodayStats {
   tasks_fired: number;
   memory_writes: number;
   memory_forgets: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+}
+
+// Approximate cost in USD cents based on token counts.
+// Uses a conservative blended estimate (~$3/1M input, $15/1M output).
+function estimateCostCents(input: number, output: number, cached: number): number {
+  const uncached = Math.max(0, input - cached);
+  return (uncached * 3 + cached * 0.3 + output * 15) / 1_000_000 * 100;
 }
 
 /** Activity since local midnight — reads from the real events log via API. */
@@ -31,6 +41,12 @@ export function GrowthDeltas() {
   if (!stats) return null;
 
   const memDelta = stats.memory_writes - stats.memory_forgets;
+  const costCents = estimateCostCents(
+    stats.input_tokens ?? 0,
+    stats.output_tokens ?? 0,
+    stats.cached_tokens ?? 0,
+  );
+  const totalTokens = (stats.input_tokens ?? 0) + (stats.output_tokens ?? 0);
 
   return (
     <div
@@ -59,6 +75,12 @@ export function GrowthDeltas() {
         label={memDelta >= 0 ? "memories written" : "memories pruned"}
         positive={memDelta >= 0}
       />
+      {totalTokens > 0 && (
+        <>
+          <Sep />
+          <TokenCost tokens={totalTokens} costCents={costCents} />
+        </>
+      )}
     </div>
   );
 }
@@ -81,6 +103,25 @@ function Delta({
       </span>
       <span style={{ color: "var(--color-text-muted)" }}>
         {label}{suffix ?? ""}
+      </span>
+    </span>
+  );
+}
+
+function TokenCost({ tokens, costCents }: { tokens: number; costCents: number }) {
+  const tokStr = tokens >= 1000
+    ? `${(tokens / 1000).toFixed(1)}k`
+    : tokens.toString();
+  const costStr = costCents >= 100
+    ? `$${(costCents / 100).toFixed(2)}`
+    : `¢${costCents.toFixed(1)}`;
+  return (
+    <span className="flex items-baseline gap-1.5 text-[11px] uppercase tracking-[0.12em]">
+      <span style={{ color: "var(--color-amber)", fontSize: 15, letterSpacing: "-0.02em" }}>
+        {tokStr}
+      </span>
+      <span style={{ color: "var(--color-text-muted)" }}>
+        tok · {costStr}
       </span>
     </span>
   );
