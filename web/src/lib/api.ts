@@ -153,6 +153,7 @@ export const api = {
       input_tokens: number;
       output_tokens: number;
       cached_tokens: number;
+      budget_cents: number;
     }>(`/stats/today?since=${encodeURIComponent(sinceIso)}`),
 
   tasksCreate: (body: {

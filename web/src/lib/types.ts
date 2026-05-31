@@ -92,6 +92,8 @@ export type EventKind =
   | "tool_call"
   | "tool_result"
   | "llm_call"
+  | "output_guard"
+  | "self_correction"
   | "memory_write"
   | "memory_forget";
 

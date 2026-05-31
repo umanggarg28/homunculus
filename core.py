@@ -876,6 +876,7 @@ class Agent:
         events.emit("user_message", text=events.full_text(user_message))
 
         tool_names_used: set[str] = set()
+        call_counts: dict[tuple[str, str], int] = {}
 
         for _ in range(MAX_TURNS):
             if streaming:
@@ -958,11 +959,29 @@ class Agent:
                     args=events.truncate_preview(json.dumps(args, ensure_ascii=False), limit=800),
                 )
 
+                # Loop/stuck detection: same (tool, args) called 3+ times this
+                # session signals the agent is looping. Inject a corrective result
+                # instead of executing, so the LLM sees the warning and pivots.
+                canon_args = json.dumps(args, sort_keys=True)
+                call_key = (name, canon_args)
+                call_counts[call_key] = call_counts.get(call_key, 0) + 1
+                if call_counts[call_key] >= 3:
+                    result = (
+                        f"STUCK_LOOP: '{name}' has been called with these exact arguments "
+                        f"{call_counts[call_key]} times this session. You are in a loop. "
+                        "Stop, reason about why the previous calls did not achieve the goal, "
+                        "and try a fundamentally different approach or ask the user for help."
+                    )
+                    events.emit(
+                        "output_guard",
+                        name=name,
+                        text=f"stuck loop: {name} × {call_counts[call_key]}",
+                        result=canon_args[:120],
+                    )
                 # Schema-validate args before dispatch. On failure the LLM
                 # gets a structured error and can correct + retry rather
                 # than running the tool with garbage arguments.
-                validation_error = _validate_tool_args(name, args)
-                if validation_error:
+                elif validation_error := _validate_tool_args(name, args):
                     result = (
                         f"ERROR: invalid arguments for '{name}': {validation_error}. "
                         f"Check the tool schema and retry with corrected arguments."

@@ -7,12 +7,20 @@ interface Alert {
   text: string;
 }
 
+// Approximate cost in USD cents — mirrors GrowthDeltas estimate.
+function estimateCostCents(input: number, output: number, cached: number): number {
+  const uncached = Math.max(0, input - cached);
+  return (uncached * 3 + cached * 0.3 + output * 15) / 1_000_000 * 100;
+}
+
 /** Contextual alert strip — surfaces hard failures (recent tool
- *  errors, missing API keys, failed task runs) at the top of every
- *  page. Hairline border in danger/amber, hides itself when clean. */
+ *  errors, missing API keys, failed task runs, stuck loops, budget overrun)
+ *  at the top of every page. Hairline border in danger/amber, hides itself when clean. */
 export function AlertBanner() {
   const { events } = useEventStream(200);
   const [tasksFailed, setTasksFailed] = useState(0);
+  const [budgetCents, setBudgetCents] = useState(0);
+  const [spentCents, setSpentCents] = useState(0);
 
   useEffect(() => {
     api.tasksList("all").then((tasks) => {
@@ -27,16 +35,25 @@ export function AlertBanner() {
     }).catch(() => undefined);
   }, [events.length]);
 
+  useEffect(() => {
+    const localMidnight = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.toISOString(); })();
+    api.statsToday(localMidnight).then((s) => {
+      setBudgetCents(s.budget_cents ?? 0);
+      setSpentCents(estimateCostCents(s.input_tokens ?? 0, s.output_tokens ?? 0, s.cached_tokens ?? 0));
+    }).catch(() => undefined);
+  }, [events.length]);
+
   const alerts = useMemo<Alert[]>(() => {
     const out: Alert[] = [];
-    // Recent tool failures (last 5 minutes)
-    const cutoff = Date.now() - 5 * 60 * 1000;
+    const cutoff5m = Date.now() - 5 * 60 * 1000;
+
+    // Recent tool failures
     const recentErr = events.filter(
       (e) =>
         e.event === "tool_result" &&
         typeof e.result === "string" &&
         e.result.startsWith("ERROR") &&
-        new Date(e.ts).getTime() >= cutoff,
+        new Date(e.ts).getTime() >= cutoff5m,
     );
     if (recentErr.length > 0) {
       out.push({
@@ -44,14 +61,45 @@ export function AlertBanner() {
         text: `${recentErr.length} tool error${recentErr.length > 1 ? "s" : ""} in the last 5 min · check traces`,
       });
     }
+
+    // Stuck-loop detection
+    const recentLoops = events.filter(
+      (e) =>
+        e.event === "output_guard" &&
+        typeof e.text === "string" &&
+        e.text.startsWith("stuck loop") &&
+        new Date(e.ts).getTime() >= cutoff5m,
+    );
+    if (recentLoops.length > 0) {
+      const last = recentLoops[recentLoops.length - 1];
+      out.push({
+        level: "danger",
+        text: `agent stuck: ${last.name ?? "tool"} called repeatedly · check traces`,
+      });
+    }
+
     if (tasksFailed > 0) {
       out.push({
         level: "warn",
         text: `${tasksFailed} task run${tasksFailed > 1 ? "s" : ""} failed today · check task detail`,
       });
     }
+
+    // Budget guard
+    if (budgetCents > 0 && spentCents > 0) {
+      const pct = spentCents / budgetCents;
+      if (pct >= 1) {
+        const costStr = spentCents >= 100 ? `$${(spentCents / 100).toFixed(2)}` : `¢${spentCents.toFixed(1)}`;
+        const capStr = budgetCents >= 100 ? `$${(budgetCents / 100).toFixed(2)}` : `¢${budgetCents.toFixed(1)}`;
+        out.push({ level: "danger", text: `daily budget exceeded: ${costStr} spent of ${capStr} cap` });
+      } else if (pct >= 0.8) {
+        const pctStr = Math.round(pct * 100);
+        out.push({ level: "warn", text: `${pctStr}% of daily budget used` });
+      }
+    }
+
     return out;
-  }, [events, tasksFailed]);
+  }, [events, tasksFailed, budgetCents, spentCents]);
 
   if (alerts.length === 0) return null;
 

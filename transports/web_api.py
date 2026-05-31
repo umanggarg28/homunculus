@@ -559,6 +559,7 @@ def stats_today(since: str = "") -> JSONResponse:
         except OSError:
             pass
 
+    budget_usd = float(os.environ.get("HOMUNCULUS_DAILY_BUDGET_USD", "0") or "0")
     return JSONResponse({
         "since": cutoff.isoformat(),
         "events": total_events,
@@ -569,6 +570,7 @@ def stats_today(since: str = "") -> JSONResponse:
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "cached_tokens": cached_tokens,
+        "budget_cents": round(budget_usd * 100, 2),
     })
 
 
