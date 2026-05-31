@@ -100,6 +100,7 @@ class TaskStore:
         due_at: str | None = None,
         recurrence: str = "none",
         notify: bool = False,
+        success_criteria: list | None = None,
     ) -> dict[str, Any]:
         recurrence = recurrence or "none"
         if recurrence not in ALLOWED_RECURRENCE:
@@ -123,6 +124,8 @@ class TaskStore:
                 # Dedupe + circuit breaker fields.
                 "last_fired_at": None,
                 "consecutive_failures": 0,
+                # Machine-checked before complete_task is accepted.
+                "success_criteria": success_criteria or [],
             }
             tasks.append(task)
             self._write(tasks)
@@ -261,6 +264,7 @@ class TaskStore:
         due_at: str | None = None,
         recurrence: str | None = None,
         notify: bool | None = None,
+        success_criteria: list | None = None,
     ) -> dict[str, Any]:
         """Edit task metadata. None means "don't change this field"."""
         with self._locked():
@@ -281,6 +285,8 @@ class TaskStore:
                 task["recurrence"] = recurrence
             if notify is not None:
                 task["notify"] = bool(notify)
+            if success_criteria is not None:
+                task["success_criteria"] = success_criteria
             task["updated_at"] = datetime.now().isoformat(timespec="seconds")
             self._write(tasks)
             return task

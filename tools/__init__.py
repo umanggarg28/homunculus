@@ -20,9 +20,20 @@ from __future__ import annotations
 
 import concurrent.futures
 import os
+from typing import Callable
 
 from ._state import get_mode, init as _init_state, set_mode
 from . import mcp_manager as _mgr_mod
+
+# Optional hook installed by the heartbeat guard (or tests). Called before every
+# tool execution. If it returns a non-None string, that string is returned to the
+# agent instead of running the real tool — the guard can block a call and explain why.
+_pre_execute_hook: Callable[[str, dict], str | None] | None = None
+
+
+def set_pre_execute_hook(fn: Callable[[str, dict], str | None] | None) -> None:
+    global _pre_execute_hook
+    _pre_execute_hook = fn
 
 _manager = _mgr_mod.manager
 _started = False
@@ -105,6 +116,15 @@ def execute(name: str, arguments: dict) -> str:
     """
     if name not in _manager.tool_names():
         return f"ERROR: unknown tool '{name}'"
+
+    # Output guard hook — installed by heartbeat TaskGuard (and tests).
+    # If the hook returns a string, treat it as the tool result without
+    # actually running the tool (blocks the call).
+    if _pre_execute_hook is not None:
+        blocked = _pre_execute_hook(name, arguments)
+        if blocked is not None:
+            return blocked
+
     if get_mode() == "plan" and _manager.is_mutating(name):
         args_preview = ", ".join(f"{k}={_short(v)}" for k, v in arguments.items())
         return (
@@ -149,7 +169,7 @@ def execute(name: str, arguments: dict) -> str:
 
 __all__ = [
     "init", "execute", "get_mode", "set_mode",
-    "SCHEMAS", "tool_names",
+    "SCHEMAS", "tool_names", "set_pre_execute_hook",
 ]
 
 

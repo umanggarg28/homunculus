@@ -382,6 +382,7 @@ async def tasks_create(request: Request) -> JSONResponse:
             due_at=body.get("due_at"),
             recurrence=body.get("recurrence", "none"),
             notify=body.get("notify", False),
+            success_criteria=body.get("success_criteria"),
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -399,6 +400,7 @@ async def tasks_update(task_id: str, request: Request) -> JSONResponse:
             due_at=body.get("due_at"),
             recurrence=body.get("recurrence"),
             notify=body.get("notify"),
+            success_criteria=body.get("success_criteria"),
         )
     except KeyError:
         raise HTTPException(404, f"task '{task_id}' not found")

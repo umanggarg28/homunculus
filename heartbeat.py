@@ -16,11 +16,13 @@ Run:
 """
 
 import os
+import re
 import sys
 import time
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -46,6 +48,12 @@ Examples of useful proactive actions:
   notify the result as the task description asks.
 - When a task is handled, call `complete_task(task_id, result)` so
   one-shot tasks stop firing and recurring tasks advance.
+
+SUCCESS CRITERIA (important):
+Some tasks list `success_criteria` — machine-checked rules that your output
+must satisfy BEFORE `complete_task` is accepted. If your output fails, you
+will receive a BLOCKED message explaining why. Read the criteria for each task
+upfront, ensure your work meets them, then call `complete_task`.
 
 Scheduling: by default the next tick is in ~60 minutes (or sooner if
 another task is due). If you'd like to adjust that (e.g. wake at 8am
@@ -114,6 +122,123 @@ Important:
 - Don't call notify(). Reflections are silent.
 - shell_exec is disabled.
 """
+
+
+class TaskGuard:
+    """Pi-style output guard for scheduled task delivery.
+
+    Installed as a pre-execute hook on tools.execute() for the duration of a
+    heartbeat tick. Intercepts two tool calls:
+
+    - notify()        → records the text so criteria can inspect it.
+    - complete_task() → checks the task's success_criteria before allowing
+                        the call through. Returns a structured BLOCKED error
+                        if any criterion fails, so the agent can correct its
+                        output and retry rather than silently recording garbage
+                        as a successful delivery.
+
+    Supported criterion types
+    ─────────────────────────
+    {"type": "notify_called"}
+        At least one notify() was called during this tick.
+
+    {"type": "notify_min_chars", "n": N}
+        The combined text of all notify() calls is at least N characters.
+
+    {"type": "notify_has_code"}
+        At least one notify() text contains a fenced code block (```).
+
+    {"type": "notify_contains", "text": "..."}
+        At least one notify() text contains the given substring.
+
+    {"type": "notify_matches", "pattern": "..."}
+        At least one notify() text matches the given regex.
+    """
+
+    def __init__(self, criteria_by_task: dict[str, list[dict[str, Any]]]) -> None:
+        self._criteria = criteria_by_task
+        self._notify_texts: list[str] = []
+
+    def on_tool_call(self, name: str, arguments: dict) -> str | None:
+        """Hook fn passed to tools.set_pre_execute_hook().
+
+        Returns None to allow the call, or a non-empty string to block it
+        and return that string as the tool result.
+        """
+        if name == "notify":
+            text = arguments.get("text") or ""
+            self._notify_texts.append(str(text))
+            return None  # allow notify to proceed normally
+
+        if name == "complete_task":
+            task_id = arguments.get("task_id", "")
+            criteria = self._criteria.get(task_id, [])
+            if not criteria:
+                return None  # no guard configured — allow
+
+            failures = self._check(criteria)
+            if not failures:
+                return None  # all criteria passed — allow
+
+            msg = (
+                f"BLOCKED by output_guard: complete_task('{task_id}') refused because "
+                f"{len(failures)} success criterion/criteria failed:\n"
+                + "\n".join(f"  • {f}" for f in failures)
+                + "\n\nFix the above issues and retry. Your notify() must satisfy all "
+                "criteria before this task can be marked complete."
+            )
+            return msg
+
+        return None  # all other tools pass through unmodified
+
+    def _check(self, criteria: list[dict[str, Any]]) -> list[str]:
+        """Return a list of human-readable failure descriptions."""
+        combined = " ".join(self._notify_texts)
+        failures = []
+
+        for c in criteria:
+            ctype = c.get("type", "")
+
+            if ctype == "notify_called":
+                if not self._notify_texts:
+                    failures.append("notify() was never called — the user received nothing")
+
+            elif ctype == "notify_min_chars":
+                n = int(c.get("n", 0))
+                length = len(combined)
+                if length < n:
+                    failures.append(
+                        f"notify text too short ({length} chars, need ≥ {n}) — "
+                        "add the full problem statement and solution"
+                    )
+
+            elif ctype == "notify_has_code":
+                if "```" not in combined:
+                    failures.append(
+                        "notify text contains no code block (```) — "
+                        "include a working code solution"
+                    )
+
+            elif ctype == "notify_contains":
+                required = c.get("text", "")
+                if required and required not in combined:
+                    failures.append(
+                        f"notify text does not contain required string: {required!r}"
+                    )
+
+            elif ctype == "notify_matches":
+                pattern = c.get("pattern", "")
+                if pattern and not re.search(pattern, combined, re.IGNORECASE):
+                    failures.append(
+                        f"notify text does not match required pattern: {pattern!r}"
+                    )
+
+            else:
+                # Unknown criterion type — skip rather than hard-fail so
+                # adding new types doesn't break existing tasks.
+                pass
+
+        return failures
 
 
 def _today_str() -> str:
@@ -187,6 +312,15 @@ def tick(memory: Memory, model: str | None) -> None:
     # Snapshot due_at for each task so we can detect if complete_task ran.
     due_at_before = {t["id"]: t.get("due_at") for t in due_tasks}
 
+    # Install output guard for this tick. The guard intercepts notify() and
+    # complete_task() to enforce each task's success_criteria before allowing
+    # completion. Always cleared in the finally block.
+    guard = TaskGuard({
+        t["id"]: t.get("success_criteria") or []
+        for t in due_tasks
+    })
+    tools.set_pre_execute_hook(guard.on_tool_call)
+
     started = datetime.now()
     try:
         response = agent.chat(prompt)
@@ -221,13 +355,16 @@ def tick(memory: Memory, model: str | None) -> None:
             except Exception as inner:
                 print(f"[heartbeat] record_failure failed for {task['id']}: {inner}", flush=True)
         raise
+    finally:
+        tools.set_pre_execute_hook(None)
     print(f"[agent] {response}", flush=True)
 
 
 def _format_due_tasks(tasks: list[dict]) -> str:
+    import json as _json
     lines = []
     for task in tasks:
-        lines.append(
+        block = (
             f"- id: {task.get('id')}\n"
             f"  title: {task.get('title')}\n"
             f"  due_at: {task.get('due_at')}\n"
@@ -235,6 +372,10 @@ def _format_due_tasks(tasks: list[dict]) -> str:
             f"  notify: {task.get('notify', False)}\n"
             f"  description: {task.get('description', '')}"
         )
+        criteria = task.get("success_criteria") or []
+        if criteria:
+            block += f"\n  success_criteria: {_json.dumps(criteria)}"
+        lines.append(block)
     return "\n".join(lines)
 
 
