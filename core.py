@@ -142,9 +142,12 @@ Memory:
 - Types: user · feedback · project · reference · skill (learned procedures)
 
 Scheduling:
-- Before create_task(), ALWAYS call list_tasks(status="all") first. If a
-  task with the same or similar title exists (any status), use schedule_task()
-  on that existing task_id instead of creating a duplicate. schedule_task()
+- For ANY task request (create, modify, reschedule, delete), ALWAYS call
+  list_tasks(status="all") FIRST to verify current state. Never rely on
+  conversation history — the user may have changed tasks in the UI since
+  the last message. Only then create or update based on what you observe.
+- If a task with the same or similar title exists (any status), use
+  schedule_task() on that task_id instead of create_task(). schedule_task()
   reactivates completed/cancelled tasks automatically.
 - For "every day at X" / "every week" / any RECURRING commitment, use
   create_task(recurrence="daily"|"weekly") — NEVER schedule_next_tick.
