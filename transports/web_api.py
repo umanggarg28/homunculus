@@ -574,6 +574,72 @@ def stats_today(since: str = "") -> JSONResponse:
     })
 
 
+# --- API: context window gauge --------------------------------------------
+
+# Known context limits for common model IDs (tokens).
+_CONTEXT_LIMITS: dict[str, int] = {
+    "gemini-2.5-flash":              1_048_576,
+    "gemini-2.5-pro":                1_048_576,
+    "gemini-2.0-flash":              1_048_576,
+    "gemini-1.5-flash":              1_048_576,
+    "gemini-1.5-pro":                2_097_152,
+    "gpt-4o":                          128_000,
+    "gpt-4o-mini":                     128_000,
+    "gpt-4-turbo":                     128_000,
+    "gpt-4":                            32_768,
+    "llama-3.3-70b-versatile":         128_000,
+    "gpt-oss-120b":                    128_000,
+}
+
+def _context_limit_for(model: str) -> int:
+    """Return the context window size for a model ID, falling back to 128k."""
+    for key, limit in _CONTEXT_LIMITS.items():
+        if key in model:
+            return limit
+    return 128_000
+
+
+@app.get("/api/context", dependencies=[Depends(require_web_auth)])
+def context_gauge() -> JSONResponse:
+    """Return the latest prompt token count and model context limit.
+
+    Scans _events.jsonl from the end for the most recent llm_call event
+    that has input_tokens. The prompt_tokens value from the API response
+    IS the full current context size (cumulative, not incremental).
+    """
+    events_path = Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
+    last_input_tokens: int = 0
+    last_model: str = os.environ.get("HOMUNCULUS_MODEL", "gemini-2.5-flash")
+
+    if events_path.exists():
+        try:
+            with events_path.open("r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+            for line in reversed(lines):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("event") == "llm_call" and rec.get("input_tokens"):
+                    last_input_tokens = rec["input_tokens"]
+                    if rec.get("model"):
+                        last_model = rec["model"]
+                    break
+        except OSError:
+            pass
+
+    limit = _context_limit_for(last_model)
+    return JSONResponse({
+        "used_tokens": last_input_tokens,
+        "limit_tokens": limit,
+        "model": last_model,
+        "pct": round(last_input_tokens / limit * 100, 1) if limit else 0,
+    })
+
+
 # --- API: logs ------------------------------------------------------------
 
 @app.get("/api/logs", dependencies=[Depends(require_web_auth)])

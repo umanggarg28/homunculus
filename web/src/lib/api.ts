@@ -216,6 +216,9 @@ export const api = {
       return r.json();
     }),
 
+  contextGauge: () =>
+    jsonGet<{ used_tokens: number; limit_tokens: number; model: string; pct: number }>("/context"),
+
   chapterClose: () =>
     fetch(`${API_BASE}/chapters/close`, {
       method: "POST",

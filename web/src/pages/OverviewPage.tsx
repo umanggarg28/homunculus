@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
 import { SignatureHeartbeat } from "@/components/overview/SignatureHeartbeat";
 import { GrowthDeltas } from "@/components/overview/GrowthDeltas";
+import { ContextGauge } from "@/components/overview/ContextGauge";
 import { HomunculusRobot } from "@/components/robot/HomunculusRobot";
 import { useRobotState } from "@/hooks/useRobotState";
 import type { MemoryEntry, Skill } from "@/lib/types";
@@ -56,6 +57,7 @@ export function OverviewPage() {
       <PageHeader title="Overview" subtitle={liveStateMessage(lastAgeSec).toLowerCase()} />
       <div className="mx-[-40px]"><SignatureHeartbeat /></div>
       <GrowthDeltas />
+      <ContextGauge />
 
       {/* ── HERO ROW — countdown + robot panel ── */}
       <div
