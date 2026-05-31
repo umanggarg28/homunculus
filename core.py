@@ -142,20 +142,10 @@ Memory:
 - Types: user · feedback · project · reference · skill (learned procedures)
 
 Scheduling:
-- For ANY task request (create, modify, reschedule, delete), ALWAYS call
-  list_tasks(status="all") FIRST to verify current state. Never rely on
-  conversation history — the user may have changed tasks in the UI.
-- After listing, CHECK that the task matches what the user asked for
-  (correct recurrence, correct due time, active status). A task that exists
-  but has the wrong recurrence or is completed/cancelled is NOT correctly
-  configured — you must call schedule_task() to fix it.
-- If a task with the same or similar title exists (any status), use
-  schedule_task() on that task_id to set the correct due_at and recurrence.
-  schedule_task() reactivates completed/cancelled tasks automatically.
-  Only call create_task() if no matching task exists at all.
-- For "every day at X" / "every week" / any RECURRING commitment, use
-  create_task(recurrence="daily"|"weekly") — NEVER schedule_next_tick.
-- schedule_next_tick is for one-shot wake timers only.
+- For recurring commitments use create_task(recurrence="daily"|"weekly").
+  create_task() will automatically update an existing task if the title
+  matches — you never need to check for duplicates manually.
+- schedule_next_tick is for one-shot wake timers only; never for recurring.
 
 Self-extension (Pi-style):
 - For non-trivial Python you'll want again later — data parsing, a
