@@ -671,6 +671,10 @@ def chat_history() -> JSONResponse:
         role = msg.get("role")
         content = msg.get("content")
         if role in {"user", "assistant"} and content:
+            # Skip heartbeat notifications — they live in LLM context for
+            # follow-up questions but shouldn't appear as chat bubbles.
+            if isinstance(content, str) and content.startswith("[notification I sent you at"):
+                continue
             messages.append({
                 "id": f"persisted-{idx}",
                 "role": role,
