@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { Task, MemoryEntry, Skill, LogFile } from "@/lib/types";
+import { parseServerIso } from "@/lib/api";
 
 /** Shared shell for every page's hero stat band. Slot-based: a giant
  *  glowing numeral on the left, label below it, a flexible "trail"
@@ -93,7 +94,7 @@ export function TasksHero({ tasks, now }: { tasks: Task[]; now: number }) {
   const active = tasks.filter((t) => t.status === "active");
 
   const upcoming = active
-    .map((t) => ({ t, due: t.due_at ? new Date(t.due_at).getTime() : null }))
+    .map((t) => ({ t, due: t.due_at ? parseServerIso(t.due_at) : null }))
     .filter((x) => x.due !== null && (x.due as number) > now)
     .sort((a, b) => (a.due as number) - (b.due as number));
 

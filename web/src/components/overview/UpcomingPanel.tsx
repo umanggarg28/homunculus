@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, parseServerIso } from "@/lib/api";
 
 interface Upcoming {
   next_tick: string | null;
@@ -93,10 +93,7 @@ export function UpcomingPanel() {
 }
 
 function parseIsoLocal(iso: string): number {
-  // Heartbeat & tasks store local naive ISO. `new Date(iso)` treats
-  // naive ISO as local in browsers, which is what we want.
-  const d = new Date(iso);
-  return d.getTime();
+  return parseServerIso(iso);
 }
 
 function formatCountdown(ms: number): string {

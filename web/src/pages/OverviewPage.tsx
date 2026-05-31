@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useEventStream } from "@/hooks/useEventStream";
-import { api } from "@/lib/api";
+import { api, parseServerIso } from "@/lib/api";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
-import { LiveTicker } from "@/components/overview/LiveTicker";
 import { SignatureHeartbeat } from "@/components/overview/SignatureHeartbeat";
 import { GrowthDeltas } from "@/components/overview/GrowthDeltas";
 import { HomunculusRobot } from "@/components/robot/HomunculusRobot";
@@ -55,7 +54,6 @@ export function OverviewPage() {
   return (
     <PageShell>
       <PageHeader title="Overview" subtitle={liveStateMessage(lastAgeSec).toLowerCase()} />
-      <LiveTicker />
       <div className="mx-[-40px]"><SignatureHeartbeat /></div>
       <GrowthDeltas />
 
@@ -261,7 +259,7 @@ interface Upcoming {
 }
 
 function parseIsoLocal(iso: string): number {
-  return new Date(iso).getTime();
+  return parseServerIso(iso);
 }
 
 function formatCountdown(ms: number): string {
