@@ -31,6 +31,7 @@ import tools
 from core import Agent
 from memory import Memory
 from tasks import TaskStore
+from tools.notify import enable_buffer, flush_buffer, clear_buffer as clear_notify_buffer
 
 
 HEARTBEAT_PROMPT_TEMPLATE = """It's a scheduled heartbeat tick — no user is
@@ -189,6 +190,11 @@ class TaskGuard:
     def __init__(self, criteria_by_task: dict[str, list[dict[str, Any]]]) -> None:
         self._criteria = criteria_by_task
         self._notify_texts: list[str] = []
+        # Enable buffering when any task has criteria so that notify()
+        # calls are held until complete_task passes — user only receives
+        # the final approved notification, not intermediate attempts.
+        if any(v for v in criteria_by_task.values()):
+            enable_buffer()
 
     def on_tool_call(self, name: str, arguments: dict) -> str | None:
         """Hook fn passed to tools.set_pre_execute_hook().
@@ -199,18 +205,24 @@ class TaskGuard:
         if name == "notify":
             text = arguments.get("text") or ""
             self._notify_texts.append(str(text))
-            return None  # allow notify to proceed normally
+            return None  # allow notify() — it self-buffers when buffer mode is on
 
         if name == "complete_task":
             task_id = arguments.get("task_id", "")
             criteria = self._criteria.get(task_id, [])
             if not criteria:
-                return None  # no guard configured — allow
+                flush_buffer()  # no guard — flush any buffered notifies now
+                return None
 
             failures = self._check(criteria)
             if not failures:
-                return None  # all criteria passed — allow
+                flush_buffer()  # criteria passed — deliver the final notification
+                return None
 
+            # Criteria failed — discard the queued notification so the agent
+            # can call notify() again with improved content. Both the discarded
+            # and new notify() texts remain visible in the event trace.
+            clear_notify_buffer()
             msg = (
                 f"BLOCKED by output_guard: complete_task('{task_id}') refused because "
                 f"{len(failures)} success criterion/criteria failed:\n"
