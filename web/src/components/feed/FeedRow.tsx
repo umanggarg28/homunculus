@@ -41,10 +41,20 @@ export function FeedRow({ event: e }: Props) {
   const isErr = (e.event === "tool_result" && typeof e.result === "string" && e.result.startsWith("ERROR"))
     || e.event === "output_guard";
 
+  const isNotifyQueued = e.event === "tool_result" && e.name === "notify"
+    && typeof e.result === "string" && e.result.startsWith("Notification queued");
+  const isNotifyDelivered = e.event === "tool_result" && e.name === "notify"
+    && typeof e.result === "string" && e.result.startsWith("Notification delivered");
+
   const dotColor = isErr
     ? "var(--color-danger)"
+    : isNotifyQueued ? "var(--color-amber)"
+    : isNotifyDelivered ? "#4ade80"
     : KIND_COLOR[e.event] ?? "var(--color-text-muted)";
-  const glyph = isErr ? "✗" : KIND_GLYPH[e.event] ?? "·";
+  const glyph = isErr ? "✗"
+    : isNotifyQueued ? "⏸"
+    : isNotifyDelivered ? "✓"
+    : KIND_GLYPH[e.event] ?? "·";
 
   const fullDetail = getFullDetail(e);
   const isTruncatable = fullDetail.length > COMPACT_LEN;
@@ -115,7 +125,7 @@ export function FeedRow({ event: e }: Props) {
       <div style={{ minWidth: 0 }}>
         <span
           className="break-words whitespace-pre-wrap"
-          style={{ color: isErr ? "var(--color-danger)" : "var(--color-text-dim)" }}
+          style={{ color: isErr ? "var(--color-danger)" : isNotifyQueued ? "var(--color-amber)" : isNotifyDelivered ? "#4ade80" : "var(--color-text-dim)" }}
         >
           {displayDetail}
         </span>
