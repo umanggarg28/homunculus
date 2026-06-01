@@ -30,14 +30,23 @@ export function ChatInput({ sending, onSend, onCancel }: Props) {
 
   return (
     <div
-      className="fixed bottom-0 right-0 z-20 pt-6 pb-5"
+      className="chat-input-shell fixed bottom-0 right-0 z-20 pt-6 pb-5"
       style={{
-        left: 220,
         background:
           "linear-gradient(to top, var(--color-bg) 70%, rgba(8, 9, 10, 0.0))",
       }}
     >
-      <div className="max-w-[760px] mx-auto px-8">
+      <style>{`
+        .chat-input-shell { left: 220px; }
+        @media (max-width: 760px) {
+          .chat-input-shell { left: 0; }
+          .chat-input-inner {
+            padding-left: 16px;
+            padding-right: 16px;
+          }
+        }
+      `}</style>
+      <div className="chat-input-inner max-w-[760px] mx-auto px-8">
         <div
           className="relative rounded-[8px]"
           style={{

@@ -57,7 +57,7 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
   return (
     <div
       onClick={onOpenDetail}
-      className="group cursor-pointer"
+      className="task-row group cursor-pointer"
       style={{
         borderBottom: "1px solid var(--color-border)",
         fontFamily: "var(--font-mono)",
@@ -67,9 +67,45 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
       onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "rgba(124,254,0,0.03)"; }}
       onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "transparent"; }}
     >
+      <style>{`
+        .task-row-grid {
+          display: grid;
+          grid-template-columns: 20px minmax(0, 1fr) auto;
+        }
+        .task-row-meta {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-top: 4px;
+        }
+        .task-row-actions {
+          display: flex;
+          align-items: center;
+          gap: 16px;
+        }
+        @media (max-width: 640px) {
+          .task-row-grid {
+            grid-template-columns: 16px minmax(0, 1fr);
+          }
+          .task-row-badge {
+            grid-column: 2;
+            justify-content: flex-start;
+            margin-top: 8px;
+          }
+          .task-row-meta {
+            align-items: flex-start;
+            flex-direction: column;
+            gap: 6px;
+          }
+          .task-row-actions {
+            flex-wrap: wrap;
+            gap: 8px;
+            opacity: 1 !important;
+          }
+        }
+      `}</style>
       <div
-        className="grid items-center gap-5 px-4 py-3"
-        style={{ gridTemplateColumns: "20px 1fr auto" }}
+        className="task-row-grid items-center gap-5 px-4 py-3"
       >
         {/* Icon */}
         <span style={{ fontSize: 13, color: iconColor, lineHeight: 1 }}>{icon}</span>
@@ -86,7 +122,7 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
           >
             {task.title}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+          <div className="task-row-meta">
             {subtitle && (
               <div style={{ fontSize: 10, letterSpacing: "0.10em", textTransform: "uppercase", color: "var(--color-text-muted)" }}>
                 {subtitle}
@@ -99,7 +135,7 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
         </div>
 
         {/* Badge */}
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="task-row-badge flex items-center gap-3 shrink-0">
           <span
             style={{
               fontSize: 10,
@@ -115,7 +151,7 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
       </div>
 
       {/* Hover actions */}
-      <div className="px-4 pb-2 flex items-center gap-4 text-[10px] uppercase tracking-[0.14em] opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="task-row-actions px-4 pb-2 text-[10px] uppercase tracking-[0.14em] opacity-0 group-hover:opacity-100 transition-opacity">
         {isActive && (
           <>
             <Action onClick={runNow} color="var(--color-accent)" busy={busy === "run"}>run now</Action>

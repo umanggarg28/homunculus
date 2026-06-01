@@ -39,6 +39,24 @@ _GUARD_INTERNAL_PATHS = ("workspace/memory/", "memory/logs/", "memory/_")
 _GUARD_ERROR_PREFIXES = ("ERROR:", "ERROR running ")
 _GUARD_CONFABULATION_TERMS = ("example.com", "example domain")
 
+# Phrases that indicate the model is claiming to have performed an action.
+# When combined with zero tool calls, this is a hallucination.
+_GUARD_ACTION_CLAIM_PHRASES = (
+    "i've created", "i have created",
+    "i've set", "i have set",
+    "i've added", "i have added",
+    "i've scheduled", "i have scheduled",
+    "i've sent", "i have sent",
+    "i've saved", "i have saved",
+    "i've updated", "i have updated",
+    "i've deleted", "i have deleted",
+    "i've removed", "i have removed",
+    "task has been created", "task was created",
+    "reminder has been set", "reminder was set",
+    "notification has been", "notification was sent",
+    "done! i've", "done. i've",
+)
+
 # Load .env at module import so config reads below see its values. Safe
 # to call twice (main.py also calls it) — load_dotenv won't overwrite
 # env vars that are already set, e.g. by docker-compose's env_file.
@@ -927,7 +945,16 @@ class Agent:
                         text=f"violations: {', '.join(violations)}",
                         result=raw_reply[:80].replace("\n", " "),
                     )
-                    reply = self._self_correct(tool_names_used)
+                    if "action_claim_without_tool_call" in violations:
+                        # Model claimed to do something without calling tools.
+                        # Re-enter the loop with a correction injected so the
+                        # model can actually call the tool this time.
+                        self.history.append({
+                            "role": "user",
+                            "content": self._ACTION_CLAIM_CORRECTION_PROMPT,
+                        })
+                        continue  # next iteration picks up the correction
+                    reply = self._self_correct(tool_names_used, violations)
                     self.history[-1]["content"] = reply
                 else:
                     reply = clean
@@ -1041,6 +1068,13 @@ class Agent:
             if not (tool_names_used & {"web_fetch", "web_search"}):
                 violations.append("example_com_confabulation")
 
+        # Catch hallucinated actions: model claims to have done something
+        # (created a task, sent a notification, etc.) without calling any
+        # tools. Only fires when tools are registered (not a Q&A-only session).
+        if not tool_names_used and tools.SCHEMAS:
+            if any(phrase in lower_reply for phrase in _GUARD_ACTION_CLAIM_PHRASES):
+                violations.append("action_claim_without_tool_call")
+
         if not violations:
             return reply, []
 
@@ -1085,7 +1119,14 @@ class Agent:
         self.history.pop()  # prune the injected nudge
         return reply
 
-    def _self_correct(self, tool_names_used: set[str]) -> str:
+    _ACTION_CLAIM_CORRECTION_PROMPT = (
+        "You just said you performed an action (created a task, sent a notification, etc.) "
+        "but you did NOT call any tools. That is a hallucination — you cannot perform actions "
+        "through text alone. You MUST call the appropriate tool now to actually do what "
+        "the user asked. Do not explain — just call the tool."
+    )
+
+    def _self_correct(self, tool_names_used: set[str], violations: list[str] | None = None) -> str:
         """Inject a correction prompt and re-call the LLM once (non-streaming).
 
         This is the AutoGen / Letta self-correction pattern: when the guard
@@ -1094,9 +1135,13 @@ class Agent:
 
         Returns the corrected reply (or a safe static fallback on second failure).
         """
+        if violations and "action_claim_without_tool_call" in violations:
+            correction = self._ACTION_CLAIM_CORRECTION_PROMPT
+        else:
+            correction = self._SELF_CORRECTION_PROMPT
         self.history.append({
             "role": "user",
-            "content": self._SELF_CORRECTION_PROMPT,
+            "content": correction,
         })
         try:
             corrected_msg = call_llm(self.history, tools.SCHEMAS, model=self.model)

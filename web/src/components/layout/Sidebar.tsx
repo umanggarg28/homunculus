@@ -56,7 +56,6 @@ export function Sidebar() {
     <aside
       className="fixed top-0 left-0 bottom-0 z-30 flex flex-col brut-sidebar"
       style={{
-        width: 220,
         background: "var(--color-surface-1)",
         borderRight: "1px solid var(--color-border)",
         fontFamily: "var(--font-mono)",
@@ -96,6 +95,60 @@ export function Sidebar() {
         }
         .brut-sidebar .nav-row:hover .marker { opacity: 1; transform: none; color: var(--color-text-muted); }
         .brut-sidebar .nav-row.active .marker { opacity: 1; transform: none; color: var(--color-accent); }
+        .brut-sidebar {
+          width: 220px;
+        }
+        @media (max-width: 760px) {
+          .brut-sidebar {
+            right: 0;
+            bottom: auto;
+            width: auto;
+            height: 58px;
+            border-right: none !important;
+            border-bottom: 1px solid var(--color-border);
+            overflow-x: auto;
+            overflow-y: hidden;
+          }
+          .brut-sidebar > :first-child,
+          .brut-sidebar > :nth-last-child(2),
+          .brut-sidebar > :last-child {
+            display: none;
+          }
+          .brut-sidebar nav {
+            flex: none;
+            height: 58px;
+            padding: 6px 10px;
+            flex-direction: row;
+            align-items: stretch;
+            gap: 14px;
+            overflow: visible;
+            min-width: max-content;
+          }
+          .brut-sidebar nav > div {
+            display: flex;
+            align-items: stretch;
+            gap: 6px;
+          }
+          .brut-sidebar nav > div > div:first-child {
+            display: none;
+          }
+          .brut-sidebar nav > div > div:last-child {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+          }
+          .brut-sidebar .nav-row {
+            display: flex !important;
+            align-items: center;
+            height: 44px;
+            padding: 0 10px !important;
+            white-space: nowrap;
+          }
+          .brut-sidebar .nav-row .marker,
+          .brut-sidebar .nav-row .kbd {
+            display: none !important;
+          }
+        }
       `}</style>
 
       <SidebarBrand />

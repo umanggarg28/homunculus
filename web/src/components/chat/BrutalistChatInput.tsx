@@ -45,19 +45,31 @@ export function BrutalistChatInput({ sending, onSend, onCancel }: Props) {
 
   return (
     <div
-      className="fixed bottom-0 right-0 z-20 pt-3 pb-4"
+      className="brut-chat-input-shell fixed bottom-0 right-0 z-20 pt-3 pb-4"
       style={{
-        left: 220,
         background:
           "linear-gradient(to top, var(--color-bg) 60%, rgba(5, 5, 5, 0))",
         fontFamily: "var(--font-mono)",
       }}
     >
       <style>{`
+        .brut-chat-input-shell { left: 220px; }
+        @media (max-width: 760px) {
+          .brut-chat-input-shell {
+            left: 0;
+          }
+          .brut-chat-input-inner {
+            padding-left: 16px;
+            padding-right: 16px;
+          }
+          .brut-chat-input-prompt {
+            display: none;
+          }
+        }
         .brut-input:focus,
         .brut-input:focus-visible { outline: none !important; box-shadow: none !important; }
       `}</style>
-      <div className="max-w-[860px] mx-auto px-10">
+      <div className="brut-chat-input-inner max-w-[860px] mx-auto px-10">
         <div
           className="flex items-start gap-2"
           style={{
@@ -68,7 +80,7 @@ export function BrutalistChatInput({ sending, onSend, onCancel }: Props) {
           }}
         >
           <span
-            className="select-none"
+            className="brut-chat-input-prompt select-none"
             style={{
               color: "var(--color-accent)",
               fontSize: 13,

@@ -58,14 +58,48 @@ export function OverviewPage() {
       <div className="mx-[-40px]"><SignatureHeartbeat /></div>
       <GrowthDeltas />
       <ContextGauge />
+      <style>{`
+        .overview-hero-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 320px;
+          border: 1px solid var(--color-border);
+          background: linear-gradient(180deg, rgba(119,255,61,0.025), transparent), var(--color-surface-1);
+        }
+        .overview-hero-main {
+          border-right: 1px solid var(--color-border);
+        }
+        .overview-state-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+        @media (max-width: 980px) {
+          .overview-hero-grid {
+            grid-template-columns: 1fr;
+          }
+          .overview-hero-main {
+            border-right: none;
+            border-bottom: 1px solid var(--color-border);
+          }
+          .overview-state-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+        @media (max-width: 560px) {
+          .overview-hero-main {
+            padding: 20px !important;
+          }
+          .overview-state-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+      `}</style>
 
       {/* ── HERO ROW — countdown + robot panel ── */}
       <div
-        className="grid gap-0 mb-10"
-        style={{ gridTemplateColumns: "1fr 320px", border: "1px solid var(--color-border)" }}
+        className="overview-hero-grid gap-0 mb-10"
       >
           {/* LEFT — countdown as hero + stats */}
-          <div className="p-8 flex flex-col justify-center gap-0" style={{ borderRight: "1px solid var(--color-border)" }}>
+          <div className="overview-hero-main p-8 flex flex-col justify-center gap-0">
             <UpcomingHero stats={stats} lastEvent={lastEvent} />
           </div>
 
@@ -79,10 +113,9 @@ export function OverviewPage() {
             ── state
           </div>
           <div
-            className="grid gap-x-8 gap-y-3"
-            style={{ gridTemplateColumns: "repeat(4, 1fr)" }}
+            className="overview-state-grid gap-x-8 gap-y-3"
           >
-            <KV label="mcp servers"  value="02" hint="builtin · fetch" />
+            <KV label="mcp servers"  value="01" hint="builtin" />
             <KV label="tools"        value={pad(skills.length)} hint={skillsCalled === skills.length ? "all ever called" : `${skillsCalled} ever called`} />
             <KV label="memory"       value={pad(memories.length)} hint="entries" />
             <KV label="active tasks" value={pad(activeTasks)} />
@@ -130,7 +163,7 @@ function KV({ label, value, hint }: { label: string; value: string; hint?: strin
         )}
         <span
           className="text-[18px]"
-          style={{ color: "var(--color-text)", fontVariantNumeric: "tabular-nums", letterSpacing: "-0.02em" }}
+          style={{ color: "var(--color-text)", fontVariantNumeric: "tabular-nums", letterSpacing: "0" }}
         >
           {value}
         </span>
@@ -353,7 +386,7 @@ function UpcomingHero({
                 fontSize: "clamp(54px, 8vw, 104px)",
                 lineHeight: 0.85,
                 fontVariantNumeric: "tabular-nums",
-                letterSpacing: "-0.04em",
+                letterSpacing: "0",
                 color: overdue ? "var(--color-amber)" : "var(--color-accent)",
                 textShadow: overdue ? "0 0 24px rgba(255,176,0,0.4)" : "0 0 32px var(--color-accent-glow)",
                 fontFamily: "var(--font-mono)",
@@ -377,7 +410,7 @@ function UpcomingHero({
             lineHeight: 0.85,
             color: "var(--color-text-faint)",
             fontFamily: "var(--font-mono)",
-            letterSpacing: "-0.04em",
+            letterSpacing: "0",
             marginBottom: 20,
           }}
         >
@@ -396,7 +429,7 @@ function UpcomingHero({
               <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--color-text-faint)", marginBottom: 4 }}>
                 {label}
               </div>
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: 22, color, fontVariantNumeric: "tabular-nums", letterSpacing: "-0.02em" }}>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: 22, color, fontVariantNumeric: "tabular-nums", letterSpacing: "0" }}>
                 {value.toString().padStart(2, "0")}
               </div>
             </div>

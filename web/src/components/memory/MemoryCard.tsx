@@ -42,11 +42,29 @@ export function MemoryCard({ entry, onDeleted }: Props) {
       onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "var(--color-surface-2)"; }}
       onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "transparent"; }}
     >
+      <style>{`
+        .memory-row-grid {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+        }
+        @media (max-width: 640px) {
+          .memory-row-grid {
+            grid-template-columns: 1fr;
+            gap: 10px;
+          }
+          .memory-row-actions {
+            justify-content: flex-start;
+          }
+          .memory-row-actions button {
+            opacity: 1 !important;
+          }
+        }
+      `}</style>
       <Link
         to={`/memory/${entry.filename}`}
         className="block px-4 py-2"
       >
-        <div className="grid items-baseline gap-5" style={{ gridTemplateColumns: "auto 1fr auto" }}>
+        <div className="memory-row-grid items-baseline gap-5">
           <span className="brut-label shrink-0" style={{ color: typeColor, minWidth: 64 }}>
             [{entry.type}]
           </span>
@@ -58,7 +76,7 @@ export function MemoryCard({ entry, onDeleted }: Props) {
               {entry.description}
             </div>
           </div>
-          <div className="shrink-0 flex items-center gap-2">
+          <div className="memory-row-actions shrink-0 flex items-center gap-2">
             {!confirming ? (
               <button
                 onClick={startDelete}
