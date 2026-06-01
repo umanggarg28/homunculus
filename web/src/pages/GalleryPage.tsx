@@ -471,7 +471,7 @@ function MarginaliaMock() {
   return (
     <div style={{ background: "#0F0E0C", color: "#E8E2D6", fontFamily: "Newsreader, Georgia, serif", padding: "56px 64px 80px", minHeight: 680 }}>
       <div className="grid items-end pb-7 mb-10" style={{ gridTemplateColumns: "1fr auto", gap: 24, borderBottom: "1px solid #2A271F" }}>
-        <h2 className="m-0" style={{ fontFamily: "Fraunces, serif", fontWeight: 300, fontSize: 56, lineHeight: 0.95, letterSpacing: "-0.025em" }}>
+        <h2 className="m-0" style={{ fontFamily: "Fraunces, serif", fontWeight: 300, fontSize: 56, lineHeight: 0.95, letterSpacing: "0" }}>
           The agent <em style={{ color: "#D4A574", fontWeight: 300 }}>at work</em>.
         </h2>
         <div style={{ font: "400 12px/1 'JetBrains Mono', monospace", color: "#6B6354", letterSpacing: "0.18em", textTransform: "uppercase" }}>Session 0c91f3 · Sat 21 May, 18:42 IST</div>
@@ -545,7 +545,7 @@ function Specimen({ name, args, status, running }: { name: string; args: string;
         </svg>
       </div>
       <div>
-        <div style={{ font: "600 16px/1.2 'Inter Tight'", letterSpacing: "-0.01em" }}>{name}</div>
+        <div style={{ font: "600 16px/1.2 'Inter Tight'", letterSpacing: "0" }}>{name}</div>
         <div style={{ font: "400 13px/1.5 'JetBrains Mono', monospace", color: "#737373", marginTop: 4 }}>{args}</div>
       </div>
       <div style={{
@@ -569,7 +569,7 @@ function PulseMock() {
         local · alive · 03:12 uptime
       </div>
       <div className="mb-5" style={{ font: "400 10px/1 'Geist Mono'", color: "#4d7c6f", letterSpacing: "0.22em", textTransform: "uppercase" }}>Session 0c91f3 · turn 4</div>
-      <h2 className="m-0 mb-2" style={{ font: "300 40px/1.05 'Instrument Serif', 'Fraunces', serif", fontStyle: "italic", color: "#fff", letterSpacing: "-0.01em", maxWidth: 720 }}>
+      <h2 className="m-0 mb-2" style={{ font: "300 40px/1.05 'Instrument Serif', 'Fraunces', serif", fontStyle: "italic", color: "#fff", letterSpacing: "0", maxWidth: 720 }}>
         What's actually changed in MCP this week.
       </h2>
       <div className="mb-9 max-w-[640px]" style={{ font: "400 13px/1.6 'Geist Mono'", color: "#6ee7b7", letterSpacing: "0.01em" }}>

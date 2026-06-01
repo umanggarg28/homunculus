@@ -27,6 +27,14 @@ import pytest
 BASE_URL = os.environ.get("HOMUNCULUS_URL", "http://localhost:8765")
 TIMEOUT = int(os.environ.get("AGENT_TEST_TIMEOUT", "240"))
 
+pytestmark = pytest.mark.skipif(
+    os.environ.get("RUN_AGENT_E2E") != "1",
+    reason=(
+        "live agent end-to-end tests require a running Homunculus web service "
+        "and real model/tool access; set RUN_AGENT_E2E=1 to enable"
+    ),
+)
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _auth_headers() -> dict:

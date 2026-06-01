@@ -91,13 +91,32 @@ function SkillRow({ skill, maxCalls }: { skill: Skill; maxCalls: number }) {
       transition={{ duration: 0.2 }}
       style={{ borderBottom: "1px solid var(--color-border)", fontFamily: "var(--font-mono)" }}
     >
+      <style>{`
+        .skill-row-grid {
+          display: grid;
+          grid-template-columns: 16px 180px minmax(120px, 1fr) 60px;
+          gap: 12px;
+          align-items: center;
+        }
+        @media (max-width: 720px) {
+          .skill-row-grid {
+            grid-template-columns: 16px minmax(0, 1fr) 52px;
+          }
+          .skill-row-bar {
+            grid-column: 2 / 4;
+          }
+          .skill-row-desc {
+            padding-left: 28px !important;
+          }
+        }
+      `}</style>
       <div
         className="px-4 py-3 cursor-pointer"
         onClick={() => setOpen((v) => !v)}
         onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "rgba(124,254,0,0.02)"; }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "transparent"; }}
       >
-        <div style={{ display: "grid", gridTemplateColumns: "16px 180px 1fr 60px", gap: 12, alignItems: "center" }}>
+        <div className="skill-row-grid">
           {/* Expand toggle */}
           <span style={{ fontSize: 9, color: "var(--color-text-faint)", userSelect: "none", transition: "transform 0.15s", display: "inline-block", transform: open ? "rotate(90deg)" : "none" }}>▶</span>
 
@@ -107,7 +126,7 @@ function SkillRow({ skill, maxCalls }: { skill: Skill; maxCalls: number }) {
           </span>
 
           {/* Bar */}
-          <div style={{ position: "relative", height: 6, background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
+          <div className="skill-row-bar" style={{ position: "relative", height: 6, background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
             <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: barWidth, background: barColor, boxShadow: barGlow, transition: "width 0.4s ease" }} />
           </div>
 
@@ -141,7 +160,7 @@ function SkillRow({ skill, maxCalls }: { skill: Skill; maxCalls: number }) {
           transition: "max-height 0.2s ease",
         }}
       >
-        <div className="px-4 pb-3" style={{ paddingLeft: 44 }}>
+        <div className="skill-row-desc px-4 pb-3" style={{ paddingLeft: 44 }}>
           <div style={{ borderLeft: "2px solid var(--color-border)", paddingLeft: 12 }}>
             <div style={{ fontSize: 11, color: "var(--color-text-dim)", letterSpacing: "0.02em", lineHeight: 1.6 }}>
               {skill.description || <em style={{ color: "var(--color-text-faint)" }}>(no description)</em>}
@@ -170,4 +189,3 @@ function SkillRow({ skill, maxCalls }: { skill: Skill; maxCalls: number }) {
     </motion.div>
   );
 }
-

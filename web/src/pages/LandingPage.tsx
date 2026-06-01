@@ -25,8 +25,7 @@ function BlinkCursor() {
 
 const BOOT_LINES = [
   "› initialising mcp manager…",
-  "› [builtin] up — 15 tools",
-  "› [fetch]   up — 1 tool",
+  "› [builtin] up — core tools mounted",
   "› watcher armed on homunculus.yaml",
   "› ready.",
 ];
@@ -135,9 +134,37 @@ export function LandingPage() {
 
   return (
     <div
-      className="min-h-[calc(100vh-48px)] px-10 pt-10 pb-16"
+      className="landing-page min-h-[calc(100vh-48px)] px-10 pt-10 pb-16"
       style={{ background: "var(--color-bg)", fontFamily: "var(--font-mono)" }}
     >
+      <style>{`
+        .landing-page {
+          background:
+            linear-gradient(180deg, rgba(119,255,61,0.05), transparent 34%),
+            linear-gradient(90deg, rgba(108,231,255,0.025), transparent 38%),
+            var(--color-bg) !important;
+        }
+        .landing-actions {
+          border: 1px solid var(--color-border);
+          background: linear-gradient(180deg, rgba(119,255,61,0.025), transparent), var(--color-surface-1);
+          box-shadow: 0 24px 80px rgba(0,0,0,0.26);
+        }
+        @media (max-width: 760px) {
+          .landing-page {
+            padding-left: 16px;
+            padding-right: 16px;
+            padding-top: 20px;
+          }
+          .landing-action-row {
+            grid-template-columns: 20px 1fr !important;
+            row-gap: 4px;
+          }
+          .landing-action-hint {
+            grid-column: 2;
+            justify-self: start;
+          }
+        }
+      `}</style>
       <div className="max-w-[960px] mx-auto">
         <pre
           className="m-0 whitespace-pre overflow-hidden"
@@ -184,12 +211,12 @@ export function LandingPage() {
             <div className="mb-3 brut-meta" style={{ color: "var(--color-text-muted)" }}>
               ── what would you like to do ──
             </div>
-            <div className="flex flex-col">
+            <div className="landing-actions flex flex-col">
               {ACTIONS.map((a, i) => (
                 <button
                   key={a.path}
                   onClick={() => navigate(a.path)}
-                  className="brut-body text-left px-3 py-3 transition-colors cursor-pointer"
+                  className="landing-action-row brut-body text-left px-3 py-3 transition-colors cursor-pointer"
                   style={{
                     background: "transparent",
                     color: "var(--color-text-dim)",
@@ -213,12 +240,9 @@ export function LandingPage() {
                 >
                   <span>›</span>
                   <span className="uppercase tracking-[0.04em]">{a.label}</span>
-                  <span className="brut-label opacity-60">{a.hint}</span>
+                  <span className="landing-action-hint brut-label opacity-60">{a.hint}</span>
                 </button>
               ))}
-            </div>
-            <div className="mt-6 brut-meta" style={{ color: "var(--color-text-faint)" }}>
-              tip · pick a row, hit ⌘k to search, or use the sidebar
             </div>
           </div>
         )}

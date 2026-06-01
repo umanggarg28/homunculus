@@ -24,11 +24,33 @@ export function PageHeader({ latin, title, subtitle, actions }: PageHeaderProps)
 
   return (
     <div
-      className="mb-6 flex items-baseline justify-between gap-6 pb-3"
+      className="page-header mb-6 flex items-baseline justify-between gap-6 pb-3"
       style={{ borderBottom: "1px solid var(--color-border)", fontFamily: "var(--font-mono)" }}
     >
+      <style>{`
+        .page-header {
+          min-height: 42px;
+        }
+        @media (max-width: 820px) {
+          .page-header {
+            align-items: flex-start;
+            flex-direction: column;
+            gap: 10px;
+          }
+          .page-header .unit-crumb {
+            white-space: normal;
+          }
+        }
+        @media (max-width: 520px) {
+          .page-header .page-heading-row {
+            align-items: flex-start;
+            flex-direction: column;
+            gap: 4px;
+          }
+        }
+      `}</style>
       {/* Left: title + subtitle */}
-      <div className="flex items-baseline gap-3 min-w-0">
+      <div className="page-heading-row flex items-baseline gap-3 min-w-0">
         {heading && (
           <h1 className="brut-h1 truncate" style={{ color: "var(--color-text)", margin: 0 }}>
             <span style={{ color: "var(--color-accent)" }}>$</span> {heading}
@@ -44,6 +66,7 @@ export function PageHeader({ latin, title, subtitle, actions }: PageHeaderProps)
       {/* Right: unit crumb + actions */}
       <div className="shrink-0 flex items-center gap-4">
         <div
+          className="unit-crumb"
           style={{
             fontSize: 9,
             letterSpacing: "0.18em",

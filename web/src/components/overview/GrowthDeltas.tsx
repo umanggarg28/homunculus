@@ -82,7 +82,7 @@ function Delta({
     : "var(--color-text-faint)";
   return (
     <span className="flex items-baseline gap-1.5 text-[11px] uppercase tracking-[0.12em]">
-      <span style={{ color, fontSize: 15, fontVariantNumeric: "tabular-nums", letterSpacing: "-0.02em" }}>
+      <span style={{ color, fontSize: 15, fontVariantNumeric: "tabular-nums", letterSpacing: "0" }}>
         {active && !positive ? "−" : "+"}{n.toString().padStart(2, "0")}
       </span>
       <span style={{ color: "var(--color-text-muted)" }}>
@@ -101,7 +101,7 @@ function TokenCost({ tokens, costCents }: { tokens: number; costCents: number })
     : `¢${costCents.toFixed(1)}`;
   return (
     <span className="flex items-baseline gap-1.5 text-[11px] uppercase tracking-[0.12em]">
-      <span style={{ color: "var(--color-amber)", fontSize: 15, letterSpacing: "-0.02em" }}>
+      <span style={{ color: "var(--color-amber)", fontSize: 15, letterSpacing: "0" }}>
         {tokStr}
       </span>
       <span style={{ color: "var(--color-text-muted)" }}>

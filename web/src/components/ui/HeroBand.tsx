@@ -26,15 +26,44 @@ function HeroBandShell({
   const numColor = numberColor ?? "var(--color-accent)";
   return (
     <div
+      className="hero-band instrument-panel"
       style={{
         position: "relative",
-        border: "1px solid var(--color-border)",
-        background: "var(--color-surface-1)",
         padding: "28px 32px 24px",
         marginBottom: 32,
         overflow: "hidden",
       }}
     >
+      <style>{`
+        .hero-band-grid {
+          display: grid;
+          grid-template-columns: auto minmax(180px, 1fr) auto;
+          gap: 32px;
+          align-items: end;
+        }
+        @media (max-width: 860px) {
+          .hero-band {
+            padding: 22px 22px 20px !important;
+          }
+          .hero-band-grid {
+            grid-template-columns: 1fr;
+            gap: 18px;
+            align-items: start;
+          }
+          .hero-band-right {
+            text-align: left !important;
+          }
+        }
+        @media (max-width: 520px) {
+          .hero-band {
+            padding: 18px 16px !important;
+            margin-bottom: 22px !important;
+          }
+          .hero-band-number {
+            font-size: clamp(42px, 17vw, 72px) !important;
+          }
+        }
+      `}</style>
       <div
         className="brut-meta"
         style={{ color: "var(--color-text-muted)", marginBottom: 12 }}
@@ -43,16 +72,11 @@ function HeroBandShell({
       </div>
 
       <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "auto 1fr auto",
-          gap: 32,
-          alignItems: "end",
-        }}
+        className="hero-band-grid"
       >
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
           <span
-            className="brut-display"
+            className="hero-band-number brut-display"
             style={{
               color: numColor,
               textShadow: `0 0 18px ${numColor}, 0 0 4px ${numColor}`,
@@ -74,7 +98,7 @@ function HeroBandShell({
 
         <div style={{ minWidth: 0 }}>{trail}</div>
 
-        <div style={{ textAlign: "right" }}>{rightSlot}</div>
+        <div className="hero-band-right" style={{ textAlign: "right" }}>{rightSlot}</div>
       </div>
 
       <div
@@ -315,7 +339,7 @@ export function SkillsHero({ skills }: { skills: Skill[] }) {
       rightSlot={
         rate !== null ? (
           <div className="brut-meta" style={{ color: "var(--color-text-faint)", textAlign: "right" }}>
-            <div style={{ fontSize: 22, color: rate >= 80 ? "var(--color-accent)" : "var(--color-warning)", letterSpacing: "-0.02em", fontWeight: 700 }}>
+            <div style={{ fontSize: 22, color: rate >= 80 ? "var(--color-accent)" : "var(--color-warning)", letterSpacing: "0", fontWeight: 700 }}>
               {rate}%
             </div>
             <div style={{ marginTop: 2 }}>SUCCESS RATE</div>

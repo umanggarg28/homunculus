@@ -60,14 +60,12 @@ export function UpcomingPanel() {
       {target ? (
         <>
           <div
-            className="leading-[0.85] my-1"
+            className="brut-display"
             style={{
               color: "var(--color-accent)",
-              fontSize: "clamp(40px, 6vw, 64px)",
+              fontSize: "clamp(56px, 8vw, 96px)",
               fontVariantNumeric: "tabular-nums",
-              letterSpacing: "-0.03em",
-              fontWeight: 700,
-              textShadow: "0 0 18px var(--color-accent-glow)",
+              textShadow: "0 0 40px var(--color-accent), 0 0 8px var(--color-accent)",
             }}
           >
             {formatCountdown(target.ms - now)}

@@ -13,7 +13,7 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
 /** Brutalist button — hard-edged, mono uppercase, hover inverts to accent. */
 const base =
   "inline-flex items-center justify-center gap-1.5 uppercase tracking-[0.12em] " +
-  "transition-colors disabled:opacity-40 disabled:cursor-not-allowed font-medium";
+  "transition-colors disabled:opacity-40 disabled:cursor-not-allowed font-medium rounded-[2px]";
 
 const sizes: Record<Size, string> = {
   sm: "h-7 px-3 text-[10px]",
@@ -23,7 +23,7 @@ const sizes: Record<Size, string> = {
 const variants: Record<Variant, string> = {
   primary:
     "bg-[var(--color-accent)] text-[var(--color-bg)] border border-[var(--color-accent)] " +
-    "hover:bg-[var(--color-accent-hover)] hover:border-[var(--color-accent-hover)]",
+    "shadow-[0_0_18px_var(--color-accent-dim)] hover:bg-[var(--color-accent-hover)] hover:border-[var(--color-accent-hover)]",
   secondary:
     "bg-transparent text-[var(--color-text-dim)] border border-[var(--color-border)] " +
     "hover:text-[var(--color-accent)] hover:border-[var(--color-accent)]",

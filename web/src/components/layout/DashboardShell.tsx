@@ -10,10 +10,22 @@ import { Atmosphere } from "./Atmosphere";
 export function DashboardShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen" style={{ background: "var(--color-bg)" }}>
+      <style>{`
+        .dashboard-main {
+          margin-left: 220px;
+          min-height: 100vh;
+        }
+        @media (max-width: 760px) {
+          .dashboard-main {
+            margin-left: 0;
+            padding-top: 58px;
+          }
+        }
+      `}</style>
       <Atmosphere />
       <BootSequence />
       <Sidebar />
-      <main style={{ marginLeft: 220, minHeight: "100vh" }}>
+      <main className="dashboard-main">
         <AlertBanner />
         <PlanModeBanner />
         {children}

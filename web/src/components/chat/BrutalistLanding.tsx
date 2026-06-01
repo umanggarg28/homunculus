@@ -36,7 +36,7 @@ export function BrutalistLanding({ bootDone, onPick }: Props) {
             fontSize: "clamp(48px, 10vw, 96px)",
             fontWeight: 700,
             lineHeight: 0.88,
-            letterSpacing: "-0.04em",
+            letterSpacing: "0",
             color: "var(--color-accent)",
             textShadow: "0 0 40px var(--color-accent-glow)",
           }}
