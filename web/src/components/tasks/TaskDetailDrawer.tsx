@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { createPortal } from "react-dom";
 import type { Task } from "@/lib/types";
 import { parseServerIso } from "@/lib/api";
 
@@ -17,7 +18,7 @@ export function TaskDetailDrawer({ task, onClose }: Props) {
 
   if (!task) return null;
 
-  return (
+  return createPortal(
     <>
       <div
         className="fixed inset-0 z-40"
@@ -148,7 +149,8 @@ export function TaskDetailDrawer({ task, onClose }: Props) {
           )}
         </div>
       </aside>
-    </>
+    </>,
+    document.body,
   );
 }
 
