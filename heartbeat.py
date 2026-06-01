@@ -71,88 +71,46 @@ Important rules:
 """
 
 
-REFLECTION_PROMPT_TEMPLATE = """It's a daily REFLECTION tick — no user is
-talking to you right now. The current date is {today}.
+REFLECTION_PROMPT_TEMPLATE = """It's a daily REFLECTION tick. Current date: {today}.
 
-Your task: review what happened yesterday ({yesterday}) and learn from it.
+You have two jobs: (1) refine skills based on real task outcomes, (2) save new memories from yesterday's log.
 
-Step 1 — Read yesterday's log file:
-    read_file("memory/logs/{yesterday_path}.md")
-(If the file doesn't exist, yesterday was quiet — say so in one line and stop.)
+━━ STEP 1 — Skill refinement (MANDATORY, do this first) ━━
 
-Step 2 — Look for PATTERNS worth carrying forward:
-- Did the user correct you on something? → save as a "feedback" memory.
-- Did the user reveal an ongoing goal, deadline, or project state? →
-  save as a "project" memory.
-- Did you make a mistake (wrong tool, wrong assumption) that a future
-  you should avoid? → save as a "feedback" memory phrased as a rule.
-- Did the user confirm a non-obvious choice worked well? → save as a
-  "feedback" memory so future-you keeps doing it.
-- Did you successfully complete a NON-TRIVIAL multi-step workflow
-  (e.g. "deliver daily LeetCode" = read tracker → pick problem →
-  fetch solution → notify → update tracker → complete task)? → save
-  as a "skill" memory with name `skill_<slug>` listing the steps in
-  order. This is how you learn your own job: next time the same
-  trigger fires, read the skill and replay. A skill memory's body
-  should start with "Trigger:" (when to use it) and then numbered
-  steps. Keep it short — the procedure, not the prose.
+read_file("tasks/tasks.json") and find every task that has `last_runs` entries from {yesterday}.
 
-Step 2.5 — Skill evaluate+refine (do this BEFORE saving new memories):
-Read the task state file:
-    read_file("tasks/tasks.json")
+For each such task:
+  a) Look in your memory index for a matching skill (name like `skill_<slug-of-title>`).
+  b) If the last_runs show failures or anomalies (errors, BLOCKED, stuck loops, too many retries):
+     - read_file the current skill memory.
+     - Identify what went wrong from the `result` field of the failing run.
+     - Update the skill with a corrected step or a "Watch out:" note.
+     - Call remember() with the SAME name to overwrite — no new memory, same name.
+  c) If the last_runs show only success AND no skill exists yet → write a new one.
+  d) If the last_runs show only success AND a skill exists → no action needed.
 
-For each task in the file that has `last_runs` entries from yesterday
-({yesterday}), check if a skill memory exists for that task. To find
-a matching skill: look in your memory index for entries named
-`skill_<slug>` where the slug resembles the task title (e.g., task
-"Daily LeetCode" → skill_daily-leetcode). For each match:
+Do not skip this step even if runs look successful on the surface — check the result text for errors, 403s, stuck loops, BLOCKED messages, or excessive retries.
 
-a) If the task's last_runs from yesterday show ONLY successes:
-   No action needed — the skill is working.
+━━ STEP 2 — Learn from yesterday's log ━━
 
-b) If the task's last_runs from yesterday show ANY failures:
-   - Read the current skill memory body.
-   - Identify what step failed (look at the error in `result` field).
-   - Rewrite the skill with a corrected step or a "watch out" note
-     added to the failing step.
-   - Call remember() with the SAME name (e.g. `skill_daily-leetcode`)
-     to overwrite the existing skill in place — do NOT create a new one.
-   - The updated skill should include a "Last fixed: {yesterday}" note
-     at the top so you can track when it was last refined.
+read_file("memory/logs/{yesterday_path}.md")
+If the file doesn't exist, skip to Step 3.
 
-c) If a task ran yesterday but has NO matching skill yet (task was
-   manually run or is new), AND it succeeded, treat it like Step 2 —
-   save a new skill memory if the workflow was non-trivial.
+Look for:
+- User corrections → save as "feedback" memory
+- Ongoing goals or project state → save as "project" memory
+- Confirmed good choices → save as "feedback" memory
 
-This is how skills self-improve: each reflection tick patches the
-procedure based on real run data rather than leaving broken steps in
-place forever.
+━━ STEP 3 — Save memories + hygiene ━━
 
-Step 3 — Save AT MOST 3 new memories via remember(). Fewer is fine.
-Skip anything trivial or already covered by an existing memory in your
-index. Quality over quantity. If a new fact updates an existing memory,
-call remember() with the SAME `name` as that entry to overwrite in
-place — don't create duplicates.
+Save AT MOST 2 new memories. Use remember() with the SAME name to update existing ones — no duplicates.
+Call forget() AT MOST 2 times for stale or contradicted memories.
 
-Step 4 — Memory hygiene pass. Scan your memory index for:
-- Duplicates (two entries that describe the same fact) — call forget()
-  on the older / less-accurate one.
-- Contradictions (a newer memory contradicts an older one) — call
-  forget() on the outdated one.
-- Plain garbage that's no longer relevant (a project that's over,
-  a deadline that's passed) — call forget().
-Call forget() AT MOST 2 times this tick. Be conservative — when in
-doubt, leave it. Losing context is worse than carrying old facts.
+━━ STEP 4 — Reply ━━
 
-Step 5 — Reply with a ONE-LINE summary of what you learned (or
-"nothing notable from yesterday"). Then stop.
+One line: what you learned or changed. If you updated a skill, say which one and why.
 
-Important:
-- Reading yesterday's log is the ONLY log read you should do this tick.
-  Don't chain into older logs.
-- Don't write to workspace files. This tick is for memory only.
-- Don't call notify(). Reflections are silent.
-- shell_exec is disabled.
+Rules: no notify(), no shell_exec, no writing workspace files, no reading logs other than yesterday's.
 """
 
 
