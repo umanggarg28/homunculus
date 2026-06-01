@@ -240,7 +240,12 @@ class TaskGuard:
     def _flush(self) -> None:
         """Send all buffered notifications directly (bypasses MCP subprocess)."""
         for text in self._notify_texts:
-            _send_to_telegram(text)
+            err = _send_to_telegram(text)
+            if err:
+                print(f"[TaskGuard] notify flush failed: {err}", flush=True)
+                events.emit("tool_result", name="notify", result=f"ERROR: buffered notification failed to send: {err}")
+            else:
+                events.emit("tool_result", name="notify", result=f"Notification delivered ({len(text)} chars).")
         self._notify_texts.clear()
 
     def _check(self, criteria: list[dict[str, Any]]) -> list[str]:
