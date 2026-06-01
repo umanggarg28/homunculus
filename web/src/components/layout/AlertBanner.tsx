@@ -7,11 +7,6 @@ interface Alert {
   text: string;
 }
 
-// Approximate cost in USD cents — mirrors GrowthDeltas estimate.
-function estimateCostCents(input: number, output: number, cached: number): number {
-  const uncached = Math.max(0, input - cached);
-  return (uncached * 3 + cached * 0.3 + output * 15) / 1_000_000 * 100;
-}
 
 /** Contextual alert strip — surfaces hard failures (recent tool
  *  errors, missing API keys, failed task runs, stuck loops, budget overrun)
@@ -36,10 +31,9 @@ export function AlertBanner() {
   }, [events.length]);
 
   useEffect(() => {
-    const localMidnight = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.toISOString(); })();
-    api.statsToday(localMidnight).then((s) => {
+    api.statsToday().then((s) => {
       setBudgetCents(s.budget_cents ?? 0);
-      setSpentCents(estimateCostCents(s.input_tokens ?? 0, s.output_tokens ?? 0, s.cached_tokens ?? 0));
+      setSpentCents(s.cost_cents ?? 0);
     }).catch(() => undefined);
   }, [events.length]);
 

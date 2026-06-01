@@ -491,23 +491,41 @@ def agent_upcoming() -> JSONResponse:
 
 # --- API: stats -----------------------------------------------------------
 
-@app.get("/api/stats/today", dependencies=[Depends(require_web_auth)])
-def stats_today(since: str = "") -> JSONResponse:
-    """Return activity counts since a given UTC ISO timestamp (defaults to UTC midnight).
+# Cost per million tokens (input, output) for known models.
+# Models ending in ":free" are always $0. Anything not listed uses 0
+# so we never overcount — better to undercount than show $2 for free runs.
+_MODEL_PRICING: dict[str, tuple[float, float]] = {
+    # ($/1M input, $/1M output)
+    "gemini-2.5-flash":                         (0.075,  0.30),
+    "gemini-2.5-pro":                           (1.25,  10.00),
+    "gemini-2.0-flash":                         (0.075,  0.30),
+    "llama-3.3-70b-versatile":                  (0.59,   0.79),
+    "llama-3.1-8b-instant":                     (0.05,   0.08),
+    "openai/gpt-4o":                            (2.50,  10.00),
+    "openai/gpt-4o-mini":                       (0.15,   0.60),
+    "anthropic/claude-3.5-sonnet":              (3.00,  15.00),
+    "anthropic/claude-3-haiku":                 (0.25,   1.25),
+}
 
-    Returns events, unique tools used, tasks fired, memory writes/forgets.
-    Scans _events.jsonl from the end for efficiency — stops once past the cutoff.
+def _model_cost_cents(model: str, input_tok: int, output_tok: int, cached_tok: int) -> float:
+    """Return estimated cost in cents for one LLM call. Free models → 0."""
+    if not model or model.endswith(":free"):
+        return 0.0
+    price_in, price_out = _MODEL_PRICING.get(model, (0.0, 0.0))
+    uncached = max(0, input_tok - cached_tok)
+    cached_in = cached_tok
+    return (uncached * price_in + cached_in * price_in * 0.1 + output_tok * price_out) / 1_000_000 * 100
+
+
+@app.get("/api/stats/today", dependencies=[Depends(require_web_auth)])
+def stats_today() -> JSONResponse:
+    """Return activity counts since UTC midnight today.
+
+    Uses server-side UTC midnight so the window is consistent regardless
+    of the client's timezone.
     """
     from datetime import timezone
-    if since:
-        try:
-            cutoff = datetime.fromisoformat(since.replace("Z", "+00:00"))
-            if cutoff.tzinfo is None:
-                cutoff = cutoff.replace(tzinfo=timezone.utc)
-        except ValueError:
-            cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    else:
-        cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
     events_path = Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
     total_events = 0
@@ -518,6 +536,7 @@ def stats_today(since: str = "") -> JSONResponse:
     input_tokens = 0
     output_tokens = 0
     cached_tokens = 0
+    cost_cents = 0.0
 
     if events_path.exists():
         try:
@@ -553,9 +572,13 @@ def stats_today(since: str = "") -> JSONResponse:
                 elif evt == "memory_forget":
                     memory_forgets += 1
                 elif evt == "llm_call":
-                    input_tokens += rec.get("input_tokens") or 0
-                    output_tokens += rec.get("output_tokens") or 0
-                    cached_tokens += rec.get("cached_tokens") or 0
+                    in_tok = rec.get("input_tokens") or 0
+                    out_tok = rec.get("output_tokens") or 0
+                    ca_tok = rec.get("cached_tokens") or 0
+                    input_tokens += in_tok
+                    output_tokens += out_tok
+                    cached_tokens += ca_tok
+                    cost_cents += _model_cost_cents(rec.get("model", ""), in_tok, out_tok, ca_tok)
         except OSError:
             pass
 
@@ -570,6 +593,7 @@ def stats_today(since: str = "") -> JSONResponse:
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "cached_tokens": cached_tokens,
+        "cost_cents": round(cost_cents, 2),
         "budget_cents": round(budget_usd * 100, 2),
     })
 

@@ -142,7 +142,7 @@ export const api = {
     next_task: { id: string; title: string; due_at: string; recurrence: string } | null;
   }>("/agent/upcoming"),
 
-  statsToday: (sinceIso: string) =>
+  statsToday: () =>
     jsonGet<{
       since: string;
       events: number;
@@ -153,8 +153,9 @@ export const api = {
       input_tokens: number;
       output_tokens: number;
       cached_tokens: number;
+      cost_cents: number;
       budget_cents: number;
-    }>(`/stats/today?since=${encodeURIComponent(sinceIso)}`),
+    }>("/stats/today"),
 
   tasksCreate: (body: {
     title: string;
