@@ -43,40 +43,6 @@ _TELEGRAM_ALLOWED_TAGS = {"b", "i", "u", "s", "code", "pre", "a", "tg-spoiler"}
 _send_history: deque[float] = deque(maxlen=NOTIFY_MAX_PER_WINDOW * 4)
 _send_lock = Lock()
 
-# Buffer mode: when enabled, notify() queues messages instead of sending
-# them to Telegram immediately. The caller is responsible for flushing
-# (on task success) or clearing (on task guard block) the buffer.
-_buffer_enabled = False
-_buffer: list[str] = []
-_buffer_lock = Lock()
-
-
-def enable_buffer() -> None:
-    global _buffer_enabled
-    with _buffer_lock:
-        _buffer_enabled = True
-        _buffer.clear()
-
-
-def flush_buffer() -> None:
-    """Send all buffered notifications to Telegram and clear the buffer."""
-    global _buffer_enabled
-    with _buffer_lock:
-        pending = list(_buffer)
-        _buffer.clear()
-        _buffer_enabled = False
-    for text in pending:
-        _send_to_telegram(text)
-
-
-def clear_buffer() -> None:
-    """Discard buffered notifications without sending (guard blocked)."""
-    global _buffer_enabled
-    with _buffer_lock:
-        _buffer.clear()
-        # Keep buffer mode enabled — the agent will retry notify()
-        # with corrected content before the next complete_task attempt.
-
 
 def _rate_limit_check() -> str | None:
     """Return an error string if rate-limited; None otherwise. Records
@@ -130,13 +96,6 @@ def notify(text: str, preview: bool = False) -> str:
     rate_err = _rate_limit_check()
     if rate_err:
         return rate_err
-
-    # Buffer mode: hold the message until the task guard approves completion.
-    # Events are still emitted for tracing (caller does that before invoking us).
-    with _buffer_lock:
-        if _buffer_enabled:
-            _buffer.append(text)
-            return f"Notification queued ({len(text)} chars) — will be delivered when task completes successfully."
 
     err = _send_to_telegram(text)
     if err:

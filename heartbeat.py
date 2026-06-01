@@ -31,7 +31,7 @@ import tools
 from core import Agent
 from memory import Memory
 from tasks import TaskStore
-from tools.notify import enable_buffer, flush_buffer, clear_buffer as clear_notify_buffer
+from tools.notify import _send_to_telegram
 
 
 HEARTBEAT_PROMPT_TEMPLATE = """It's a scheduled heartbeat tick — no user is
@@ -190,11 +190,11 @@ class TaskGuard:
     def __init__(self, criteria_by_task: dict[str, list[dict[str, Any]]]) -> None:
         self._criteria = criteria_by_task
         self._notify_texts: list[str] = []
-        # Enable buffering when any task has criteria so that notify()
-        # calls are held until complete_task passes — user only receives
-        # the final approved notification, not intermediate attempts.
-        if any(v for v in criteria_by_task.values()):
-            enable_buffer()
+        # When any task has criteria, intercept notify() calls in the hook
+        # itself — block them from reaching the MCP subprocess and hold the
+        # text here, then send directly (bypassing subprocess boundary) once
+        # complete_task passes all criteria.
+        self._buffering = any(v for v in criteria_by_task.values())
 
     def on_tool_call(self, name: str, arguments: dict) -> str | None:
         """Hook fn passed to tools.set_pre_execute_hook().
@@ -205,24 +205,27 @@ class TaskGuard:
         if name == "notify":
             text = arguments.get("text") or ""
             self._notify_texts.append(str(text))
-            return None  # allow notify() — it self-buffers when buffer mode is on
+            if self._buffering:
+                # Block the MCP call — we'll send directly from this process
+                # once complete_task passes criteria, bypassing the subprocess.
+                return f"Notification queued ({len(text)} chars) — will be delivered when task completes successfully."
+            return None  # no criteria — let notify go through normally
 
         if name == "complete_task":
             task_id = arguments.get("task_id", "")
             criteria = self._criteria.get(task_id, [])
             if not criteria:
-                flush_buffer()  # no guard — flush any buffered notifies now
+                self._flush()  # no guard — send any buffered notifies now
                 return None
 
             failures = self._check(criteria)
             if not failures:
-                flush_buffer()  # criteria passed — deliver the final notification
+                self._flush()  # criteria passed — deliver buffered notifications
                 return None
 
-            # Criteria failed — discard the queued notification so the agent
-            # can call notify() again with improved content. Both the discarded
-            # and new notify() texts remain visible in the event trace.
-            clear_notify_buffer()
+            # Criteria failed — discard queued notifications so the agent
+            # retries notify() with improved content before the next attempt.
+            self._notify_texts.clear()
             msg = (
                 f"BLOCKED by output_guard: complete_task('{task_id}') refused because "
                 f"{len(failures)} success criterion/criteria failed:\n"
@@ -233,6 +236,12 @@ class TaskGuard:
             return msg
 
         return None  # all other tools pass through unmodified
+
+    def _flush(self) -> None:
+        """Send all buffered notifications directly (bypasses MCP subprocess)."""
+        for text in self._notify_texts:
+            _send_to_telegram(text)
+        self._notify_texts.clear()
 
     def _check(self, criteria: list[dict[str, Any]]) -> list[str]:
         """Return a list of human-readable failure descriptions."""
