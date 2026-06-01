@@ -489,6 +489,157 @@ def agent_upcoming() -> JSONResponse:
     })
 
 
+# --- API: stats -----------------------------------------------------------
+
+@app.get("/api/stats/today", dependencies=[Depends(require_web_auth)])
+def stats_today(since: str = "") -> JSONResponse:
+    """Return activity counts since a given UTC ISO timestamp (defaults to UTC midnight).
+
+    Returns events, unique tools used, tasks fired, memory writes/forgets.
+    Scans _events.jsonl from the end for efficiency — stops once past the cutoff.
+    """
+    from datetime import timezone
+    if since:
+        try:
+            cutoff = datetime.fromisoformat(since.replace("Z", "+00:00"))
+            if cutoff.tzinfo is None:
+                cutoff = cutoff.replace(tzinfo=timezone.utc)
+        except ValueError:
+            cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    events_path = Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
+    total_events = 0
+    unique_tools: set[str] = set()
+    tasks_fired = 0
+    memory_writes = 0
+    memory_forgets = 0
+    input_tokens = 0
+    output_tokens = 0
+    cached_tokens = 0
+
+    if events_path.exists():
+        try:
+            with events_path.open("r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+            for line in reversed(lines):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ts_raw = rec.get("ts", "")
+                try:
+                    ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+                if ts < cutoff:
+                    break
+                total_events += 1
+                evt = rec.get("event", "")
+                if evt == "tool_call":
+                    name = rec.get("name") or ""
+                    if name:
+                        unique_tools.add(name)
+                    if name == "complete_task":
+                        tasks_fired += 1
+                elif evt == "memory_write":
+                    memory_writes += 1
+                elif evt == "memory_forget":
+                    memory_forgets += 1
+                elif evt == "llm_call":
+                    input_tokens += rec.get("input_tokens") or 0
+                    output_tokens += rec.get("output_tokens") or 0
+                    cached_tokens += rec.get("cached_tokens") or 0
+        except OSError:
+            pass
+
+    budget_usd = float(os.environ.get("HOMUNCULUS_DAILY_BUDGET_USD", "0") or "0")
+    return JSONResponse({
+        "since": cutoff.isoformat(),
+        "events": total_events,
+        "unique_tools": len(unique_tools),
+        "tasks_fired": tasks_fired,
+        "memory_writes": memory_writes,
+        "memory_forgets": memory_forgets,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cached_tokens": cached_tokens,
+        "budget_cents": round(budget_usd * 100, 2),
+    })
+
+
+# --- API: context window gauge --------------------------------------------
+
+# Known context limits for common model IDs (tokens).
+_CONTEXT_LIMITS: dict[str, int] = {
+    "gemini-2.5-flash":              1_048_576,
+    "gemini-2.5-pro":                1_048_576,
+    "gemini-2.0-flash":              1_048_576,
+    "gemini-1.5-flash":              1_048_576,
+    "gemini-1.5-pro":                2_097_152,
+    "gpt-4o":                          128_000,
+    "gpt-4o-mini":                     128_000,
+    "gpt-4-turbo":                     128_000,
+    "gpt-4":                            32_768,
+    "llama-3.3-70b-versatile":         128_000,
+    "gpt-oss-120b":                    128_000,
+}
+
+def _context_limit_for(model: str) -> int:
+    """Return the context window size for a model ID, falling back to 128k."""
+    for key, limit in _CONTEXT_LIMITS.items():
+        if key in model:
+            return limit
+    return 128_000
+
+
+@app.get("/api/context", dependencies=[Depends(require_web_auth)])
+def context_gauge() -> JSONResponse:
+    """Return the latest prompt token count and model context limit.
+
+    Scans _events.jsonl from the end for the most recent llm_call event
+    that has input_tokens. The prompt_tokens value from the API response
+    IS the full current context size (cumulative, not incremental).
+    """
+    events_path = Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
+    last_input_tokens: int = 0
+    last_model: str = os.environ.get("HOMUNCULUS_MODEL", "gemini-2.5-flash")
+
+    if events_path.exists():
+        try:
+            with events_path.open("r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+            for line in reversed(lines):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("event") == "llm_call" and rec.get("input_tokens"):
+                    last_input_tokens = rec["input_tokens"]
+                    if rec.get("model"):
+                        last_model = rec["model"]
+                    break
+        except OSError:
+            pass
+
+    limit = _context_limit_for(last_model)
+    return JSONResponse({
+        "used_tokens": last_input_tokens,
+        "limit_tokens": limit,
+        "model": last_model,
+        "pct": round(last_input_tokens / limit * 100, 1) if limit else 0,
+    })
+
+
 # --- API: logs ------------------------------------------------------------
 
 @app.get("/api/logs", dependencies=[Depends(require_web_auth)])
@@ -520,6 +671,10 @@ def chat_history() -> JSONResponse:
         role = msg.get("role")
         content = msg.get("content")
         if role in {"user", "assistant"} and content:
+            # Skip heartbeat notifications — they live in LLM context for
+            # follow-up questions but shouldn't appear as chat bubbles.
+            if isinstance(content, str) and content.startswith("[notification I sent you at"):
+                continue
             messages.append({
                 "id": f"persisted-{idx}",
                 "role": role,

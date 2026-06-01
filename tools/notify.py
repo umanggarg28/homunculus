@@ -97,27 +97,31 @@ def notify(text: str, preview: bool = False) -> str:
     if rate_err:
         return rate_err
 
+    err = _send_to_telegram(text)
+    if err:
+        return err
+    _queue_for_telegram_history(text)
+    return f"Notification delivered ({len(text)} chars)."
+
+
+def _send_to_telegram(text: str) -> str | None:
+    """Send text to Telegram. Returns an error string on failure, None on success."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_ALLOWED_USER_ID")
+    if not token or not chat_id:
+        return None  # silently skip if not configured (e.g. during tests)
+
     body = _markdown_to_telegram_html(text)
-    parse_failed = False
     try:
         response = httpx.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": body,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            },
+            json={"chat_id": chat_id, "text": body, "parse_mode": "HTML", "disable_web_page_preview": True},
             timeout=10.0,
         )
     except httpx.HTTPError as e:
         return f"ERROR: Telegram request failed: {e}"
 
     if response.status_code != 200:
-        # Most common cause: HTML parse error from a stray `<` or unclosed
-        # tag in the converted body. Fall back to plain text so the agent's
-        # message still reaches the user.
-        parse_failed = True
         plain = _strip_markdown(text)
         try:
             fallback = httpx.post(
@@ -126,25 +130,12 @@ def notify(text: str, preview: bool = False) -> str:
                 timeout=10.0,
             )
         except httpx.HTTPError as e:
-            return (
-                f"ERROR: Telegram HTML send failed ({response.status_code}: "
-                f"{response.text[:200]}) and plain-text fallback also failed: {e}"
-            )
+            return f"ERROR: Telegram HTML send failed ({response.status_code}) and fallback also failed: {e}"
         if fallback.status_code != 200:
-            return (
-                f"ERROR: Telegram HTML send failed ({response.status_code}: "
-                f"{response.text[:200]}) and plain-text fallback returned "
-                f"{fallback.status_code}: {fallback.text[:200]}"
-            )
+            return f"ERROR: Telegram send failed ({response.status_code}); fallback {fallback.status_code}"
 
-    # Persist the notification so the Telegram bot's agent can pick it up
-    # on the next user message. Without this bridge, a follow-up like
-    # "explain it" arrives with zero context because the heartbeat
-    # daemon and the bot run in separate processes with separate agent
-    # histories. See Memory.drain_pending_notifications.
     _queue_for_telegram_history(text)
-    suffix = " (plain-text fallback)" if parse_failed else ""
-    return f"Notification delivered ({len(text)} chars){suffix}."
+    return None
 
 
 def _queue_for_telegram_history(text: str) -> None:

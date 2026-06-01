@@ -143,13 +143,13 @@ function AgentReply({ message, toolCalls, inFlight, sending }: AgentReplyProps) 
             display: "grid",
             gridTemplateColumns: "16px minmax(0, 1fr)",
             columnGap: "10px",
-            alignItems: "start",
+            alignItems: "first baseline",
             marginTop: 6,
           }}
         >
           <span
-            className="select-none pt-[2px]"
-            style={{ color: "var(--color-accent)", fontSize: 14, lineHeight: "1.7" }}
+            className="select-none"
+            style={{ color: "var(--color-accent)", fontSize: 13, lineHeight: "1.7" }}
           >
             ›
           </span>

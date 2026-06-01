@@ -91,7 +91,11 @@ export type EventKind =
   | "assistant_reply"
   | "tool_call"
   | "tool_result"
-  | "llm_call";
+  | "llm_call"
+  | "output_guard"
+  | "self_correction"
+  | "memory_write"
+  | "memory_forget";
 
 export interface FeedEvent {
   ts: string;
@@ -105,4 +109,7 @@ export interface FeedEvent {
   model?: string;
   host?: string;
   request?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  cached_tokens?: number;
 }

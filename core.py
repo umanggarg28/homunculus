@@ -142,9 +142,10 @@ Memory:
 - Types: user · feedback · project · reference · skill (learned procedures)
 
 Scheduling:
-- For "every day at X" / "every week" / any RECURRING commitment, use
-  create_task(recurrence="daily"|"weekly") — NEVER schedule_next_tick.
-- schedule_next_tick is for one-shot wake timers only.
+- For recurring commitments use create_task(recurrence="daily"|"weekly").
+  create_task() will automatically update an existing task if the title
+  matches — you never need to check for duplicates manually.
+- schedule_next_tick is for one-shot wake timers only; never for recurring.
 
 Self-extension (Pi-style):
 - For non-trivial Python you'll want again later — data parsing, a
@@ -333,8 +334,9 @@ def call_llm(
                         timeout=60.0,
                     )
                     if retry_resp.status_code == 200:
-                        events.emit("llm_call", name=model_id, model=model_id, host=_url_host(url), request=_serialize_messages(messages))
-                        return retry_resp.json()["choices"][0]["message"]
+                        rj = retry_resp.json()
+                        _emit_llm_call(model_id, url, messages, rj.get("usage"))
+                        return rj["choices"][0]["message"]
                     # Retry also failed — fall through to cool + continue
                     response = retry_resp
                     retry_after = _parse_retry_after(retry_resp)
@@ -360,8 +362,9 @@ def call_llm(
         if response.status_code >= 400:
             raise RuntimeError(f"API error {response.status_code}: {response.text}")
         # Emit which model actually answered, so the live feed shows it.
-        events.emit("llm_call", name=model_id, model=model_id, host=_url_host(url), request=_serialize_messages(messages))
-        return response.json()["choices"][0]["message"]
+        rj = response.json()
+        _emit_llm_call(model_id, url, messages, rj.get("usage"))
+        return rj["choices"][0]["message"]
 
     # All providers in this attempt 429'd or errored. Honor a short sleep
     # then retry the chain once — usually one provider's cooldown will
@@ -390,8 +393,9 @@ def call_llm(
             continue
         if response.status_code >= 400:
             raise RuntimeError(f"API error {response.status_code}: {response.text}")
-        events.emit("llm_call", name=model_id, model=model_id, host=_url_host(url), request=_serialize_messages(messages))
-        return response.json()["choices"][0]["message"]
+        rj = response.json()
+        _emit_llm_call(model_id, url, messages, rj.get("usage"))
+        return rj["choices"][0]["message"]
 
     raise RuntimeError(f"All providers exhausted: {last_err}")
 
@@ -402,6 +406,23 @@ def _url_host(url: str) -> str:
         return url.split("://", 1)[1].split("/", 1)[0]
     except (IndexError, AttributeError):
         return url
+
+
+def _emit_llm_call(model_id: str, url: str, messages: list[dict], usage: dict | None) -> None:
+    """Emit an llm_call event with token counts extracted from the usage dict."""
+    kwargs: dict[str, Any] = {
+        "name": model_id,
+        "model": model_id,
+        "host": _url_host(url),
+        "request": _serialize_messages(messages),
+    }
+    if usage:
+        kwargs["input_tokens"] = usage.get("prompt_tokens", 0)
+        kwargs["output_tokens"] = usage.get("completion_tokens", 0)
+        # OpenAI-compatible cached token field (varies by provider)
+        cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+        kwargs["cached_tokens"] = cached
+    events.emit("llm_call", **kwargs)
 
 
 def _serialize_messages(messages: list[dict]) -> str:
@@ -464,6 +485,7 @@ def call_llm_stream(
             "model": model_id,
             "messages": messages,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
         if tool_schemas is not None:
             payload["tools"] = tool_schemas
@@ -511,7 +533,6 @@ def call_llm_stream(
                         # Retry succeeded — break out to streaming logic below
                         used_url = url
                         used_model = model_id
-                        events.emit("llm_call", name=model_id, model=model_id, host=_url_host(url), request=_serialize_messages(messages))
                         break
                     # Retry also failed — clean up and fall through to cool+continue
                     retry_after = _parse_retry_after(response)
@@ -556,7 +577,6 @@ def call_llm_stream(
             raise RuntimeError(f"API error {response.status_code}: {err}")
         used_url = url
         used_model = model_id
-        events.emit("llm_call", name=model_id, model=model_id, host=_url_host(url), request=_serialize_messages(messages))
         break
 
     if response_ctx is None or response is None:
@@ -564,6 +584,7 @@ def call_llm_stream(
 
     content_acc: list[str] = []
     tool_calls_acc: dict[int, dict[str, Any]] = {}
+    stream_usage: dict | None = None
 
     try:
         for raw_line in response.iter_lines():
@@ -579,6 +600,8 @@ def call_llm_stream(
                 chunk = json.loads(data)
             except json.JSONDecodeError:
                 continue
+            if chunk.get("usage"):
+                stream_usage = chunk["usage"]
             choices = chunk.get("choices") or []
             if not choices:
                 continue
@@ -612,6 +635,8 @@ def call_llm_stream(
                 yield ("tool_call_delta", slot)
     finally:
         response_ctx.__exit__(None, None, None)
+
+    _emit_llm_call(used_model, used_url, messages, stream_usage)
 
     # Assemble the final assistant message in the shape the loop expects.
     # Validate tool-call arguments parse as JSON — sometimes a stream
@@ -852,6 +877,7 @@ class Agent:
         events.emit("user_message", text=events.full_text(user_message))
 
         tool_names_used: set[str] = set()
+        call_counts: dict[tuple[str, str], int] = {}
 
         for _ in range(MAX_TURNS):
             if streaming:
@@ -934,11 +960,29 @@ class Agent:
                     args=events.truncate_preview(json.dumps(args, ensure_ascii=False), limit=800),
                 )
 
+                # Loop/stuck detection: same (tool, args) called 3+ times this
+                # session signals the agent is looping. Inject a corrective result
+                # instead of executing, so the LLM sees the warning and pivots.
+                canon_args = json.dumps(args, sort_keys=True)
+                call_key = (name, canon_args)
+                call_counts[call_key] = call_counts.get(call_key, 0) + 1
+                if call_counts[call_key] >= 3:
+                    result = (
+                        f"STUCK_LOOP: '{name}' has been called with these exact arguments "
+                        f"{call_counts[call_key]} times this session. You are in a loop. "
+                        "Stop, reason about why the previous calls did not achieve the goal, "
+                        "and try a fundamentally different approach or ask the user for help."
+                    )
+                    events.emit(
+                        "output_guard",
+                        name=name,
+                        text=f"stuck loop: {name} × {call_counts[call_key]}",
+                        result=canon_args[:120],
+                    )
                 # Schema-validate args before dispatch. On failure the LLM
                 # gets a structured error and can correct + retry rather
                 # than running the tool with garbage arguments.
-                validation_error = _validate_tool_args(name, args)
-                if validation_error:
+                elif validation_error := _validate_tool_args(name, args):
                     result = (
                         f"ERROR: invalid arguments for '{name}': {validation_error}. "
                         f"Check the tool schema and retry with corrected arguments."

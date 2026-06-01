@@ -142,6 +142,20 @@ export const api = {
     next_task: { id: string; title: string; due_at: string; recurrence: string } | null;
   }>("/agent/upcoming"),
 
+  statsToday: (sinceIso: string) =>
+    jsonGet<{
+      since: string;
+      events: number;
+      unique_tools: number;
+      tasks_fired: number;
+      memory_writes: number;
+      memory_forgets: number;
+      input_tokens: number;
+      output_tokens: number;
+      cached_tokens: number;
+      budget_cents: number;
+    }>(`/stats/today?since=${encodeURIComponent(sinceIso)}`),
+
   tasksCreate: (body: {
     title: string;
     description?: string;
@@ -201,6 +215,9 @@ export const api = {
       if (!r.ok) throw new Error(`Delete task failed: ${r.status}`);
       return r.json();
     }),
+
+  contextGauge: () =>
+    jsonGet<{ used_tokens: number; limit_tokens: number; model: string; pct: number }>("/context"),
 
   chapterClose: () =>
     fetch(`${API_BASE}/chapters/close`, {

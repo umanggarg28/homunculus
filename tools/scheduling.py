@@ -45,6 +45,12 @@ def schedule_next_tick(iso_datetime: str) -> str:
     return f"Scheduled next heartbeat for {target.isoformat(timespec='seconds')} (in {delta})."
 
 
+def _slug(title: str) -> str:
+    """Normalize a title to a comparable slug."""
+    import re
+    return re.sub(r"[^a-z0-9]+", "", title.lower())
+
+
 def create_task(
     title: str,
     description: str = "",
@@ -52,7 +58,16 @@ def create_task(
     recurrence: str = "none",
     notify: bool = False,
 ) -> str:
-    task = _task_store().create(title, description, due_at, recurrence, notify)
+    store = _task_store()
+    # Dedup guard: if a task with a very similar title already exists,
+    # update it instead of creating a duplicate. This catches cases where
+    # the LLM rephrases the user's intent ("remind me to X" vs "X task").
+    title_slug = _slug(title)
+    for existing in store.list("all"):
+        if _slug(existing["title"]) == title_slug:
+            task = store.schedule(existing["id"], due_at or existing.get("due_at") or "", recurrence if recurrence != "none" else existing.get("recurrence", "none"))
+            return f"Updated existing task {task['id']} (was {existing['status']}): {task['title']} — due {task.get('due_at')}, recurrence: {task.get('recurrence')}"
+    task = store.create(title, description, due_at, recurrence, notify)
     return f"Created task {task['id']}: {task['title']}"
 
 
