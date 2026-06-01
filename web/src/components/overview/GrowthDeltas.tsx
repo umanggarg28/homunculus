@@ -10,28 +10,16 @@ interface TodayStats {
   input_tokens: number;
   output_tokens: number;
   cached_tokens: number;
+  cost_cents: number;
 }
 
-// Approximate cost in USD cents based on token counts.
-// Uses a conservative blended estimate (~$3/1M input, $15/1M output).
-function estimateCostCents(input: number, output: number, cached: number): number {
-  const uncached = Math.max(0, input - cached);
-  return (uncached * 3 + cached * 0.3 + output * 15) / 1_000_000 * 100;
-}
-
-/** Activity since local midnight — reads from the real events log via API. */
+/** Activity since UTC midnight — window is server-authoritative. */
 export function GrowthDeltas() {
   const [stats, setStats] = useState<TodayStats | null>(null);
 
   useEffect(() => {
-    const localMidnight = (() => {
-      const d = new Date();
-      d.setHours(0, 0, 0, 0);
-      return d.toISOString();
-    })();
-
     const fetch = () =>
-      api.statsToday(localMidnight).then(setStats).catch(() => undefined);
+      api.statsToday().then(setStats).catch(() => undefined);
 
     fetch();
     const id = setInterval(fetch, 30_000);
@@ -41,11 +29,7 @@ export function GrowthDeltas() {
   if (!stats) return null;
 
   const memDelta = stats.memory_writes - stats.memory_forgets;
-  const costCents = estimateCostCents(
-    stats.input_tokens ?? 0,
-    stats.output_tokens ?? 0,
-    stats.cached_tokens ?? 0,
-  );
+  const costCents = stats.cost_cents ?? 0;
   const totalTokens = (stats.input_tokens ?? 0) + (stats.output_tokens ?? 0);
 
   return (
