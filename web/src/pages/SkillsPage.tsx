@@ -253,6 +253,21 @@ function SkillRow({ skill, maxCalls }: { skill: Skill; maxCalls: number }) {
                 )}
               </div>
             )}
+            {(skill.uses != null || skill.consecutive_failures != null) && (
+              <div style={{ display: "flex", gap: 16, marginTop: 6, fontSize: 10, letterSpacing: "0.10em", textTransform: "uppercase" }}>
+                {skill.uses != null && (
+                  <span style={{ color: "var(--color-text-faint)" }}>rated {skill.uses}×</span>
+                )}
+                {skill.consecutive_failures != null && skill.consecutive_failures > 0 && (
+                  <span style={{ color: skill.consecutive_failures >= 3 ? "var(--color-danger)" : "var(--color-amber)" }}>
+                    {skill.consecutive_failures} consec. fail{skill.consecutive_failures >= 3 ? " ⚠" : ""}
+                  </span>
+                )}
+                {skill.consecutive_failures === 0 && skill.uses != null && skill.uses > 0 && (
+                  <span style={{ color: "var(--color-signal)" }}>clean streak</span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

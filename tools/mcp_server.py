@@ -148,6 +148,66 @@ import json as _json
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
+def conversation_search(
+    query: Annotated[
+        str,
+        Field(
+            description=(
+                "Keywords or phrase to search recent conversation logs for. "
+                "Searches daily log files from the last 7 days. Use when the "
+                "user asks about something you discussed recently but is no "
+                "longer in the active conversation history."
+            )
+        ),
+    ],
+    days: Annotated[
+        int,
+        Field(description="How many days back to search (1–14). Default 7.", ge=1, le=14),
+    ] = 7,
+) -> str:
+    """Search recent conversation logs for a keyword or phrase.
+
+    Unlike recall() which searches the memory vault, this searches the
+    raw daily conversation logs. Useful for finding what was said in a
+    recent session — e.g. a specific URL, filename, or decision.
+    Returns matching lines with surrounding context.
+    """
+    import re as _re
+
+    from ._state import get_memory as _get_memory
+    mem = _get_memory()
+    if mem is None:
+        return "ERROR: memory not initialised"
+
+    log_paths = mem.recent_log_paths(days=days)
+    if not log_paths:
+        return f"No conversation logs found in the last {days} days."
+
+    pattern = _re.compile(_re.escape(query), _re.IGNORECASE)
+    hits: list[str] = []
+    for path in log_paths:
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for i, line in enumerate(lines):
+            if pattern.search(line):
+                ctx_start = max(0, i - 1)
+                ctx_end = min(len(lines), i + 3)
+                snippet = "\n".join(lines[ctx_start:ctx_end]).strip()
+                date_label = path.stem  # e.g. "2026-06-01"
+                hits.append(f"[{date_label}]\n{snippet}")
+                if len(hits) >= 10:
+                    break
+        if len(hits) >= 10:
+            break
+
+    if not hits:
+        return f"No matches for '{query}' in the last {days} days of logs."
+    return f"Found {len(hits)} match(es) for '{query}':\n\n" + "\n\n---\n\n".join(hits)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
 def get_world_state() -> str:
     """Read the current session world state.
 

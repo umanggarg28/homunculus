@@ -438,6 +438,33 @@ def skills_list() -> JSONResponse:
     cutoff_iso = (cutoff_dt - timedelta(days=1)).isoformat(timespec="seconds")
     for entry in by_name.values():
         entry["recent_calls"] = [t for t in entry["recent_calls"] if t >= cutoff_iso]
+        entry["uses"] = None
+        entry["consecutive_failures"] = None
+
+    # Overlay uses/consecutive_failures from skill_*.md frontmatter (written by rate_skill).
+    # These track agent-learned procedures — distinct from MCP tool call counts above.
+    mem_dir = MEMORY_DIR if MEMORY_DIR.exists() else None
+    if mem_dir:
+        import re as _re
+        for skill_file in mem_dir.glob("skill_*.md"):
+            try:
+                text = skill_file.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            # Extract skill name from frontmatter `name:` field to match against by_name.
+            name_m = _re.search(r"^name:\s*(.+)$", text, _re.MULTILINE)
+            if not name_m:
+                continue
+            skill_name = name_m.group(1).strip()
+            entry = by_name.get(skill_name)
+            if entry is None:
+                continue
+            uses_m = _re.search(r"^uses:\s*(\d+)", text, _re.MULTILINE)
+            cf_m = _re.search(r"^consecutive_failures:\s*(\d+)", text, _re.MULTILINE)
+            if uses_m:
+                entry["uses"] = int(uses_m.group(1))
+            if cf_m:
+                entry["consecutive_failures"] = int(cf_m.group(1))
 
     return JSONResponse(list(by_name.values()))
 
