@@ -163,6 +163,9 @@ class TaskStore:
                 continue  # malformed due_at — skip rather than crash
             if target > now:
                 continue
+            # Skip tasks that are currently executing (heartbeat restart mid-tick).
+            if task.get("executing"):
+                continue
             last_fired = task.get("last_fired_at")
             if last_fired:
                 try:
@@ -177,16 +180,16 @@ class TaskStore:
         return due_tasks
 
     def mark_fired(self, task_id: str, now: datetime | None = None) -> dict[str, Any]:
-        """Stamp `last_fired_at` so the same task doesn't re-fire on the
-        next heartbeat tick. Must be called BEFORE the agent runs the
-        task — otherwise a slow agent or a heartbeat crash mid-task will
-        leave the task without a fire stamp and it'll fire again.
+        """Stamp `last_fired_at` and set `executing=True` before the agent
+        runs the task. Prevents double-fire if heartbeat restarts mid-tick.
+        `executing` is cleared by record_success/record_failure/complete.
         """
         now = now or datetime.now()
         with self._locked():
             tasks = self.all()
             task = self._find(tasks, task_id)
             task["last_fired_at"] = now.isoformat(timespec="seconds")
+            task["executing"] = True
             self._write(tasks)
             return task
 
@@ -215,6 +218,7 @@ class TaskStore:
             task["updated_at"] = now.isoformat(timespec="seconds")
             task["completed_at"] = now.isoformat(timespec="seconds")
             task["consecutive_failures"] = 0  # successful run resets counter
+            task["executing"] = False
             self._append_run(task, now, "success", result, duration_s)
 
             recurrence = task.get("recurrence", "none")
@@ -247,6 +251,7 @@ class TaskStore:
             now = datetime.now()
             task["updated_at"] = now.isoformat(timespec="seconds")
             task["last_result"] = error.strip()
+            task["executing"] = False
             self._append_run(task, now, "failure", error, duration_s)
             if increment_failures:
                 failures = int(task.get("consecutive_failures", 0)) + 1

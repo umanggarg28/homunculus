@@ -15,6 +15,8 @@ import asyncio
 import json
 import os
 import secrets
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -64,6 +66,10 @@ async def _web_ping_loop() -> None:
 
 @asynccontextmanager
 async def _lifespan(app_: object):
+    import events as _ev
+    dropped = _ev.rotate(keep_days=14)
+    if dropped:
+        print(f"[web] rotated _events.jsonl: dropped {dropped} lines older than 14 days", flush=True)
     task = asyncio.create_task(_web_ping_loop())
     yield
     task.cancel()
@@ -1107,6 +1113,23 @@ def _drain_notifications_for_chat(agent) -> None:
         })
 
 
+# Per-IP rate-limit state for /api/chat/send (in-memory, resets on restart).
+_chat_rate: dict[str, list[float]] = defaultdict(list)
+_CHAT_RATE_MAX = 10   # requests per window
+_CHAT_RATE_WINDOW = 60  # seconds
+
+
+def _check_chat_rate(request: Request) -> None:
+    ip = (request.client.host if request.client else None) or "unknown"
+    now = time.monotonic()
+    timestamps = _chat_rate[ip]
+    # Drop timestamps outside the sliding window
+    _chat_rate[ip] = [t for t in timestamps if now - t < _CHAT_RATE_WINDOW]
+    if len(_chat_rate[ip]) >= _CHAT_RATE_MAX:
+        raise HTTPException(429, "rate limit exceeded — max 10 messages/minute")
+    _chat_rate[ip].append(now)
+
+
 @app.post("/api/chat/send", dependencies=[Depends(require_web_auth)])
 async def chat_send(request: Request):
     """SSE stream of the agent's reply to a posted user message.
@@ -1115,6 +1138,7 @@ async def chat_send(request: Request):
     can call /api/chat/cancel with that ID to interrupt this stream
     mid-flight. The cancellation takes effect at the next chunk
     boundary (we can't interrupt a tool call already in progress)."""
+    _check_chat_rate(request)
     payload = await request.json()
     user_message = (payload or {}).get("message", "").strip()
     if not user_message:

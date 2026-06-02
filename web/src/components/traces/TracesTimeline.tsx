@@ -121,8 +121,17 @@ export function TracesTimeline() {
   const [now, setNow]               = useState(() => Date.now());
   const [selected, setSelected]     = useState<Block | null>(null);
   const [paused, setPaused]         = useState(false);
-  const [service, setService]       = useState<ServiceFilter>("web"); // default: web only
+  const [service, setService]       = useState<ServiceFilter>("all"); // default: all services
+  const [hiddenLanes, setHiddenLanes] = useState<Set<LaneKey>>(new Set());
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const toggleLane = (key: LaneKey) => {
+    setHiddenLanes((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (paused) return;
@@ -131,10 +140,13 @@ export function TracesTimeline() {
   }, [paused]);
 
   const windowStart = now - windowMs;
-  const blocks = useMemo(
+  const allBlocks = useMemo(
     () => buildBlocks(events, windowStart, now, service),
     [events, windowStart, now, service],
   );
+  const blocks = hiddenLanes.size === 0
+    ? allBlocks
+    : allBlocks.filter((b) => !hiddenLanes.has(b.lane));
   const ticks = useMemo(() => buildTicks(windowStart, now, windowMs), [windowStart, now, windowMs]);
 
   const laneH  = 48;
@@ -147,12 +159,12 @@ export function TracesTimeline() {
     return Math.min(100, Math.max(0, p));
   };
 
-  // Count blocks per lane for the header
+  // Count blocks per lane for the header (use allBlocks so counts don't change when lane is hidden)
   const counts = useMemo(() => {
     const c: Record<LaneKey, number> = { USER: 0, LLM: 0, TOOL: 0, REPLY: 0 };
-    for (const b of blocks) if (b.startMs >= windowStart) c[b.lane]++;
+    for (const b of allBlocks) if (b.startMs >= windowStart) c[b.lane]++;
     return c;
-  }, [blocks, windowStart]);
+  }, [allBlocks, windowStart]);
 
   return (
     <div className="traces-timeline">
@@ -206,13 +218,22 @@ export function TracesTimeline() {
             })}
           </div>
 
-          {/* Lane counts */}
-          <div className="brut-meta" style={{ display: "flex", gap: 12, color: "var(--color-text-muted)" }}>
-            {LANES.map((l) => (
-              <span key={l.key} style={{ color: l.color }}>
-                {l.key} <span style={{ color: "var(--color-text-faint)" }}>{counts[l.key].toString().padStart(2, "0")}</span>
-              </span>
-            ))}
+          {/* Lane counts — click to toggle lane visibility */}
+          <div className="brut-meta" style={{ display: "flex", gap: 6, color: "var(--color-text-muted)" }}>
+            {LANES.map((l) => {
+              const hidden = hiddenLanes.has(l.key);
+              return (
+                <button key={l.key} onClick={() => toggleLane(l.key)} title={hidden ? `show ${l.key}` : `hide ${l.key}`} style={{
+                  background: "none", border: `1px solid ${hidden ? "var(--color-border)" : l.color}`,
+                  padding: "2px 7px", cursor: "pointer", fontFamily: "var(--font-mono)",
+                  fontSize: 9, letterSpacing: "0.14em",
+                  color: hidden ? "var(--color-text-faint)" : l.color,
+                  opacity: hidden ? 0.4 : 1,
+                }}>
+                  {l.key} <span style={{ color: hidden ? "var(--color-text-faint)" : "var(--color-text-faint)" }}>{counts[l.key].toString().padStart(2, "0")}</span>
+                </button>
+              );
+            })}
           </div>
 
           {/* Live indicator */}

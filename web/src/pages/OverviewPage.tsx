@@ -41,7 +41,8 @@ export function OverviewPage() {
     };
   }, [events]);
 
-  const lastEvent = events[events.length - 1];
+  const SYSTEM_EVENTS = new Set(["service_ping","provider_cooled","context_compacted","budget_blocked","agent_controls_updated"]);
+  const lastEvent = [...events].reverse().find((e) => !SYSTEM_EVENTS.has(e.event));
   const lastAgeSec = lastEvent
     ? Math.floor((Date.now() - new Date(lastEvent.ts).getTime()) / 1000)
     : null;

@@ -19,7 +19,8 @@ export function FeedPage() {
     return () => clearInterval(t);
   }, []);
 
-  const lastEvent = events[events.length - 1];
+  const SYSTEM_EVENTS_SET = new Set(["service_ping","provider_cooled","context_compacted","budget_blocked","agent_controls_updated"]);
+  const lastEvent = [...events].reverse().find((e) => !SYSTEM_EVENTS_SET.has(e.event));
   const ageSec = lastEvent ? (now - new Date(lastEvent.ts).getTime()) / 1000 : Infinity;
   const live = ageSec < 5;
 

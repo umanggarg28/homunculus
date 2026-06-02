@@ -428,6 +428,10 @@ def main() -> None:
     memory = Memory(memory_dir)
     tools.init(memory, autonomous=True)
 
+    dropped = events.rotate(keep_days=14)
+    if dropped:
+        print(f"[heartbeat] rotated _events.jsonl: dropped {dropped} lines older than 14 days", flush=True)
+
     print(f"[heartbeat] starting, interval = {interval_min} min, model = {model}", flush=True)
 
     default_interval = interval_min * 60

@@ -11,22 +11,59 @@ const SYSTEM_EVENTS = new Set([
   "agent_controls_updated",
 ]);
 
+// User-facing event type groups for the filter bar.
+const EVENT_TYPE_FILTERS = [
+  { label: "USER",  match: (t: string) => t === "user_message" },
+  { label: "LLM",   match: (t: string) => t === "llm_call" },
+  { label: "TOOL",  match: (t: string) => t === "tool_call" || t === "tool_result" },
+  { label: "REPLY", match: (t: string) => t === "assistant_reply" },
+] as const;
+
+type TypeLabel = (typeof EVENT_TYPE_FILTERS)[number]["label"];
+
 /** Brutalist trace stream — hairline-bordered container, no card. */
 export function FeedStream() {
   const { events } = useEventStream(300);
   const [showSystem, setShowSystem] = useState(false);
+  const [query, setQuery] = useState("");
+  const [activeTypes, setActiveTypes] = useState<Set<TypeLabel>>(new Set());
   const endRef = useRef<HTMLDivElement>(null);
 
-  const visible = showSystem ? events : events.filter((e) => !SYSTEM_EVENTS.has(e.event));
+  // Step 1: filter system events
+  const withoutSystem = showSystem ? events : events.filter((e) => !SYSTEM_EVENTS.has(e.event));
+  const hiddenCount = events.length - withoutSystem.length;
 
-  // Count how many system events are hidden so the toggle label is informative.
-  const hiddenCount = events.length - visible.length;
+  // Step 2: filter by event type (empty = all)
+  const byType = activeTypes.size === 0
+    ? withoutSystem
+    : withoutSystem.filter((e) =>
+        EVENT_TYPE_FILTERS.some((f) => activeTypes.has(f.label) && f.match(e.event))
+      );
+
+  // Step 3: search filter
+  const q = query.trim().toLowerCase();
+  const visible = q
+    ? byType.filter((e) => {
+        const haystack = [e.event, e.service, e.text, e.args, e.result, e.name, e.model]
+          .filter(Boolean).join(" ").toLowerCase();
+        return haystack.includes(q);
+      })
+    : byType;
 
   useEffect(() => {
+    if (query || activeTypes.size > 0) return; // don't auto-scroll when user is filtering
     const nearBottom =
       window.innerHeight + window.scrollY > document.body.offsetHeight - 200;
     if (nearBottom) endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [events.length]);
+  }, [events.length, query, activeTypes.size]);
+
+  const toggleType = (label: TypeLabel) => {
+    setActiveTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label); else next.add(label);
+      return next;
+    });
+  };
 
   if (events.length === 0) {
     return (
@@ -45,11 +82,29 @@ export function FeedStream() {
 
   return (
     <div>
-      {/* System-event toggle */}
+      {/* Filter bar */}
       <div
-        className="flex items-center gap-3 mb-2"
-        style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--color-text-faint)" }}
+        style={{
+          display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap",
+          fontFamily: "var(--font-mono)", fontSize: 10, alignItems: "center",
+        }}
       >
+        {/* Event type toggles */}
+        {EVENT_TYPE_FILTERS.map((f) => {
+          const on = activeTypes.has(f.label);
+          return (
+            <button key={f.label} onClick={() => toggleType(f.label)} style={{
+              padding: "2px 8px",
+              border: `1px solid ${on ? "var(--color-accent)" : "var(--color-border)"}`,
+              background: on ? "var(--color-accent)" : "transparent",
+              color: on ? "var(--color-bg)" : "var(--color-text-faint)",
+              cursor: "pointer", fontFamily: "var(--font-mono)", fontSize: 9,
+              letterSpacing: "0.14em", textTransform: "uppercase",
+            }}>{f.label}</button>
+          );
+        })}
+
+        {/* System toggle */}
         <button
           onClick={() => setShowSystem((v) => !v)}
           style={{
@@ -59,17 +114,49 @@ export function FeedStream() {
             padding: "2px 8px",
             cursor: "pointer",
             fontFamily: "var(--font-mono)",
-            fontSize: 10,
+            fontSize: 9,
             letterSpacing: "0.10em",
             textTransform: "uppercase",
           }}
         >
-          {showSystem ? "hide system" : "show system"}
+          {showSystem ? "hide sys" : `sys${hiddenCount > 0 ? ` (${hiddenCount})` : ""}`}
         </button>
-        {!showSystem && hiddenCount > 0 && (
-          <span style={{ letterSpacing: "0.08em" }}>
-            {hiddenCount} ping/infra event{hiddenCount !== 1 ? "s" : ""} hidden
+
+        {/* Search box */}
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="search events…"
+          style={{
+            marginLeft: "auto",
+            background: "transparent",
+            border: "1px solid var(--color-border)",
+            color: "var(--color-text)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 10,
+            padding: "2px 8px",
+            outline: "none",
+            width: 160,
+            letterSpacing: "0.06em",
+          }}
+        />
+
+        {/* Result count when filtering */}
+        {(q || activeTypes.size > 0) && (
+          <span style={{ color: "var(--color-text-faint)", fontSize: 9, letterSpacing: "0.10em" }}>
+            {visible.length}/{withoutSystem.length}
           </span>
+        )}
+
+        {/* Clear */}
+        {(q || activeTypes.size > 0) && (
+          <button onClick={() => { setQuery(""); setActiveTypes(new Set()); }} style={{
+            background: "none", border: "1px solid var(--color-border)",
+            color: "var(--color-text-faint)", padding: "2px 7px",
+            cursor: "pointer", fontFamily: "var(--font-mono)", fontSize: 9,
+            letterSpacing: "0.10em",
+          }}>✕ clear</button>
         )}
       </div>
 
@@ -79,7 +166,7 @@ export function FeedStream() {
             className="p-8 text-center text-[11px] uppercase tracking-[0.16em]"
             style={{ color: "var(--color-text-muted)" }}
           >
-            ─ no agent activity yet ─
+            {q || activeTypes.size > 0 ? "─ no matching events ─" : "─ no agent activity yet ─"}
           </div>
         ) : (
           visible.map((e, i) => <FeedRow key={`${e.ts}-${i}`} event={e} />)

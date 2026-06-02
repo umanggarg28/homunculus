@@ -53,6 +53,40 @@ def emit(event: str, **fields) -> None:
         pass
 
 
+def rotate(keep_days: int = 14) -> int:
+    """Trim _events.jsonl to the last `keep_days` days.
+
+    Reads the file, drops lines older than the cutoff, rewrites in place.
+    Returns the number of lines dropped. No-ops if the file doesn't exist
+    or is already small. Call once at service startup.
+    """
+    if not _EVENTS_PATH.exists():
+        return 0
+    try:
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat(timespec="seconds")
+        lines = _EVENTS_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+        kept: list[str] = []
+        dropped = 0
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ts = json.loads(line).get("ts", "")
+                if ts < cutoff:
+                    dropped += 1
+                    continue
+            except Exception:
+                pass  # malformed line — keep it
+            kept.append(line)
+        if dropped:
+            _EVENTS_PATH.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+        return dropped
+    except Exception:
+        return 0
+
+
 def truncate_preview(text: str, limit: int = 240) -> str:
     """Shorten a string for display in the feed. Multi-line → single line.
 
