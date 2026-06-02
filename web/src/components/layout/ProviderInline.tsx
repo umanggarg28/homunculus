@@ -1,32 +1,31 @@
 import { useEffect, useState } from "react";
 import { useEventStream } from "@/hooks/useEventStream";
 
+interface ModelInfo { model: string; host: string; is_fallback?: boolean; }
+
 /** Sidebar footer model readout — brutalist mono. */
 export function ProviderInline() {
   const { events } = useEventStream(10);
-  const [active, setActive] = useState<{ model: string; host: string } | null>(null);
-  const [configured, setConfigured] = useState<{ model: string; host: string } | null>(null);
+  const [info, setInfo] = useState<ModelInfo | null>(null);
 
-  // Fetch the configured model from the backend on mount so we show it
-  // immediately without waiting for a live LLM call.
+  // Fetch on mount — API now returns the last actually-used model from
+  // events.jsonl, not just the configured primary.
   useEffect(() => {
     fetch("/api/model")
       .then((r) => r.json())
-      .then((d) => setConfigured({ model: d.model ?? "", host: d.host ?? "" }))
+      .then((d) => setInfo({ model: d.model ?? "", host: d.host ?? "", is_fallback: d.is_fallback ?? false }))
       .catch(() => {});
   }, []);
 
-  // Once a real call happens, prefer that (shows the actual model used,
-  // which may differ when a provider fell back).
+  // Override with live SSE events as they arrive.
   useEffect(() => {
     const llmCall = [...events].reverse().find((e) => e.event === "llm_call");
-    if (!llmCall || !llmCall.model) return;
-    setActive({ model: llmCall.model, host: llmCall.host ?? "" });
+    if (!llmCall?.model) return;
+    const primary = info?.model;
+    setInfo({ model: llmCall.model, host: llmCall.host ?? "", is_fallback: llmCall.model !== primary });
   }, [events]);
 
-  const display = active ?? configured;
-
-  if (!display) {
+  if (!info) {
     return (
       <div
         className="text-[10px] uppercase tracking-[0.14em]"
@@ -37,17 +36,27 @@ export function ProviderInline() {
     );
   }
 
+  const fallback = info.is_fallback;
+
   return (
     <div className="flex flex-col gap-0.5" style={{ fontFamily: "var(--font-mono)" }}>
-      <div className="text-[10.5px] truncate" style={{ color: "var(--color-text-dim)" }}>
-        {display.model}
+      {fallback && (
+        <div className="text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--color-warn, #f59e0b)" }}>
+          ⚠ fallback active
+        </div>
+      )}
+      <div
+        className="text-[10.5px] truncate"
+        style={{ color: fallback ? "var(--color-warn, #f59e0b)" : "var(--color-text-dim)" }}
+      >
+        {info.model}
       </div>
-      {display.host && (
+      {info.host && (
         <div
           className="text-[9px] uppercase tracking-[0.16em] truncate"
           style={{ color: "var(--color-text-faint)" }}
         >
-          via {display.host}
+          via {info.host}
         </div>
       )}
     </div>
