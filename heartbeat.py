@@ -299,7 +299,7 @@ def tick(memory: Memory, model: str | None) -> None:
 
     tasks = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
     due_tasks = tasks.due()
-    events.emit("service_ping", name="heartbeat", text=now_iso)
+    events.emit("service_ping", name="heartbeat", text="alive")
     if not due_tasks:
         print(f"\n[heartbeat] tick at {now_iso}: no due tasks; skipping LLM", flush=True)
         return

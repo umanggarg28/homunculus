@@ -194,7 +194,15 @@ function formatArgs(raw: string | undefined): string {
 
 function formatHms(iso: string): string {
   const d = new Date(iso);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  const hms = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  if (sameDay) return hms;
+  const month = d.toLocaleString("en-US", { month: "short" });
+  return `${month} ${d.getDate()} ${hms}`;
 }
 
 function pad(n: number): string {
