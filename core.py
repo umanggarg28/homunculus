@@ -94,7 +94,12 @@ API_URL_FALLBACK = os.environ.get(
     "https://openrouter.ai/api/v1/chat/completions",
 )
 MODEL_FALLBACK = os.environ.get(
-    "HOMUNCULUS_MODEL_FALLBACK", "moonshotai/kimi-k2.6:free,qwen/qwen3-235b-a22b:free,qwen/qwen3-30b-a3b:free"
+    "HOMUNCULUS_MODEL_FALLBACK",
+    # Verified against OpenRouter /api/v1/models June 2026 — all :free, all support tool calling.
+    # kimi-k2.6: 262K ctx, purpose-built for agentic tool use.
+    # qwen3-coder: 1M ctx, strong tool calling.
+    # hermes-3-405b: Nous Research, specifically fine-tuned for function calling.
+    "moonshotai/kimi-k2.6:free,qwen/qwen3-coder:free,nousresearch/hermes-3-llama-3.1-405b:free",
 )
 
 API_URL_FALLBACK_2 = os.environ.get(
@@ -1039,6 +1044,15 @@ class Agent:
         self.history.append({"role": "user", "content": user_message})
         if self.memory is not None:
             self.memory.log_turn("user", user_message)
+            # Auto-stamp world state at turn start so resume after restart
+            # always has a current focus, regardless of whether the LLM
+            # chooses to call update_world_state itself.
+            self.memory.update_world_state({
+                "focus": user_message[:120],
+                "step": 0,
+                "last_action": None,
+                "last_ok": None,
+            })
         events.emit("user_message", text=events.full_text(user_message))
 
         tool_names_used: set[str] = set()
@@ -1163,6 +1177,26 @@ class Agent:
                     )
                 else:
                     result = tools.execute(name, args)
+
+                # Auto-update world state after every tool call so the agent
+                # can resume correctly after a restart without relying on the
+                # LLM to remember to call update_world_state itself.
+                # Skip internal state tools to avoid infinite recursion.
+                if self.memory is not None and name not in (
+                    "get_world_state", "update_world_state"
+                ):
+                    step = call_counts.get(call_key, 1)
+                    succeeded = not (
+                        isinstance(result, str) and result.startswith("ERROR")
+                    )
+                    try:
+                        self.memory.update_world_state({
+                            "last_action": name,
+                            "last_ok": succeeded,
+                            "step": step,
+                        })
+                    except Exception:
+                        pass  # never let state tracking break the agent loop
 
                 events.emit(
                     "tool_result",
