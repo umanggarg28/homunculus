@@ -38,6 +38,8 @@ from telegram.ext import (
     filters,
 )
 
+import events as _events
+import threading
 import tools
 from core import Agent, SYSTEM_PROMPT
 from memory import Memory
@@ -318,6 +320,17 @@ def main() -> None:
     app.add_handler(CommandHandler("pause", pause_command))
     app.add_handler(CommandHandler("resume", resume_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    def _ping_loop() -> None:
+        import time
+        while True:
+            try:
+                _events.emit("service_ping", name="telegram", text="alive")
+            except Exception:
+                pass
+            time.sleep(600)
+
+    threading.Thread(target=_ping_loop, daemon=True).start()
 
     logging.info("Telegram bot starting (long-polling)...")
     app.run_polling()
