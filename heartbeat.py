@@ -441,7 +441,9 @@ def main() -> None:
         sleep_seconds = _compute_sleep(memory, default_interval)
         wake_at = (datetime.now() + timedelta(seconds=sleep_seconds)).isoformat(timespec="seconds")
         print(f"[heartbeat] sleeping {sleep_seconds:.0f}s, next tick ~{wake_at}", flush=True)
+        memory.set_next_tick(wake_at)
         _interruptible_sleep(sleep_seconds)
+        memory.pop_next_tick()  # consumed — clear so stale value doesn't persist after waking
 
 
 def _interruptible_sleep(total_seconds: float, poll_interval: float = 60.0) -> None:

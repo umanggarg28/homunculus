@@ -612,7 +612,9 @@ def agent_upcoming() -> JSONResponse:
     interval_min = int(os.environ.get("HEARTBEAT_INTERVAL_MINUTES", "60"))
     explicit_tick = mem.peek_next_tick()
 
-    # When no explicit tick is scheduled, estimate from last heartbeat event + default interval.
+    # When no explicit tick is scheduled, fall back to estimate from last heartbeat event + interval.
+    # The heartbeat now also writes its wake time to memory/_next_tick.txt while sleeping, so
+    # explicit_tick covers both agent-scheduled and heartbeat-scheduled wakes.
     estimated_tick: str | None = explicit_tick
     if not estimated_tick and EVENTS_PATH.exists():
         last_hb_ts: float | None = None
