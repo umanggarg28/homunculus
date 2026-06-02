@@ -441,7 +441,29 @@ def main() -> None:
         sleep_seconds = _compute_sleep(memory, default_interval)
         wake_at = (datetime.now() + timedelta(seconds=sleep_seconds)).isoformat(timespec="seconds")
         print(f"[heartbeat] sleeping {sleep_seconds:.0f}s, next tick ~{wake_at}", flush=True)
-        time.sleep(sleep_seconds)
+        _interruptible_sleep(sleep_seconds)
+
+
+def _interruptible_sleep(total_seconds: float, poll_interval: float = 60.0) -> None:
+    """Sleep for `total_seconds` but wake early if a task becomes due.
+
+    Polls once per `poll_interval` (default 60s). When a task's due_at
+    is <= now the loop breaks immediately so the next tick fires without
+    waiting out the rest of the sleep window. This fixes the missed-
+    notification problem: tasks created mid-sleep are picked up within
+    one poll interval instead of the full default sleep window.
+    No LLM cost — the due() check is a local JSON read.
+    """
+    task_store = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
+    deadline = time.monotonic() + total_seconds
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(poll_interval, remaining))
+        if task_store.due():
+            print("[heartbeat] task became due mid-sleep — waking early", flush=True)
+            break
 
 
 def _compute_sleep(memory: Memory, default_seconds: float) -> float:
