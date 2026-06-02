@@ -455,6 +455,60 @@ def tasks_meta() -> JSONResponse:
     })
 
 
+# --- Webhooks ---------------------------------------------------------------
+# External services (GitHub, Gmail, IFTTT, cron jobs, etc.) POST here to
+# trigger the agent. Two modes:
+#   task   — creates a task that fires on the next heartbeat tick (default)
+#   inject — queues a message that the Telegram/web bot drains before the
+#            next user turn (use for time-sensitive events that need
+#            immediate context in conversation)
+#
+# Auth: if HOMUNCULUS_WEBHOOK_SECRET is set, the caller must pass it as
+# the X-Webhook-Secret header. Leave unset for localhost-only use.
+
+_WEBHOOK_SECRET = os.environ.get("HOMUNCULUS_WEBHOOK_SECRET", "").strip()
+
+
+@app.post("/api/webhook")
+async def webhook(request: Request) -> JSONResponse:
+    """Receive an external event and create a task or inject a message."""
+    secret_header = request.headers.get("x-webhook-secret", "")
+    if _WEBHOOK_SECRET and not secrets.compare_digest(secret_header, _WEBHOOK_SECRET):
+        raise HTTPException(401, "Invalid or missing X-Webhook-Secret header")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Request body must be valid JSON")
+
+    mode = body.get("mode", "task")
+    source = str(body.get("source", "webhook"))[:40]
+    message = str(body.get("message", "")).strip()
+    task_title = str(body.get("task_title", "")).strip() or f"[{source}] incoming event"
+    task_description = message or str(body.get("description", "")).strip()
+
+    if mode == "inject":
+        # Drop straight into the notification queue so the next conversation
+        # turn picks it up as context, without creating a persistent task.
+        if not message:
+            raise HTTPException(400, "'message' is required for mode=inject")
+        _chat_memory.queue_notification(f"[{source}] {message}")
+        return JSONResponse({"ok": True, "mode": "inject", "source": source})
+
+    # Default: create a task due immediately so the heartbeat fires it.
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    task = _task_store().create(
+        title=task_title,
+        description=task_description,
+        due_at=now_iso,
+        recurrence="none",
+        notify=True,
+    )
+    import events as _events
+    _events.emit("webhook_received", name=source, text=task_title, result=task["id"])
+    return JSONResponse({"ok": True, "mode": "task", "task_id": task["id"], "source": source})
+
+
 @app.get("/api/agent/upcoming", dependencies=[Depends(require_web_auth)])
 def agent_upcoming() -> JSONResponse:
     """What the agent is set to do next.
@@ -495,16 +549,18 @@ def agent_upcoming() -> JSONResponse:
 # Models ending in ":free" are always $0. Anything not listed uses 0
 # so we never overcount — better to undercount than show $2 for free runs.
 _MODEL_PRICING: dict[str, tuple[float, float]] = {
-    # ($/1M input, $/1M output)
-    "gemini-2.5-flash":                         (0.075,  0.30),
+    # ($/1M input, $/1M output) — updated June 2026
+    "gemini-2.5-flash":                         (0.15,   0.60),
     "gemini-2.5-pro":                           (1.25,  10.00),
-    "gemini-2.0-flash":                         (0.075,  0.30),
+    "gemini-2.0-flash":                         (0.10,   0.40),
     "llama-3.3-70b-versatile":                  (0.59,   0.79),
     "llama-3.1-8b-instant":                     (0.05,   0.08),
     "openai/gpt-4o":                            (2.50,  10.00),
     "openai/gpt-4o-mini":                       (0.15,   0.60),
-    "anthropic/claude-3.5-sonnet":              (3.00,  15.00),
-    "anthropic/claude-3-haiku":                 (0.25,   1.25),
+    "openai/gpt-4.1-mini":                      (0.40,   1.60),
+    "anthropic/claude-sonnet-4-6":              (3.00,  15.00),
+    "anthropic/claude-haiku-4-5":               (1.00,   5.00),
+    "deepseek/deepseek-v3":                     (0.14,   0.28),
 }
 
 def _model_cost_cents(model: str, input_tok: int, output_tok: int, cached_tok: int) -> float:
@@ -688,23 +744,48 @@ def log_entry_raw(rel: str) -> PlainTextResponse:
 
 @app.get("/api/chat/history", dependencies=[Depends(require_web_auth)])
 def chat_history() -> JSONResponse:
-    """Return persisted user/assistant chat turns for UI hydration."""
+    """Return complete persisted user/assistant chat turns for UI hydration.
+
+    Saved sessions can contain interrupted turns: user message, assistant
+    tool_call message, tool results, then no final assistant text because the
+    stream was cancelled or the process stopped mid-turn. Rendering those user
+    messages alone makes the chat page look like the agent never replied. For
+    the UI transcript, keep only visible user→assistant pairs.
+    """
     memory = _chat_memory or Memory(MEMORY_DIR)
+    return JSONResponse(_visible_chat_history(memory.load_session()))
+
+
+def _visible_chat_history(history: list[dict]) -> list[dict]:
+    """Filter persisted agent history down to visible complete chat turns."""
     messages = []
-    for idx, msg in enumerate(memory.load_session()):
+    pending_user: dict | None = None
+    for idx, msg in enumerate(history):
         role = msg.get("role")
         content = msg.get("content")
-        if role in {"user", "assistant"} and content:
-            # Skip heartbeat notifications — they live in LLM context for
-            # follow-up questions but shouldn't appear as chat bubbles.
-            if isinstance(content, str) and content.startswith("[notification I sent you at"):
-                continue
+        if not isinstance(content, str) or not content.strip():
+            continue
+        # Skip heartbeat notifications — they live in LLM context for
+        # follow-up questions but shouldn't appear as chat bubbles.
+        if content.startswith("[notification I sent you at"):
+            continue
+        if role == "user":
+            pending_user = {
+                "id": f"persisted-{idx}",
+                "role": role,
+                "content": content,
+            }
+            continue
+        if role == "assistant":
+            if pending_user is not None:
+                messages.append(pending_user)
+                pending_user = None
             messages.append({
                 "id": f"persisted-{idx}",
                 "role": role,
                 "content": content,
             })
-    return JSONResponse(messages)
+    return messages
 
 
 # Stream cancellation state.

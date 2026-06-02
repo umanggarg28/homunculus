@@ -144,6 +144,71 @@ def recall(
     return memory_tools.search_memory(query)
 
 
+import json as _json
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def get_world_state() -> str:
+    """Read the current session world state.
+
+    Returns a JSON object tracking what you are working on right now:
+    focus, active_task, step, last_action, last_ok, notes.
+    Call at the start of a multi-step task to check if prior steps already
+    completed (e.g. after a restart or interruption).
+    """
+    state = memory_tools.get_world_state()
+    if not state:
+        return "{}"
+    return _json.dumps(state, indent=2)
+
+
+@mcp.tool(annotations={"readOnlyHint": False})
+def update_world_state(
+    updates: Annotated[
+        dict,
+        Field(
+            description=(
+                "Key-value pairs to merge into the world state. "
+                "Conventional keys: focus (str), active_task (str), step (int), "
+                "last_action (str), last_ok (bool), notes (str). "
+                "Omitted keys are preserved; pass null to clear a key."
+            )
+        ),
+    ],
+) -> str:
+    """Update the session world state with new key-value pairs.
+
+    Call this to track progress through multi-step tasks so the agent can
+    resume safely after interruption, and the UI can show live status.
+    Safe to call frequently — writes are atomic and cheap.
+    """
+    state = memory_tools.update_world_state(updates)
+    return "World state updated: " + _json.dumps(state)
+
+
+@mcp.tool(annotations={"readOnlyHint": False})
+def rate_skill(
+    name: Annotated[str, Field(description="Name of the skill memory to rate (partial match ok).")],
+    outcome: Annotated[
+        Literal["success", "failure"],
+        Field(description="Whether this use of the skill achieved the intended result."),
+    ],
+    notes: Annotated[
+        str,
+        Field(description="Optional one-line note about what worked or failed."),
+    ] = "",
+) -> str:
+    """Record whether a skill worked this time.
+
+    Call after completing a task that used a learned skill. Increments the
+    skill's use counter and tracks consecutive failures. After 3 failures the
+    skill is flagged for review in the daily reflection.
+    Do NOT call for every task — only for tasks that explicitly relied on a
+    skill_*.md procedure.
+    """
+    return memory_tools.rate_skill(name, outcome, notes)
+
+
 # ── datetime ─────────────────────────────────────────────────────────
 
 
