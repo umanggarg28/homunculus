@@ -41,7 +41,7 @@ export function FeedPage() {
       <TracesTimeline />
 
       <div className="brut-meta mt-10 mb-3" style={{ color: "var(--color-text-muted)" }}>
-        ── raw event log · {events.length.toString().padStart(2, "0")} events
+        ── raw event log · {events.filter(e => !["service_ping","provider_cooled","context_compacted","budget_blocked","agent_controls_updated"].includes(e.event)).length.toString().padStart(2, "0")} events
       </div>
       <FeedStream />
     </PageShell>
