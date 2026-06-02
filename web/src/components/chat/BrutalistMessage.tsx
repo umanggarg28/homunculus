@@ -105,7 +105,14 @@ function UserPrompt({ content }: { content: string }) {
       >
         user@homunculus:~$
       </span>
-      <span style={{ color: "var(--color-text)", whiteSpace: "pre-wrap" }}>
+      <span
+        style={{
+          color: "var(--color-text)",
+          whiteSpace: "pre-wrap",
+          overflowWrap: "anywhere",
+          wordBreak: "break-word",
+        }}
+      >
         {content}
       </span>
     </div>
@@ -168,7 +175,7 @@ function Cursor() {
   return (
     <motion.span
       animate={{ opacity: [1, 0] }}
-      transition={{ duration: 0.55, repeat: Infinity, ease: "steps(1)" }}
+      transition={{ duration: 0.55, repeat: Infinity, ease: "linear" }}
       style={{
         display: "inline-block",
         width: "7px",

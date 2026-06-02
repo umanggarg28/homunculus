@@ -14,6 +14,8 @@ export function parseServerIso(iso: string): number {
 }
 
 import type {
+  AgentControls,
+  AgentReplayTurn,
   Chapter,
   MemoryEntry,
   LogFile,
@@ -99,7 +101,7 @@ export const api = {
     fetch(`${API_BASE}/memory/${encodeURIComponent(filename)}/raw`, {
       method: "PUT",
       credentials: "include",
-      headers: { "Content-Type": "text/plain" },
+      headers: authHeaders({ "Content-Type": "text/plain" }),
       body,
     }).then((r) => {
       if (!r.ok) throw new Error(`Update memory failed: ${r.status}`);
@@ -118,6 +120,21 @@ export const api = {
   chaptersList: () => jsonGet<Chapter[]>("/chapters"),
 
   skillsList: () => jsonGet<Skill[]>("/skills"),
+
+  agentControls: () => jsonGet<AgentControls>("/agent/controls"),
+
+  agentControlsUpdate: (body: Partial<AgentControls>) =>
+    fetch(`${API_BASE}/agent/controls`, {
+      method: "PUT",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    }).then(async (r) => {
+      if (!r.ok) throw new Error(`Update controls failed: ${r.status}`);
+      return r.json() as Promise<AgentControls>;
+    }),
+
+  agentReplay: (limit: number = 12) =>
+    jsonGet<AgentReplayTurn[]>(`/agent/replay?limit=${limit}`),
 
   modeGet: () => jsonGet<{ mode: "plan" | "build" }>("/mode"),
 

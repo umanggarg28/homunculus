@@ -62,6 +62,14 @@ function HeroBandShell({
           .hero-band-number {
             font-size: clamp(42px, 17vw, 72px) !important;
           }
+          .hero-band-stat {
+            flex-wrap: wrap;
+            row-gap: 4px;
+          }
+          .hero-band-unit {
+            font-size: 9px !important;
+            letter-spacing: 0.12em !important;
+          }
         }
       `}</style>
       <div
@@ -74,7 +82,7 @@ function HeroBandShell({
       <div
         className="hero-band-grid"
       >
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
+        <div className="hero-band-stat" style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
           <span
             className="hero-band-number brut-display"
             style={{
@@ -88,7 +96,7 @@ function HeroBandShell({
           </span>
           {bigUnit && (
             <span
-              className="brut-label"
+              className="hero-band-unit brut-label"
               style={{ color: "var(--color-text-muted)", fontSize: 11 }}
             >
               {bigUnit}

@@ -99,7 +99,7 @@ function SessionLoader() {
           <span style={{ color: "var(--color-text-muted)" }}>&gt; </span>
           <motion.span
             animate={{ opacity: [1, 0] }}
-            transition={{ duration: 0.55, repeat: Infinity, ease: "steps(1)" }}
+            transition={{ duration: 0.55, repeat: Infinity, ease: "linear" }}
             style={{
               display: "inline-block",
               width: 8,

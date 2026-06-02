@@ -155,7 +155,7 @@ export function TracesTimeline() {
   }, [blocks, windowStart]);
 
   return (
-    <div>
+    <div className="traces-timeline">
       {/* Controls row */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 12, flexWrap: "wrap", fontFamily: "var(--font-mono)" }}>
 
@@ -224,7 +224,10 @@ export function TracesTimeline() {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: selected ? "1fr 340px" : "1fr", gap: 12 }}>
+      <div
+        className="traces-chart-grid"
+        style={{ gridTemplateColumns: selected ? "minmax(0, 1fr) 340px" : "minmax(0, 1fr)" }}
+      >
         {/* Chart */}
         <div ref={containerRef} style={{
           border: "1px solid var(--color-border)",
@@ -237,15 +240,22 @@ export function TracesTimeline() {
             borderBottom: "1px solid var(--color-border)",
             background: "rgba(0,0,0,0.3)",
           }}>
-            {ticks.map((tk, i) => (
+            {ticks.map((tk, i) => {
+              const isLast = i === ticks.length - 1;
+              return (
               <div key={i} style={{
-                position: "absolute", left: `${xPct(tk.ts)}%`, top: 0, bottom: 0,
-                borderLeft: "1px solid var(--color-border)",
+                position: "absolute",
+                left: isLast ? "auto" : `${xPct(tk.ts)}%`,
+                right: isLast ? 6 : "auto",
+                top: 0,
+                bottom: 0,
+                borderLeft: isLast ? "none" : "1px solid var(--color-border)",
+                borderRight: isLast ? "1px solid var(--color-border)" : "none",
                 paddingLeft: 5, paddingTop: 6,
                 fontSize: 9, letterSpacing: "0.14em",
                 color: "var(--color-text-faint)", fontFamily: "var(--font-mono)",
               }}>{tk.label}</div>
-            ))}
+            )})}
           </div>
 
           {/* Lane backgrounds + labels */}
@@ -421,7 +431,7 @@ function KV({ k, v }: { k: string; v: string }) {
   return (
     <>
       <span style={{ fontSize: 9, letterSpacing: "0.18em", color: "var(--color-text-faint)", textTransform: "uppercase" }}>{k}</span>
-      <span style={{ fontSize: 11, color: "var(--color-text-dim)", overflow: "hidden", textOverflow: "ellipsis" }}>{v}</span>
+      <span style={{ fontSize: 11, color: "var(--color-text-dim)", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, overflowWrap: "anywhere", wordBreak: "break-word" }}>{v}</span>
     </>
   );
 }

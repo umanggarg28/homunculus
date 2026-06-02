@@ -8,7 +8,7 @@ import { GrowthDeltas } from "@/components/overview/GrowthDeltas";
 import { ContextGauge } from "@/components/overview/ContextGauge";
 import { HomunculusRobot } from "@/components/robot/HomunculusRobot";
 import { useRobotState } from "@/hooks/useRobotState";
-import type { MemoryEntry, Skill } from "@/lib/types";
+import type { FeedEvent, MemoryEntry, Skill } from "@/lib/types";
 
 /** Brutalist Overview — one signature element (the full-bleed
  *  heartbeat strip), one hero number, then dense readouts. */
@@ -35,9 +35,6 @@ export function OverviewPage() {
     const startMs = startOfDay.getTime();
     const today = events.filter((e) => new Date(e.ts).getTime() >= startMs);
     return {
-      toolCalls: today.filter((e) => e.event === "tool_call").length,
-      llmCalls:  today.filter((e) => e.event === "llm_call").length,
-      replies:   today.filter((e) => e.event === "assistant_reply").length,
       failures:  today.filter(
         (e) => e.event === "tool_result" && typeof e.result === "string" && e.result.startsWith("ERROR"),
       ).length,
@@ -50,12 +47,21 @@ export function OverviewPage() {
     : null;
 
   const activeTasks = tasks.filter((t) => t.status === "active").length;
-  const skillsCalled = skills.filter((s) => s.call_count > 0).length;
+  const readyItems = useMemo(
+    () => buildReadiness({
+      lastAgeSec,
+      failures: stats.failures,
+      activeTasks,
+      skills,
+      memories,
+    }),
+    [activeTasks, lastAgeSec, memories, skills, stats.failures],
+  );
 
   return (
     <PageShell>
       <PageHeader title="Overview" subtitle={liveStateMessage(lastAgeSec).toLowerCase()} />
-      <div className="mx-[-40px]"><SignatureHeartbeat /></div>
+      <div className="overflow-hidden"><SignatureHeartbeat /></div>
       <GrowthDeltas />
       <ContextGauge />
       <style>{`
@@ -92,6 +98,49 @@ export function OverviewPage() {
             grid-template-columns: 1fr;
           }
         }
+        .overview-mission-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1.25fr) minmax(260px, 0.75fr);
+          gap: 18px;
+        }
+        .overview-ops-card {
+          border: 1px solid var(--color-border);
+          background: linear-gradient(180deg, rgba(119,255,61,0.018), transparent), var(--color-surface-1);
+          padding: 18px;
+          min-width: 0;
+        }
+        .overview-step-row {
+          display: grid;
+          grid-template-columns: 74px 22px minmax(0, 1fr) auto;
+          gap: 10px;
+          align-items: baseline;
+          padding: 8px 0;
+          border-bottom: 1px dashed rgba(67,133,105,0.35);
+        }
+        .overview-tool-row {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(72px, 0.8fr) 34px;
+          gap: 10px;
+          align-items: center;
+          padding: 6px 0;
+        }
+        @media (max-width: 920px) {
+          .overview-mission-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+        @media (max-width: 560px) {
+          .overview-ops-card {
+            padding: 14px;
+          }
+          .overview-step-row {
+            grid-template-columns: 56px 18px minmax(0, 1fr);
+          }
+          .overview-step-meta {
+            grid-column: 3;
+            justify-self: start !important;
+          }
+        }
       `}</style>
 
       {/* ── HERO ROW — countdown + robot panel ── */}
@@ -107,38 +156,21 @@ export function OverviewPage() {
           <AgentPanel robotState={robotState} cyc={cyc} />
         </div>
 
-        {/* ── STATE ── */}
+        {/* ── READINESS ── */}
         <div className="p-6 mb-10" style={{ border: "1px solid var(--color-border)" }}>
           <div className="text-[10px] uppercase tracking-[0.32em] mb-4" style={{ color: "var(--color-text-muted)" }}>
-            ── state
+            ── readiness
           </div>
           <div
             className="overview-state-grid gap-x-8 gap-y-3"
           >
-            <KV label="mcp servers"  value="01" hint="builtin" />
-            <KV label="tools"        value={pad(skills.length)} hint={skillsCalled === skills.length ? "all ever called" : `${skillsCalled} ever called`} />
-            <KV label="memory"       value={pad(memories.length)} hint="entries" />
-            <KV label="active tasks" value={pad(activeTasks)} />
+            {readyItems.map((item) => (
+              <ReadinessKV key={item.label} {...item} />
+            ))}
           </div>
         </div>
 
-        {/* ── ACTIVITY TAIL ── */}
-        <div className="p-6" style={{ border: "1px solid var(--color-border)" }}>
-          <div className="text-[10px] uppercase tracking-[0.32em] mb-4" style={{ color: "var(--color-text-muted)" }}>
-            ── activity · last 16 events
-          </div>
-          {events.length === 0 ? (
-            <div className="text-[11px] uppercase tracking-[0.16em]" style={{ color: "var(--color-text-faint)" }}>
-              ─ no events yet
-            </div>
-          ) : (
-            <div className="text-[12px] leading-[1.85]">
-              {events.slice(-16).reverse().map((e, i) => (
-                <ActivityRow key={i} event={e} />
-              ))}
-            </div>
-          )}
-        </div>
+        <MissionControl events={events} />
     </PageShell>
   );
 }
@@ -146,7 +178,22 @@ export function OverviewPage() {
 // ── helpers ─────────────────────────────────────────────────────────
 
 
-function KV({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function ReadinessKV({
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  tone: "ok" | "warn" | "idle";
+}) {
+  const color = tone === "warn"
+    ? "var(--color-amber)"
+    : tone === "ok"
+      ? "var(--color-accent)"
+      : "var(--color-text-faint)";
   return (
     <div
       className="flex items-baseline justify-between gap-4 py-2"
@@ -156,14 +203,12 @@ function KV({ label, value, hint }: { label: string; value: string; hint?: strin
         {label}
       </span>
       <span className="flex items-baseline gap-3">
-        {hint && (
-          <span className="text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--color-text-faint)" }}>
-            {hint}
-          </span>
-        )}
+        <span className="text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--color-text-faint)" }}>
+          {hint}
+        </span>
         <span
           className="text-[18px]"
-          style={{ color: "var(--color-text)", fontVariantNumeric: "tabular-nums", letterSpacing: "0" }}
+          style={{ color, fontVariantNumeric: "tabular-nums", letterSpacing: "0" }}
         >
           {value}
         </span>
@@ -172,48 +217,48 @@ function KV({ label, value, hint }: { label: string; value: string; hint?: strin
   );
 }
 
-function ActivityRow({
-  event,
+function buildReadiness({
+  lastAgeSec,
+  failures,
+  activeTasks,
+  skills,
+  memories,
 }: {
-  event: { event: string; ts: string; tool?: string; result?: string };
+  lastAgeSec: number | null;
+  failures: number;
+  activeTasks: number;
+  skills: Skill[];
+  memories: MemoryEntry[];
 }) {
-  const time = new Date(event.ts);
-  const hh = pad(time.getHours());
-  const mm = pad(time.getMinutes());
-  const ss = pad(time.getSeconds());
-  const isErr =
-    event.event === "tool_result" &&
-    typeof event.result === "string" &&
-    event.result.startsWith("ERROR");
-  const dot =
-    event.event === "tool_call" ? "→"
-      : event.event === "tool_result" ? (isErr ? "✗" : "←")
-      : event.event === "llm_call" ? "λ"
-      : event.event === "assistant_reply" ? "›" : "·";
-  const dotColor = isErr ? "var(--color-danger)" : "var(--color-accent)";
-  const txtColor = isErr ? "var(--color-danger)" : "var(--color-text-dim)";
-  return (
-    <div className="grid items-baseline" style={{ gridTemplateColumns: "84px 18px 1fr", columnGap: 12 }}>
-      <span style={{ color: "var(--color-text-faint)", fontVariantNumeric: "tabular-nums", fontSize: 11 }}>
-        {hh}:{mm}:{ss}
-      </span>
-      <span style={{ color: dotColor }}>{dot}</span>
-      <span style={{ color: txtColor }}>
-        <span
-          className="mr-3"
-          style={{
-            color: "var(--color-text-muted)",
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            fontSize: 10,
-          }}
-        >
-          {event.event}
-        </span>
-        {event.tool ?? (isErr ? truncate(event.result ?? "", 80) : "")}
-      </span>
-    </div>
-  );
+  const usedTools = skills.filter((s) => s.call_count > 0).length;
+  const failedTools = skills.filter((s) => s.failure_count > 0).length;
+  const activeRecently = lastAgeSec !== null && lastAgeSec < 300;
+  return [
+    {
+      label: "activity",
+      value: activeRecently ? "LIVE" : "IDLE",
+      hint: lastAgeSec === null ? "no events" : lastAgeSec < 60 ? `${lastAgeSec}s ago` : `${Math.floor(lastAgeSec / 60)}m ago`,
+      tone: activeRecently ? "ok" : "idle",
+    },
+    {
+      label: "attention",
+      value: failures > 0 || failedTools > 0 ? "CHECK" : "CLEAR",
+      hint: failures > 0 ? `${failures} failures today` : failedTools > 0 ? `${failedTools} tools failed` : "no failures",
+      tone: failures > 0 || failedTools > 0 ? "warn" : "ok",
+    },
+    {
+      label: "autonomy",
+      value: activeTasks > 0 ? "ARMED" : "EMPTY",
+      hint: activeTasks > 0 ? `${activeTasks} active tasks` : "no active tasks",
+      tone: activeTasks > 0 ? "ok" : "idle",
+    },
+    {
+      label: "capability",
+      value: usedTools > 0 ? `${pad(usedTools)}/${pad(skills.length)}` : "COLD",
+      hint: memories.length > 0 ? `${memories.length} memories` : "no memory",
+      tone: usedTools > 0 && memories.length > 0 ? "ok" : "idle",
+    },
+  ] satisfies Array<{ label: string; value: string; hint: string; tone: "ok" | "warn" | "idle" }>;
 }
 
 function AgentPanel({
@@ -313,11 +358,11 @@ function fmtAbs(d: Date): string {
   return `${dd} · ${tt}`.toLowerCase();
 }
 
-function nowNarration(lastEvent: { event: string; tool?: string } | undefined): string {
+function nowNarration(lastEvent: { event: string; name?: string } | undefined): string {
   if (!lastEvent) return "─ no activity yet";
   switch (lastEvent.event) {
     case "llm_call": return "thinking…";
-    case "tool_call": return `calling ${(lastEvent.tool ?? "tool").toLowerCase()}…`;
+    case "tool_call": return `calling ${(lastEvent.name ?? "tool").toLowerCase()}…`;
     case "tool_result": return "processing result…";
     case "assistant_reply": return "replied.";
     case "user_message": return "received input.";
@@ -329,8 +374,8 @@ function UpcomingHero({
   stats,
   lastEvent,
 }: {
-  stats: { toolCalls: number; llmCalls: number; replies: number; failures: number };
-  lastEvent: { event: string; ts: string; tool?: string } | undefined;
+  stats: { failures: number };
+  lastEvent: { event: string; ts: string; name?: string } | undefined;
 }) {
   const [data, setData] = useState<Upcoming | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -361,13 +406,6 @@ function UpcomingHero({
     candidates.sort((a, b) => a.ms - b.ms);
     return candidates[0] ?? null;
   })();
-
-  const STAT_COLS: { label: string; value: number; color: string }[] = [
-    { label: "tool calls", value: stats.toolCalls, color: "var(--color-accent)" },
-    { label: "replies",    value: stats.replies,   color: "#818cf8" },
-    { label: "llm calls",  value: stats.llmCalls,  color: "var(--color-accent)" },
-    { label: "failures",   value: stats.failures,  color: stats.failures > 0 ? "var(--color-danger)" : "var(--color-text-faint)" },
-  ];
 
   return (
     <>
@@ -418,22 +456,24 @@ function UpcomingHero({
         </div>
       )}
 
-      {/* Stats row — since midnight */}
+      {/* Operational strip — do not duplicate the global since-midnight band above. */}
       <div style={{ borderTop: "1px solid var(--color-border)", paddingTop: 12, marginBottom: 6 }}>
-        <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: "0.22em", textTransform: "uppercase", color: "var(--color-text-faint)", marginBottom: 10 }}>
-          since midnight
-        </div>
-        <div className="grid grid-cols-4 gap-4" style={{ marginBottom: 16 }}>
-          {STAT_COLS.map(({ label, value, color }) => (
-            <div key={label}>
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--color-text-faint)", marginBottom: 4 }}>
-                {label}
-              </div>
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: 22, color, fontVariantNumeric: "tabular-nums", letterSpacing: "0" }}>
-                {value.toString().padStart(2, "0")}
-              </div>
-            </div>
-          ))}
+        <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", marginBottom: 16 }}>
+          <HeroSignal
+            label="last action"
+            value={lastEvent ? lastEvent.event.replace(/_/g, " ") : "none"}
+            tone={lastEvent ? "ok" : "idle"}
+          />
+          <HeroSignal
+            label="today"
+            value={stats.failures > 0 ? `${stats.failures} failures` : "no failures"}
+            tone={stats.failures > 0 ? "warn" : "ok"}
+          />
+          <HeroSignal
+            label="inspect"
+            value={stats.failures > 0 ? "traces" : "chat"}
+            tone={stats.failures > 0 ? "warn" : "idle"}
+          />
         </div>
       </div>
 
@@ -446,13 +486,303 @@ function UpcomingHero({
   );
 }
 
-function pad(n: number): string {
-  return n.toString().padStart(2, "0");
+function HeroSignal({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "ok" | "warn" | "idle";
+}) {
+  const color = tone === "warn"
+    ? "var(--color-amber)"
+    : tone === "ok"
+      ? "var(--color-accent)"
+      : "var(--color-text-muted)";
+  return (
+    <div>
+      <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--color-text-faint)", marginBottom: 4 }}>
+        {label}
+      </div>
+      <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, color, letterSpacing: "0.02em", textTransform: "uppercase", overflowWrap: "anywhere" }}>
+        {value}
+      </div>
+    </div>
+  );
 }
 
-function truncate(s: string, n: number): string {
+function MissionControl({ events }: { events: FeedEvent[] }) {
+  const recent = events.slice(-80);
+  const turn = latestTurn(recent);
+  const attention = recent
+    .filter((e) => isAttentionEvent(e))
+    .slice(-4)
+    .reverse();
+  const tools = toolMix(recent);
+  const lastModel = [...recent].reverse().find((e) => e.event === "llm_call");
+
+  return (
+    <div className="overview-mission-grid mb-10">
+      <div className="overview-ops-card">
+        <SectionKicker label="mission trace" value={turn.steps.length ? `${turn.steps.length} steps` : "idle"} />
+        {turn.user ? (
+          <div style={{ marginBottom: 14 }}>
+            <div className="text-[10px] uppercase tracking-[0.18em] mb-2" style={{ color: "var(--color-text-faint)" }}>
+              latest instruction
+            </div>
+            <div
+              className="text-[13px] leading-[1.65]"
+              style={{ color: "var(--color-text)", overflowWrap: "anywhere", wordBreak: "break-word" }}
+            >
+              <span style={{ color: "var(--color-accent)" }}>›</span>{" "}
+              {clip(turn.user.text ?? "", 150)}
+            </div>
+          </div>
+        ) : (
+          <EmptyLine text="no user turn in the current event window" />
+        )}
+
+        <div>
+          {turn.steps.map((step, i) => (
+            <MissionStep key={`${step.ts}-${i}`} event={step} />
+          ))}
+        </div>
+
+        {turn.reply && (
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--color-border)" }}>
+            <div className="text-[10px] uppercase tracking-[0.18em] mb-2" style={{ color: "var(--color-text-faint)" }}>
+              last reply
+            </div>
+            <div
+              className="text-[12px] leading-[1.7]"
+              style={{ color: "var(--color-text-dim)", overflowWrap: "anywhere", wordBreak: "break-word" }}
+            >
+              {clip(turn.reply.text ?? "", 220)}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="overview-ops-card">
+        <SectionKicker label="attention" value={attention.length ? `${attention.length} open` : "clear"} tone={attention.length ? "warn" : "ok"} />
+        {attention.length ? (
+          <div style={{ marginBottom: 18 }}>
+            {attention.map((e, i) => (
+              <AttentionRow key={`${e.ts}-${i}`} event={e} />
+            ))}
+          </div>
+        ) : (
+          <div style={{ marginBottom: 18 }}>
+            <EmptyLine text="no guards, failures, or cooldowns in view" />
+          </div>
+        )}
+
+        <SectionKicker label="tool mix" value={tools.length ? `${tools.length} active` : "quiet"} />
+        {tools.length ? (
+          <div style={{ marginBottom: 18 }}>
+            {tools.map((t) => <ToolMixRow key={t.name} {...t} />)}
+          </div>
+        ) : (
+          <div style={{ marginBottom: 18 }}>
+            <EmptyLine text="no tool calls in the current window" />
+          </div>
+        )}
+
+        <SectionKicker label="model lane" value={lastModel?.model ? "live" : "empty"} />
+        {lastModel ? (
+          <div className="text-[11px] leading-[1.7]" style={{ color: "var(--color-text-dim)" }}>
+            <div style={{ color: "var(--color-text)", overflowWrap: "anywhere" }}>
+              {lastModel.model}
+            </div>
+            <div className="uppercase tracking-[0.12em]" style={{ color: "var(--color-text-faint)", fontSize: 9 }}>
+              {lastModel.host ?? "unknown host"}
+            </div>
+            <div style={{ marginTop: 6, fontVariantNumeric: "tabular-nums" }}>
+              {(lastModel.input_tokens ?? 0).toLocaleString()} in · {(lastModel.output_tokens ?? 0).toLocaleString()} out
+              {lastModel.cached_tokens ? ` · ${lastModel.cached_tokens.toLocaleString()} cached` : ""}
+            </div>
+          </div>
+        ) : (
+          <EmptyLine text="no model call in the current window" />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SectionKicker({
+  label,
+  value,
+  tone = "muted",
+}: {
+  label: string;
+  value: string;
+  tone?: "muted" | "ok" | "warn";
+}) {
+  const color = tone === "warn"
+    ? "var(--color-amber)"
+    : tone === "ok"
+      ? "var(--color-accent)"
+      : "var(--color-text-muted)";
+  return (
+    <div className="flex items-baseline justify-between gap-4 mb-4">
+      <div className="text-[10px] uppercase tracking-[0.28em]" style={{ color: "var(--color-text-muted)" }}>
+        ── {label}
+      </div>
+      <div className="text-[9px] uppercase tracking-[0.18em]" style={{ color }}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function MissionStep({ event }: { event: FeedEvent }) {
+  const isErr = event.event === "tool_result" && (event.result ?? "").startsWith("ERROR");
+  const glyph = event.event === "llm_call" ? "λ"
+    : event.event === "tool_call" ? "→"
+      : event.event === "tool_result" ? (isErr ? "✗" : "←")
+        : event.event === "assistant_reply" ? "›"
+          : "·";
+  const label = event.event === "tool_call" || event.event === "tool_result"
+    ? `${event.event.replace(/_/g, " ")} · ${event.name ?? "tool"}`
+    : event.event.replace(/_/g, " ");
+  const meta = event.event === "llm_call"
+    ? event.model ?? "model"
+    : event.event === "tool_result"
+      ? statusForResult(event.result)
+      : event.service ?? "";
+  return (
+    <div className="overview-step-row">
+      <span style={{ color: "var(--color-text-faint)", fontVariantNumeric: "tabular-nums", fontSize: 11 }}>
+        {formatTime(event.ts)}
+      </span>
+      <span style={{ color: isErr ? "var(--color-danger)" : "var(--color-accent)" }}>{glyph}</span>
+      <span
+        className="uppercase"
+        style={{
+          color: isErr ? "var(--color-danger)" : "var(--color-text-dim)",
+          fontSize: 10,
+          letterSpacing: "0.12em",
+          overflowWrap: "anywhere",
+          wordBreak: "break-word",
+        }}
+      >
+        {label}
+      </span>
+      <span
+        className="overview-step-meta"
+        style={{
+          justifySelf: "end",
+          color: "var(--color-text-faint)",
+          fontSize: 9,
+          letterSpacing: "0.08em",
+          overflowWrap: "anywhere",
+          wordBreak: "break-word",
+        }}
+      >
+        {meta}
+      </span>
+    </div>
+  );
+}
+
+function AttentionRow({ event }: { event: FeedEvent }) {
+  const color = event.event === "tool_result" ? "var(--color-danger)" : "var(--color-amber)";
+  const label = event.event.replace(/_/g, " ");
+  const detail = event.result ?? event.text ?? event.name ?? event.model ?? "";
+  return (
+    <div style={{ padding: "7px 0", borderBottom: "1px dashed rgba(67,133,105,0.35)" }}>
+      <div className="text-[10px] uppercase tracking-[0.14em]" style={{ color }}>
+        {label}
+      </div>
+      <div
+        className="text-[11px] leading-[1.55]"
+        style={{ color: "var(--color-text-dim)", overflowWrap: "anywhere", wordBreak: "break-word" }}
+      >
+        {clip(detail, 120)}
+      </div>
+    </div>
+  );
+}
+
+function ToolMixRow({ name, count, pct }: { name: string; count: number; pct: number }) {
+  return (
+    <div className="overview-tool-row">
+      <div className="text-[11px]" style={{ color: "var(--color-text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {name}
+      </div>
+      <div style={{ height: 5, border: "1px solid var(--color-border)", background: "var(--color-surface-2)" }}>
+        <div style={{ height: "100%", width: `${pct}%`, background: "var(--color-accent)", boxShadow: "0 0 8px var(--color-accent-glow)" }} />
+      </div>
+      <div className="text-[10px] text-right" style={{ color: "var(--color-accent)", fontVariantNumeric: "tabular-nums" }}>
+        {count}
+      </div>
+    </div>
+  );
+}
+
+function EmptyLine({ text }: { text: string }) {
+  return (
+    <div className="text-[11px] uppercase tracking-[0.14em]" style={{ color: "var(--color-text-faint)" }}>
+      {text}
+    </div>
+  );
+}
+
+function latestTurn(events: FeedEvent[]) {
+  const userIdx = (() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].event === "user_message") return i;
+    }
+    return -1;
+  })();
+  const from = userIdx >= 0 ? events.slice(userIdx) : events.slice(-10);
+  const steps = from
+    .filter((e) => ["llm_call", "tool_call", "tool_result", "assistant_reply"].includes(e.event))
+    .slice(0, 9);
+  return {
+    user: userIdx >= 0 ? events[userIdx] : null,
+    steps,
+    reply: [...from].reverse().find((e) => e.event === "assistant_reply") ?? null,
+  };
+}
+
+function isAttentionEvent(e: FeedEvent): boolean {
+  if (e.event === "tool_result" && (e.result ?? "").startsWith("ERROR")) return true;
+  return ["output_guard", "self_correction", "tool_blocked", "budget_blocked", "provider_cooled"].includes(e.event);
+}
+
+function toolMix(events: FeedEvent[]) {
+  const counts = new Map<string, number>();
+  for (const e of events) {
+    if (e.event !== "tool_call" || !e.name) continue;
+    counts.set(e.name, (counts.get(e.name) ?? 0) + 1);
+  }
+  const rows = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const max = Math.max(1, ...rows.map(([, count]) => count));
+  return rows.map(([name, count]) => ({ name, count, pct: Math.max(8, Math.round((count / max) * 100)) }));
+}
+
+function statusForResult(result: string | undefined): string {
+  if (!result) return "done";
+  if (result.startsWith("ERROR")) return "error";
+  if (result.length > 240) return `${result.length.toLocaleString()} chars`;
+  return "done";
+}
+
+function formatTime(iso: string): string {
+  const d = new Date(iso);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function clip(s: string, n: number): string {
   if (s.length <= n) return s;
   return s.slice(0, n - 1) + "…";
+}
+
+function pad(n: number): string {
+  return n.toString().padStart(2, "0");
 }
 
 function liveStateMessage(ageSec: number | null): string {
