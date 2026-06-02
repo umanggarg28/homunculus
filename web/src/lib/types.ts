@@ -83,6 +83,8 @@ export interface Skill {
   last_used: string | null;
   last_status: "success" | "failure" | null;
   recent_calls?: string[]; // ISO timestamps in last 24h
+  uses: number | null;              // from rate_skill() in skill_*.md
+  consecutive_failures: number | null; // from rate_skill() in skill_*.md
 }
 
 export interface AgentControls {

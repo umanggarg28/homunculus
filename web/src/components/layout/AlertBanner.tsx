@@ -23,7 +23,9 @@ export function AlertBanner() {
       let failed = 0;
       for (const t of tasks) {
         for (const r of (t.last_runs || [])) {
-          if (r.status === "failure" && new Date(r.ts).getTime() >= startOfToday) failed += 1;
+          // Provider exhaustion is a transient infra failure, not a broken task — exclude it
+          const isProviderExhaustion = typeof r.result === "string" && r.result.toLowerCase().includes("all providers exhausted");
+          if (r.status === "failure" && !isProviderExhaustion && new Date(r.ts).getTime() >= startOfToday) failed += 1;
         }
       }
       setTasksFailed(failed);
