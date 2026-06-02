@@ -2,7 +2,7 @@ import { motion } from "framer-motion";
 import type { ServiceName, StatusMap } from "@/lib/types";
 import { formatAge } from "@/lib/format";
 
-const SERVICES: ServiceName[] = ["repl", "heartbeat", "telegram", "feed"];
+const SERVICES: ServiceName[] = ["heartbeat", "telegram", "web"];
 
 /** A row of four pills, one per service. Each pulses subtly when live. */
 export function StatusPills({ status }: { status: StatusMap }) {

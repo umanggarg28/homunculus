@@ -15,7 +15,8 @@ import asyncio
 import json
 import os
 import secrets
-from datetime import datetime, timedelta
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -50,7 +51,25 @@ STATUS_IDLE_SECONDS = 12 * 60
 STATUS_STALE_SECONDS = 60 * 60
 
 
-app = FastAPI(title="Homunculus API")
+async def _web_ping_loop() -> None:
+    """Emit a service_ping event every 10 minutes so /api/status never goes stale."""
+    import events as _ev
+    while True:
+        try:
+            _ev.emit("service_ping", name="web", text="alive")
+        except Exception:
+            pass
+        await asyncio.sleep(10 * 60)
+
+
+@asynccontextmanager
+async def _lifespan(app_: object):
+    task = asyncio.create_task(_web_ping_loop())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="Homunculus API", lifespan=_lifespan)
 
 # Memory + tools are initialised eagerly at process start so the
 # /skills endpoint (and anything else that introspects tools.SCHEMAS)
@@ -144,7 +163,7 @@ def model_info() -> JSONResponse:
 @app.get("/api/status", dependencies=[Depends(require_web_auth)])
 def status() -> JSONResponse:
     """Per-service liveness inferred from event-stream freshness."""
-    services = ["repl", "heartbeat", "telegram", "web"]
+    services = ["heartbeat", "telegram", "web"]
     last_seen: dict[str, float | None] = {s: None for s in services}
 
     if EVENTS_PATH.exists():
@@ -593,6 +612,28 @@ def agent_upcoming() -> JSONResponse:
     interval_min = int(os.environ.get("HEARTBEAT_INTERVAL_MINUTES", "60"))
     explicit_tick = mem.peek_next_tick()
 
+    # When no explicit tick is scheduled, estimate from last heartbeat event + default interval.
+    estimated_tick: str | None = explicit_tick
+    if not estimated_tick and EVENTS_PATH.exists():
+        last_hb_ts: float | None = None
+        try:
+            with EVENTS_PATH.open("r", encoding="utf-8", errors="replace") as f:
+                for line in f.readlines()[-500:]:
+                    try:
+                        rec = json.loads(line)
+                        if rec.get("service") == "heartbeat":
+                            t = datetime.fromisoformat(rec["ts"]).timestamp()
+                            if last_hb_ts is None or t > last_hb_ts:
+                                last_hb_ts = t
+                    except (json.JSONDecodeError, KeyError, ValueError):
+                        continue
+        except OSError:
+            pass
+        if last_hb_ts is not None:
+            estimated = datetime.fromtimestamp(last_hb_ts) + timedelta(minutes=interval_min)
+            if estimated > datetime.now():
+                estimated_tick = estimated.isoformat(timespec="seconds")
+
     # Earliest active task by due_at.
     store = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
     next_task = None
@@ -607,7 +648,7 @@ def agent_upcoming() -> JSONResponse:
                           "recurrence": t.get("recurrence", "none")}
 
     return JSONResponse({
-        "next_tick": explicit_tick,
+        "next_tick": estimated_tick,
         "default_interval_min": interval_min,
         "next_task": next_task,
     })
