@@ -64,10 +64,9 @@ export function FeedRow({ event: e }: Props) {
 
   return (
     <div
-      className="grid py-1.5 px-4"
+      className="feed-row grid py-1.5 px-4"
       onClick={isTruncatable ? () => setExpanded((v) => !v) : undefined}
       style={{
-        gridTemplateColumns: "90px 80px 18px 150px 1fr",
         gap: "0 16px",
         alignItems: "start",
         borderBottom: "1px solid var(--color-border)",
@@ -80,7 +79,7 @@ export function FeedRow({ event: e }: Props) {
     >
       {/* Time */}
       <span
-        className="pt-[2px]"
+        className="feed-row-time pt-[2px]"
         style={{ color: "var(--color-text-faint)", fontVariantNumeric: "tabular-nums" }}
       >
         {formatHms(e.ts)}
@@ -88,17 +87,17 @@ export function FeedRow({ event: e }: Props) {
 
       {/* Service */}
       <span
-        className="uppercase tracking-[0.12em] pt-[2px]"
+        className="feed-row-service uppercase tracking-[0.12em] pt-[2px]"
         style={{ color: "var(--color-text-muted)", fontSize: 10 }}
       >
         {e.service}
       </span>
 
       {/* Glyph */}
-      <span className="pt-[2px]" style={{ color: dotColor }}>{glyph}</span>
+      <span className="feed-row-glyph pt-[2px]" style={{ color: dotColor }}>{glyph}</span>
 
       {/* Kind + tool name (two lines so the name is always visible) */}
-      <div className="pt-[2px]" style={{ minWidth: 0 }}>
+      <div className="feed-row-kind pt-[2px]" style={{ minWidth: 0 }}>
         <div
           className="uppercase tracking-[0.12em]"
           style={{ color: dotColor, fontSize: 10 }}
@@ -122,10 +121,10 @@ export function FeedRow({ event: e }: Props) {
       </div>
 
       {/* Detail */}
-      <div style={{ minWidth: 0 }}>
+      <div className="feed-row-detail" style={{ minWidth: 0 }}>
         <span
           className="break-words whitespace-pre-wrap"
-          style={{ color: isErr ? "var(--color-danger)" : isNotifyQueued ? "var(--color-amber)" : isNotifyDelivered ? "#4ade80" : "var(--color-text-dim)" }}
+          style={{ color: isErr ? "var(--color-danger)" : isNotifyQueued ? "var(--color-amber)" : isNotifyDelivered ? "#4ade80" : "var(--color-text-dim)", overflowWrap: "anywhere", wordBreak: "break-word" }}
         >
           {displayDetail}
         </span>

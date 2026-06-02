@@ -85,6 +85,59 @@ export interface Skill {
   recent_calls?: string[]; // ISO timestamps in last 24h
 }
 
+export interface AgentControls {
+  mode: "plan" | "build";
+  max_steps: number;
+  dry_run: boolean;
+  prefer_free_models: boolean;
+  allowed_tools: string[];
+  blocked_tools: string[];
+}
+
+export interface AgentReplayTool {
+  name: string;
+  args: string;
+  result: string;
+  status: "pending" | "success" | "failure" | "blocked";
+  started_at?: string;
+  ended_at?: string;
+}
+
+export interface AgentReplayModel {
+  ts: string;
+  model: string;
+  host: string;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  cost_cents: number;
+  request: string;
+}
+
+export interface AgentReplayGuard {
+  ts: string;
+  event: string;
+  name: string;
+  text: string;
+  result: string;
+}
+
+export interface AgentReplayTurn {
+  id: string;
+  started_at: string | null;
+  ended_at?: string;
+  service: string;
+  user: string;
+  assistant: string;
+  models: AgentReplayModel[];
+  tools: AgentReplayTool[];
+  guards: AgentReplayGuard[];
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  cost_cents: number;
+}
+
 /** Event kinds emitted into _events.jsonl by every Homunculus service. */
 export type EventKind =
   | "user_message"
@@ -94,6 +147,8 @@ export type EventKind =
   | "llm_call"
   | "output_guard"
   | "self_correction"
+  | "tool_blocked"
+  | "agent_controls_updated"
   | "memory_write"
   | "memory_forget";
 

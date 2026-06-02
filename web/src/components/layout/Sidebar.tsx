@@ -6,30 +6,30 @@ import { SidebarBrand } from "./SidebarBrand";
 import { SidebarRobot } from "@/components/robot/SidebarRobot";
 import { SoundToggle } from "./SoundToggle";
 
-interface NavItem { to: string; label: string; kbd?: string; }
+interface NavItem { to: string; label: string; short: string; kbd?: string; }
 
 const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
   {
     title: "WORK",
     items: [
-      { to: "/",         label: "HOME",     kbd: "H" },
-      { to: "/overview", label: "OVERVIEW", kbd: "O" },
-      { to: "/chat",     label: "CHAT",     kbd: "C" },
+      { to: "/",         label: "HOME",     short: "HOME", kbd: "H" },
+      { to: "/overview", label: "OVERVIEW", short: "OVR",  kbd: "O" },
+      { to: "/chat",     label: "CHAT",     short: "CHAT", kbd: "C" },
     ],
   },
   {
     title: "STATE",
     items: [
-      { to: "/tasks",  label: "TASKS",  kbd: "T" },
-      { to: "/memory", label: "MEMORY", kbd: "M" },
-      { to: "/tools",  label: "TOOLS",  kbd: "X" },
+      { to: "/tasks",  label: "TASKS",  short: "TASK", kbd: "T" },
+      { to: "/memory", label: "MEMORY", short: "MEM",  kbd: "M" },
+      { to: "/tools",  label: "TOOLS",  short: "TOOL", kbd: "X" },
     ],
   },
   {
     title: "LOGS",
     items: [
-      { to: "/traces", label: "TRACES", kbd: "R" },
-      { to: "/logs",   label: "LOGS",   kbd: "L" },
+      { to: "/traces", label: "TRACES", short: "TRC", kbd: "R" },
+      { to: "/logs",   label: "LOGS",   short: "LOG", kbd: "L" },
     ],
   },
 ];
@@ -106,7 +106,7 @@ export function Sidebar() {
             height: 58px;
             border-right: none !important;
             border-bottom: 1px solid var(--color-border);
-            overflow-x: auto;
+            overflow: hidden;
             overflow-y: hidden;
           }
           .brut-sidebar > :first-child,
@@ -120,14 +120,22 @@ export function Sidebar() {
             padding: 6px 10px;
             flex-direction: row;
             align-items: stretch;
-            gap: 14px;
-            overflow: visible;
-            min-width: max-content;
+            gap: 4px;
+            width: 100%;
+            min-width: 0;
+            max-width: 100vw;
+            overflow-x: auto;
+            overflow-y: hidden;
+            scrollbar-width: none;
+          }
+          .brut-sidebar nav::-webkit-scrollbar {
+            display: none;
           }
           .brut-sidebar nav > div {
             display: flex;
             align-items: stretch;
-            gap: 6px;
+            gap: 2px;
+            flex: 0 0 auto;
           }
           .brut-sidebar nav > div > div:first-child {
             display: none;
@@ -141,12 +149,23 @@ export function Sidebar() {
             display: flex !important;
             align-items: center;
             height: 44px;
-            padding: 0 10px !important;
+            padding: 0 8px !important;
             white-space: nowrap;
+          }
+          .brut-sidebar .nav-label-full {
+            display: none;
+          }
+          .brut-sidebar .nav-label-short {
+            display: inline;
           }
           .brut-sidebar .nav-row .marker,
           .brut-sidebar .nav-row .kbd {
             display: none !important;
+          }
+        }
+        @media (min-width: 761px) {
+          .brut-sidebar .nav-label-short {
+            display: none;
           }
         }
       `}</style>
@@ -178,7 +197,8 @@ export function Sidebar() {
                       <span className="marker" style={{ width: 16, display: "inline-block" }}>
                         {isActive ? ">" : " "}
                       </span>
-                      <span style={{ flex: 1 }}>{item.label}</span>
+                      <span className="nav-label-full" style={{ flex: 1 }}>{item.label}</span>
+                      <span className="nav-label-short" style={{ flex: 1 }}>{item.short}</span>
                       {item.kbd && (
                         <span
                           className="kbd"

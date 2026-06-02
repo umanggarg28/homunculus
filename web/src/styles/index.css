@@ -334,8 +334,24 @@ input, textarea { caret-color: var(--color-accent); }
  * terminal treatment. Syntax highlighting via hljs (see below).
  * =========================================================== */
 
-.brut-md { font-family: var(--font-mono); font-size: 13px; line-height: 1.7; color: var(--color-text); }
+.brut-md {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--color-text);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
 .brut-md > * + * { margin-top: 14px; }
+.brut-md p,
+.brut-md li,
+.brut-md strong,
+.brut-md em,
+.brut-md a {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 
 /* Headings — sized so there's real hierarchy, not just 12px everything */
 .brut-md h1 {
@@ -395,7 +411,9 @@ input, textarea { caret-color: var(--color-accent); }
   border: 1px solid var(--color-border-bright);
   font-family: var(--font-mono);
   font-size: 12px;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* Code block: dark well with left accent + optional language badge */
@@ -457,7 +475,7 @@ input, textarea { caret-color: var(--color-accent); }
 .brut-md a:hover { text-decoration-color: var(--color-accent); }
 
 /* Tables */
-.brut-md-table-wrap { overflow-x: auto; margin: 10px 0; }
+.brut-md-table-wrap { overflow-x: auto; margin: 10px 0; max-width: 100%; }
 .brut-md-table { border-collapse: collapse; font-size: 12px; width: 100%; }
 .brut-md-table th, .brut-md-table td {
   border: 1px solid var(--color-border);
@@ -475,6 +493,49 @@ input, textarea { caret-color: var(--color-accent); }
 }
 .brut-md-table td { color: var(--color-text-dim); }
 .brut-md-table tr:hover td { background: var(--color-surface-3); }
+
+/* Traces timeline needs to survive dense labels on phone widths. */
+.traces-timeline,
+.traces-timeline * {
+  min-width: 0;
+}
+.traces-chart-grid {
+  display: grid;
+  gap: 12px;
+}
+.feed-row {
+  grid-template-columns: 90px 80px 18px 150px minmax(0, 1fr);
+}
+@media (max-width: 760px) {
+  .traces-timeline {
+    overflow: hidden;
+  }
+  .traces-chart-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .feed-row {
+    grid-template-columns: 64px 18px minmax(0, 1fr);
+    grid-template-areas:
+      "time glyph kind"
+      "service glyph kind"
+      "detail detail detail";
+    gap: 2px 10px !important;
+    padding: 10px 12px !important;
+  }
+  .feed-row-time { grid-area: time; }
+  .feed-row-service { grid-area: service; }
+  .feed-row-glyph { grid-area: glyph; }
+  .feed-row-kind { grid-area: kind; }
+  .feed-row-detail {
+    grid-area: detail;
+    padding-top: 8px;
+  }
+  .feed-row-kind > div,
+  .feed-row-detail span {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+}
 
 /* ===========================================================
  * HLJS — Phosphor CRT syntax theme.

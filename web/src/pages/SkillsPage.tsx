@@ -1,19 +1,26 @@
 import { useEffect, useMemo, useState, useRef } from "react";
+import type { ReactNode } from "react";
 import { motion } from "framer-motion";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
 import { BrutalistEmpty } from "@/components/ui/BrutalistEmpty";
 import { SkillsHero } from "@/components/ui/HeroBand";
-import type { Skill } from "@/lib/types";
+import { AutonomyConsole } from "@/components/tools/AutonomyConsole";
+import type { AgentControls, AgentReplayTurn, Skill } from "@/lib/types";
 
 export function SkillsPage() {
   const [skills, setSkills] = useState<Skill[] | null>(null);
+  const [controls, setControls] = useState<AgentControls | null>(null);
+  const [replay, setReplay] = useState<AgentReplayTurn[]>([]);
 
   useEffect(() => {
     api.skillsList().then(setSkills).catch(() => setSkills([]));
+    api.agentControls().then(setControls).catch(() => undefined);
+    api.agentReplay(8).then(setReplay).catch(() => setReplay([]));
     const id = setInterval(() => {
       api.skillsList().then(setSkills).catch(() => undefined);
+      api.agentReplay(8).then(setReplay).catch(() => undefined);
     }, 30_000);
     return () => clearInterval(id);
   }, []);
@@ -54,17 +61,80 @@ export function SkillsPage() {
 
       {skills && skills.length > 0 && <SkillsHero skills={skills} />}
 
+      {skills && controls && (
+        <AutonomyConsole
+          controls={controls}
+          skills={skills}
+          replay={replay}
+          onControlsChange={setControls}
+          onReplayChange={setReplay}
+        />
+      )}
+
       {skills === null ? null : skills.length === 0 ? (
         <BrutalistEmpty
           header="NO TOOLS REGISTERED"
           body={<>this is unexpected — the agent should always mount at least the core tools (memory, python_exec, web_fetch). check <code style={{ color: "var(--color-text)" }}>tools/__init__.py</code> on the backend.</>}
         />
       ) : (
-        <div style={{ borderTop: "1px solid var(--color-border)" }}>
-          {[...used, ...unused].map((s) => <SkillRow key={s.name} skill={s} maxCalls={used[0]?.call_count ?? 1} />)}
+        <div className="grid gap-8">
+          {used.length > 0 && (
+            <ToolSection
+              title="active tools"
+              subtitle="tools the agent actually used; sorted by call volume"
+              count={used.length}
+            >
+              {used.map((s) => <SkillRow key={s.name} skill={s} maxCalls={used[0]?.call_count ?? 1} />)}
+            </ToolSection>
+          )}
+          {unused.length > 0 && (
+            <ToolSection
+              title="available tools"
+              subtitle="mounted capabilities not yet exercised in this workspace"
+              count={unused.length}
+              quiet
+            >
+              {unused.map((s) => <SkillRow key={s.name} skill={s} maxCalls={used[0]?.call_count ?? 1} />)}
+            </ToolSection>
+          )}
         </div>
       )}
     </PageShell>
+  );
+}
+
+function ToolSection({
+  title,
+  subtitle,
+  count,
+  quiet,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  count: number;
+  quiet?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section>
+      <div className="flex items-baseline justify-between gap-4 mb-3 px-1">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.28em]" style={{ color: quiet ? "var(--color-text-faint)" : "var(--color-text-muted)" }}>
+            ── {title}
+          </div>
+          <div className="text-[11px] mt-1" style={{ color: "var(--color-text-faint)" }}>
+            {subtitle}
+          </div>
+        </div>
+        <div className="text-[10px] uppercase tracking-[0.16em]" style={{ color: quiet ? "var(--color-text-faint)" : "var(--color-accent)" }}>
+          {count.toString().padStart(2, "0")}
+        </div>
+      </div>
+      <div style={{ borderTop: "1px solid var(--color-border)" }}>
+        {children}
+      </div>
+    </section>
   );
 }
 

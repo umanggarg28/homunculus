@@ -15,8 +15,7 @@ export function LogList({ logs }: { logs: LogFile[] }) {
           style={{ borderBottom: "1px solid var(--color-border)" }}
         >
           <div
-            className="px-4 py-2 grid items-baseline gap-5"
-            style={{ gridTemplateColumns: "auto 1fr auto auto" }}
+            className="log-list-row px-4 py-2 grid items-baseline gap-5"
             onMouseEnter={(e) => {
               (e.currentTarget.parentElement as HTMLAnchorElement).style.background = "var(--color-surface-2)";
             }}
@@ -31,7 +30,10 @@ export function LogList({ logs }: { logs: LogFile[] }) {
               {lf.date}
             </span>
             <span className="brut-label brut-num" style={{ color: "var(--color-text-faint)" }}>
-              {lf.size_kb.toFixed(1)} kb
+              {ageLabel(lf.mtime)}
+            </span>
+            <span className="brut-label brut-num" style={{ color: "var(--color-text-faint)" }}>
+              {lf.size_kb.toFixed(1)}kb
             </span>
             <span
               className="brut-label opacity-0 group-hover:opacity-100 transition-opacity"
@@ -42,6 +44,30 @@ export function LogList({ logs }: { logs: LogFile[] }) {
           </div>
         </Link>
       ))}
+      <style>{`
+        .log-list-row {
+          grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+        }
+        @media (max-width: 640px) {
+          .log-list-row {
+            grid-template-columns: auto minmax(0, 1fr) auto;
+            gap: 10px;
+          }
+          .log-list-row > :nth-child(4) {
+            display: none;
+          }
+          .log-list-row > :last-child {
+            display: none;
+          }
+        }
+      `}</style>
     </div>
   );
+}
+
+function ageLabel(mtime: number): string {
+  const age = Date.now() / 1000 - mtime;
+  if (age < 3600) return `${Math.max(1, Math.floor(age / 60))}m ago`;
+  if (age < 86400) return `${Math.floor(age / 3600)}h ago`;
+  return `${Math.floor(age / 86400)}d ago`;
 }

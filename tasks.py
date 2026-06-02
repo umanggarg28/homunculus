@@ -39,7 +39,7 @@ CONSECUTIVE_FAILURE_LIMIT = 3
 # subsequent `due()` call. Prevents heartbeat-restart double-fires:
 # heartbeat crashes mid-tick → next tick sees the same overdue task →
 # fires it again without this check.
-RE_FIRE_SUPPRESSION_SECONDS = 5 * 60  # 5 minutes
+RE_FIRE_SUPPRESSION_SECONDS = 30 * 60  # 30 minutes — covers provider outages without duplicate notifications
 
 # `_advance_due()` can in theory loop forever if `recurrence_step` is
 # 0 or if `now` keeps advancing during a slow operation. Cap iterations.
