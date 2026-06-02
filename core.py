@@ -18,7 +18,7 @@ import json
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -81,25 +81,28 @@ MODEL = os.environ.get("HOMUNCULUS_MODEL", "gemini-2.5-flash")
 # provider is benched for PROVIDER_COOLDOWN_SECONDS so we don't hammer
 # a throttled endpoint.
 #
-# Slot 1 (HOMUNCULUS_API_KEY_FALLBACK): Groq — llama-3.3-70b-versatile has
-#   strong tool use and instruction following. Good rate-limit backup.
-# Slot 2 (HOMUNCULUS_API_KEY_FALLBACK_2): OpenRouter — free endpoints
-#   can disappear or rate-limit upstream. We accept a comma-separated
-#   list and try each model before moving to the next provider.
+# Slot 1 (HOMUNCULUS_API_KEY_FALLBACK): OpenRouter — Kimi K2.6 and Qwen3 are
+#   purpose-built for agentic tool-calling; both have free tiers with generous
+#   weekly limits. Comma-separated: we try each model before moving to the next
+#   provider. kimi-k2.6 first (262K ctx, top agentic benchmark), then qwen3.
+# Slot 2 (HOMUNCULUS_API_KEY_FALLBACK_2): Groq — llama-3.3-70b-versatile is
+#   fast and reliable; good speed fallback when OpenRouter free tiers are busy.
 # Slot 3 (HOMUNCULUS_API_KEY_FALLBACK_3): Cerebras — fast inference,
 #   generous TPM. Get key at cloud.cerebras.ai.
 API_URL_FALLBACK = os.environ.get(
     "HOMUNCULUS_API_URL_FALLBACK",
-    "https://api.groq.com/openai/v1/chat/completions",
+    "https://openrouter.ai/api/v1/chat/completions",
 )
-MODEL_FALLBACK = os.environ.get("HOMUNCULUS_MODEL_FALLBACK", "llama-3.3-70b-versatile")
+MODEL_FALLBACK = os.environ.get(
+    "HOMUNCULUS_MODEL_FALLBACK", "moonshotai/kimi-k2.6:free,qwen/qwen3-235b-a22b:free,qwen/qwen3-30b-a3b:free"
+)
 
 API_URL_FALLBACK_2 = os.environ.get(
     "HOMUNCULUS_API_URL_FALLBACK_2",
-    "https://openrouter.ai/api/v1/chat/completions",
+    "https://api.groq.com/openai/v1/chat/completions",
 )
 MODEL_FALLBACK_2 = os.environ.get(
-    "HOMUNCULUS_MODEL_FALLBACK_2", "nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free"
+    "HOMUNCULUS_MODEL_FALLBACK_2", "llama-3.3-70b-versatile"
 )
 
 API_URL_FALLBACK_3 = os.environ.get(
@@ -122,6 +125,30 @@ PRIMARY_MAX_RETRY_WAIT = 45.0
 # When the primary 429s with no Retry-After header, wait this many seconds and
 # retry once before falling to weaker fallbacks. Gemini often omits the header.
 PRIMARY_DEFAULT_RETRY_WAIT = 8.0
+
+# Optional hard budget guard. The dashboard already reports estimated spend;
+# this flag turns that estimate into enforcement. Free endpoints (`:free`)
+# and unknown-priced models are allowed so the agent can degrade to free
+# providers instead of going completely dark.
+ENFORCE_DAILY_BUDGET = os.environ.get(
+    "HOMUNCULUS_ENFORCE_DAILY_BUDGET",
+    "",
+).strip().lower() in {"1", "true", "yes", "on"}
+
+_MODEL_PRICING_CENTS: dict[str, tuple[float, float]] = {
+    # cents per 1M input, cents per 1M output (updated June 2026)
+    "gemini-2.5-flash":                         (15.0,  60.0),
+    "gemini-2.5-pro":                           (125.0, 1000.0),
+    "gemini-2.0-flash":                         (10.0,  40.0),
+    "llama-3.3-70b-versatile":                  (59.0,  79.0),
+    "llama-3.1-8b-instant":                     (5.0,   8.0),
+    "openai/gpt-4o":                            (250.0, 1000.0),
+    "openai/gpt-4o-mini":                       (15.0,  60.0),
+    "openai/gpt-4.1-mini":                      (40.0,  160.0),
+    "anthropic/claude-sonnet-4-6":              (300.0, 1500.0),
+    "anthropic/claude-haiku-4-5":               (100.0, 500.0),
+    "deepseek/deepseek-v3":                     (14.0,  28.0),
+}
 
 # Module-level cooldown cache: url|model -> wall-clock expiry timestamp.
 # A provider/model pair is "cooled" if time.time() < its expiry.
@@ -164,6 +191,14 @@ Scheduling:
   create_task() will automatically update an existing task if the title
   matches — you never need to check for duplicates manually.
 - schedule_next_tick is for one-shot wake timers only; never for recurring.
+
+World state:
+- Call get_world_state() at the start of any multi-step task to check if
+  prior steps already completed (safe after restarts/interruptions).
+- Call update_world_state() as you progress: set focus, active_task, step,
+  last_ok. This lets you resume safely and lets the UI show live status.
+- Call rate_skill(name, outcome) after using a skill_*.md procedure so the
+  system can learn what works and flag skills that need refinement.
 
 Self-extension (Pi-style):
 - For non-trivial Python you'll want again later — data parsing, a
@@ -238,6 +273,73 @@ def _expand_model_spec(model_spec: str) -> list[str]:
 
 def _provider_key(url: str, model_id: str) -> str:
     return f"{url}|{model_id}"
+
+
+def _budget_cents() -> float:
+    raw = os.environ.get("HOMUNCULUS_DAILY_BUDGET_USD", "0") or "0"
+    try:
+        return max(0.0, float(raw) * 100)
+    except ValueError:
+        return 0.0
+
+
+def _is_known_paid_model(model_id: str) -> bool:
+    if not model_id or model_id.endswith(":free"):
+        return False
+    return model_id in _MODEL_PRICING_CENTS
+
+
+def _today_spend_cents() -> float:
+    """Estimate today's spend from llm_call events.
+
+    This mirrors the dashboard's accounting. It is intentionally conservative
+    and best-effort: if the log is missing or malformed, return 0 so the agent
+    does not brick itself because observability failed.
+    """
+    events_path = Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
+    if not events_path.exists():
+        return 0.0
+    cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    total = 0.0
+    try:
+        lines = events_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return 0.0
+    for line in reversed(lines):
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        ts_raw = rec.get("ts", "")
+        try:
+            ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if ts < cutoff:
+            break
+        if rec.get("event") != "llm_call":
+            continue
+        model = rec.get("model") or rec.get("name") or ""
+        if not _is_known_paid_model(model):
+            continue
+        input_tok = int(rec.get("input_tokens") or 0)
+        output_tok = int(rec.get("output_tokens") or 0)
+        cached_tok = int(rec.get("cached_tokens") or 0)
+        price_in, price_out = _MODEL_PRICING_CENTS[model]
+        uncached = max(0, input_tok - cached_tok)
+        total += (uncached * price_in + cached_tok * price_in * 0.1 + output_tok * price_out) / 1_000_000
+    return total
+
+
+def _budget_blocks_model(model_id: str) -> bool:
+    if not ENFORCE_DAILY_BUDGET:
+        return False
+    budget = _budget_cents()
+    if budget <= 0 or not _is_known_paid_model(model_id):
+        return False
+    return _today_spend_cents() >= budget
 
 
 def _cool_provider(
@@ -316,6 +418,19 @@ def call_llm(
     last_err = ""
 
     for idx, (url, key, model_id) in enumerate(providers):
+        if _budget_blocks_model(model_id):
+            last_err = f"daily budget exhausted; skipping paid model {model_id}"
+            try:
+                events.emit(
+                    "budget_blocked",
+                    name=model_id,
+                    model=model_id,
+                    host=_url_host(url),
+                    result=last_err,
+                )
+            except Exception:
+                pass
+            continue
         payload: dict[str, Any] = {"model": model_id, "messages": messages}
         if tool_schemas is not None:
             payload["tools"] = tool_schemas
@@ -391,6 +506,19 @@ def call_llm(
     print(f"[call_llm] all providers cooled; sleeping {wait:.0f}s and retrying once", flush=True)
     time.sleep(wait)
     for url, key, model_id in _providers(model):
+        if _budget_blocks_model(model_id):
+            last_err = f"daily budget exhausted; skipping paid model {model_id}"
+            try:
+                events.emit(
+                    "budget_blocked",
+                    name=model_id,
+                    model=model_id,
+                    host=_url_host(url),
+                    result=last_err,
+                )
+            except Exception:
+                pass
+            continue
         payload = {"model": model_id, "messages": messages}
         if tool_schemas is not None:
             payload["tools"] = tool_schemas
@@ -499,6 +627,19 @@ def call_llm_stream(
     used_url = ""
     used_model = ""
     for idx, (url, key, model_id) in enumerate(_providers(model)):
+        if _budget_blocks_model(model_id):
+            last_err = f"daily budget exhausted; skipping paid model {model_id}"
+            try:
+                events.emit(
+                    "budget_blocked",
+                    name=model_id,
+                    model=model_id,
+                    host=_url_host(url),
+                    result=last_err,
+                )
+            except Exception:
+                pass
+            continue
         payload: dict[str, Any] = {
             "model": model_id,
             "messages": messages,
@@ -803,6 +944,7 @@ class Agent:
         self.history = self.history[:1]
         if self.memory is not None:
             self.memory.clear_session()
+            self.memory.clear_world_state()
 
     def restore_session(self) -> int:
         """Opt-in: load previously-saved conversation history.
@@ -853,7 +995,12 @@ class Agent:
             tz = ZoneInfo("UTC")
         now = datetime.now(tz=tz)
         date_line = now.strftime("Current date/time: %A, %Y-%m-%d %H:%M %Z")
-        return self._base_system_prompt + f"\n\n{date_line}"
+        prompt = self._base_system_prompt + f"\n\n{date_line}"
+        if self.memory is not None:
+            state = self.memory.get_world_state()
+            if state:
+                prompt += "\n\n# Session world state\n\n" + json.dumps(state, indent=2)
+        return prompt
 
     def _run_loop(self, user_message: str, streaming: bool):
         """Unified agent loop generator shared by chat() and chat_stream().

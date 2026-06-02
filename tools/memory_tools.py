@@ -43,3 +43,24 @@ def search_memory(query: str) -> str:
     return result
 
 
+def get_world_state() -> dict:
+    mem = get_memory()
+    if mem is None:
+        return {}
+    return mem.get_world_state()
+
+
+def update_world_state(updates: dict) -> dict:
+    mem = get_memory()
+    if mem is None:
+        return {}
+    return mem.update_world_state(updates)
+
+
+def rate_skill(name: str, outcome: str, notes: str = "") -> str:
+    mem = get_memory()
+    if mem is None:
+        return "ERROR: memory subsystem is not initialized"
+    return mem.rate_skill(name, outcome, notes)
+
+

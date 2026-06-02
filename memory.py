@@ -426,6 +426,101 @@ class Memory:
                 pass
             return fresh
 
+    # ---- world state ---------------------------------------------------
+    # A small typed JSON object that tracks what the agent is doing *right
+    # now* in the current session. Unlike message history (raw turns) this
+    # is a structured summary the agent actively maintains: current focus,
+    # active task, last action outcome, step counter. The heartbeat and web
+    # UI can read it to show live status; multi-step tasks use it to avoid
+    # re-running completed steps after a restart.
+    #
+    # Conventional keys (all agent-defined, free-form):
+    #   focus        — short description of current goal
+    #   active_task  — task_id currently being executed
+    #   step         — step number in a multi-step flow
+    #   last_action  — last tool called
+    #   last_ok      — bool, did the last action succeed
+    #   notes        — scratch pad for mid-task context
+    #   updated_at   — ISO timestamp (auto-set by update_world_state)
+
+    @property
+    def world_state_path(self) -> Path:
+        return self.root / "_world_state.json"
+
+    def get_world_state(self) -> dict:
+        if not self.world_state_path.exists():
+            return {}
+        try:
+            return json.loads(self.world_state_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def update_world_state(self, updates: dict) -> dict:
+        """Merge `updates` into the world state and persist atomically."""
+        with self._file_lock(self.world_state_path.with_suffix(".json.lock")):
+            state = self.get_world_state()
+            state.update(updates)
+            state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+            tmp = self.world_state_path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+            tmp.replace(self.world_state_path)
+        return state
+
+    def clear_world_state(self) -> None:
+        if self.world_state_path.exists():
+            self.world_state_path.unlink()
+
+    # ---- skill evaluation ----------------------------------------------
+    # Skills are `skill_*.md` memories. We track `uses` and `consecutive_failures`
+    # in each file's frontmatter so the daily reflection can spot skills that
+    # need refinement.
+
+    def rate_skill(self, name: str, outcome: str, notes: str = "") -> str:
+        """Record a success or failure against a named skill.
+
+        Increments `uses` and, on failure, `consecutive_failures`. Resets
+        `consecutive_failures` on success. The daily reflection uses these
+        counters to decide which skills need review.
+        """
+        if outcome not in ("success", "failure"):
+            return "ERROR: outcome must be 'success' or 'failure'"
+        slug = self._slugify(name)
+        path = self.root / f"skill_{slug}.md"
+        if not path.exists():
+            candidates = [p for p in self.root.glob("skill_*.md") if slug in p.stem]
+            if not candidates:
+                return f"Skill '{name}' not found. Use recall() to find the exact name."
+            path = candidates[0]
+
+        text = path.read_text(encoding="utf-8")
+        uses_m = re.search(r"^uses:\s*(\d+)", text, re.MULTILINE)
+        failures_m = re.search(r"^consecutive_failures:\s*(\d+)", text, re.MULTILINE)
+        uses = int(uses_m.group(1)) if uses_m else 0
+        consec = int(failures_m.group(1)) if failures_m else 0
+
+        uses += 1
+        consec = 0 if outcome == "success" else consec + 1
+
+        def _set_fm(t: str, key: str, value: int) -> str:
+            pattern = rf"^{key}:\s*\d+$"
+            if re.search(pattern, t, re.MULTILINE):
+                return re.sub(pattern, f"{key}: {value}", t, flags=re.MULTILINE)
+            return t.replace("---\n", f"---\n{key}: {value}\n", 1)
+
+        text = _set_fm(text, "uses", uses)
+        text = _set_fm(text, "consecutive_failures", consec)
+
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        note_line = f"\n- {now_str} · {outcome}" + (f" — {notes}" if notes else "")
+        if "\n## Run log" in text:
+            text = text.rstrip() + note_line + "\n"
+        else:
+            text = text.rstrip() + f"\n\n## Run log{note_line}\n"
+
+        path.write_text(text, encoding="utf-8")
+        flag = " ⚠ consider reviewing this skill" if consec >= 3 else ""
+        return f"Rated '{path.stem}': {outcome} (uses={uses}, consecutive_failures={consec}){flag}"
+
     # ---- self-scheduled heartbeat --------------------------------------
     # The heartbeat daemon can be told (by the agent itself, via the
     # schedule_next_tick tool) when to wake up next. We store the target
