@@ -226,17 +226,20 @@ class TaskStore:
             self._write(tasks)
             return task
 
-    def record_failure(self, task_id: str, error: str, duration_s: float | None = None) -> dict[str, Any]:
+    def record_failure(
+        self,
+        task_id: str,
+        error: str,
+        duration_s: float | None = None,
+        increment_failures: bool = True,
+    ) -> dict[str, Any]:
         """Log a failed run.
 
-        Increments `consecutive_failures`. If the counter reaches
-        CONSECUTIVE_FAILURE_LIMIT the task auto-cancels — a broken task
-        otherwise fires every tick forever, burning quota and spamming
-        logs.
-
-        Status stays active until the limit hits (heartbeat retries on
-        next tick). At the limit, status flips to cancelled with a
-        descriptive last_result.
+        When increment_failures=True (default), increments consecutive_failures
+        and auto-cancels at CONSECUTIVE_FAILURE_LIMIT. Pass False for transient
+        infrastructure failures (provider exhaustion) that don't indicate a
+        broken task — the run is still logged but the auto-cancel counter is
+        left unchanged.
         """
         with self._locked():
             tasks = self.all()
@@ -244,15 +247,16 @@ class TaskStore:
             now = datetime.now()
             task["updated_at"] = now.isoformat(timespec="seconds")
             task["last_result"] = error.strip()
-            failures = int(task.get("consecutive_failures", 0)) + 1
-            task["consecutive_failures"] = failures
             self._append_run(task, now, "failure", error, duration_s)
-            if failures >= CONSECUTIVE_FAILURE_LIMIT:
-                task["status"] = "cancelled"
-                task["last_result"] = (
-                    f"auto-cancelled after {failures} consecutive failures · "
-                    f"last error: {error.strip()[:200]}"
-                )
+            if increment_failures:
+                failures = int(task.get("consecutive_failures", 0)) + 1
+                task["consecutive_failures"] = failures
+                if failures >= CONSECUTIVE_FAILURE_LIMIT:
+                    task["status"] = "cancelled"
+                    task["last_result"] = (
+                        f"auto-cancelled after {failures} consecutive failures · "
+                        f"last error: {error.strip()[:200]}"
+                    )
             self._write(tasks)
             return task
 
