@@ -346,27 +346,46 @@ def tick(memory: Memory, model: str | None) -> None:
         # on a task that will correctly fire again tomorrow.
         duration = (datetime.now() - started).total_seconds()
         err = f"{type(e).__name__}: {e}"
+        # Provider exhaustion is a transient infrastructure failure — the task
+        # itself is not broken. Don't count it toward consecutive_failures so
+        # provider outages during peak hours don't auto-cancel healthy tasks.
+        is_provider_exhaustion = "All providers exhausted" in err
         for task in due_tasks:
             try:
                 current = tasks.get(task["id"])
                 if current and current.get("due_at") != due_at_before.get(task["id"]):
-                    # due_at advanced → complete_task ran; skip failure recording.
                     print(
                         f"[heartbeat] {task['id']} due_at advanced — task was completed; "
                         f"skipping record_failure",
                         flush=True,
                     )
                     continue
-                updated = tasks.record_failure(task["id"], err, duration_s=duration)
-                events.emit(
-                    "task_failure",
-                    name=task["id"],
-                    text=events.truncate_preview(err),
-                    result=(
-                        f"consecutive_failures={updated.get('consecutive_failures', '?')} "
-                        f"status={updated.get('status', '?')}"
-                    ),
-                )
+                if is_provider_exhaustion:
+                    # Log the failure but don't increment consecutive_failures.
+                    print(
+                        f"[heartbeat] {task['id']} provider-exhaustion failure — "
+                        f"logging but not counting toward auto-cancel",
+                        flush=True,
+                    )
+                    tasks.record_failure(task["id"], err, duration_s=duration,
+                                        increment_failures=False)
+                    events.emit(
+                        "task_failure",
+                        name=task["id"],
+                        text=events.truncate_preview(err),
+                        result="provider_exhaustion · consecutive_failures unchanged",
+                    )
+                else:
+                    updated = tasks.record_failure(task["id"], err, duration_s=duration)
+                    events.emit(
+                        "task_failure",
+                        name=task["id"],
+                        text=events.truncate_preview(err),
+                        result=(
+                            f"consecutive_failures={updated.get('consecutive_failures', '?')} "
+                            f"status={updated.get('status', '?')}"
+                        ),
+                    )
             except Exception as inner:
                 print(f"[heartbeat] record_failure failed for {task['id']}: {inner}", flush=True)
         raise
