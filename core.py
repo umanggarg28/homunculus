@@ -98,8 +98,9 @@ MODEL_FALLBACK = os.environ.get(
     # Verified against OpenRouter /api/v1/models June 2026 — all :free, all support tool calling.
     # kimi-k2.6: 262K ctx, purpose-built for agentic tool use.
     # qwen3-coder: 1M ctx, strong tool calling.
-    # hermes-3-405b: Nous Research, specifically fine-tuned for function calling.
-    "moonshotai/kimi-k2.6:free,qwen/qwen3-coder:free,nousresearch/hermes-3-llama-3.1-405b:free",
+    # llama-3.3-70b-instruct: Meta, 131K ctx, verified tools support.
+    # gpt-oss-120b: OpenAI MoE 117B, 131K ctx, verified tools+tool_choice support.
+    "moonshotai/kimi-k2.6:free,qwen/qwen3-coder:free,meta-llama/llama-3.3-70b-instruct:free,openai/gpt-oss-120b:free",
 )
 
 API_URL_FALLBACK_2 = os.environ.get(
@@ -115,6 +116,10 @@ API_URL_FALLBACK_3 = os.environ.get(
     "https://api.cerebras.ai/v1/chat/completions",
 )
 MODEL_FALLBACK_3 = os.environ.get("HOMUNCULUS_MODEL_FALLBACK_3", "gpt-oss-120b")
+
+# Some providers (Groq, Cerebras) sit behind Cloudflare which returns 403
+# when the User-Agent is absent or looks like a raw Python script.
+_HTTP_HEADERS_BASE = {"User-Agent": "homunculus/1.0 (httpx)"}
 
 # How long to bench a provider after it returns 429. During this window
 # we skip it entirely and route to the next provider in the chain. 60s
@@ -445,7 +450,7 @@ def call_llm(
         try:
             response = httpx.post(
                 url,
-                headers={"Authorization": f"Bearer {key}"},
+                headers={**_HTTP_HEADERS_BASE, "Authorization": f"Bearer {key}"},
                 json=payload,
                 timeout=60.0,
             )
@@ -467,7 +472,7 @@ def call_llm(
                 try:
                     retry_resp = httpx.post(
                         url,
-                        headers={"Authorization": f"Bearer {key}"},
+                        headers={**_HTTP_HEADERS_BASE, "Authorization": f"Bearer {key}"},
                         json=payload,
                         timeout=60.0,
                     )
@@ -531,7 +536,7 @@ def call_llm(
             payload["parallel_tool_calls"] = False
         response = httpx.post(
             url,
-            headers={"Authorization": f"Bearer {key}"},
+            headers={**_HTTP_HEADERS_BASE, "Authorization": f"Bearer {key}"},
             json=payload,
             timeout=60.0,
         )
@@ -659,7 +664,7 @@ def call_llm_stream(
             response_ctx = httpx.stream(
                 "POST",
                 url,
-                headers={"Authorization": f"Bearer {key}"},
+                headers={**_HTTP_HEADERS_BASE, "Authorization": f"Bearer {key}"},
                 json=payload,
                 timeout=120.0,
             )
@@ -688,7 +693,7 @@ def call_llm_stream(
                     response_ctx = httpx.stream(
                         "POST",
                         url,
-                        headers={"Authorization": f"Bearer {key}"},
+                        headers={**_HTTP_HEADERS_BASE, "Authorization": f"Bearer {key}"},
                         json=payload,
                         timeout=120.0,
                     )
