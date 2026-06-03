@@ -4,6 +4,7 @@ import { ModeToggle } from "./ModeToggle";
 import { ProviderInline } from "./ProviderInline";
 import { SidebarBrand } from "./SidebarBrand";
 import { SidebarRobot } from "@/components/robot/SidebarRobot";
+import { SidebarTelemetry } from "./SidebarTelemetry";
 import { SoundToggle } from "./SoundToggle";
 
 interface NavItem { to: string; label: string; short: string; kbd?: string; }
@@ -109,8 +110,11 @@ export function Sidebar() {
             overflow: hidden;
             overflow-y: hidden;
           }
+          /* Mobile top-bar only shows nav. Hide brand, telemetry, robot,
+             and footer (everything except the <nav>). */
           .brut-sidebar > :first-child,
           .brut-sidebar > :nth-last-child(2),
+          .brut-sidebar > :nth-last-child(3),
           .brut-sidebar > :last-child {
             display: none;
           }
@@ -222,6 +226,12 @@ export function Sidebar() {
           </div>
         ))}
       </nav>
+
+      {/* Ambient operator telemetry — fills the previously empty middle
+          column with at-a-glance signals (next fire, heartbeat age,
+          budget, current model). Hidden on the mobile top-bar layout
+          via the .brut-sidebar media query. */}
+      <SidebarTelemetry />
 
       <SidebarRobot />
 
