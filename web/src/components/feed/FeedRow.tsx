@@ -74,7 +74,12 @@ export function FeedRow({ event: e }: Props) {
 
   return (
     <div
-      className="feed-row grid py-1.5 px-4"
+      className={
+        // hm-interactive-row gives the row a subtle hover bloom (left
+        // accent bar + faint phosphor wash). Only enable when the row
+        // is clickable — otherwise hover affordance lies about behavior.
+        `feed-row grid py-1.5 px-4${isTruncatable ? " hm-interactive-row" : ""}`
+      }
       onClick={isTruncatable ? () => setExpanded((v) => !v) : undefined}
       style={{
         gap: "0 16px",

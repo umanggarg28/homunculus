@@ -61,11 +61,10 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
       style={{
         borderBottom: "1px solid var(--color-border)",
         fontFamily: "var(--font-mono)",
-        background: "transparent",
-        transition: "background 0.12s",
       }}
-      onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "rgba(124,254,0,0.03)"; }}
-      onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "transparent"; }}
+      // Hover bloom is owned by .hm-interactive-row (atmosphere.css) —
+      // the inline onMouseEnter handlers were a per-component fallback
+      // when the utility CSS was trimmed; revived now, drop the inline.
     >
       <style>{`
         .task-row-grid {

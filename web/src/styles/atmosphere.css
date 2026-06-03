@@ -91,6 +91,72 @@
   50%      { opacity: 0.015; }
 }
 
+/* ---------- row hover bloom ----------
+   Subtle interactive cue for list-style rows (tasks, memory, feed,
+   command palette). Adds a hairline left border + faint phosphor
+   wash on hover/focus-within. Used by classNames "hm-interactive-row"
+   and "hm-pressable" — utility names were referenced by existing
+   components but had their CSS trimmed in a recent cleanup. Restored
+   here in atmosphere.css since this is interaction polish, not core. */
+.hm-interactive-row,
+.hm-pressable {
+  position: relative;
+  transition: background 140ms ease, color 140ms ease;
+}
+.hm-interactive-row::before,
+.hm-pressable::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--color-accent);
+  opacity: 0;
+  box-shadow: 0 0 8px var(--color-accent-glow);
+  transition: opacity 140ms ease;
+  pointer-events: none;
+}
+.hm-interactive-row:hover,
+.hm-interactive-row:focus-within,
+.hm-pressable:hover,
+.hm-pressable:focus-within {
+  background: rgba(124, 254, 0, 0.025);
+}
+.hm-interactive-row:hover::before,
+.hm-interactive-row:focus-within::before,
+.hm-pressable:hover::before,
+.hm-pressable:focus-within::before {
+  opacity: 1;
+}
+
+/* ---------- skeleton scanline shimmer ----------
+   Drop-in placeholder for loading states. Inherits parent dimensions;
+   draws a slow phosphor-tinted bar moving across the area. Aesthetic
+   match for the CRT theme — never a generic gray pulse. */
+.hm-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+}
+.hm-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(124, 254, 0, 0.05) 50%,
+    transparent 100%
+  );
+  animation: hm-skeleton-sweep 1.6s ease-in-out infinite;
+}
+@keyframes hm-skeleton-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
 /* ---------- page reveal / stagger ----------
    Put `data-reveal` on a container; children with `.reveal` fade+rise
    in sequence. Toggle by adding `.in` to the container on mount. */
@@ -141,7 +207,8 @@
   .atmo-flicker,
   .atmo-poweron,
   .atmo-pip,
-  .atmo-breath { animation: none !important; }
+  .atmo-breath,
+  .hm-skeleton::after { animation: none !important; }
   .reveal { transition: none !important; opacity: 1 !important; transform: none !important; }
   /* index.css crt-roll also respects this if you add the same guard there */
 }
