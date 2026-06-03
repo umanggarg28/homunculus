@@ -196,7 +196,16 @@ class TaskGuard:
         return None  # all other tools pass through unmodified
 
     def _flush(self) -> None:
-        """Send all buffered notifications directly (bypasses MCP subprocess)."""
+        """Send all buffered notifications directly (bypasses MCP subprocess).
+
+        Only sends when _buffering=True, i.e. notify() was intercepted and
+        held back from the MCP subprocess. When _buffering=False the MCP
+        subprocess already delivered the notifications; calling this would
+        double-send, so we just clear the tracking list.
+        """
+        if not self._buffering:
+            self._notify_texts.clear()
+            return
         for text in self._notify_texts:
             err = _send_to_telegram(text)
             if err:
