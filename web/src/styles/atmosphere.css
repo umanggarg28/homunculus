@@ -72,6 +72,25 @@
   box-shadow: 0 0 0 1px var(--color-accent-glow), 0 0 18px -2px var(--color-accent-glow);
 }
 
+/* ---------- screen-wide phosphor breathing ----------
+   Barely perceptible luminance oscillation that sells "this is a live
+   CRT" without distracting.
+
+   Implemented as an opacity-animated dark overlay rather than a
+   `filter: brightness()` on body — applying `filter` to an ancestor
+   creates a containing block for `position:fixed` descendants and
+   breaks the fixed sidebar (it would size to document height instead
+   of viewport height). Same effect, no containing-block side effect. */
+.atmo-breath {
+  background: rgba(0, 0, 0, 1);
+  animation: hm-phosphor-breath 6.4s ease-in-out infinite;
+  opacity: 0;
+}
+@keyframes hm-phosphor-breath {
+  0%, 100% { opacity: 0; }
+  50%      { opacity: 0.015; }
+}
+
 /* ---------- page reveal / stagger ----------
    Put `data-reveal` on a container; children with `.reveal` fade+rise
    in sequence. Toggle by adding `.in` to the container on mount. */
@@ -121,7 +140,8 @@
 @media (prefers-reduced-motion: reduce) {
   .atmo-flicker,
   .atmo-poweron,
-  .atmo-pip { animation: none !important; }
+  .atmo-pip,
+  .atmo-breath { animation: none !important; }
   .reveal { transition: none !important; opacity: 1 !important; transform: none !important; }
   /* index.css crt-roll also respects this if you add the same guard there */
 }

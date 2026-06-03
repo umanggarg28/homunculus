@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useEventStream } from "@/hooks/useEventStream";
 import { FeedRow } from "./FeedRow";
 
-// Events that are infrastructure noise — shown only when "system" toggle is on.
+// Infrastructure-only events. Hidden by default; viewable via the SYS chip.
 const SYSTEM_EVENTS = new Set([
   "service_ping",
   "provider_cooled",
@@ -11,12 +11,21 @@ const SYSTEM_EVENTS = new Set([
   "agent_controls_updated",
 ]);
 
-// User-facing event type groups for the filter bar.
+/**
+ * Filter chips behave inclusively:
+ *   - No chip selected → show all real (non-system) events. Default.
+ *   - Click any chip(s) → show only events matching the selected categories.
+ *   - SYS chip → show only the system/infra events (service_pings etc.).
+ *     SYS is the only way to surface system events; it doesn't "add" to
+ *     other chips — selecting SYS alone shows pings, selecting SYS + USER
+ *     shows pings + user messages, etc.
+ */
 const EVENT_TYPE_FILTERS = [
   { label: "USER",  match: (t: string) => t === "user_message" },
   { label: "LLM",   match: (t: string) => t === "llm_call" },
   { label: "TOOL",  match: (t: string) => t === "tool_call" || t === "tool_result" },
   { label: "REPLY", match: (t: string) => t === "assistant_reply" },
+  { label: "SYS",   match: (t: string) => SYSTEM_EVENTS.has(t) },
 ] as const;
 
 type TypeLabel = (typeof EVENT_TYPE_FILTERS)[number]["label"];
@@ -24,23 +33,23 @@ type TypeLabel = (typeof EVENT_TYPE_FILTERS)[number]["label"];
 /** Brutalist trace stream — hairline-bordered container, no card. */
 export function FeedStream() {
   const { events } = useEventStream(300);
-  const [showSystem, setShowSystem] = useState(false);
   const [query, setQuery] = useState("");
   const [activeTypes, setActiveTypes] = useState<Set<TypeLabel>>(new Set());
   const endRef = useRef<HTMLDivElement>(null);
 
-  // Step 1: filter system events
-  const withoutSystem = showSystem ? events : events.filter((e) => !SYSTEM_EVENTS.has(e.event));
-  const hiddenCount = events.length - withoutSystem.length;
+  // Counts for display chips. Real = non-system, sys = system events.
+  const realCount = events.filter((e) => !SYSTEM_EVENTS.has(e.event)).length;
+  const sysCount = events.length - realCount;
 
-  // Step 2: filter by event type (empty = all)
+  // Filter by type: empty set = show all real events (system hidden);
+  // any selection = show only events matching at least one chip.
   const byType = activeTypes.size === 0
-    ? withoutSystem
-    : withoutSystem.filter((e) =>
+    ? events.filter((e) => !SYSTEM_EVENTS.has(e.event))
+    : events.filter((e) =>
         EVENT_TYPE_FILTERS.some((f) => activeTypes.has(f.label) && f.match(e.event))
       );
 
-  // Step 3: search filter
+  // Search filter on top of type filter.
   const q = query.trim().toLowerCase();
   const visible = q
     ? byType.filter((e) => {
@@ -51,7 +60,7 @@ export function FeedStream() {
     : byType;
 
   useEffect(() => {
-    if (query || activeTypes.size > 0) return; // don't auto-scroll when user is filtering
+    if (query || activeTypes.size > 0) return;
     const nearBottom =
       window.innerHeight + window.scrollY > document.body.offsetHeight - 200;
     if (nearBottom) endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -68,9 +77,8 @@ export function FeedStream() {
   if (events.length === 0) {
     return (
       <div
-        className="p-8 text-center text-[11px] uppercase tracking-[0.16em]"
+        className="instrument-panel hm-panel-scan hm-panel-secondary p-8 text-center text-[11px] uppercase tracking-[0.16em]"
         style={{
-          border: "1px solid var(--color-border)",
           color: "var(--color-text-muted)",
           fontFamily: "var(--font-mono)",
         }}
@@ -89,9 +97,12 @@ export function FeedStream() {
           fontFamily: "var(--font-mono)", fontSize: 10, alignItems: "center",
         }}
       >
-        {/* Event type toggles */}
         {EVENT_TYPE_FILTERS.map((f) => {
           const on = activeTypes.has(f.label);
+          // Show per-chip count for SYS so users know how many pings exist.
+          const labelText = f.label === "SYS" && sysCount > 0 && !on
+            ? `SYS (${sysCount})`
+            : f.label;
           return (
             <button key={f.label} onClick={() => toggleType(f.label)} style={{
               padding: "2px 8px",
@@ -100,27 +111,9 @@ export function FeedStream() {
               color: on ? "var(--color-bg)" : "var(--color-text-faint)",
               cursor: "pointer", fontFamily: "var(--font-mono)", fontSize: 9,
               letterSpacing: "0.14em", textTransform: "uppercase",
-            }}>{f.label}</button>
+            }}>{labelText}</button>
           );
         })}
-
-        {/* System toggle */}
-        <button
-          onClick={() => setShowSystem((v) => !v)}
-          style={{
-            background: "none",
-            border: "1px solid var(--color-border)",
-            color: showSystem ? "var(--color-accent)" : "var(--color-text-faint)",
-            padding: "2px 8px",
-            cursor: "pointer",
-            fontFamily: "var(--font-mono)",
-            fontSize: 9,
-            letterSpacing: "0.10em",
-            textTransform: "uppercase",
-          }}
-        >
-          {showSystem ? "hide sys" : `sys${hiddenCount > 0 ? ` (${hiddenCount})` : ""}`}
-        </button>
 
         {/* Search box */}
         <input
@@ -145,7 +138,7 @@ export function FeedStream() {
         {/* Result count when filtering */}
         {(q || activeTypes.size > 0) && (
           <span style={{ color: "var(--color-text-faint)", fontSize: 9, letterSpacing: "0.10em" }}>
-            {visible.length}/{withoutSystem.length}
+            {visible.length}/{activeTypes.has("SYS") ? events.length : realCount}
           </span>
         )}
 
@@ -160,7 +153,7 @@ export function FeedStream() {
         )}
       </div>
 
-      <div style={{ border: "1px solid var(--color-border)", fontFamily: "var(--font-mono)" }}>
+      <div className="instrument-panel hm-panel-scan hm-panel-secondary" style={{ fontFamily: "var(--font-mono)" }}>
         {visible.length === 0 ? (
           <div
             className="p-8 text-center text-[11px] uppercase tracking-[0.16em]"
