@@ -57,7 +57,7 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
   return (
     <div
       onClick={onOpenDetail}
-      className="task-row group cursor-pointer"
+      className="task-row hm-interactive-row group cursor-pointer"
       style={{
         borderBottom: "1px solid var(--color-border)",
         fontFamily: "var(--font-mono)",
@@ -118,6 +118,10 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
               letterSpacing: "0.04em",
               textTransform: "uppercase",
               color: task.status === "active" ? "var(--color-text)" : "var(--color-text-muted)",
+              // Cancelled tasks read identically to completed ones at a glance;
+              // strikethrough is the editorial cue without introducing color.
+              textDecoration: task.status === "cancelled" ? "line-through" : "none",
+              textDecorationColor: "var(--color-text-faint)",
             }}
           >
             {task.title}

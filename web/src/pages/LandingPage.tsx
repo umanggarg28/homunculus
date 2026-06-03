@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { api } from "@/lib/api";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -59,12 +60,29 @@ const ACTIONS: Action[] = [
   { path: "/memory",   label: "browse memory",         hint: "what the agent remembers" },
 ];
 
+interface HomeTelemetry {
+  events: number | null;
+  toolsUsed: number | null;
+  activeTasks: number | null;
+  memoryEntries: number | null;
+  lastDirective: string | null;
+  status: "loading" | "ready" | "partial";
+}
+
 export function LandingPage() {
   const navigate = useNavigate();
   const [typed, setTyped] = useState<string[]>([]);
   const [phase, setPhase] = useState<"boot" | "ready">("boot");
   const [tagline] = useState(() => TAGLINES[Math.floor(Math.random() * TAGLINES.length)]);
   const [glitch, setGlitch] = useState<{ row: number; col: number; ch: string } | null>(null);
+  const [telemetry, setTelemetry] = useState<HomeTelemetry>({
+    events: null,
+    toolsUsed: null,
+    activeTasks: null,
+    memoryEntries: null,
+    lastDirective: null,
+    status: "loading",
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -92,6 +110,38 @@ export function LandingPage() {
     }
     run();
     return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadTelemetry() {
+      const [stats, tasks, memories, replay] = await Promise.allSettled([
+        api.statsToday(),
+        api.tasksList("all"),
+        api.memoryList(),
+        api.agentReplay(1),
+      ]);
+      if (cancelled) return;
+      const loaded = [stats, tasks, memories, replay].filter((r) => r.status === "fulfilled").length;
+      const lastDirective = replay.status === "fulfilled"
+        ? replay.value[0]?.user?.trim() || replay.value[0]?.assistant?.trim() || null
+        : null;
+      setTelemetry({
+        events: stats.status === "fulfilled" ? stats.value.events : null,
+        toolsUsed: stats.status === "fulfilled" ? stats.value.unique_tools : null,
+        activeTasks: tasks.status === "fulfilled"
+          ? tasks.value.filter((task) => task.status === "active").length
+          : null,
+        memoryEntries: memories.status === "fulfilled" ? memories.value.length : null,
+        lastDirective: lastDirective ? compactDirective(lastDirective) : null,
+        status: loaded === 4 ? "ready" : loaded > 0 ? "partial" : "loading",
+      });
+    }
+    loadTelemetry();
+    // Poll every 30s so the home stats don't drift behind the API
+    // (events/tasks/memory all change in the background).
+    const timer = setInterval(loadTelemetry, 30_000);
+    return () => { cancelled = true; clearInterval(timer); };
   }, []);
 
   // CRT brand-mark glitch
@@ -134,7 +184,7 @@ export function LandingPage() {
 
   return (
     <div
-      className="landing-page min-h-[calc(100vh-48px)] px-10 pt-10 pb-16"
+      className="landing-page min-h-[calc(100vh-48px)] px-10 pt-12 pb-24"
       style={{ background: "var(--color-bg)", fontFamily: "var(--font-mono)" }}
     >
       <style>{`
@@ -149,11 +199,146 @@ export function LandingPage() {
           background: linear-gradient(180deg, rgba(119,255,61,0.025), transparent), var(--color-surface-1);
           box-shadow: 0 24px 80px rgba(0,0,0,0.26);
         }
+        .landing-action-row {
+          color: var(--color-text-dim);
+          transition: background 150ms ease, color 150ms ease, box-shadow 180ms ease;
+        }
+        .landing-action-row:hover,
+        .landing-action-row:focus-visible {
+          background:
+            linear-gradient(90deg, rgba(124,254,0,0.10), rgba(124,254,0,0.025) 42%, transparent),
+            var(--color-surface-2);
+          color: var(--color-text);
+          box-shadow: inset 2px 0 0 var(--color-accent);
+        }
+        .landing-action-caret {
+          color: var(--color-accent);
+          transition: transform 150ms ease, text-shadow 180ms ease;
+        }
+        .landing-action-row:hover .landing-action-caret,
+        .landing-action-row:focus-visible .landing-action-caret {
+          transform: translateX(2px);
+          text-shadow: 0 0 8px var(--color-accent-glow);
+        }
+        .landing-action-hint {
+          color: var(--color-text-muted);
+          transition: color 150ms ease, opacity 150ms ease;
+        }
+        .landing-action-row:hover .landing-action-hint,
+        .landing-action-row:focus-visible .landing-action-hint {
+          color: var(--color-text-dim);
+          opacity: 1;
+        }
+        .landing-desk {
+          display: grid;
+          grid-template-columns: minmax(0, 1.18fr) minmax(320px, 0.82fr);
+          gap: 28px;
+          align-items: start;
+          margin-top: 64px;
+        }
+        .landing-panel {
+          border: 1px solid var(--color-border);
+          background: linear-gradient(180deg, rgba(119,255,61,0.022), transparent), var(--color-surface-1);
+          min-width: 0;
+          transition: border-color 180ms ease, box-shadow 220ms ease, transform 180ms ease;
+        }
+        .landing-panel:focus-within,
+        .landing-panel:hover {
+          border-color: rgba(67, 133, 105, 0.78);
+          box-shadow:
+            inset 0 1px 0 rgba(215,245,223,0.035),
+            0 18px 58px rgba(0,0,0,0.28),
+            0 0 24px rgba(124,254,0,0.035);
+        }
+        .landing-panel-head {
+          padding: 14px 16px;
+          border-bottom: 1px solid var(--color-border);
+        }
+        .landing-telemetry-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          border-bottom: 1px solid var(--color-border);
+        }
+        .landing-status-dot {
+          display: inline-block;
+          width: 6px;
+          height: 6px;
+          margin-right: 8px;
+          background: currentColor;
+          box-shadow: 0 0 8px currentColor;
+          vertical-align: middle;
+          animation: landing-status-dot 2.8s steps(1, end) infinite;
+        }
+        @keyframes landing-status-dot {
+          0%, 76%, 100% { opacity: 0.62; }
+          82% { opacity: 1; }
+          88% { opacity: 0.35; }
+          94% { opacity: 1; }
+        }
+        .landing-telemetry-cell {
+          display: flex;
+          appearance: none;
+          width: 100%;
+          text-align: left;
+          background: transparent;
+          min-height: 110px;
+          padding: 15px 16px;
+          border-left: 1px solid var(--color-border);
+          border-top: 1px solid var(--color-border);
+          flex-direction: column;
+          justify-content: space-between;
+          gap: 18px;
+          cursor: pointer;
+          color: inherit;
+          transition: background 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+        }
+        .landing-telemetry-cell:nth-child(odd) {
+          border-left: none;
+        }
+        .landing-telemetry-cell:nth-child(-n + 2) {
+          border-top: none;
+        }
+        .landing-telemetry-cell:hover {
+          background: rgba(124,254,0,0.025);
+          box-shadow: inset 2px 0 0 rgba(124,254,0,0.7);
+        }
+        .landing-telemetry-cell:focus-visible {
+          outline: 2px solid var(--color-accent);
+          outline-offset: -2px;
+        }
+        .landing-telemetry-value {
+          color: var(--color-accent);
+          font-size: 34px;
+          line-height: 1;
+          font-variant-numeric: tabular-nums;
+          text-shadow: 0 0 14px var(--color-accent-glow);
+        }
+        .landing-boot-log {
+          min-height: 164px;
+          padding: 16px;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+        }
         @media (max-width: 760px) {
           .landing-page {
             padding-left: 16px;
             padding-right: 16px;
             padding-top: 20px;
+          }
+          .landing-desk {
+            grid-template-columns: 1fr;
+          }
+          .landing-telemetry-grid {
+            grid-template-columns: 1fr;
+          }
+          .landing-telemetry-cell {
+            min-height: 78px;
+            border-left: none;
+            border-top: 1px solid var(--color-border);
+          }
+          .landing-telemetry-cell:first-child {
+            border-top: none;
           }
           .landing-action-row {
             grid-template-columns: 20px 1fr !important;
@@ -165,7 +350,7 @@ export function LandingPage() {
           }
         }
       `}</style>
-      <div className="max-w-[960px] mx-auto">
+      <div className="max-w-[980px] mx-auto">
         <pre
           className="m-0 whitespace-pre overflow-hidden"
           style={{
@@ -187,66 +372,106 @@ export function LandingPage() {
           ── personal agent · runtime 0.1.0 · phosphor build ──
         </div>
 
-        <div className="brut-body min-h-[180px]">
-          {typed.map((line, i) => {
-            const isLast = i === BOOT_LINES.length - 1 && line === BOOT_LINES[i];
-            const isActive = i === typed.length - 1 && phase === "boot";
-            return (
-              <div
-                key={i}
-                style={{
-                  color: isLast ? "var(--color-accent)" : "var(--color-text-muted)",
-                  textShadow: isLast ? "0 0 12px var(--color-accent-glow)" : "none",
-                }}
-              >
-                {line}
-                {isActive && <BlinkCursor />}
-              </div>
-            );
-          })}
-        </div>
-
-        {phase === "ready" && (
-          <div className="mt-10">
-            <div className="mb-3 brut-meta" style={{ color: "var(--color-text-muted)" }}>
-              ── what would you like to do ──
+        <div className="landing-desk">
+          <div className="landing-panel instrument-panel hm-panel-scan hm-panel-primary">
+            <div className="landing-panel-head brut-meta" style={{ color: "var(--color-text-muted)" }}>
+              ── boot channel · {phase}
+            </div>
+            <div className="landing-boot-log brut-body">
+              {typed.map((line, i) => {
+                const isLast = i === BOOT_LINES.length - 1 && line === BOOT_LINES[i];
+                const isActive = i === typed.length - 1 && phase === "boot";
+                return (
+                  <div
+                    key={i}
+                    style={{
+                      color: isLast ? "var(--color-accent)" : "var(--color-text-muted)",
+                      textShadow: isLast ? "0 0 12px var(--color-accent-glow)" : "none",
+                    }}
+                  >
+                    {line}
+                    {isActive && <BlinkCursor />}
+                  </div>
+                );
+              })}
             </div>
             <div className="landing-actions flex flex-col">
               {ACTIONS.map((a, i) => (
-                <button
-                  key={a.path}
-                  onClick={() => navigate(a.path)}
-                  className="landing-action-row brut-body text-left px-3 py-3 transition-colors cursor-pointer"
-                  style={{
-                    background: "transparent",
-                    color: "var(--color-text-dim)",
-                    borderTop: i === 0 ? "1px solid var(--color-border)" : "none",
-                    borderBottom: "1px solid var(--color-border)",
-                    display: "grid",
-                    gridTemplateColumns: "20px 1fr auto",
-                    columnGap: 12,
-                    alignItems: "center",
-                  }}
-                  onMouseEnter={(e) => {
-                    const el = e.currentTarget as HTMLButtonElement;
-                    el.style.background = "var(--color-accent)";
-                    el.style.color = "var(--color-bg)";
-                  }}
-                  onMouseLeave={(e) => {
-                    const el = e.currentTarget as HTMLButtonElement;
-                    el.style.background = "transparent";
-                    el.style.color = "var(--color-text-dim)";
-                  }}
-                >
-                  <span>›</span>
-                  <span className="uppercase tracking-[0.04em]">{a.label}</span>
-                  <span className="landing-action-hint brut-label opacity-60">{a.hint}</span>
-                </button>
+                <ActionRow key={a.path} action={a} index={i} onPick={() => navigate(a.path)} />
               ))}
             </div>
           </div>
-        )}
+
+          <div className="landing-panel instrument-panel hm-panel-scan hm-panel-primary">
+            <div className="landing-panel-head brut-meta" style={{ color: "var(--color-text-muted)" }}>
+              ── live digest · <span style={{ color: telemetry.status === "ready" ? "var(--color-accent)" : "var(--color-amber)" }}><span className="landing-status-dot" />{telemetry.status}</span>
+            </div>
+            <div className="landing-telemetry-grid">
+              <TelemetryCell label="events today" value={fmtMetric(telemetry.events)} hint="activity volume" onPick={() => navigate("/traces")} />
+              <TelemetryCell label="tools used" value={fmtMetric(telemetry.toolsUsed)} hint="capability exercised" onPick={() => navigate("/tools")} />
+              <TelemetryCell label="active tasks" value={fmtMetric(telemetry.activeTasks)} hint="autonomy armed" onPick={() => navigate("/tasks")} />
+              <TelemetryCell label="memories" value={fmtMetric(telemetry.memoryEntries)} hint="persistent context" onPick={() => navigate("/memory")} />
+            </div>
+            <div className="px-4 py-3" style={{ borderTop: "1px solid var(--color-border)" }}>
+              <div className="brut-label mb-2" style={{ color: "var(--color-text-faint)" }}>last directive</div>
+              <div
+                className="brut-body"
+                style={{
+                  color: telemetry.lastDirective ? "var(--color-text-dim)" : "var(--color-text-faint)",
+                  overflowWrap: "anywhere",
+                  wordBreak: "break-word",
+                }}
+                title={telemetry.lastDirective ?? undefined}
+              >
+                {telemetry.lastDirective ?? "awaiting user command"}
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
+  );
+}
+
+function fmtMetric(value: number | null): string {
+  if (value === null) return "—";
+  return value.toString().padStart(value < 100 ? 2 : 0, "0");
+}
+
+function compactDirective(value: string): string {
+  return value.replace(/\s+/g, " ").slice(0, 96);
+}
+
+function TelemetryCell({ label, value, hint, onPick }: { label: string; value: string; hint: string; onPick: () => void }) {
+  return (
+    <button type="button" className="landing-telemetry-cell" onClick={onPick}>
+      <div>
+        <div className="brut-label" style={{ color: "var(--color-text-muted)" }}>{label}</div>
+        <div className="brut-label mt-1" style={{ color: "var(--color-text-faint)" }}>{hint}</div>
+      </div>
+      <div className="landing-telemetry-value">{value}</div>
+    </button>
+  );
+}
+
+function ActionRow({ action, index, onPick }: { action: Action; index: number; onPick: () => void }) {
+  return (
+    <button
+      onClick={onPick}
+      className="landing-action-row hm-pressable brut-body text-left px-3 py-3 cursor-pointer"
+      style={{
+        background: "transparent",
+        borderTop: index === 0 ? "1px solid var(--color-border)" : "none",
+        borderBottom: "1px solid var(--color-border)",
+        display: "grid",
+        gridTemplateColumns: "20px 1fr auto",
+        columnGap: 12,
+        alignItems: "center",
+      }}
+    >
+      <span className="landing-action-caret">›</span>
+      <span className="uppercase tracking-[0.04em]">{action.label}</span>
+      <span className="landing-action-hint brut-label opacity-60">{action.hint}</span>
+    </button>
   );
 }

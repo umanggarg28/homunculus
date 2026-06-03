@@ -123,6 +123,7 @@ export function TracesTimeline() {
   const [paused, setPaused]         = useState(false);
   const [service, setService]       = useState<ServiceFilter>("all"); // default: all services
   const [hiddenLanes, setHiddenLanes] = useState<Set<LaneKey>>(new Set());
+  const [autoWidened, setAutoWidened] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const toggleLane = (key: LaneKey) => {
@@ -132,6 +133,35 @@ export function TracesTimeline() {
       return next;
     });
   };
+
+  // Auto-widen the window on first render IF the default (15M) contains no
+  // real activity. Picks the smallest WINDOWS option that actually has
+  // events with a lane. Skipped once the user touches WINDOW manually
+  // (autoWidened gate), so we never fight a deliberate selection.
+  useEffect(() => {
+    if (autoWidened || events.length === 0) return;
+    const nowMs = Date.now();
+    const hasLane = (e: FeedEvent) => laneFor(e) !== null;
+    const inWindow = (e: FeedEvent, ms: number) => {
+      const t = new Date(e.ts).getTime();
+      return t >= nowMs - ms;
+    };
+    // If the current window already shows activity, don't touch it.
+    if (events.some((e) => hasLane(e) && inWindow(e, windowMs))) {
+      setAutoWidened(true);
+      return;
+    }
+    for (const w of WINDOWS) {
+      if (w.ms <= windowMs) continue; // only widen
+      if (events.some((e) => hasLane(e) && inWindow(e, w.ms))) {
+        setWindowMs(w.ms);
+        setAutoWidened(true);
+        return;
+      }
+    }
+    // No window contains real activity — give up gracefully on the widest.
+    setAutoWidened(true);
+  }, [events, windowMs, autoWidened]);
 
   useEffect(() => {
     if (paused) return;
@@ -165,6 +195,17 @@ export function TracesTimeline() {
     for (const b of allBlocks) if (b.startMs >= windowStart) c[b.lane]++;
     return c;
   }, [allBlocks, windowStart]);
+  const traceSummary = useMemo(() => {
+    const visibleBlocks = allBlocks.filter((b) => b.startMs >= windowStart);
+    const errors = visibleBlocks.filter((b) => b.isError).length;
+    const tools = visibleBlocks.filter((b) => b.lane === "TOOL").length;
+    const models = visibleBlocks.filter((b) => b.lane === "LLM").length;
+    const latest = visibleBlocks[visibleBlocks.length - 1];
+    const latestLabel = latest
+      ? `${latest.label}${latest.event.name ? ` · ${latest.event.name}` : ""}`
+      : "no lane events";
+    return { total: visibleBlocks.length, errors, tools, models, latestLabel };
+  }, [allBlocks, windowStart]);
 
   return (
     <div className="traces-timeline">
@@ -177,7 +218,7 @@ export function TracesTimeline() {
           {WINDOWS.map((w) => {
             const active = w.ms === windowMs;
             return (
-              <button key={w.label} onClick={() => setWindowMs(w.ms)} className="brut-meta" style={{
+              <button key={w.label} onClick={() => { setWindowMs(w.ms); setAutoWidened(true); }} className="brut-meta" style={{
                 padding: "4px 9px",
                 border: `1px solid ${active ? "var(--color-accent)" : "var(--color-border)"}`,
                 background: active ? "var(--color-accent)" : "transparent",
@@ -246,12 +287,26 @@ export function TracesTimeline() {
       </div>
 
       <div
+        className="traces-summary-strip instrument-panel hm-panel-scan hm-panel-secondary mb-3 px-4 py-3"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+          gap: 14,
+          fontFamily: "var(--font-mono)",
+        }}
+      >
+        <TraceMetric label="window events" value={traceSummary.total.toString().padStart(2, "0")} />
+        <TraceMetric label="model calls" value={traceSummary.models.toString().padStart(2, "0")} tone="accent" />
+        <TraceMetric label="tool spans" value={traceSummary.tools.toString().padStart(2, "0")} tone="amber" />
+        <TraceMetric label={traceSummary.errors > 0 ? "errors" : "latest"} value={traceSummary.errors > 0 ? traceSummary.errors.toString().padStart(2, "0") : traceSummary.latestLabel} tone={traceSummary.errors > 0 ? "danger" : "muted"} />
+      </div>
+
+      <div
         className="traces-chart-grid"
         style={{ gridTemplateColumns: selected ? "minmax(0, 1fr) 340px" : "minmax(0, 1fr)" }}
       >
         {/* Chart */}
-        <div ref={containerRef} style={{
-          border: "1px solid var(--color-border)",
+        <div ref={containerRef} className="instrument-panel hm-panel-scan hm-panel-primary hm-traces-frame" style={{
           background: "var(--color-surface-1)",
           position: "relative", height: totalH, overflow: "hidden",
         }}>
@@ -353,6 +408,36 @@ export function TracesTimeline() {
   );
 }
 
+function TraceMetric({ label, value, tone = "muted" }: { label: string; value: string; tone?: "accent" | "amber" | "danger" | "muted" }) {
+  const color = tone === "accent"
+    ? "var(--color-accent)"
+    : tone === "amber"
+      ? "var(--color-amber)"
+      : tone === "danger"
+        ? "var(--color-danger)"
+        : "var(--color-text-dim)";
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div className="brut-meta" style={{ color: "var(--color-text-faint)" }}>{label}</div>
+      <div
+        className="truncate"
+        style={{
+          color,
+          fontSize: 13,
+          lineHeight: 1.4,
+          marginTop: 3,
+          letterSpacing: label === "latest" ? "0.04em" : "0",
+          fontVariantNumeric: "tabular-nums",
+          textTransform: label === "latest" ? "uppercase" : "none",
+        }}
+        title={value}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
 function EmptyState({ events, windowStart, windowMs, service, rulerH, onWiden, onShowAll }: {
   events: FeedEvent[]; windowStart: number; windowMs: number;
   service: ServiceFilter; rulerH: number;
@@ -412,18 +497,36 @@ function ActionBtn({ onClick, children }: { onClick: () => void; children: React
 function DetailPanel({ block, onClose }: { block: Block; onClose: () => void }) {
   const e = block.event;
   const dur = block.durationMs < 1000 ? `${block.durationMs}ms` : `${(block.durationMs/1000).toFixed(1)}s`;
+  const laneColor = block.isError
+    ? "var(--color-danger)"
+    : LANES.find((lane) => lane.key === block.lane)?.color ?? "var(--color-accent)";
 
   return (
-    <div style={{
-      border: "1px solid var(--color-border)",
+    <div className="instrument-panel hm-panel-scan hm-panel-secondary hm-traces-frame" style={{
       background: "var(--color-surface-1)",
       fontFamily: "var(--font-mono)", padding: 16,
       maxHeight: "calc(100vh - 200px)", overflowY: "auto",
     }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <span style={{ fontSize: 9, letterSpacing: "0.20em", color: "var(--color-accent)" }}>
-          ── {block.label}
-        </span>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, marginBottom: 14 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 9, letterSpacing: "0.20em", color: "var(--color-text-faint)" }}>
+            ── selected span
+          </div>
+          <div
+            className="truncate"
+            style={{
+              marginTop: 4,
+              fontSize: 15,
+              lineHeight: 1.2,
+              color: laneColor,
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+            }}
+            title={block.label}
+          >
+            {block.label}
+          </div>
+        </div>
         <button onClick={onClose} style={{
           border: "1px solid var(--color-border)", padding: "3px 7px",
           background: "transparent", color: "var(--color-text-muted)",
