@@ -6,21 +6,31 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
 import { BrutalistEmpty } from "@/components/ui/BrutalistEmpty";
 import { SkillsHero } from "@/components/ui/HeroBand";
+import { LoadingPanel } from "@/components/ui/LoadingPanel";
 import { AutonomyConsole } from "@/components/tools/AutonomyConsole";
-import type { AgentControls, AgentReplayTurn, Skill } from "@/lib/types";
+import type { AgentBudgetStats, AgentControls, AgentReplayTurn, Skill } from "@/lib/types";
+
+type ToolsTab = "console" | "catalog";
 
 export function SkillsPage() {
   const [skills, setSkills] = useState<Skill[] | null>(null);
   const [controls, setControls] = useState<AgentControls | null>(null);
   const [replay, setReplay] = useState<AgentReplayTurn[]>([]);
+  const [budgetStats, setBudgetStats] = useState<AgentBudgetStats | null>(null);
+  // Console = autonomy controls + recent turns (tune the agent).
+  // Catalog = active + available tool list (see what the agent has done).
+  // Two distinct mental models — splitting halves the page height.
+  const [tab, setTab] = useState<ToolsTab>("console");
 
   useEffect(() => {
     api.skillsList().then(setSkills).catch(() => setSkills([]));
     api.agentControls().then(setControls).catch(() => undefined);
     api.agentReplay(8).then(setReplay).catch(() => setReplay([]));
+    api.statsToday().then(setBudgetStats).catch(() => undefined);
     const id = setInterval(() => {
       api.skillsList().then(setSkills).catch(() => undefined);
       api.agentReplay(8).then(setReplay).catch(() => undefined);
+      api.statsToday().then(setBudgetStats).catch(() => undefined);
     }, 30_000);
     return () => clearInterval(id);
   }, []);
@@ -61,45 +71,108 @@ export function SkillsPage() {
 
       {skills && skills.length > 0 && <SkillsHero skills={skills} />}
 
-      {skills && controls && (
+      {/* Tabs — single click-target row. Console (autonomy + recent
+          turns) vs Catalog (tool list). Hero stays above both. */}
+      <ToolsTabs current={tab} onChange={setTab} catalogCount={skills?.length ?? null} />
+
+      {tab === "console" && skills && controls && (
         <AutonomyConsole
           controls={controls}
           skills={skills}
           replay={replay}
+          budgetStats={budgetStats}
           onControlsChange={setControls}
           onReplayChange={setReplay}
         />
       )}
 
-      {skills === null ? null : skills.length === 0 ? (
-        <BrutalistEmpty
-          header="NO TOOLS REGISTERED"
-          body={<>this is unexpected — the agent should always mount at least the core tools (memory, python_exec, web_fetch). check <code style={{ color: "var(--color-text)" }}>tools/__init__.py</code> on the backend.</>}
-        />
-      ) : (
-        <div className="grid gap-8">
-          {used.length > 0 && (
-            <ToolSection
-              title="active tools"
-              subtitle="tools the agent actually used; sorted by call volume"
-              count={used.length}
-            >
-              {used.map((s) => <SkillRow key={s.name} skill={s} maxCalls={used[0]?.call_count ?? 1} />)}
-            </ToolSection>
-          )}
-          {unused.length > 0 && (
-            <ToolSection
-              title="available tools"
-              subtitle="mounted capabilities not yet exercised in this workspace"
-              count={unused.length}
-              quiet
-            >
-              {unused.map((s) => <SkillRow key={s.name} skill={s} maxCalls={used[0]?.call_count ?? 1} />)}
-            </ToolSection>
-          )}
-        </div>
+      {tab === "catalog" && (
+        skills === null ? (
+          <LoadingPanel title="probe tool registry" detail="loading permissions and replay data" />
+        ) : skills.length === 0 ? (
+          <BrutalistEmpty
+            header="NO TOOLS REGISTERED"
+            body={<>this is unexpected — the agent should always mount at least the core tools (memory, python_exec, web_fetch). check <code style={{ color: "var(--color-text)" }}>tools/__init__.py</code> on the backend.</>}
+          />
+        ) : (
+          <div className="grid gap-8">
+            {used.length > 0 && (
+              <ToolSection
+                title="active tools"
+                subtitle="tools the agent actually used; sorted by call volume"
+                count={used.length}
+              >
+                {used.map((s) => <SkillRow key={s.name} skill={s} maxCalls={used[0]?.call_count ?? 1} />)}
+              </ToolSection>
+            )}
+            {unused.length > 0 && (
+              <ToolSection
+                title="available tools"
+                subtitle="mounted capabilities not yet exercised in this workspace"
+                count={unused.length}
+                quiet
+              >
+                {unused.map((s) => <SkillRow key={s.name} skill={s} maxCalls={used[0]?.call_count ?? 1} />)}
+              </ToolSection>
+            )}
+          </div>
+        )
       )}
     </PageShell>
+  );
+}
+
+function ToolsTabs({
+  current,
+  onChange,
+  catalogCount,
+}: {
+  current: ToolsTab;
+  onChange: (t: ToolsTab) => void;
+  catalogCount: number | null;
+}) {
+  const tabs: { id: ToolsTab; label: string; hint: string }[] = [
+    { id: "console", label: "Console", hint: "autonomy · recent turns" },
+    { id: "catalog", label: "Catalog", hint: catalogCount !== null ? `${catalogCount} tools` : "loading" },
+  ];
+  return (
+    <div
+      className="flex gap-0 mb-6"
+      style={{ borderBottom: "1px solid var(--color-border)" }}
+    >
+      {tabs.map((t) => {
+        const active = current === t.id;
+        return (
+          <button
+            key={t.id}
+            onClick={() => onChange(t.id)}
+            style={{
+              padding: "10px 18px",
+              background: "transparent",
+              border: "none",
+              borderBottom: `2px solid ${active ? "var(--color-accent)" : "transparent"}`,
+              cursor: "pointer",
+              fontFamily: "var(--font-mono)",
+              textAlign: "left",
+              marginBottom: "-1px",
+            }}
+          >
+            <div
+              className="text-[11px] uppercase tracking-[0.18em]"
+              style={{ color: active ? "var(--color-accent)" : "var(--color-text-muted)" }}
+            >
+              {t.label}
+            </div>
+            <div
+              className="text-[9px] uppercase tracking-[0.14em] mt-1"
+              style={{ color: "var(--color-text-faint)" }}
+            >
+              {t.hint}
+            </div>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
