@@ -110,12 +110,13 @@ export function Sidebar() {
             overflow: hidden;
             overflow-y: hidden;
           }
-          /* Mobile top-bar only shows nav. Hide brand, telemetry, robot,
-             and footer (everything except the <nav>). */
-          .brut-sidebar > :first-child,
-          .brut-sidebar > :nth-last-child(2),
-          .brut-sidebar > :nth-last-child(3),
-          .brut-sidebar > :last-child {
+          /* Mobile top-bar shows only the <nav>. The previous position-
+             based selectors (:first-child, :nth-last-child(N)) broke
+             after React injected a <style> tag as the actual first
+             child — :first-child was hiding the style tag (no-op) and
+             SidebarBrand stayed visible.  :not(nav) is stable against
+             child-order changes. */
+          .brut-sidebar > *:not(nav) {
             display: none;
           }
           .brut-sidebar nav {
