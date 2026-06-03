@@ -271,36 +271,38 @@ def _yesterday_iso_and_path() -> tuple[str, str]:
 def tick(memory: Memory, model: str | None) -> None:
     """One heartbeat iteration — fresh agent, one prompt, then discard.
 
-    If reflection is due (we haven't reflected today yet) AND there's a
-    yesterday to look at, this tick runs the reflection prompt instead
-    of the normal proactive prompt. The marker is updated on success so
-    we don't reflect twice in the same calendar day.
+    Due tasks always take priority. Only after handling all due tasks does the
+    heartbeat consider reflection (once per calendar day). This prevents the
+    reflection branch from starving overdue tasks on the first tick of a new day.
     """
-    today = _today_str()
-    last = memory.get_last_reflection_date()
-    do_reflection = last is None or last < today
-
     now_iso = datetime.now().isoformat(timespec="seconds")
-
-    if do_reflection:
-        agent = Agent(memory=memory, model=model)
-        yesterday_iso, yesterday_path = _yesterday_iso_and_path()
-        print(f"\n[heartbeat] REFLECTION tick at {now_iso} "
-              f"(reviewing {yesterday_iso}, model={agent.model})", flush=True)
-        prompt = REFLECTION_PROMPT_TEMPLATE.format(
-            today=today,
-            yesterday=yesterday_iso,
-            yesterday_path=yesterday_path,
-        )
-        response = agent.chat(prompt)
-        memory.set_last_reflection_date(today)
-        print(f"[agent] {response}", flush=True)
-        return
-
     tasks = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
     due_tasks = tasks.due()
     events.emit("service_ping", name="heartbeat", text="alive")
-    if not due_tasks:
+
+    if due_tasks:
+        # Tasks take priority — fall through to the task-execution block below.
+        pass
+    else:
+        # No due tasks — consider running the daily reflection instead.
+        today = _today_str()
+        last = memory.get_last_reflection_date()
+        do_reflection = last is None or last < today
+        if do_reflection:
+            agent = Agent(memory=memory, model=model)
+            yesterday_iso, yesterday_path = _yesterday_iso_and_path()
+            print(f"\n[heartbeat] REFLECTION tick at {now_iso} "
+                  f"(reviewing {yesterday_iso}, model={agent.model})", flush=True)
+            prompt = REFLECTION_PROMPT_TEMPLATE.format(
+                today=today,
+                yesterday=yesterday_iso,
+                yesterday_path=yesterday_path,
+            )
+            response = agent.chat(prompt)
+            memory.set_last_reflection_date(today)
+            print(f"[agent] {response}", flush=True)
+            return
+
         print(f"\n[heartbeat] tick at {now_iso}: no due tasks; skipping LLM", flush=True)
         return
 
@@ -431,6 +433,23 @@ def main() -> None:
     dropped = events.rotate(keep_days=14)
     if dropped:
         print(f"[heartbeat] rotated _events.jsonl: dropped {dropped} lines older than 14 days", flush=True)
+
+    # Crash recovery: any task left with executing=True from a previous run
+    # is stuck and will never fire again. Clear the flag on startup so the
+    # next tick can pick them up.
+    _tasks_dir = Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks"))
+    _task_store = TaskStore(_tasks_dir)
+    _stuck = [t for t in _task_store.all() if t.get("executing")]
+    for _t in _stuck:
+        try:
+            _task_store.record_failure(
+                _t["id"],
+                "cleared by heartbeat restart — previous run did not finish",
+                increment_failures=False,
+            )
+            print(f"[heartbeat] cleared stuck executing flag on task {_t['id']!r}", flush=True)
+        except Exception as _e:
+            print(f"[heartbeat] could not clear executing on {_t['id']}: {_e}", flush=True)
 
     print(f"[heartbeat] starting, interval = {interval_min} min, model = {model}", flush=True)
 
