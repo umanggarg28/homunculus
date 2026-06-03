@@ -176,11 +176,14 @@ export function Sidebar() {
       <nav className="flex-1 px-3 pt-3 pb-2 flex flex-col gap-3 overflow-y-auto">
         {NAV_GROUPS.map((group) => (
           <div key={group.title}>
+            {/* Group header — the visual separation between sections
+                (gap-3 wrap above) already signals grouping; the leading
+                "── " was redundant operator-noise. */}
             <div
               className="text-[9px] uppercase tracking-[0.22em] mb-1 px-1"
               style={{ color: "var(--color-text-faint)" }}
             >
-              ── {group.title}
+              {group.title}
             </div>
             <div>
               {group.items.map((item) => (

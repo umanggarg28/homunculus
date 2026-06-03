@@ -434,7 +434,9 @@ function LedgerCell({ label, value }: { label: string; value: string }) {
       <div className="text-[9px] uppercase tracking-[0.18em]" style={{ color: "var(--color-text-muted)" }}>
         {label}
       </div>
-      <div className="text-[34px] leading-none" style={{ color: "var(--color-accent)", fontVariantNumeric: "tabular-nums", letterSpacing: "0", textShadow: "0 0 12px var(--color-accent-glow)" }}>
+      {/* Ledger numbers are secondary — no text-shadow so they don't
+          compete with the page-anchor countdown above. */}
+      <div className="text-[34px] leading-none" style={{ color: "var(--color-accent)", fontVariantNumeric: "tabular-nums", letterSpacing: "0" }}>
         {value}
       </div>
     </div>
@@ -634,7 +636,7 @@ function AgentPanel({
       {/* Caption */}
       <div style={{ textAlign: "center" }}>
         <div style={{ fontSize: 9, letterSpacing: "0.28em", color: "var(--color-text-muted)", textTransform: "uppercase", marginBottom: 4 }}>{info.verb}</div>
-        <div style={{ fontSize: 14, letterSpacing: "0.04em", color: "var(--color-accent)", textShadow: "0 0 14px var(--color-accent-glow)" }}>{info.title}</div>
+        <div style={{ fontSize: 14, letterSpacing: "0.04em", color: "var(--color-accent)" }}>{info.title}</div>
       </div>
 
     </div>
