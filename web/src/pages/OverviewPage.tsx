@@ -158,7 +158,7 @@ export function OverviewPage() {
         </div>
 
         {/* ── READINESS ── */}
-        <div className="p-6 mb-10" style={{ border: "1px solid var(--color-border)" }}>
+        <div className="instrument-panel hm-panel-scan p-6 mb-10">
           <div className="text-[10px] uppercase tracking-[0.32em] mb-4" style={{ color: "var(--color-text-muted)" }}>
             ── readiness
           </div>
@@ -359,12 +359,17 @@ function fmtAbs(d: Date): string {
   return `${dd} · ${tt}`.toLowerCase();
 }
 
-function nowNarration(lastEvent: { event: string; name?: string } | undefined): string {
+function nowNarration(lastEvent: { event: string; name?: string; ts: string } | undefined, nowMs: number): string {
   if (!lastEvent) return "─ no activity yet";
+  const ageSec = (nowMs - new Date(lastEvent.ts).getTime()) / 1000;
+  // In-progress labels are only meaningful while the event is recent.
+  // After 30s with no follow-up, the agent has finished (or crashed);
+  // show the elapsed time instead of a stale "thinking…" / "calling…".
+  const inProgress = ageSec < 30;
   switch (lastEvent.event) {
-    case "llm_call": return "thinking…";
-    case "tool_call": return `calling ${(lastEvent.name ?? "tool").toLowerCase()}…`;
-    case "tool_result": return "processing result…";
+    case "llm_call":    return inProgress ? "thinking…"   : `idle · last active ${ageSec < 3600 ? `${Math.floor(ageSec / 60)}m` : `${Math.floor(ageSec / 3600)}h`} ago`;
+    case "tool_call":   return inProgress ? `calling ${(lastEvent.name ?? "tool").toLowerCase()}…` : `idle · last active ${Math.floor(ageSec / 60)}m ago`;
+    case "tool_result": return inProgress ? "processing result…" : "idle.";
     case "assistant_reply": return "replied.";
     case "user_message": return "received input.";
     default: return lastEvent.event.replace(/_/g, " ");
@@ -481,7 +486,7 @@ function UpcomingHero({
       {/* NOW narration */}
       <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.08em", color: "var(--color-text-dim)", borderTop: "1px solid var(--color-border)", paddingTop: 12 }}>
         <span style={{ color: "var(--color-text-faint)", marginRight: 8 }}>NOW</span>
-        {nowNarration(lastEvent)}
+        {nowNarration(lastEvent, now)}
       </div>
     </>
   );
