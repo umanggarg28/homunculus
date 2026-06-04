@@ -35,12 +35,32 @@ export function SkillsPage() {
     return () => clearInterval(id);
   }, []);
 
-  const { used, unused, totalCalls, overallSuccess } = useMemo(() => {
+  const { needsAttention, used, unused, totalCalls, overallSuccess } = useMemo(() => {
     const list = skills ?? [];
+    // V.4 "Needs attention": skills that have recently failed or have
+    // consecutive failures. These get a dedicated subsection at the top
+    // of the Catalog so the user sees what's breaking before scrolling
+    // through the healthy tools.
+    const needsAttention = list
+      .filter((s) =>
+        (s.consecutive_failures ?? 0) > 0
+        || s.last_status === "failure"
+        || (s.failure_count > 0 && s.call_count > 0)
+      )
+      .sort((a, b) => {
+        // Highest signal first: consecutive failures, then failure ratio
+        const aCons = a.consecutive_failures ?? 0;
+        const bCons = b.consecutive_failures ?? 0;
+        if (aCons !== bCons) return bCons - aCons;
+        const aRatio = a.call_count > 0 ? a.failure_count / a.call_count : 0;
+        const bRatio = b.call_count > 0 ? b.failure_count / b.call_count : 0;
+        return bRatio - aRatio;
+      });
+    const attentionNames = new Set(needsAttention.map((s) => s.name));
     const used = list
-      .filter((s) => s.call_count > 0)
+      .filter((s) => s.call_count > 0 && !attentionNames.has(s.name))
       .sort((a, b) => b.call_count - a.call_count);
-    const unused = list.filter((s) => s.call_count === 0);
+    const unused = list.filter((s) => s.call_count === 0 && !attentionNames.has(s.name));
     const totalCalls = list.reduce((sum, s) => sum + s.call_count, 0);
     const totalSuccess = list.reduce((sum, s) => sum + s.success_count, 0);
     const totalResults = list.reduce(
@@ -48,6 +68,7 @@ export function SkillsPage() {
       0,
     );
     return {
+      needsAttention,
       used,
       unused,
       totalCalls,
@@ -96,6 +117,16 @@ export function SkillsPage() {
           />
         ) : (
           <div className="grid gap-8">
+            {needsAttention.length > 0 && (
+              <ToolSection
+                title="needs attention"
+                subtitle="tools with recent failures or consecutive errors — check the skill_*.md for any auto-appended 'Watch out:' notes from T1.2"
+                count={needsAttention.length}
+                tone="warn"
+              >
+                {needsAttention.map((s) => <SkillRow key={s.name} skill={s} maxCalls={Math.max(1, needsAttention[0]?.call_count ?? 1)} />)}
+              </ToolSection>
+            )}
             {used.length > 0 && (
               <ToolSection
                 title="active tools"
@@ -181,30 +212,42 @@ function ToolSection({
   subtitle,
   count,
   quiet,
+  tone,
   children,
 }: {
   title: string;
   subtitle: string;
   count: number;
   quiet?: boolean;
+  // "warn" renders the title and count in amber to flag attention-needed
+  // sections (V.4 of the capability roadmap — skill failure surfacing).
+  tone?: "warn";
   children: ReactNode;
 }) {
+  const titleColor =
+    tone === "warn" ? "var(--color-warning)"
+    : quiet ? "var(--color-text-faint)"
+    : "var(--color-text-muted)";
+  const countColor =
+    tone === "warn" ? "var(--color-warning)"
+    : quiet ? "var(--color-text-faint)"
+    : "var(--color-accent)";
   return (
     <section>
       <div className="flex items-baseline justify-between gap-4 mb-3 px-1">
         <div>
-          <div className="text-[10px] uppercase tracking-[0.28em]" style={{ color: quiet ? "var(--color-text-faint)" : "var(--color-text-muted)" }}>
+          <div className="text-[10px] uppercase tracking-[0.28em]" style={{ color: titleColor }}>
             ── {title}
           </div>
           <div className="text-[11px] mt-1" style={{ color: "var(--color-text-faint)" }}>
             {subtitle}
           </div>
         </div>
-        <div className="text-[10px] uppercase tracking-[0.16em]" style={{ color: quiet ? "var(--color-text-faint)" : "var(--color-accent)" }}>
+        <div className="text-[10px] uppercase tracking-[0.16em]" style={{ color: countColor }}>
           {count.toString().padStart(2, "0")}
         </div>
       </div>
-      <div style={{ borderTop: "1px solid var(--color-border)" }}>
+      <div style={{ borderTop: `1px solid ${tone === "warn" ? "var(--color-warning)" : "var(--color-border)"}` }}>
         {children}
       </div>
     </section>
