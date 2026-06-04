@@ -216,11 +216,19 @@ class TaskGuard:
             # retries notify() with improved content before the next attempt.
             self._notify_texts.clear()
             msg = (
-                f"BLOCKED by output_guard: complete_task('{task_id}') refused because "
+                f"BLOCKED: complete_task('{task_id}') was REFUSED because "
                 f"{len(failures)} success criterion/criteria failed:\n"
                 + "\n".join(f"  • {f}" for f in failures)
-                + "\n\nFix the above issues and retry. Your notify() must satisfy all "
-                "criteria before this task can be marked complete."
+                + "\n\nWHAT TO DO NEXT (in this order):\n"
+                "  1. Call notify(text=...) AGAIN with the same useful content "
+                "PLUS whatever the failed criterion requires (e.g. a fenced ``` "
+                "code block, longer text, the required substring).\n"
+                "  2. Then call complete_task() again — the buffered notify "
+                "from step 1 will be re-checked against criteria.\n\n"
+                "Do NOT call complete_task() without first redoing notify(). "
+                "Do NOT give up and stop — the next tick will see you didn't "
+                "complete and either retry the whole tick or notify the user "
+                "of a silent drop."
             )
             return msg
 
