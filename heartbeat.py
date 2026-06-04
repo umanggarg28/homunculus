@@ -601,6 +601,31 @@ def tick(memory: Memory, model: str | None) -> None:
                 text="silent drop (no complete_task, no record_failure)",
                 result="executing flag cleared · consecutive_failures unchanged",
             )
+            # T1.2: skill auto-refinement. Append a Watch-out note to the
+            # related skill_*.md so next-run's agent has the lesson available
+            # without us having to manually update the skill. Best-effort.
+            try:
+                from tools._skill_refiner import update_skill_on_failure
+                updated_path = update_skill_on_failure(
+                    task["id"],
+                    "silent drop on a heartbeat run — agent reached the end of "
+                    "the loop without calling complete_task or record_failure. "
+                    "Either provider was degraded or the loop ran out of "
+                    "context before the final tool call. Make sure you call "
+                    "complete_task or record_failure even with partial data.",
+                    memory_dir=os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"),
+                )
+                if updated_path:
+                    print(
+                        f"[heartbeat] auto-refined skill {updated_path}",
+                        flush=True,
+                    )
+            except Exception as refine_err:
+                print(
+                    f"[heartbeat] skill auto-refine failed for {task['id']}: "
+                    f"{refine_err}",
+                    flush=True,
+                )
             # Item 8: autonomous fallback notify. For notify-flagged tasks
             # the user explicitly opted in to hearing about them; if the
             # agent silently dropped one we tell the user directly so
