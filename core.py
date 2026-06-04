@@ -1102,7 +1102,33 @@ class Agent:
         tool_names_used: set[str] = set()
         call_counts: dict[tuple[str, str], int] = {}
 
-        for _ in range(MAX_TURNS):
+        for _turn_idx in range(MAX_TURNS):
+            # Budget nudge: 2 iterations before the hard cap, inject a synthetic
+            # harness message reminding the model to wrap up. Without this the
+            # loop silently hits MAX_TURNS and bails with a fallback string,
+            # leaving any due heartbeat task stuck in `executing=True` (see the
+            # post-success check in heartbeat.py:tick which then has to clean
+            # up after the fact). The nudge gives the model a chance to call
+            # complete_task / record_failure before the hard cap fires.
+            if _turn_idx == MAX_TURNS - 2:
+                self.history.append({
+                    "role": "user",
+                    "content": (
+                        "Heads-up from the harness: you have 2 iterations left "
+                        f"of a {MAX_TURNS}-step budget. If a task is still "
+                        "active, call complete_task() now with what you have "
+                        "(it's better to deliver a partial answer than nothing). "
+                        "If the task cannot be completed, briefly explain why "
+                        "and stop calling tools — the harness will record a "
+                        "failure with your reasoning."
+                    ),
+                })
+                events.emit(
+                    "self_correction",
+                    text=f"harness budget nudge at iter {_turn_idx + 1}/{MAX_TURNS}",
+                    result="injected wrap-up reminder",
+                )
+
             if streaming:
                 # Buffer the full stream before yielding — lets the output
                 # guard check the complete reply and self-correct if needed
