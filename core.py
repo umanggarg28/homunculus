@@ -1127,6 +1127,29 @@ class Agent:
         tool_result_cache: dict[tuple[str, str], str] = {}
 
         for _turn_idx in range(MAX_TURNS):
+            # Item 5: pre-turn hook. Lets a caller (heartbeat TaskGuard, tests)
+            # inject a synthetic user message at the start of any iteration.
+            # The TaskGuard uses this at iter MAX_TURNS-1 to force a forced
+            # complete_task call when any due task is still unfinished —
+            # complementing the iter-(MAX_TURNS-2) budget nudge below.
+            if tools._pre_turn_hook is not None:
+                try:
+                    injected = tools._pre_turn_hook(_turn_idx, self.history)
+                except Exception as _hook_err:
+                    injected = None
+                    events.emit(
+                        "self_correction",
+                        text=f"pre_turn_hook raised at iter {_turn_idx}: {_hook_err}",
+                        result="hook ignored",
+                    )
+                if injected is not None:
+                    self.history.append(injected)
+                    events.emit(
+                        "self_correction",
+                        text=f"pre_turn_hook injection at iter {_turn_idx + 1}/{MAX_TURNS}",
+                        result=str(injected.get("content", ""))[:100],
+                    )
+
             # Budget nudge: 2 iterations before the hard cap, inject a synthetic
             # harness message reminding the model to wrap up. Without this the
             # loop silently hits MAX_TURNS and bails with a fallback string,

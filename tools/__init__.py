@@ -35,6 +35,33 @@ def set_pre_execute_hook(fn: Callable[[str, dict], str | None] | None) -> None:
     global _pre_execute_hook
     _pre_execute_hook = fn
 
+
+# Item 5 of the robustness plan — turn-level hook. Called at the START of
+# each iteration of the agent loop (before the LLM call). Receives the
+# 0-indexed turn number. Returns either None (do nothing) or a synthetic
+# message dict to append to history before the LLM is called. Used to:
+#   - inject the harness budget nudge at MAX_TURNS-2
+#   - force a complete_task/record_failure call at MAX_TURNS-1 when the
+#     TaskGuard sees expected_remaining() is non-empty
+#   - (future) per-tick context budget enforcement, summarisation triggers
+# A single hook is fine; the loop hook implementation chains multiple
+# concerns by composing them in the registered function.
+_pre_turn_hook: Callable[[int, list], dict | None] | None = None
+
+
+def set_pre_turn_hook(fn: Callable[[int, list], dict | None] | None) -> None:
+    """Install a hook called at the start of each loop iteration.
+
+    Hook signature: fn(turn_idx: int, history: list[dict]) -> dict | None
+        Return a single message dict to append to history before the LLM
+        is called, or None for a no-op turn.
+
+    Pass None to clear the hook. Always clear after the tick to avoid
+    leaking state between sessions.
+    """
+    global _pre_turn_hook
+    _pre_turn_hook = fn
+
 _manager = _mgr_mod.manager
 _started = False
 
@@ -169,7 +196,7 @@ def execute(name: str, arguments: dict) -> str:
 
 __all__ = [
     "init", "execute", "get_mode", "set_mode",
-    "SCHEMAS", "tool_names", "set_pre_execute_hook",
+    "SCHEMAS", "tool_names", "set_pre_execute_hook", "set_pre_turn_hook",
 ]
 
 

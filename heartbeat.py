@@ -253,6 +253,46 @@ class TaskGuard:
         """
         return [tid for tid in self._criteria if tid not in self._completed_tasks]
 
+    def on_pre_turn(self, turn_idx: int, _history: list) -> dict | None:
+        """Pre-turn hook (item 5 of robustness plan).
+
+        Installed via tools.set_pre_turn_hook(). Called at the start of
+        every loop iteration with the 0-indexed turn number. Returns a
+        synthetic user message to inject, or None for a no-op turn.
+
+        Currently used for ONE thing: at iter MAX_TURNS-1 (turn 19 of 20),
+        if any due task is still unfinished, force a final message demanding
+        complete_task() or record_failure() before the loop hits the cap.
+        This is the structural complement to the prompt tightening — instead
+        of HOPING the model wraps up, the harness ORDERS it to.
+
+        Imported locally to avoid a circular import of core.MAX_TURNS at
+        module load time.
+        """
+        from core import MAX_TURNS  # local import — see docstring
+        if turn_idx != MAX_TURNS - 1:
+            return None
+        remaining = self.expected_remaining()
+        if not remaining:
+            return None
+        # Pick the first uncompleted task — the message is per-task explicit.
+        task_id = remaining[0]
+        return {
+            "role": "user",
+            "content": (
+                f"HARNESS DIRECTIVE (last iteration): task '{task_id}' has "
+                f"not yet had complete_task() OR record_failure() called. "
+                f"You have exactly one tool call left.\n\n"
+                f"Pick ONE of:\n"
+                f"  ✓ complete_task(task_id='{task_id}', result='<one-line summary>')\n"
+                f"  ✗ record_failure(task_id='{task_id}', reason='<one-line reason>')\n\n"
+                f"If you've already called notify() this turn, complete_task "
+                f"will deliver the buffered message. If success_criteria are "
+                f"unmet, complete_task will be BLOCKED — in that case prefer "
+                f"record_failure with the reason. DO NOT call any other tool."
+            ),
+        }
+
     def _flush(self) -> None:
         """Send all buffered notifications directly (bypasses MCP subprocess).
 
@@ -449,6 +489,10 @@ def tick(memory: Memory, model: str | None) -> None:
         for t in due_tasks
     })
     tools.set_pre_execute_hook(guard.on_tool_call)
+    # Item 5 (pragmatic slice): install the turn-level hook so the guard
+    # can inject a forced completion message at iter MAX_TURNS-1 when any
+    # due task is still unfinished.
+    tools.set_pre_turn_hook(guard.on_pre_turn)
 
     started = datetime.now()
     try:
@@ -505,6 +549,7 @@ def tick(memory: Memory, model: str | None) -> None:
         raise
     finally:
         tools.set_pre_execute_hook(None)
+        tools.set_pre_turn_hook(None)
     print(f"[agent] {response}", flush=True)
 
     # Post-success completion check. agent.chat() returned without an
