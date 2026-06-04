@@ -15,6 +15,7 @@ export function parseServerIso(iso: string): number {
 
 import type {
   AgentControls,
+  AgentBudgetStats,
   AgentReplayTurn,
   Chapter,
   MemoryEntry,
@@ -28,7 +29,7 @@ import type {
   WebConfig,
 } from "./types";
 
-const API_BASE = "/api";
+export const API_BASE = "/api";
 const TOKEN_STORAGE_KEY = "homunculus.webToken";
 
 export function getWebToken(): string {
@@ -46,7 +47,7 @@ export function eventStreamUrl(): string {
   return token ? `/events?token=${encodeURIComponent(token)}` : "/events";
 }
 
-function authHeaders(extra: HeadersInit = {}): HeadersInit {
+export function authHeaders(extra: HeadersInit = {}): HeadersInit {
   const token = getWebToken();
   return token ? { ...extra, "X-Homunculus-Token": token } : extra;
 }
@@ -159,20 +160,7 @@ export const api = {
     next_task: { id: string; title: string; due_at: string; recurrence: string } | null;
   }>("/agent/upcoming"),
 
-  statsToday: () =>
-    jsonGet<{
-      since: string;
-      events: number;
-      unique_tools: number;
-      tasks_fired: number;
-      memory_writes: number;
-      memory_forgets: number;
-      input_tokens: number;
-      output_tokens: number;
-      cached_tokens: number;
-      cost_cents: number;
-      budget_cents: number;
-    }>("/stats/today"),
+  statsToday: () => jsonGet<AgentBudgetStats>("/stats/today"),
 
   tasksCreate: (body: {
     title: string;
@@ -205,6 +193,9 @@ export const api = {
       if (!r.ok) throw new Error(`Update task failed: ${r.status}`);
       return r.json() as Promise<Task>;
     }),
+
+  tasksGet: (id: string) =>
+    jsonGet<Task>(`/tasks/${encodeURIComponent(id)}`),
 
   tasksRunNow: (id: string) =>
     fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}/run-now`, {

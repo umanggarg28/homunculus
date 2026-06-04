@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, parseServerIso } from "@/lib/api";
 import type { Task } from "@/lib/types";
+import { RunNowPanel } from "./RunNowPanel";
 
 interface Props {
   task: Task;
@@ -12,6 +13,7 @@ interface Props {
 export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [runOpen, setRunOpen] = useState(false);
 
   useEffect(() => {
     if (!task.due_at || task.status !== "active") return;
@@ -20,9 +22,21 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
   }, [task.due_at, task.status]);
 
   const stop = (e: React.MouseEvent) => e.stopPropagation();
-  const runNow = async (e: React.MouseEvent) => {
-    stop(e); setBusy("run");
-    try { onChanged(await api.tasksRunNow(task.id)); } finally { setBusy(null); }
+  // T1.4 of the capability roadmap: click [run now] opens a side drawer
+  // that streams the agent's execution live. The old API endpoint
+  // (POST /api/tasks/{id}/run-now) which just bumps due_at is still
+  // available — invoke it explicitly when the user only wants to
+  // schedule, but the default UX is now the streaming panel.
+  const runNow = (e: React.MouseEvent) => {
+    stop(e);
+    setRunOpen(true);
+  };
+  const closeRun = () => {
+    setRunOpen(false);
+    // Refresh the task data once after a run so the row's badge /
+    // sparkline / due_at reflect any state changes (success advances
+    // due_at, failure shows up in last_runs).
+    api.tasksGet(task.id).then(onChanged).catch(() => undefined);
   };
   const cancel = async (e: React.MouseEvent) => {
     stop(e);
@@ -55,6 +69,14 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
   const subtitle = buildSubtitle(task, due, now, isOverdue);
 
   return (
+    <>
+    {/* Live run-stream drawer — sibling to the row so it can size to viewport. */}
+    <RunNowPanel
+      taskId={task.id}
+      taskTitle={task.title}
+      open={runOpen}
+      onClose={closeRun}
+    />
     <div
       onClick={onOpenDetail}
       className="task-row hm-interactive-row group cursor-pointer"
@@ -164,6 +186,7 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
         <Action onClick={remove} color="var(--color-danger)" busy={busy === "del"}>delete</Action>
       </div>
     </div>
+    </>
   );
 }
 
