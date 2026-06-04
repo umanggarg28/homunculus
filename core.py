@@ -241,6 +241,30 @@ COMPACT_TRIGGER = 8   # heartbeat sessions are short; compact sooner to stay und
 COMPACT_KEEP_RECENT = 4
 
 
+def _resolve_agents_md():
+    """Locate the AGENTS.md identity file, or None if absent.
+
+    Search order:
+      1. $HOMUNCULUS_AGENTS_MD if set
+      2. /app/AGENTS.md (Docker image path — production)
+      3. ./AGENTS.md relative to cwd (local dev)
+
+    Returns a Path or None. Cached at first call — restart to pick up
+    new locations, but file CONTENTS are re-read on every Agent
+    construction (since each heartbeat tick instantiates a fresh Agent).
+    """
+    from pathlib import Path as _P
+    import os as _os
+    explicit = _os.environ.get("HOMUNCULUS_AGENTS_MD")
+    if explicit:
+        p = _P(explicit)
+        return p if p.exists() else None
+    for candidate in (_P("/app/AGENTS.md"), _P("AGENTS.md")):
+        if candidate.exists():
+            return candidate
+    return None
+
+
 SYSTEM_PROMPT = """You are Homunculus — an autonomous personal assistant with persistent memory.
 
 Paths: your cwd IS the workspace. Use plain relative paths like `notes.md` or
@@ -992,6 +1016,20 @@ class Agent:
         self.memory = memory
         self.model = model or MODEL
         full_prompt = system_prompt
+        # T2.7 of the capability roadmap — AGENTS.md is the user-owned
+        # identity layer (OpenClaw calls it SOUL.md; same pattern). It
+        # loads AFTER the codebase's hardcoded behavior rules and BEFORE
+        # the memory blocks, so the codebase sets the foundation and the
+        # user can shape persona on top without forking core.py.
+        agents_md_path = _resolve_agents_md()
+        if agents_md_path is not None:
+            try:
+                full_prompt += (
+                    "\n\n# Identity (AGENTS.md — user-owned persona)\n\n"
+                    + agents_md_path.read_text(encoding="utf-8")
+                )
+            except OSError:
+                pass  # missing file is fine; corrupt encoding falls through
         if memory is not None:
             # Pinned core block: user profile + key feedback rules (full bodies,
             # capped small). Always in context so the agent knows who it's
