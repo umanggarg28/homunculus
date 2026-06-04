@@ -1315,6 +1315,46 @@ _CHAT_RATE_MAX = 10   # requests per window
 _CHAT_RATE_WINDOW = 60  # seconds
 
 
+# Curated set of model ids the user is most likely to want to swap to
+# without typing the full provider path. Anything else is allowed too —
+# this is just a discoverability list shown by bare `/use`.
+_MODEL_HINTS = [
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "moonshotai/kimi-k2.6:free",
+    "qwen/qwen3-coder:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "openai/gpt-oss-120b:free",
+    "anthropic/claude-sonnet-4-6",
+    "anthropic/claude-haiku-4-5",
+]
+
+
+def _handle_use_command(agent: Agent, arg: str) -> str:
+    if not arg:
+        lines = [
+            f"current model: `{agent.model}`",
+            "",
+            "switch with `/use <model-id>` — known options:",
+        ]
+        lines.extend(f"  - `{m}`" for m in _MODEL_HINTS)
+        lines.append("")
+        lines.append("`/use reset` returns to the default.")
+        return "\n".join(lines)
+
+    if arg == "reset":
+        previous = agent.model
+        agent.model = MODEL
+        return f"model: `{previous}` -> `{agent.model}` (default)"
+
+    previous = agent.model
+    agent.model = arg
+    return (
+        f"model: `{previous}` -> `{agent.model}`. "
+        "fallbacks still apply if this one rate-limits."
+    )
+
+
 def _check_chat_rate(request: Request) -> None:
     ip = (request.client.host if request.client else None) or "unknown"
     now = time.monotonic()
@@ -1342,6 +1382,27 @@ async def chat_send(request: Request):
 
     stream_id = (payload or {}).get("stream_id") or secrets.token_urlsafe(12)
     agent = _get_chat_agent()
+
+    # /use <model> — swap the primary model for this chat session without
+    # restart. Empty arg shows current model + known catalogue. "reset"
+    # restores the default. Fallbacks still kick in if the new primary
+    # 429s, so a typo never bricks the chat.
+    if user_message.startswith("/use"):
+        reply = _handle_use_command(agent, user_message[4:].strip())
+
+        def cmd_gen():
+            yield _format_sse_data(reply)
+            yield "event: done\ndata: end\n\n"
+
+        return StreamingResponse(
+            cmd_gen(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "X-Stream-Id": stream_id,
+            },
+        )
 
     # Drain any notifications fired by heartbeat (or other processes)
     # since the last chat turn, so follow-ups like "explain it" arrive
