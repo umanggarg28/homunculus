@@ -69,6 +69,15 @@ export function BrutalistMessage({ message, toolCalls, sending }: Props) {
             ? <span style={{ color: "var(--color-amber)" }}>live</span>
             : timeStr}
         </div>
+        {message.source && message.source !== "web" && (
+          <div
+            className="mt-1 uppercase tracking-[0.12em]"
+            style={{ color: "var(--color-text-muted)", fontSize: 9 }}
+            title={`via ${message.source}`}
+          >
+            via {message.source === "telegram" ? "tg" : message.source}
+          </div>
+        )}
         {!isUser && toolCalls.length > 0 && !inFlight && (
           <div className="mt-1.5 uppercase tracking-[0.06em]" style={{ color: "var(--color-text-faint)" }}>
             ↳{toolCalls.length}T

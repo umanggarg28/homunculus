@@ -520,6 +520,20 @@ def _is_transient_provider_error(response: httpx.Response) -> bool:
     return False
 
 
+# Keys we attach to history messages for our own bookkeeping but never
+# want to leak into the LLM request. Providers vary on strictness — most
+# OpenAI-compatible endpoints tolerate extras, but Anthropic-via-OpenRouter
+# and some others reject unknown keys outright.
+_INTERNAL_MESSAGE_KEYS = frozenset({"source"})
+
+
+def _strip_internal_fields(messages: list[dict]) -> list[dict]:
+    return [
+        {k: v for k, v in m.items() if k not in _INTERNAL_MESSAGE_KEYS}
+        for m in messages
+    ]
+
+
 def call_llm(
     messages: list[dict],
     tool_schemas: list[dict] | None,
@@ -561,7 +575,7 @@ def call_llm(
             except Exception:
                 pass
             continue
-        payload: dict[str, Any] = {"model": model_id, "messages": messages}
+        payload: dict[str, Any] = {"model": model_id, "messages": _strip_internal_fields(messages)}
         if tool_schemas is not None:
             payload["tools"] = tool_schemas
             payload["tool_choice"] = "auto"
@@ -649,7 +663,7 @@ def call_llm(
             except Exception:
                 pass
             continue
-        payload = {"model": model_id, "messages": messages}
+        payload = {"model": model_id, "messages": _strip_internal_fields(messages)}
         if tool_schemas is not None:
             payload["tools"] = tool_schemas
             payload["tool_choice"] = "auto"
@@ -772,7 +786,7 @@ def call_llm_stream(
             continue
         payload: dict[str, Any] = {
             "model": model_id,
-            "messages": messages,
+            "messages": _strip_internal_fields(messages),
             "stream": True,
             "stream_options": {"include_usage": True},
         }
@@ -1117,18 +1131,24 @@ class Agent:
             "worth saving, just say so in one line."
         )
 
-    def chat(self, user_message: str) -> str:
-        """Send a user message; return the agent's final text reply."""
-        return "".join(self._run_loop(user_message, streaming=False))
+    def chat(self, user_message: str, source: str = "web") -> str:
+        """Send a user message; return the agent's final text reply.
 
-    def chat_stream(self, user_message: str):
+        `source` tags which channel the message arrived from
+        ("web" / "telegram" / "repl" / "heartbeat") so the unified
+        chat log can show provenance. Default is "web" since most
+        callers are the web UI.
+        """
+        return "".join(self._run_loop(user_message, streaming=False, source=source))
+
+    def chat_stream(self, user_message: str, source: str = "web"):
         """Streaming variant of chat() for the web UI.
 
         Yields content strings as they arrive from the LLM. Tool calls
         happen silently — their activity is visible via the /events SSE
         feed. This is a sync generator; FastAPI is happy to consume it.
         """
-        yield from self._run_loop(user_message, streaming=True)
+        yield from self._run_loop(user_message, streaming=True, source=source)
 
     def _current_system_prompt(self) -> str:
         """Return the base system prompt with a fresh current-datetime line appended."""
@@ -1146,7 +1166,7 @@ class Agent:
                 prompt += "\n\n# Session world state\n\n" + json.dumps(state, indent=2)
         return prompt
 
-    def _run_loop(self, user_message: str, streaming: bool):
+    def _run_loop(self, user_message: str, streaming: bool, source: str = "web"):
         """Unified agent loop generator shared by chat() and chat_stream().
 
         Structural improvements over the prior dual-path design:
@@ -1192,7 +1212,7 @@ class Agent:
                 pass
 
         self._maybe_compact()
-        self.history.append({"role": "user", "content": user_message})
+        self.history.append({"role": "user", "content": user_message, "source": source})
         if self.memory is not None:
             self.memory.log_turn("user", user_message)
             # Auto-stamp world state at turn start so resume after restart
@@ -1290,6 +1310,9 @@ class Agent:
                 cleaned["tool_calls"] = assistant_msg["tool_calls"]
             if "content" not in cleaned and "tool_calls" not in cleaned:
                 cleaned["content"] = ""
+            # Inherit source from the user turn so the unified chat log
+            # can tag the reply to the channel it went out on.
+            cleaned["source"] = source
             self.history.append(cleaned)
 
             tool_calls = assistant_msg.get("tool_calls")

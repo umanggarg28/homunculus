@@ -7,6 +7,7 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   inFlight?: boolean;
+  source?: "web" | "telegram" | "repl" | "heartbeat" | string;
 }
 
 interface UseChatStream {

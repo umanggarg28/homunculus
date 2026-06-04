@@ -1251,6 +1251,7 @@ def _visible_chat_history(history: list[dict]) -> list[dict]:
                 "id": f"persisted-{idx}",
                 "role": role,
                 "content": content,
+                "source": msg.get("source", "web"),
             }
             continue
         if role == "assistant":
@@ -1268,6 +1269,7 @@ def _visible_chat_history(history: list[dict]) -> list[dict]:
                 "id": f"persisted-{idx}",
                 "role": role,
                 "content": content,
+                "source": msg.get("source", "web"),
             })
     return messages
 
@@ -1413,7 +1415,7 @@ async def chat_send(request: Request):
         _active_streams.add(stream_id)
         cancelled = False
         try:
-            for chunk in agent.chat_stream(user_message):
+            for chunk in agent.chat_stream(user_message, source="web"):
                 if stream_id in _cancelled_streams:
                     cancelled = True
                     break
