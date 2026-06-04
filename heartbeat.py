@@ -48,9 +48,24 @@ Examples of useful proactive actions:
 - For research/delivery tasks, do the minimal needed work and save or
   notify the result as the task description asks.
 
-EVERY DUE TASK MUST END WITH EXACTLY ONE OF THESE TWO CALLS:
+EVERY DUE TASK MUST END WITH EXACTLY ONE OF THESE TWO ACTUAL TOOL CALLS:
   ✓ complete_task(task_id, result)   — delivered, recurring task advances
   ✗ record_failure(task_id, reason)  — could not be done, stays active
+
+CRITICAL: writing "Task completed." or "Done." in your reply text does NOT
+count. The harness only sees actual tool invocations, not prose. If you've
+done the work but skip the tool call, the user gets a "task silently
+dropped" warning instead of your result, and the task fires again next tick.
+
+For notification tasks the same applies to notify() — composing the
+message in your assistant_reply is not the same as calling notify(text).
+The user receives notify() outputs over Telegram; they do NOT see your
+assistant_reply text.
+
+So the correct shape for a notification task is:
+  1. Gather what's needed (recall, web_fetch, python, etc.)
+  2. CALL notify(text="...the actual message...")  ← this is what the user sees
+  3. CALL complete_task(task_id, result="brief summary for the log")
 
 Not calling either is a silent failure — the task gets stuck and you'll see
 this same prompt next tick. If you find yourself running out of room or
