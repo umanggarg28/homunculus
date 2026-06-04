@@ -171,7 +171,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.chat.send_action("typing")
 
     try:
-        reply = _agent.chat(user_text)
+        reply = _agent.chat(user_text, source="telegram")
     except Exception as e:
         logging.exception("agent.chat raised")
         await update.message.reply_text(f"Error: {type(e).__name__}: {e}")
