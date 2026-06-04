@@ -847,6 +847,61 @@ function RunInspector({ events }: { events: FeedEvent[] }) {
     ? `${Math.max(0, Math.floor((Date.now() - new Date(turn.steps[turn.steps.length - 1].ts).getTime()) / 1000))}s ago`
     : "no run";
 
+  // Sparse mode: on a quiet day there is nothing in any of the panels —
+  // no recent turn, no attention items, no tool calls, no model trace.
+  // Rendering the full two-card grid in that state is just a wall of
+  // "no X in view" placeholders. Collapse to a single calm idle pill
+  // until activity resumes. The grid returns immediately on any signal.
+  const isQuiet =
+    !turn.user &&
+    turn.steps.length === 0 &&
+    attention.length === 0 &&
+    tools.length === 0 &&
+    !lastModel;
+
+  if (isQuiet) {
+    const lastTs = recent.at(-1)?.ts;
+    const idleFor = lastTs
+      ? Math.max(0, Math.floor((Date.now() - new Date(lastTs).getTime()) / 60000))
+      : null;
+    return (
+      <div
+        className="mb-10"
+        style={{
+          border: "1px solid var(--color-border)",
+          padding: "18px 20px",
+          fontFamily: "var(--font-mono)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 16,
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <div
+            className="text-[10px] uppercase tracking-[0.28em]"
+            style={{ color: "var(--color-text-muted)" }}
+          >
+            mission control
+          </div>
+          <div
+            className="text-[12px] mt-1"
+            style={{ color: "var(--color-text-dim)" }}
+          >
+            system idle — no runs, tool calls, or attention items in view
+          </div>
+        </div>
+        <div
+          className="text-[10px] uppercase tracking-[0.18em]"
+          style={{ color: "var(--color-text-faint)" }}
+        >
+          {idleFor === null ? "no recent events" : idleFor === 0 ? "quiet · <1 min" : `quiet · ${idleFor} min`}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="overview-mission-grid mb-10">
       <div className="overview-ops-card">
