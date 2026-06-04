@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
+import { InstallBadge } from "./InstallBadge";
 import { ModeToggle } from "./ModeToggle";
 import { ProviderInline } from "./ProviderInline";
 import { SidebarBrand } from "./SidebarBrand";
@@ -241,6 +242,7 @@ export function Sidebar() {
         <SoundToggle />
         <ModeToggle />
         <ProviderInline />
+        <InstallBadge />
       </div>
     </aside>
   );
