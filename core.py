@@ -168,6 +168,66 @@ _PROVIDER_COOLDOWN: dict[str, float] = {}
 # LLM could call tools forever. 20 is plenty for any realistic task.
 MAX_TURNS = 20
 
+# Read-only tools whose results can be safely cached within a single turn.
+# When the LLM re-calls one of these with the same arguments, the harness
+# returns the cached result + a hint instead of re-executing. Saves an
+# LLM call's worth of cycles AND prevents the worse stuck-loop error
+# path (which fires at count 3 and tells the model to "pivot" — useful
+# only for true non-idempotent loops). Tools with side effects (notify,
+# complete_task, write_file, python with mutations) are deliberately
+# excluded — their results should NEVER be cached.
+READ_ONLY_CACHEABLE_TOOLS = frozenset({
+    "read_file",
+    "recall",
+    "search_files",
+    "get_current_time",
+    "list_tasks",
+    "get_world_state",
+    "conversation_search",
+    "archival_memory_search",
+    "web_fetch",      # idempotent on a given URL within a turn
+    "web_search",     # query is the cache key; same query → same answer
+})
+
+# Hard cap on per-tool-result content that lands in conversation history.
+# Without this, a single web_fetch of a long page (e.g. a 50KB GitHub
+# README markdown) dumps the entire payload into history, leaving no
+# token budget for the final LLM call that would actually USE the data.
+# The agent loop then drops into the empty-content fallback path and
+# the task never completes.
+#
+# 6000 chars ≈ 1500 tokens — enough to capture the gist of most useful
+# tool results while preserving room for reasoning. The harness adds a
+# hint at the cut so the agent knows it can refine the query to see more.
+#
+# Note: this only affects what's appended to history. The `tool_result`
+# event emitted to _events.jsonl keeps the full payload (truncated for
+# display by the UI's per-kind COMPACT_LEN_BY_KIND) so the Traces page
+# can still show the complete tool output for debugging.
+TOOL_RESULT_HARD_CAP = 6000
+
+
+def _trim_tool_result_for_history(name: str, result: object) -> object:
+    """Cap oversized tool result strings before they enter conversation history.
+
+    Non-string results pass through unchanged (some tools return dicts/lists).
+    ERROR strings under the cap pass through (they're already short).
+    Anything over the cap gets head-truncated with a clear hint that the
+    agent can re-call the tool with a more targeted query.
+    """
+    if not isinstance(result, str):
+        return result
+    if len(result) <= TOOL_RESULT_HARD_CAP:
+        return result
+    head_budget = TOOL_RESULT_HARD_CAP - 200  # reserve room for the hint
+    trimmed_count = len(result) - head_budget
+    return (
+        f"{result[:head_budget]}\n\n"
+        f"[+{trimmed_count:,} chars trimmed by harness — re-call with a "
+        f"more targeted query/path if needed, or use recall() / "
+        f"search_files() to find specific content]"
+    )
+
 # Mid-session compaction thresholds.
 #
 # COMPACT_TRIGGER counts USER turns (not raw messages). When we exceed
@@ -1062,8 +1122,60 @@ class Agent:
 
         tool_names_used: set[str] = set()
         call_counts: dict[tuple[str, str], int] = {}
+        # Per-turn cache for READ_ONLY_CACHEABLE_TOOLS — same (name, args) → same
+        # result, no need to re-execute. Cleared at the start of every turn.
+        tool_result_cache: dict[tuple[str, str], str] = {}
 
-        for _ in range(MAX_TURNS):
+        for _turn_idx in range(MAX_TURNS):
+            # Item 5: pre-turn hook. Lets a caller (heartbeat TaskGuard, tests)
+            # inject a synthetic user message at the start of any iteration.
+            # The TaskGuard uses this at iter MAX_TURNS-1 to force a forced
+            # complete_task call when any due task is still unfinished —
+            # complementing the iter-(MAX_TURNS-2) budget nudge below.
+            if tools._pre_turn_hook is not None:
+                try:
+                    injected = tools._pre_turn_hook(_turn_idx, self.history)
+                except Exception as _hook_err:
+                    injected = None
+                    events.emit(
+                        "self_correction",
+                        text=f"pre_turn_hook raised at iter {_turn_idx}: {_hook_err}",
+                        result="hook ignored",
+                    )
+                if injected is not None:
+                    self.history.append(injected)
+                    events.emit(
+                        "self_correction",
+                        text=f"pre_turn_hook injection at iter {_turn_idx + 1}/{MAX_TURNS}",
+                        result=str(injected.get("content", ""))[:100],
+                    )
+
+            # Budget nudge: 2 iterations before the hard cap, inject a synthetic
+            # harness message reminding the model to wrap up. Without this the
+            # loop silently hits MAX_TURNS and bails with a fallback string,
+            # leaving any due heartbeat task stuck in `executing=True` (see the
+            # post-success check in heartbeat.py:tick which then has to clean
+            # up after the fact). The nudge gives the model a chance to call
+            # complete_task / record_failure before the hard cap fires.
+            if _turn_idx == MAX_TURNS - 2:
+                self.history.append({
+                    "role": "user",
+                    "content": (
+                        "Heads-up from the harness: you have 2 iterations left "
+                        f"of a {MAX_TURNS}-step budget. If a task is still "
+                        "active, call complete_task() now with what you have "
+                        "(it's better to deliver a partial answer than nothing). "
+                        "If the task cannot be completed, briefly explain why "
+                        "and stop calling tools — the harness will record a "
+                        "failure with your reasoning."
+                    ),
+                })
+                events.emit(
+                    "self_correction",
+                    text=f"harness budget nudge at iter {_turn_idx + 1}/{MAX_TURNS}",
+                    result="injected wrap-up reminder",
+                )
+
             if streaming:
                 # Buffer the full stream before yielding — lets the output
                 # guard check the complete reply and self-correct if needed
@@ -1159,7 +1271,31 @@ class Agent:
                 canon_args = json.dumps(args, sort_keys=True)
                 call_key = (name, canon_args)
                 call_counts[call_key] = call_counts.get(call_key, 0) + 1
-                if call_counts[call_key] >= 3:
+                # Per-turn cache hit: read-only tools with the same args this
+                # turn return the cached result with a hint. Saves wasted
+                # round trips and prevents read_file/recall thrashing —
+                # the most common shape of the "stuck loop" failure in
+                # production was 3× read_file with identical args.
+                if (
+                    name in READ_ONLY_CACHEABLE_TOOLS
+                    and call_key in tool_result_cache
+                ):
+                    cached = tool_result_cache[call_key]
+                    result = (
+                        f"(harness-cached result from earlier this turn — "
+                        f"call #{call_counts[call_key]} for '{name}' with "
+                        f"identical args)\n\n"
+                        f"{cached}\n\n"
+                        f"[Hint: you already called {name} with these arguments. "
+                        f"No need to re-call — proceed with the next step.]"
+                    )
+                    events.emit(
+                        "output_guard",
+                        name=name,
+                        text=f"cache hit: {name} × {call_counts[call_key]}",
+                        result=canon_args[:120],
+                    )
+                elif call_counts[call_key] >= 3:
                     result = (
                         f"STUCK_LOOP: '{name}' has been called with these exact arguments "
                         f"{call_counts[call_key]} times this session. You are in a loop. "
@@ -1182,6 +1318,15 @@ class Agent:
                     )
                 else:
                     result = tools.execute(name, args)
+                    # Populate the per-turn cache for read-only tools.
+                    # Only cache real (non-error) results so a failed call
+                    # can still be retried with the same args.
+                    if (
+                        name in READ_ONLY_CACHEABLE_TOOLS
+                        and isinstance(result, str)
+                        and not result.startswith("ERROR")
+                    ):
+                        tool_result_cache[call_key] = result
 
                 # Auto-update world state after every tool call so the agent
                 # can resume correctly after a restart without relying on the
@@ -1208,10 +1353,13 @@ class Agent:
                     name=name,
                     result=events.truncate_preview(result, limit=2000),
                 )
+                # Trim oversized results before they enter history. The full
+                # payload is preserved in the events log; the agent can
+                # re-call the tool with a refined query if it needs more.
                 self.history.append({
                     "role": "tool",
                     "tool_call_id": call["id"],
-                    "content": result,
+                    "content": _trim_tool_result_for_history(name, result),
                 })
 
         fallback = "(hit MAX_TURNS without a final answer)"

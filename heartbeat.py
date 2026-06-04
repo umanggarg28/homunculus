@@ -47,8 +47,31 @@ Examples of useful proactive actions:
 - For notification tasks, use `notify()` with a concise message.
 - For research/delivery tasks, do the minimal needed work and save or
   notify the result as the task description asks.
-- When a task is handled, call `complete_task(task_id, result)` so
-  one-shot tasks stop firing and recurring tasks advance.
+
+EVERY DUE TASK MUST END WITH EXACTLY ONE OF THESE TWO ACTUAL TOOL CALLS:
+  ✓ complete_task(task_id, result)   — delivered, recurring task advances
+  ✗ record_failure(task_id, reason)  — could not be done, stays active
+
+CRITICAL: writing "Task completed." or "Done." in your reply text does NOT
+count. The harness only sees actual tool invocations, not prose. If you've
+done the work but skip the tool call, the user gets a "task silently
+dropped" warning instead of your result, and the task fires again next tick.
+
+For notification tasks the same applies to notify() — composing the
+message in your assistant_reply is not the same as calling notify(text).
+The user receives notify() outputs over Telegram; they do NOT see your
+assistant_reply text.
+
+So the correct shape for a notification task is:
+  1. Gather what's needed (recall, web_fetch, python, etc.)
+  2. CALL notify(text="...the actual message...")  ← this is what the user sees
+  3. CALL complete_task(task_id, result="brief summary for the log")
+
+Not calling either is a silent failure — the task gets stuck and you'll see
+this same prompt next tick. If you find yourself running out of room or
+hitting tool errors you can't recover from, prefer record_failure with a
+brief reason over silence. Even a partial delivery + complete_task is better
+than a perfect plan you never executed.
 
 SUCCESS CRITERIA (important):
 Some tasks list `success_criteria` — machine-checked rules that your output
@@ -65,7 +88,6 @@ Important rules:
 - DO NOT read the daily log files unless you have a specific recall
   task. Logs contain your own previous heartbeat output and reading
   them every tick creates a feedback loop. Trust your memory index.
-- If a due task cannot be completed, leave it active and briefly say why.
 - shell_exec is disabled. If a task would need shell access, call
   remember() to leave a note for the user.
 """
@@ -153,6 +175,13 @@ class TaskGuard:
         # text here, then send directly (bypassing subprocess boundary) once
         # complete_task passes all criteria.
         self._buffering = any(v for v in criteria_by_task.values())
+        # Item 4 of the robustness plan — track which due tasks have had
+        # complete_task called successfully. Combined with expected_remaining(),
+        # the heartbeat tick can detect the silent-failure mode (agent loop
+        # ran but no due task was completed) and report a *specific* failure
+        # like "task X never got complete_task" instead of the generic
+        # "agent loop returned without complete_task".
+        self._completed_tasks: set[str] = set()
 
     def on_tool_call(self, name: str, arguments: dict) -> str | None:
         """Hook fn passed to tools.set_pre_execute_hook().
@@ -174,29 +203,107 @@ class TaskGuard:
             criteria = self._criteria.get(task_id, [])
             if not criteria:
                 self._flush()  # no guard — send any buffered notifies now
+                self._completed_tasks.add(task_id)
                 return None
 
             failures = self._check(criteria)
             if not failures:
                 self._flush()  # criteria passed — deliver buffered notifications
+                self._completed_tasks.add(task_id)
                 return None
 
             # Criteria failed — discard queued notifications so the agent
             # retries notify() with improved content before the next attempt.
             self._notify_texts.clear()
             msg = (
-                f"BLOCKED by output_guard: complete_task('{task_id}') refused because "
+                f"BLOCKED: complete_task('{task_id}') was REFUSED because "
                 f"{len(failures)} success criterion/criteria failed:\n"
                 + "\n".join(f"  • {f}" for f in failures)
-                + "\n\nFix the above issues and retry. Your notify() must satisfy all "
-                "criteria before this task can be marked complete."
+                + "\n\nWHAT TO DO NEXT (in this order):\n"
+                "  1. Call notify(text=...) AGAIN with the same useful content "
+                "PLUS whatever the failed criterion requires (e.g. a fenced ``` "
+                "code block, longer text, the required substring).\n"
+                "  2. Then call complete_task() again — the buffered notify "
+                "from step 1 will be re-checked against criteria.\n\n"
+                "Do NOT call complete_task() without first redoing notify(). "
+                "Do NOT give up and stop — the next tick will see you didn't "
+                "complete and either retry the whole tick or notify the user "
+                "of a silent drop."
             )
             return msg
 
+        # record_failure is also a way to close out a task — track it so the
+        # heartbeat tick doesn't double-report a task that the agent already
+        # marked as failed.
+        if name == "record_failure":
+            task_id = arguments.get("task_id", "")
+            if task_id:
+                self._completed_tasks.add(task_id)
+            return None
+
         return None  # all other tools pass through unmodified
 
+    def expected_remaining(self) -> list[str]:
+        """Task IDs that were due at the start of this tick but have not yet
+        had complete_task (or record_failure) called.
+
+        Used by heartbeat.tick() after the agent loop returns to produce a
+        more specific diagnostic than the generic post-success check — and
+        to drive the autonomous notify() pattern from item 8 of the plan.
+        """
+        return [tid for tid in self._criteria if tid not in self._completed_tasks]
+
+    def on_pre_turn(self, turn_idx: int, _history: list) -> dict | None:
+        """Pre-turn hook (item 5 of robustness plan).
+
+        Installed via tools.set_pre_turn_hook(). Called at the start of
+        every loop iteration with the 0-indexed turn number. Returns a
+        synthetic user message to inject, or None for a no-op turn.
+
+        Currently used for ONE thing: at iter MAX_TURNS-1 (turn 19 of 20),
+        if any due task is still unfinished, force a final message demanding
+        complete_task() or record_failure() before the loop hits the cap.
+        This is the structural complement to the prompt tightening — instead
+        of HOPING the model wraps up, the harness ORDERS it to.
+
+        Imported locally to avoid a circular import of core.MAX_TURNS at
+        module load time.
+        """
+        from core import MAX_TURNS  # local import — see docstring
+        if turn_idx != MAX_TURNS - 1:
+            return None
+        remaining = self.expected_remaining()
+        if not remaining:
+            return None
+        # Pick the first uncompleted task — the message is per-task explicit.
+        task_id = remaining[0]
+        return {
+            "role": "user",
+            "content": (
+                f"HARNESS DIRECTIVE (last iteration): task '{task_id}' has "
+                f"not yet had complete_task() OR record_failure() called. "
+                f"You have exactly one tool call left.\n\n"
+                f"Pick ONE of:\n"
+                f"  ✓ complete_task(task_id='{task_id}', result='<one-line summary>')\n"
+                f"  ✗ record_failure(task_id='{task_id}', reason='<one-line reason>')\n\n"
+                f"If you've already called notify() this turn, complete_task "
+                f"will deliver the buffered message. If success_criteria are "
+                f"unmet, complete_task will be BLOCKED — in that case prefer "
+                f"record_failure with the reason. DO NOT call any other tool."
+            ),
+        }
+
     def _flush(self) -> None:
-        """Send all buffered notifications directly (bypasses MCP subprocess)."""
+        """Send all buffered notifications directly (bypasses MCP subprocess).
+
+        Only sends when _buffering=True, i.e. notify() was intercepted and
+        held back from the MCP subprocess. When _buffering=False the MCP
+        subprocess already delivered the notifications; calling this would
+        double-send, so we just clear the tracking list.
+        """
+        if not self._buffering:
+            self._notify_texts.clear()
+            return
         for text in self._notify_texts:
             err = _send_to_telegram(text)
             if err:
@@ -256,13 +363,19 @@ class TaskGuard:
         return failures
 
 
+# User TZ is autodetected from the browser (see user_tz module) — no env
+# var, no hardcoding. The browser writes workspace/user_tz.txt on its first
+# visit; this module reads from there and falls back to system local.
+from user_tz import now_user_tz as _now_user_tz  # noqa: E402
+
+
 def _today_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+    return _now_user_tz().strftime("%Y-%m-%d")
 
 
 def _yesterday_iso_and_path() -> tuple[str, str]:
-    """Return (YYYY-MM-DD, YYYY/MM/YYYY-MM-DD) for yesterday."""
-    y = datetime.now() - timedelta(days=1)
+    """Return (YYYY-MM-DD, YYYY/MM/YYYY-MM-DD) for yesterday in user TZ."""
+    y = _now_user_tz() - timedelta(days=1)
     iso = y.strftime("%Y-%m-%d")
     path_form = y.strftime("%Y/%m/%Y-%m-%d")
     return iso, path_form
@@ -271,36 +384,76 @@ def _yesterday_iso_and_path() -> tuple[str, str]:
 def tick(memory: Memory, model: str | None) -> None:
     """One heartbeat iteration — fresh agent, one prompt, then discard.
 
-    If reflection is due (we haven't reflected today yet) AND there's a
-    yesterday to look at, this tick runs the reflection prompt instead
-    of the normal proactive prompt. The marker is updated on success so
-    we don't reflect twice in the same calendar day.
+    Due tasks always take priority. Only after handling all due tasks does the
+    heartbeat consider reflection (once per calendar day). This prevents the
+    reflection branch from starving overdue tasks on the first tick of a new day.
     """
-    today = _today_str()
-    last = memory.get_last_reflection_date()
-    do_reflection = last is None or last < today
-
-    now_iso = datetime.now().isoformat(timespec="seconds")
-
-    if do_reflection:
-        agent = Agent(memory=memory, model=model)
-        yesterday_iso, yesterday_path = _yesterday_iso_and_path()
-        print(f"\n[heartbeat] REFLECTION tick at {now_iso} "
-              f"(reviewing {yesterday_iso}, model={agent.model})", flush=True)
-        prompt = REFLECTION_PROMPT_TEMPLATE.format(
-            today=today,
-            yesterday=yesterday_iso,
-            yesterday_path=yesterday_path,
-        )
-        response = agent.chat(prompt)
-        memory.set_last_reflection_date(today)
-        print(f"[agent] {response}", flush=True)
-        return
-
+    # Use user-TZ-aware now for the prompt — the agent quotes this back to
+    # the user, so naive UTC here causes "the current time is 06:30 IST"
+    # mismatches in chat replies.
+    now_iso = _now_user_tz().isoformat(timespec="seconds")
     tasks = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
+
+    # Auto-recover stale executing flags before computing due_tasks. The
+    # main() startup cleanup only runs on container restart; if the agent
+    # finishes without calling complete_task or record_failure (e.g.,
+    # provider-exhaustion limp-along where the loop returns a fallback
+    # string instead of raising), the flag stays True forever and the
+    # task is filtered from due(). Anything older than the stale window
+    # is forcibly cleared so the next tick can re-fire it.
+    STALE_EXECUTING_SEC = 10 * 60
+    now_dt = datetime.now()
+    for t in tasks.all():
+        if not t.get("executing"):
+            continue
+        last_fired = t.get("last_fired_at")
+        if not last_fired:
+            continue
+        try:
+            age = (now_dt - datetime.fromisoformat(last_fired)).total_seconds()
+        except ValueError:
+            continue
+        if age > STALE_EXECUTING_SEC:
+            try:
+                tasks.record_failure(
+                    t["id"],
+                    f"executing flag stale ({int(age)}s old) — auto-cleared",
+                    increment_failures=False,
+                )
+                print(
+                    f"[heartbeat] auto-cleared stale executing flag on {t['id']!r} "
+                    f"(age={int(age)}s)",
+                    flush=True,
+                )
+            except Exception as _e:
+                print(f"[heartbeat] auto-clear failed for {t['id']}: {_e}", flush=True)
+
     due_tasks = tasks.due()
     events.emit("service_ping", name="heartbeat", text="alive")
-    if not due_tasks:
+
+    if due_tasks:
+        # Tasks take priority — fall through to the task-execution block below.
+        pass
+    else:
+        # No due tasks — consider running the daily reflection instead.
+        today = _today_str()
+        last = memory.get_last_reflection_date()
+        do_reflection = last is None or last < today
+        if do_reflection:
+            agent = Agent(memory=memory, model=model)
+            yesterday_iso, yesterday_path = _yesterday_iso_and_path()
+            print(f"\n[heartbeat] REFLECTION tick at {now_iso} "
+                  f"(reviewing {yesterday_iso}, model={agent.model})", flush=True)
+            prompt = REFLECTION_PROMPT_TEMPLATE.format(
+                today=today,
+                yesterday=yesterday_iso,
+                yesterday_path=yesterday_path,
+            )
+            response = agent.chat(prompt)
+            memory.set_last_reflection_date(today)
+            print(f"[agent] {response}", flush=True)
+            return
+
         print(f"\n[heartbeat] tick at {now_iso}: no due tasks; skipping LLM", flush=True)
         return
 
@@ -336,6 +489,10 @@ def tick(memory: Memory, model: str | None) -> None:
         for t in due_tasks
     })
     tools.set_pre_execute_hook(guard.on_tool_call)
+    # Item 5 (pragmatic slice): install the turn-level hook so the guard
+    # can inject a forced completion message at iter MAX_TURNS-1 when any
+    # due task is still unfinished.
+    tools.set_pre_turn_hook(guard.on_pre_turn)
 
     started = datetime.now()
     try:
@@ -392,7 +549,80 @@ def tick(memory: Memory, model: str | None) -> None:
         raise
     finally:
         tools.set_pre_execute_hook(None)
+        tools.set_pre_turn_hook(None)
     print(f"[agent] {response}", flush=True)
+
+    # Post-success completion check. agent.chat() returned without an
+    # exception, but that doesn't mean the task was actually delivered —
+    # under heavy provider rate-limiting the loop can drop into the
+    # "I'm not sure how to respond — could you rephrase?" fallback path
+    # without ever calling notify() or complete_task(). When that
+    # happens, due_at stays put and executing=True remains stuck.
+    # Detect by checking whether due_at advanced (the dedupe signal we
+    # already use in the failure handler) and record_failure on any
+    # task whose due_at is unchanged so the next tick can pick it up.
+    # Item 4: use guard.expected_remaining() to distinguish "agent explicitly
+    # called record_failure" (intentional fail with reason — don't double-log)
+    # from "agent never touched the task" (silent fall-through — the bug
+    # this whole layer exists to catch).
+    silently_dropped = set(guard.expected_remaining())
+    for task in due_tasks:
+        try:
+            current = tasks.get(task["id"])
+            if current is None:
+                continue
+            if current.get("due_at") != due_at_before.get(task["id"]):
+                continue  # complete_task ran, advanced due_at — good
+            # Distinguish the failure shape so we can act on it differently:
+            #   - silent drop  → agent never called complete_task or record_failure.
+            #                    The post-success check has to clean up.
+            #   - explicit fail → agent called record_failure with a reason
+            #                     (which the TaskGuard tracked). The reason is
+            #                     already in the task's last_runs; don't double-log.
+            if task["id"] not in silently_dropped:
+                # Agent called record_failure — respect its decision.
+                continue
+            print(
+                f"[heartbeat] {task['id']} silently dropped — agent did not call "
+                f"complete_task OR record_failure. Recording soft failure to clear "
+                f"executing flag.",
+                flush=True,
+            )
+            tasks.record_failure(
+                task["id"],
+                "silent drop — agent did not complete_task or record_failure "
+                "(likely provider degradation or context bloat)",
+                duration_s=(datetime.now() - started).total_seconds(),
+                increment_failures=False,
+            )
+            events.emit(
+                "task_failure",
+                name=task["id"],
+                text="silent drop (no complete_task, no record_failure)",
+                result="executing flag cleared · consecutive_failures unchanged",
+            )
+            # Item 8: autonomous fallback notify. For notify-flagged tasks
+            # the user explicitly opted in to hearing about them; if the
+            # agent silently dropped one we tell the user directly so
+            # they don't discover it later by checking Traces. Best-effort:
+            # any failure to send the notification is swallowed (we still
+            # want the failure recorded above to land).
+            if task.get("notify"):
+                try:
+                    title = task.get("title") or task["id"]
+                    _send_to_telegram(
+                        f"⚠️ I tried to handle '{title}' just now but ran out of "
+                        f"iterations / context before finishing. The task is still "
+                        f"active and I'll retry on the next tick."
+                    )
+                except Exception as notify_err:
+                    print(
+                        f"[heartbeat] fallback-notify failed for {task['id']}: "
+                        f"{notify_err}",
+                        flush=True,
+                    )
+        except Exception as inner:
+            print(f"[heartbeat] post-tick check failed for {task['id']}: {inner}", flush=True)
 
 
 def _format_due_tasks(tasks: list[dict]) -> str:
@@ -427,6 +657,27 @@ def main() -> None:
 
     memory = Memory(memory_dir)
     tools.init(memory, autonomous=True)
+
+    dropped = events.rotate(keep_days=14)
+    if dropped:
+        print(f"[heartbeat] rotated _events.jsonl: dropped {dropped} lines older than 14 days", flush=True)
+
+    # Crash recovery: any task left with executing=True from a previous run
+    # is stuck and will never fire again. Clear the flag on startup so the
+    # next tick can pick them up.
+    _tasks_dir = Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks"))
+    _task_store = TaskStore(_tasks_dir)
+    _stuck = [t for t in _task_store.all() if t.get("executing")]
+    for _t in _stuck:
+        try:
+            _task_store.record_failure(
+                _t["id"],
+                "cleared by heartbeat restart — previous run did not finish",
+                increment_failures=False,
+            )
+            print(f"[heartbeat] cleared stuck executing flag on task {_t['id']!r}", flush=True)
+        except Exception as _e:
+            print(f"[heartbeat] could not clear executing on {_t['id']}: {_e}", flush=True)
 
     print(f"[heartbeat] starting, interval = {interval_min} min, model = {model}", flush=True)
 

@@ -74,11 +74,12 @@ def test_due_reappears_after_suppression_window(tmp_path):
     store = _store(tmp_path)
     task = _add_overdue(store)
     store.mark_fired(task["id"])
-    # Wind last_fired_at back past the window
+    # Wind last_fired_at back past the window; clear executing so due() sees the task
     tasks = store.all()
     tasks[0]["last_fired_at"] = (
         datetime.now() - timedelta(seconds=RE_FIRE_SUPPRESSION_SECONDS + 60)
     ).isoformat(timespec="seconds")
+    tasks[0]["executing"] = False
     store._write(tasks)
     assert len(store.due()) == 1
 

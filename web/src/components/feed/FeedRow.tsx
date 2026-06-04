@@ -27,7 +27,16 @@ const KIND_GLYPH: Record<string, string> = {
   memory_forget:    "✕",
 };
 
-const COMPACT_LEN = 280;
+// Per-event collapse threshold. LLM call payloads can be many KB
+// (full request JSON), and tool results can be megabytes of text —
+// rendering even 280 chars per row makes the page scroll forever.
+// User can click the row to expand any of these to full length.
+const COMPACT_LEN_DEFAULT = 280;
+const COMPACT_LEN_BY_KIND: Record<string, number> = {
+  llm_call:    100,
+  tool_result: 140,
+  tool_call:   200,
+};
 
 /** Brutalist trace row with click-to-expand full detail.
  *
@@ -57,14 +66,20 @@ export function FeedRow({ event: e }: Props) {
     : KIND_GLYPH[e.event] ?? "·";
 
   const fullDetail = getFullDetail(e);
-  const isTruncatable = fullDetail.length > COMPACT_LEN;
+  const compactLen = COMPACT_LEN_BY_KIND[e.event] ?? COMPACT_LEN_DEFAULT;
+  const isTruncatable = fullDetail.length > compactLen;
   const displayDetail = expanded || !isTruncatable
     ? fullDetail
-    : fullDetail.slice(0, COMPACT_LEN);
+    : fullDetail.slice(0, compactLen);
 
   return (
     <div
-      className="feed-row grid py-1.5 px-4"
+      className={
+        // hm-interactive-row gives the row a subtle hover bloom (left
+        // accent bar + faint phosphor wash). Only enable when the row
+        // is clickable — otherwise hover affordance lies about behavior.
+        `feed-row grid py-1.5 px-4${isTruncatable ? " hm-interactive-row" : ""}`
+      }
       onClick={isTruncatable ? () => setExpanded((v) => !v) : undefined}
       style={{
         gap: "0 16px",
@@ -140,7 +155,7 @@ export function FeedRow({ event: e }: Props) {
               letterSpacing: "0.14em",
             }}
           >
-            {expanded ? "▲ collapse" : `▼ +${fullDetail.length - COMPACT_LEN} chars`}
+            {expanded ? "▲ collapse" : `▼ +${fullDetail.length - compactLen} chars`}
           </span>
         )}
       </div>

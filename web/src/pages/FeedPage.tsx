@@ -19,7 +19,8 @@ export function FeedPage() {
     return () => clearInterval(t);
   }, []);
 
-  const lastEvent = events[events.length - 1];
+  const SYSTEM_EVENTS_SET = new Set(["service_ping","provider_cooled","context_compacted","budget_blocked","agent_controls_updated"]);
+  const lastEvent = [...events].reverse().find((e) => !SYSTEM_EVENTS_SET.has(e.event));
   const ageSec = lastEvent ? (now - new Date(lastEvent.ts).getTime()) / 1000 : Infinity;
   const live = ageSec < 5;
 
@@ -40,8 +41,11 @@ export function FeedPage() {
 
       <TracesTimeline />
 
+      {/* Counts are owned by FeedStream's filter bar so they reflect the
+          current toggle state (sys on/off, event-type chips, search) —
+          a fixed count here was stale and made the SYS filter look broken. */}
       <div className="brut-meta mt-10 mb-3" style={{ color: "var(--color-text-muted)" }}>
-        ── raw event log · {events.filter(e => !["service_ping","provider_cooled","context_compacted","budget_blocked","agent_controls_updated"].includes(e.event)).length.toString().padStart(2, "0")} events
+        ── raw event log
       </div>
       <FeedStream />
     </PageShell>

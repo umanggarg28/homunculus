@@ -4,6 +4,7 @@ import { ModeToggle } from "./ModeToggle";
 import { ProviderInline } from "./ProviderInline";
 import { SidebarBrand } from "./SidebarBrand";
 import { SidebarRobot } from "@/components/robot/SidebarRobot";
+import { SidebarTelemetry } from "./SidebarTelemetry";
 import { SoundToggle } from "./SoundToggle";
 
 interface NavItem { to: string; label: string; short: string; kbd?: string; }
@@ -109,9 +110,13 @@ export function Sidebar() {
             overflow: hidden;
             overflow-y: hidden;
           }
-          .brut-sidebar > :first-child,
-          .brut-sidebar > :nth-last-child(2),
-          .brut-sidebar > :last-child {
+          /* Mobile top-bar shows only the <nav>. The previous position-
+             based selectors (:first-child, :nth-last-child(N)) broke
+             after React injected a <style> tag as the actual first
+             child — :first-child was hiding the style tag (no-op) and
+             SidebarBrand stayed visible.  :not(nav) is stable against
+             child-order changes. */
+          .brut-sidebar > *:not(nav) {
             display: none;
           }
           .brut-sidebar nav {
@@ -176,11 +181,14 @@ export function Sidebar() {
       <nav className="flex-1 px-3 pt-3 pb-2 flex flex-col gap-3 overflow-y-auto">
         {NAV_GROUPS.map((group) => (
           <div key={group.title}>
+            {/* Group header — the visual separation between sections
+                (gap-3 wrap above) already signals grouping; the leading
+                "── " was redundant operator-noise. */}
             <div
               className="text-[9px] uppercase tracking-[0.22em] mb-1 px-1"
               style={{ color: "var(--color-text-faint)" }}
             >
-              ── {group.title}
+              {group.title}
             </div>
             <div>
               {group.items.map((item) => (
@@ -219,6 +227,12 @@ export function Sidebar() {
           </div>
         ))}
       </nav>
+
+      {/* Ambient operator telemetry — fills the previously empty middle
+          column with at-a-glance signals (next fire, heartbeat age,
+          budget, current model). Hidden on the mobile top-bar layout
+          via the .brut-sidebar media query. */}
+      <SidebarTelemetry />
 
       <SidebarRobot />
 

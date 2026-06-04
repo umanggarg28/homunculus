@@ -67,12 +67,14 @@ export function PageHeader({ latin, title, subtitle, actions }: PageHeaderProps)
       <div className="shrink-0 flex items-center gap-4">
         <div
           className="unit-crumb"
+          title="HMCL-01 = Homunculus Unit 01 (instance identifier). STATE shows the agent's liveness."
           style={{
             fontSize: 9,
             letterSpacing: "0.18em",
             color: "var(--color-text-muted)",
             textTransform: "uppercase",
             whiteSpace: "nowrap",
+            cursor: "help",
           }}
         >
           UNIT · <span style={{ color: "var(--color-accent)" }}>HMCL-01</span>

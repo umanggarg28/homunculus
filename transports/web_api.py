@@ -15,6 +15,8 @@ import asyncio
 import json
 import os
 import secrets
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -44,7 +46,19 @@ SPA_DIST_DIR = Path(os.environ.get("HOMUNCULUS_WEB_DIST", "/app/web-dist"))
 WEB_AUTH_TOKEN = os.environ.get("HOMUNCULUS_WEB_AUTH_TOKEN", "").strip()
 
 POLL_INTERVAL = 0.25
-INITIAL_TAIL = 50
+# Minimum number of "real" (non-infra-ping) events that the SSE initial
+# tail should contain, so the browser always has recent agent activity
+# to show when it first connects. The tail scans back from EOF until it
+# has this many real events, capped at INITIAL_TAIL_MAX raw lines.
+INITIAL_TAIL_MIN_REAL = 30
+INITIAL_TAIL_MAX = 2000
+# Events that count as "infra noise" (matches the UI's SYSTEM_EVENTS
+# filter). When the tail is dominated by these, we keep scanning back
+# until the user gets actual activity (turns, tool calls, replies).
+SSE_INFRA_EVENTS = {
+    "service_ping", "provider_cooled", "context_compacted",
+    "budget_blocked", "agent_controls_updated",
+}
 
 # Per-service liveness thresholds for /api/status.
 STATUS_IDLE_SECONDS = 12 * 60
@@ -64,6 +78,10 @@ async def _web_ping_loop() -> None:
 
 @asynccontextmanager
 async def _lifespan(app_: object):
+    import events as _ev
+    dropped = _ev.rotate(keep_days=14)
+    if dropped:
+        print(f"[web] rotated _events.jsonl: dropped {dropped} lines older than 14 days", flush=True)
     task = asyncio.create_task(_web_ping_loop())
     yield
     task.cancel()
@@ -113,6 +131,40 @@ def require_web_auth(
 @app.get("/api/config")
 def config() -> JSONResponse:
     return JSONResponse({"auth_required": bool(WEB_AUTH_TOKEN)})
+
+
+@app.post("/api/user-tz")
+async def user_tz_set(request: Request) -> JSONResponse:
+    """Persist the browser-detected timezone so heartbeat and agent tools
+    can use it. Called by the web UI on first load.
+
+    Body: {"tz": "Asia/Kolkata"} — an IANA timezone name.
+    Invalid names are silently ignored (better than 4xx-ing the user's
+    perfectly normal session for a TZ we can't parse).
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "reason": "invalid json"}, status_code=400)
+    tz = (body or {}).get("tz") if isinstance(body, dict) else None
+    if not isinstance(tz, str) or not tz:
+        return JSONResponse({"ok": False, "reason": "missing tz"}, status_code=400)
+    try:
+        from user_tz import set_user_tz_name, get_user_tz_name
+        set_user_tz_name(tz)
+        return JSONResponse({"ok": True, "stored": get_user_tz_name()})
+    except Exception as e:
+        return JSONResponse({"ok": False, "reason": str(e)}, status_code=500)
+
+
+@app.get("/api/user-tz")
+def user_tz_get() -> JSONResponse:
+    """Return the currently stored user TZ (for debugging / UI display)."""
+    try:
+        from user_tz import get_user_tz_name
+        return JSONResponse({"tz": get_user_tz_name()})
+    except Exception as e:
+        return JSONResponse({"tz": "UTC", "error": str(e)})
 
 
 @app.get("/api/model")
@@ -740,24 +792,21 @@ def _build_agent_replay(limit: int = 12) -> list[dict]:
         if event == "user_message":
             if current is not None:
                 turns.append(current)
-            current = {
-                "id": f"turn-{len(turns) + 1}",
-                "started_at": ts,
-                "service": service,
-                "user": rec.get("text", ""),
-                "assistant": "",
-                "models": [],
-                "tools": [],
-                "guards": [],
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "cached_tokens": 0,
-                "cost_cents": 0.0,
-            }
+            current = _new_replay_turn(len(turns), ts, service, rec.get("text", ""))
             continue
 
         if current is None:
-            continue
+            if _starts_autonomous_replay(event, service):
+                current = _new_replay_turn(
+                    len(turns),
+                    ts,
+                    service,
+                    _autonomous_replay_label(service, event, rec),
+                )
+            else:
+                continue
+        if ts:
+            current["ended_at"] = ts
 
         if event == "assistant_reply":
             current["assistant"] = rec.get("text", "")
@@ -816,13 +865,21 @@ def _build_agent_replay(limit: int = 12) -> list[dict]:
                 )
             continue
 
-        if event in {"output_guard", "self_correction", "budget_blocked", "provider_cooled"}:
+        if event in {
+            "output_guard",
+            "self_correction",
+            "budget_blocked",
+            "provider_cooled",
+            "task_failure",
+            "memory_write",
+            "memory_forget",
+        }:
             current["guards"].append({
                 "ts": ts,
                 "event": event,
                 "name": rec.get("name", ""),
-                "text": rec.get("text", ""),
-                "result": rec.get("result", ""),
+                "text": rec.get("text", "") or rec.get("description", "") or rec.get("memory_name", ""),
+                "result": rec.get("result", "") or rec.get("action", ""),
             })
 
     if current is not None:
@@ -831,6 +888,56 @@ def _build_agent_replay(limit: int = 12) -> list[dict]:
     for turn in turns:
         turn["cost_cents"] = round(float(turn.get("cost_cents") or 0.0), 4)
     return turns[-limit:][::-1]
+
+
+def _new_replay_turn(index: int, ts: str | None, service: str, user: str) -> dict:
+    return {
+        "id": f"turn-{index + 1}",
+        "started_at": ts,
+        "service": service,
+        "user": user,
+        "assistant": "",
+        "models": [],
+        "tools": [],
+        "guards": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": 0,
+        "cost_cents": 0.0,
+    }
+
+
+def _starts_autonomous_replay(event: str | None, service: str) -> bool:
+    if service in {"", "unknown"}:
+        return False
+    return event in {
+        "llm_call",
+        "tool_call",
+        "tool_result",
+        "tool_blocked",
+        "output_guard",
+        "self_correction",
+        "budget_blocked",
+        "provider_cooled",
+        "task_failure",
+        "memory_write",
+        "memory_forget",
+    }
+
+
+def _autonomous_replay_label(service: str, event: str | None, rec: dict) -> str:
+    if service == "heartbeat":
+        if event == "task_failure":
+            name = rec.get("name") or "scheduled task"
+            return f"Autonomous heartbeat: task failure in {name}"
+        return "Autonomous heartbeat tick"
+    if event in {"memory_write", "memory_forget"}:
+        name = rec.get("memory_name") or rec.get("name") or "memory"
+        return f"{service}: {event.replace('_', ' ')} · {name}"
+    if event in {"budget_blocked", "provider_cooled"}:
+        name = rec.get("name") or "provider"
+        return f"{service}: {event.replace('_', ' ')} · {name}"
+    return f"{service}: autonomous {event or 'event'}"
 
 
 @app.get("/api/stats/today", dependencies=[Depends(require_web_auth)])
@@ -1107,6 +1214,23 @@ def _drain_notifications_for_chat(agent) -> None:
         })
 
 
+# Per-IP rate-limit state for /api/chat/send (in-memory, resets on restart).
+_chat_rate: dict[str, list[float]] = defaultdict(list)
+_CHAT_RATE_MAX = 10   # requests per window
+_CHAT_RATE_WINDOW = 60  # seconds
+
+
+def _check_chat_rate(request: Request) -> None:
+    ip = (request.client.host if request.client else None) or "unknown"
+    now = time.monotonic()
+    timestamps = _chat_rate[ip]
+    # Drop timestamps outside the sliding window
+    _chat_rate[ip] = [t for t in timestamps if now - t < _CHAT_RATE_WINDOW]
+    if len(_chat_rate[ip]) >= _CHAT_RATE_MAX:
+        raise HTTPException(429, "rate limit exceeded — max 10 messages/minute")
+    _chat_rate[ip].append(now)
+
+
 @app.post("/api/chat/send", dependencies=[Depends(require_web_auth)])
 async def chat_send(request: Request):
     """SSE stream of the agent's reply to a posted user message.
@@ -1115,6 +1239,7 @@ async def chat_send(request: Request):
     can call /api/chat/cancel with that ID to interrupt this stream
     mid-flight. The cancellation takes effect at the next chunk
     boundary (we can't interrupt a tool call already in progress)."""
+    _check_chat_rate(request)
     payload = await request.json()
     user_message = (payload or {}).get("message", "").strip()
     if not user_message:
@@ -1198,13 +1323,27 @@ async def _tail_events():
     """
     EVENTS_PATH.touch(exist_ok=True)
 
-    # Initial tail: send the last INITIAL_TAIL lines and remember the
-    # byte offset so we can resume from there.
+    # Initial tail: scan back from EOF until we've collected at least
+    # INITIAL_TAIL_MIN_REAL non-infra events (so the browser always sees
+    # actual agent activity, not just service_pings). Capped at
+    # INITIAL_TAIL_MAX lines to bound memory on heavy infra-only periods.
     with EVENTS_PATH.open("rb") as f:
         all_lines = f.readlines()
-        for raw in all_lines[-INITIAL_TAIL:]:
-            yield _format_sse(raw.decode("utf-8", errors="replace"))
         pos = f.tell()
+    take = 0
+    real = 0
+    for raw in reversed(all_lines):
+        take += 1
+        try:
+            ev = json.loads(raw.decode("utf-8", errors="replace")).get("event")
+            if ev not in SSE_INFRA_EVENTS:
+                real += 1
+        except Exception:
+            pass
+        if real >= INITIAL_TAIL_MIN_REAL or take >= INITIAL_TAIL_MAX:
+            break
+    for raw in all_lines[-take:]:
+        yield _format_sse(raw.decode("utf-8", errors="replace"))
 
     while True:
         try:
@@ -1244,20 +1383,58 @@ def _format_sse_data(data: str) -> str:
 def _list_memory_entries() -> list[dict]:
     if not MEMORY_DIR.exists():
         return []
+    provenance = _memory_write_provenance()
     entries: list[dict] = []
     for path in MEMORY_DIR.glob("*.md"):
         if path.name in {"MEMORY.md", "README.md"}:
             continue
         meta = _parse_frontmatter(path)
+        source = provenance.get(path.name, {})
         entries.append({
             "filename": path.name,
             "name": meta.get("name", path.stem),
             "description": meta.get("description", ""),
             "type": meta.get("type", "unknown"),
             "mtime": path.stat().st_mtime,
+            "source_service": source.get("service"),
+            "source_event": source.get("event"),
+            "source_action": source.get("action"),
+            "source_ts": source.get("ts"),
         })
     entries.sort(key=lambda e: e["mtime"], reverse=True)
     return entries
+
+
+def _memory_write_provenance() -> dict[str, dict]:
+    """Return the most recent memory_write event keyed by memory filename."""
+    out: dict[str, dict] = {}
+    if not EVENTS_PATH.exists():
+        return out
+    try:
+        with EVENTS_PATH.open("r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()[-5000:]
+    except OSError:
+        return out
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("event") != "memory_write":
+            continue
+        name = rec.get("name")
+        if not name:
+            continue
+        out[str(name)] = {
+            "ts": rec.get("ts"),
+            "service": rec.get("service"),
+            "event": rec.get("event"),
+            "action": rec.get("action"),
+        }
+    return out
 
 
 def _parse_frontmatter(path: Path) -> dict:

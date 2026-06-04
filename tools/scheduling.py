@@ -58,6 +58,13 @@ def create_task(
     recurrence: str = "none",
     notify: bool = False,
 ) -> str:
+    # Intake clarifier (robustness plan item 7): refuse to save tasks that
+    # are too vague to fire. The agent receives the NEEDS_CLARIFICATION
+    # marker as the tool result and is expected to relay the question to
+    # the user via the chat reply.
+    from ._intake import needs_clarification
+    if (clarif := needs_clarification(title, description, due_at, recurrence)) is not None:
+        return clarif
     store = _task_store()
     # Dedup guard: if a task with a very similar title already exists,
     # update it instead of creating a duplicate. This catches cases where

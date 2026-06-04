@@ -40,4 +40,9 @@ if "tools" not in sys.modules or not hasattr(sys.modules["tools"], "init"):
         get_mode=lambda: "build",
         set_mode=lambda mode: None,
         set_pre_execute_hook=lambda *a, **k: None,
+        # Item 5 of the robustness plan added a turn-level hook. Tests
+        # need an attribute they can monkey-patch — the no-op default
+        # mirrors the real implementation's behavior.
+        _pre_turn_hook=None,
+        set_pre_turn_hook=lambda *a, **k: None,
     )

@@ -57,15 +57,14 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
   return (
     <div
       onClick={onOpenDetail}
-      className="task-row group cursor-pointer"
+      className="task-row hm-interactive-row group cursor-pointer"
       style={{
         borderBottom: "1px solid var(--color-border)",
         fontFamily: "var(--font-mono)",
-        background: "transparent",
-        transition: "background 0.12s",
       }}
-      onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "rgba(124,254,0,0.03)"; }}
-      onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "transparent"; }}
+      // Hover bloom is owned by .hm-interactive-row (atmosphere.css) —
+      // the inline onMouseEnter handlers were a per-component fallback
+      // when the utility CSS was trimmed; revived now, drop the inline.
     >
       <style>{`
         .task-row-grid {
@@ -118,6 +117,10 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
               letterSpacing: "0.04em",
               textTransform: "uppercase",
               color: task.status === "active" ? "var(--color-text)" : "var(--color-text-muted)",
+              // Cancelled tasks read identically to completed ones at a glance;
+              // strikethrough is the editorial cue without introducing color.
+              textDecoration: task.status === "cancelled" ? "line-through" : "none",
+              textDecorationColor: "var(--color-text-faint)",
             }}
           >
             {task.title}

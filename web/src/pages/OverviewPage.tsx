@@ -4,11 +4,28 @@ import { api, parseServerIso } from "@/lib/api";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
 import { SignatureHeartbeat } from "@/components/overview/SignatureHeartbeat";
-import { GrowthDeltas } from "@/components/overview/GrowthDeltas";
-import { ContextGauge } from "@/components/overview/ContextGauge";
 import { HomunculusRobot } from "@/components/robot/HomunculusRobot";
 import { useRobotState } from "@/hooks/useRobotState";
 import type { FeedEvent, MemoryEntry, Skill } from "@/lib/types";
+
+interface TodayStats {
+  events: number;
+  unique_tools: number;
+  tasks_fired: number;
+  memory_writes: number;
+  memory_forgets: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  cost_cents: number;
+}
+
+interface CtxData {
+  used_tokens: number;
+  limit_tokens: number;
+  model: string;
+  pct: number;
+}
 
 /** Brutalist Overview — one signature element (the full-bleed
  *  heartbeat strip), one hero number, then dense readouts. */
@@ -17,16 +34,28 @@ export function OverviewPage() {
   const robotState = useRobotState();
   const cycRef = useRef(0);
   const [cyc, setCyc] = useState(0);
-  const [memories, setMemories] = useState<MemoryEntry[]>([]);
-  const [skills, setSkills] = useState<Skill[]>([]);
-  const [tasks, setTasks] = useState<Array<{ status: string }>>([]);
+  const [memories, setMemories] = useState<MemoryEntry[] | null>(null);
+  const [skills, setSkills] = useState<Skill[] | null>(null);
+  const [tasks, setTasks] = useState<Array<{ status: string }> | null>(null);
+  const [todayStats, setTodayStats] = useState<TodayStats | null>(null);
+  const [contextData, setContextData] = useState<CtxData | null>(null);
 
   useEffect(() => {
     api.memoryList().then(setMemories).catch(() => undefined);
     api.skillsList().then(setSkills).catch(() => undefined);
     api.tasksList("all").then(setTasks).catch(() => undefined);
+    const fetchStats = () => api.statsToday().then(setTodayStats).catch(() => undefined);
+    const fetchContext = () => api.contextGauge().then(setContextData).catch(() => undefined);
+    fetchStats();
+    fetchContext();
+    const statsTimer = setInterval(fetchStats, 30_000);
+    const contextTimer = setInterval(fetchContext, 30_000);
     const t = setInterval(() => setCyc((c) => { cycRef.current = c + 1; return c + 1; }), 100);
-    return () => clearInterval(t);
+    return () => {
+      clearInterval(t);
+      clearInterval(statsTimer);
+      clearInterval(contextTimer);
+    };
   }, []);
 
   const stats = useMemo(() => {
@@ -41,61 +70,167 @@ export function OverviewPage() {
     };
   }, [events]);
 
-  const lastEvent = events[events.length - 1];
+  const SYSTEM_EVENTS = new Set(["service_ping","provider_cooled","context_compacted","budget_blocked","agent_controls_updated"]);
+  const lastEvent = [...events].reverse().find((e) => !SYSTEM_EVENTS.has(e.event));
   const lastAgeSec = lastEvent
     ? Math.floor((Date.now() - new Date(lastEvent.ts).getTime()) / 1000)
     : null;
 
-  const activeTasks = tasks.filter((t) => t.status === "active").length;
+  const derivedTodayStats = useMemo(() => deriveTodayStats(events), [events]);
+  const displayTodayStats = todayStats ?? derivedTodayStats;
+  const activeTasks = tasks ? tasks.filter((t) => t.status === "active").length : null;
   const readyItems = useMemo(
     () => buildReadiness({
       lastAgeSec,
       failures: stats.failures,
       activeTasks,
       skills,
-      memories,
     }),
-    [activeTasks, lastAgeSec, memories, skills, stats.failures],
+    [activeTasks, lastAgeSec, skills, stats.failures],
   );
 
   return (
     <PageShell>
       <PageHeader title="Overview" subtitle={liveStateMessage(lastAgeSec).toLowerCase()} />
-      <div className="overflow-hidden"><SignatureHeartbeat /></div>
-      <GrowthDeltas />
-      <ContextGauge />
       <style>{`
-        .overview-hero-grid {
+        .overview-command-deck {
           display: grid;
           grid-template-columns: minmax(0, 1fr) 320px;
-          border: 1px solid var(--color-border);
-          background: linear-gradient(180deg, rgba(119,255,61,0.025), transparent), var(--color-surface-1);
+          margin-bottom: 40px;
+          overflow: hidden;
+          background:
+            radial-gradient(circle at 13% 18%, rgba(124, 254, 0, 0.075), transparent 26%),
+            linear-gradient(180deg, rgba(119, 255, 61, 0.035), rgba(108, 231, 255, 0.012)),
+            var(--color-surface-1);
+          box-shadow:
+            inset 0 1px 0 rgba(215, 245, 223, 0.045),
+            inset 0 -1px 0 rgba(124, 254, 0, 0.025),
+            0 18px 64px rgba(0, 0, 0, 0.32),
+            0 0 28px rgba(124, 254, 0, 0.035);
         }
-        .overview-hero-main {
+        .overview-command-main {
           border-right: 1px solid var(--color-border);
         }
-        .overview-state-grid {
+        .overview-command-agent {
+          min-width: 0;
+        }
+        .overview-command-status {
+          grid-column: 1 / -1;
+          border-top: 1px solid var(--color-border);
+          padding: 18px;
+          background:
+            linear-gradient(90deg, rgba(124,254,0,0.025), transparent 42%),
+            var(--color-surface-1);
+        }
+        .overview-command-status-grid {
           display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
+          grid-template-columns: minmax(0, 0.82fr) minmax(320px, 1.18fr);
+          gap: 14px 18px;
+          align-items: start;
+        }
+        .overview-pulse-panel {
+          grid-column: 1 / -1;
+          min-width: 0;
+          border: 1px solid var(--color-border);
+          padding: 14px 16px;
+          background: linear-gradient(90deg, rgba(124,254,0,0.025), transparent 55%);
+        }
+        .overview-today-ledger {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          border: 1px solid var(--color-border);
+          align-self: stretch;
+          min-height: 100%;
+        }
+        .overview-today-ledger > div {
+          padding: 18px 20px;
+          border-left: 1px solid var(--color-border);
+          border-top: 1px solid var(--color-border);
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
+          gap: 18px;
+        }
+        .overview-today-ledger > div:nth-child(odd) {
+          border-left: none;
+        }
+        .overview-today-ledger > div:nth-child(-n + 2) {
+          border-top: none;
+        }
+        .overview-status-stack {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          border: 1px solid var(--color-border);
+          min-width: 0;
+        }
+        .overview-status-wide {
+          grid-column: 1 / -1;
+        }
+        .overview-status-stack > div {
+          padding: 14px;
+          border-left: 1px solid var(--color-border);
+          border-top: 1px solid var(--color-border);
+        }
+        .overview-status-stack > div:nth-child(odd) {
+          border-left: none;
+        }
+        .overview-status-stack > div:nth-child(-n + 2) {
+          border-top: none;
+        }
+        .overview-status-wide {
+          border-left: none !important;
+        }
+        .overview-context-bar {
+          margin-top: 10px;
+          height: 4px;
+          background: var(--color-border);
+          overflow: hidden;
+        }
+        .overview-context-bar > span {
+          display: block;
+          height: 100%;
+          background: var(--color-accent);
+          box-shadow: 0 0 10px var(--color-accent-glow);
         }
         @media (max-width: 980px) {
-          .overview-hero-grid {
+          .overview-command-deck {
             grid-template-columns: 1fr;
           }
-          .overview-hero-main {
+          .overview-command-main {
             border-right: none;
             border-bottom: 1px solid var(--color-border);
           }
-          .overview-state-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+          .overview-command-status-grid {
+            grid-template-columns: 1fr;
+          }
+          .overview-pulse-panel {
+            grid-column: auto;
           }
         }
         @media (max-width: 560px) {
-          .overview-hero-main {
+          .overview-command-main {
             padding: 20px !important;
           }
-          .overview-state-grid {
+          .overview-command-status {
+            padding: 14px;
+          }
+          .overview-status-stack {
             grid-template-columns: 1fr;
+          }
+          .overview-today-ledger {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+          .overview-status-stack > div,
+          .overview-status-stack > div:nth-child(odd),
+          .overview-status-stack > div:nth-child(-n + 2) {
+            border-left: none;
+            border-top: 1px solid var(--color-border);
+          }
+          .overview-status-stack > div:first-child {
+            border-top: none;
+          }
+          .overview-status-wide {
+            grid-column: auto;
           }
         }
         .overview-mission-grid {
@@ -106,8 +241,40 @@ export function OverviewPage() {
         .overview-ops-card {
           border: 1px solid var(--color-border);
           background: linear-gradient(180deg, rgba(119,255,61,0.018), transparent), var(--color-surface-1);
-          padding: 18px;
           min-width: 0;
+          overflow: hidden;
+          transition: border-color 180ms ease, box-shadow 220ms ease;
+        }
+        .overview-ops-card:hover,
+        .overview-ops-card:focus-within {
+          border-color: rgba(67, 133, 105, 0.76);
+          box-shadow:
+            inset 0 1px 0 rgba(215,245,223,0.03),
+            0 14px 46px rgba(0,0,0,0.24),
+            0 0 20px rgba(124,254,0,0.028);
+        }
+        .overview-ops-head {
+          display: flex;
+          justify-content: space-between;
+          gap: 18px;
+          align-items: baseline;
+          padding: 16px 18px;
+          border-bottom: 1px solid var(--color-border);
+        }
+        .overview-ops-body {
+          padding: 18px;
+        }
+        .overview-run-summary {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          border-bottom: 1px solid var(--color-border);
+        }
+        .overview-run-summary > div {
+          padding: 12px 14px;
+          border-left: 1px solid var(--color-border);
+        }
+        .overview-run-summary > div:first-child {
+          border-left: none;
         }
         .overview-step-row {
           display: grid;
@@ -131,7 +298,22 @@ export function OverviewPage() {
         }
         @media (max-width: 560px) {
           .overview-ops-card {
-            padding: 14px;
+            padding: 0;
+          }
+          .overview-ops-head,
+          .overview-ops-body {
+            padding-left: 14px;
+            padding-right: 14px;
+          }
+          .overview-run-summary {
+            grid-template-columns: 1fr;
+          }
+          .overview-run-summary > div {
+            border-left: none;
+            border-top: 1px solid var(--color-border);
+          }
+          .overview-run-summary > div:first-child {
+            border-top: none;
           }
           .overview-step-row {
             grid-template-columns: 56px 18px minmax(0, 1fr);
@@ -143,34 +325,31 @@ export function OverviewPage() {
         }
       `}</style>
 
-      {/* ── HERO ROW — countdown + robot panel ── */}
+      {/* ── COMMAND DECK — next action + live state + operational truth ── */}
       <div
-        className="overview-hero-grid gap-0 mb-10"
+        className="overview-command-deck instrument-panel hm-panel-scan hm-panel-hero gap-0"
       >
           {/* LEFT — countdown as hero + stats */}
-          <div className="overview-hero-main p-8 flex flex-col justify-center gap-0">
+          <div className="overview-command-main p-8 flex flex-col justify-center gap-0">
             <UpcomingHero stats={stats} lastEvent={lastEvent} />
           </div>
 
           {/* RIGHT — robot panel */}
-          <AgentPanel robotState={robotState} cyc={cyc} />
-        </div>
-
-        {/* ── READINESS ── */}
-        <div className="p-6 mb-10" style={{ border: "1px solid var(--color-border)" }}>
-          <div className="text-[10px] uppercase tracking-[0.32em] mb-4" style={{ color: "var(--color-text-muted)" }}>
-            ── readiness
+          <div className="overview-command-agent">
+            <AgentPanel robotState={robotState} cyc={cyc} />
           </div>
-          <div
-            className="overview-state-grid gap-x-8 gap-y-3"
-          >
-            {readyItems.map((item) => (
-              <ReadinessKV key={item.label} {...item} />
-            ))}
+
+          <div className="overview-command-status">
+            <CommandStatus
+              readyItems={readyItems}
+              todayStats={displayTodayStats}
+              contextData={contextData}
+              memories={memories?.length ?? null}
+            />
           </div>
         </div>
 
-        <MissionControl events={events} />
+        <RunInspector events={events} />
     </PageShell>
   );
 }
@@ -178,7 +357,139 @@ export function OverviewPage() {
 // ── helpers ─────────────────────────────────────────────────────────
 
 
-function ReadinessKV({
+function CommandStatus({
+  readyItems,
+  todayStats,
+  contextData,
+  memories,
+}: {
+  readyItems: Array<{ label: string; value: string; hint: string; tone: "ok" | "warn" | "idle" }>;
+  todayStats: TodayStats | null;
+  contextData: CtxData | null;
+  memories: number | null;
+}) {
+  return (
+    <div className="overview-command-status-grid">
+      <div className="overview-pulse-panel">
+        <SignatureHeartbeat compact />
+      </div>
+      <TodayLedger stats={todayStats} />
+      <div className="overview-status-stack">
+        {readyItems.map((item) => (
+          <StatusCell key={item.label} {...item} />
+        ))}
+        <StatusCell
+          label="runtime"
+          value={todayStats ? `${todayStats.events}` : "--"}
+          hint={todayStats ? `${todayStats.unique_tools} tools · ${todayStats.tasks_fired} fires` : "loading"}
+          tone={todayStats && todayStats.events > 0 ? "ok" : "idle"}
+        />
+        <StatusCell
+          label="memory"
+          value={memories === null ? "SYNC" : pad(memories)}
+          hint={todayStats ? `${Math.max(0, todayStats.memory_writes - todayStats.memory_forgets)} net today` : "persistent"}
+          tone={memories && memories > 0 ? "ok" : "idle"}
+        />
+        <ContextStatusCell contextData={contextData} />
+      </div>
+    </div>
+  );
+}
+
+function TodayLedger({ stats }: { stats: TodayStats | null }) {
+  const tokens = stats ? (stats.input_tokens ?? 0) + (stats.output_tokens ?? 0) : 0;
+  const cost = stats ? stats.cost_cents ?? 0 : 0;
+  return (
+    <div className="overview-today-ledger">
+      <LedgerCell label="events" value={stats ? String(stats.events) : "--"} />
+      <LedgerCell label="tools" value={stats ? String(stats.unique_tools) : "--"} />
+      <LedgerCell label="fires" value={stats ? String(stats.tasks_fired) : "--"} />
+      <LedgerCell label="spend" value={stats ? formatCost(cost, tokens) : "--"} />
+    </div>
+  );
+}
+
+function deriveTodayStats(events: FeedEvent[]): TodayStats {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const startMs = startOfDay.getTime();
+  const today = events.filter((e) => new Date(e.ts).getTime() >= startMs);
+  const tools = new Set(today.filter((e) => e.event === "tool_call" && e.name).map((e) => e.name as string));
+  return {
+    events: today.length,
+    unique_tools: tools.size,
+    tasks_fired: today.filter((e) => ["task_fired", "task_started", "scheduled_task"].includes(e.event)).length,
+    memory_writes: today.filter((e) => e.event === "memory_write").length,
+    memory_forgets: today.filter((e) => e.event === "memory_forget").length,
+    input_tokens: today.reduce((sum, e) => sum + (e.input_tokens ?? 0), 0),
+    output_tokens: today.reduce((sum, e) => sum + (e.output_tokens ?? 0), 0),
+    cached_tokens: today.reduce((sum, e) => sum + (e.cached_tokens ?? 0), 0),
+    cost_cents: 0,
+  };
+}
+
+function LedgerCell({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-[9px] uppercase tracking-[0.18em]" style={{ color: "var(--color-text-muted)" }}>
+        {label}
+      </div>
+      {/* Ledger numbers are secondary — no text-shadow so they don't
+          compete with the page-anchor countdown above. */}
+      <div className="text-[34px] leading-none" style={{ color: "var(--color-accent)", fontVariantNumeric: "tabular-nums", letterSpacing: "0" }}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function formatCost(costCents: number, tokens: number): string {
+  if (costCents > 0) return costCents >= 100 ? `$${(costCents / 100).toFixed(2)}` : `¢${costCents.toFixed(1)}`;
+  if (tokens > 0) return "$0";
+  return "idle";
+}
+
+function ContextStatusCell({ contextData }: { contextData: CtxData | null }) {
+  const hasContext = !!contextData && contextData.used_tokens > 0;
+  const pct = hasContext ? Math.min(contextData.pct, 100) : 0;
+  const tone = hasContext && pct >= 70 ? "warn" : hasContext ? "ok" : "idle";
+  const color = tone === "warn"
+    ? "var(--color-amber)"
+    : tone === "ok"
+      ? "var(--color-accent)"
+      : "var(--color-text-faint)";
+  const fillColor = tone === "warn" ? "var(--color-amber)" : "var(--color-accent)";
+  return (
+    <div
+      className="overview-status-wide"
+      title={
+        hasContext
+          ? `Context window usage on ${contextData.model}: ${contextData.used_tokens.toLocaleString()} of ${contextData.limit_tokens.toLocaleString()} tokens. Not cost.`
+          : "Context window usage — no model call yet this session."
+      }
+      style={{ cursor: "help" }}
+    >
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <div className="text-[9px] uppercase tracking-[0.18em]" style={{ color: "var(--color-text-muted)" }}>
+            context
+          </div>
+          <div className="mt-2 text-[22px] leading-none" style={{ color, fontVariantNumeric: "tabular-nums", letterSpacing: "0" }}>
+            {hasContext ? `${pct.toFixed(0)}%` : "COLD"}
+          </div>
+        </div>
+        <div className="text-[9px] uppercase tracking-[0.1em] text-right" style={{ color: "var(--color-text-faint)", overflowWrap: "anywhere" }}>
+          {hasContext ? compactTokens(contextData.used_tokens, contextData.limit_tokens) : "no model call"}
+        </div>
+      </div>
+      <div className="overview-context-bar">
+        <span style={{ width: `${pct}%`, background: fillColor }} />
+      </div>
+    </div>
+  );
+}
+
+function StatusCell({
   label,
   value,
   hint,
@@ -195,26 +506,36 @@ function ReadinessKV({
       ? "var(--color-accent)"
       : "var(--color-text-faint)";
   return (
-    <div
-      className="flex items-baseline justify-between gap-4 py-2"
-      style={{ borderBottom: "1px dashed var(--color-border)" }}
-    >
-      <span className="text-[10px] uppercase tracking-[0.16em]" style={{ color: "var(--color-text-muted)" }}>
+    <div>
+      <div className="text-[9px] uppercase tracking-[0.18em]" style={{ color: "var(--color-text-muted)" }}>
         {label}
-      </span>
-      <span className="flex items-baseline gap-3">
-        <span className="text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--color-text-faint)" }}>
-          {hint}
-        </span>
+      </div>
+      <div className="mt-2 flex items-end justify-between gap-3">
         <span
-          className="text-[18px]"
+          className="text-[22px] leading-none"
           style={{ color, fontVariantNumeric: "tabular-nums", letterSpacing: "0" }}
         >
           {value}
         </span>
-      </span>
+        <span
+          className="text-[9px] uppercase tracking-[0.1em] text-right"
+          style={{ color: "var(--color-text-faint)", overflowWrap: "anywhere" }}
+        >
+          {hint}
+        </span>
+      </div>
     </div>
   );
+}
+
+function compactTokens(used: number, limit: number): string {
+  return `${fmtShort(used)} / ${fmtShort(limit)}`;
+}
+
+function fmtShort(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}m`;
+  if (n >= 1000) return `${Math.round(n / 1000)}k`;
+  return String(n);
 }
 
 function buildReadiness({
@@ -222,16 +543,15 @@ function buildReadiness({
   failures,
   activeTasks,
   skills,
-  memories,
 }: {
   lastAgeSec: number | null;
   failures: number;
-  activeTasks: number;
-  skills: Skill[];
-  memories: MemoryEntry[];
+  activeTasks: number | null;
+  skills: Skill[] | null;
+  // memories param removed — capability cell now reflects tool usage only.
 }) {
-  const usedTools = skills.filter((s) => s.call_count > 0).length;
-  const failedTools = skills.filter((s) => s.failure_count > 0).length;
+  const usedTools = skills?.filter((s) => s.call_count > 0).length ?? null;
+  const failedTools = skills?.filter((s) => s.failure_count > 0).length ?? 0;
   const activeRecently = lastAgeSec !== null && lastAgeSec < 300;
   return [
     {
@@ -248,15 +568,19 @@ function buildReadiness({
     },
     {
       label: "autonomy",
-      value: activeTasks > 0 ? "ARMED" : "EMPTY",
-      hint: activeTasks > 0 ? `${activeTasks} active tasks` : "no active tasks",
-      tone: activeTasks > 0 ? "ok" : "idle",
+      value: activeTasks === null ? "SYNC" : activeTasks > 0 ? "ARMED" : "EMPTY",
+      hint: activeTasks === null ? "loading tasks" : activeTasks > 0 ? `${activeTasks} active tasks` : "no active tasks",
+      tone: activeTasks && activeTasks > 0 ? "ok" : "idle",
     },
     {
+      // Value = tools actually called at least once / total tools registered.
+      // Hint must describe the SAME thing — was mis-pointed at memory count.
       label: "capability",
-      value: usedTools > 0 ? `${pad(usedTools)}/${pad(skills.length)}` : "COLD",
-      hint: memories.length > 0 ? `${memories.length} memories` : "no memory",
-      tone: usedTools > 0 && memories.length > 0 ? "ok" : "idle",
+      value: skills === null ? "SYNC" : usedTools && usedTools > 0 ? `${pad(usedTools)}/${pad(skills.length)}` : "COLD",
+      hint: skills === null ? "loading tools" : usedTools && usedTools > 0
+        ? `tools exercised`
+        : "no tool calls yet",
+      tone: usedTools && usedTools > 0 ? "ok" : "idle",
     },
   ] satisfies Array<{ label: string; value: string; hint: string; tone: "ok" | "warn" | "idle" }>;
 }
@@ -296,17 +620,6 @@ function AgentPanel({
     >
       {/* Framed robot */}
       <div style={{ position: "relative", width: "100%", maxWidth: 240, aspectRatio: "3/4", border: "1px solid var(--color-border)", background: "var(--color-surface-1)" }}>
-        {/* HUD corners */}
-        {(["tl","tr","bl","br"] as const).map((c) => (
-          <span key={c} style={{
-            position: "absolute", width: 10, height: 10,
-            border: "1px solid var(--color-border-bright)",
-            top: c[0] === "t" ? 6 : undefined, bottom: c[0] === "b" ? 6 : undefined,
-            left: c[1] === "l" ? 6 : undefined, right: c[1] === "r" ? 6 : undefined,
-            borderRight: c[1] === "r" ? "none" : undefined, borderLeft: c[1] === "l" ? "none" : undefined,
-            borderBottom: c[0] === "t" ? "none" : undefined, borderTop: c[0] === "b" ? "none" : undefined,
-          }} />
-        ))}
         {/* HUD top */}
         <div style={{ position: "absolute", left: 10, right: 10, top: 9, display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 8, letterSpacing: "0.14em", color: "var(--color-text-muted)", textTransform: "uppercase", pointerEvents: "none" }}>
           <span>UNIT · <b style={{ color: "var(--color-accent)", fontWeight: 500 }}>HMCL-01</b></span>
@@ -323,7 +636,7 @@ function AgentPanel({
       {/* Caption */}
       <div style={{ textAlign: "center" }}>
         <div style={{ fontSize: 9, letterSpacing: "0.28em", color: "var(--color-text-muted)", textTransform: "uppercase", marginBottom: 4 }}>{info.verb}</div>
-        <div style={{ fontSize: 14, letterSpacing: "0.04em", color: "var(--color-accent)", textShadow: "0 0 14px var(--color-accent-glow)" }}>{info.title}</div>
+        <div style={{ fontSize: 14, letterSpacing: "0.04em", color: "var(--color-accent)" }}>{info.title}</div>
       </div>
 
     </div>
@@ -358,12 +671,17 @@ function fmtAbs(d: Date): string {
   return `${dd} · ${tt}`.toLowerCase();
 }
 
-function nowNarration(lastEvent: { event: string; name?: string } | undefined): string {
+function nowNarration(lastEvent: { event: string; name?: string; ts: string } | undefined, nowMs: number): string {
   if (!lastEvent) return "─ no activity yet";
+  const ageSec = (nowMs - new Date(lastEvent.ts).getTime()) / 1000;
+  // In-progress labels are only meaningful while the event is recent.
+  // After 30s with no follow-up, the agent has finished (or crashed);
+  // show the elapsed time instead of a stale "thinking…" / "calling…".
+  const inProgress = ageSec < 30;
   switch (lastEvent.event) {
-    case "llm_call": return "thinking…";
-    case "tool_call": return `calling ${(lastEvent.name ?? "tool").toLowerCase()}…`;
-    case "tool_result": return "processing result…";
+    case "llm_call":    return inProgress ? "thinking…"   : `idle · last active ${ageSec < 3600 ? `${Math.floor(ageSec / 60)}m` : `${Math.floor(ageSec / 3600)}h`} ago`;
+    case "tool_call":   return inProgress ? `calling ${(lastEvent.name ?? "tool").toLowerCase()}…` : `idle · last active ${Math.floor(ageSec / 60)}m ago`;
+    case "tool_result": return inProgress ? "processing result…" : "idle.";
     case "assistant_reply": return "replied.";
     case "user_message": return "received input.";
     default: return lastEvent.event.replace(/_/g, " ");
@@ -420,14 +738,17 @@ function UpcomingHero({
         return (
           <>
             <div
+              className="brut-display"
               style={{
                 fontSize: "clamp(54px, 8vw, 104px)",
                 lineHeight: 0.85,
+                fontWeight: 700,
                 fontVariantNumeric: "tabular-nums",
                 letterSpacing: "0",
                 color: overdue ? "var(--color-amber)" : "var(--color-accent)",
-                textShadow: overdue ? "0 0 24px rgba(255,176,0,0.4)" : "0 0 32px var(--color-accent-glow)",
-                fontFamily: "var(--font-mono)",
+                textShadow: overdue
+                  ? "0 0 18px var(--color-amber), 0 0 4px var(--color-amber)"
+                  : "0 0 18px var(--color-accent), 0 0 4px var(--color-accent)",
                 marginBottom: 12,
               }}
             >
@@ -480,7 +801,7 @@ function UpcomingHero({
       {/* NOW narration */}
       <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.08em", color: "var(--color-text-dim)", borderTop: "1px solid var(--color-border)", paddingTop: 12 }}>
         <span style={{ color: "var(--color-text-faint)", marginRight: 8 }}>NOW</span>
-        {nowNarration(lastEvent)}
+        {nowNarration(lastEvent, now)}
       </div>
     </>
   );
@@ -512,7 +833,7 @@ function HeroSignal({
   );
 }
 
-function MissionControl({ events }: { events: FeedEvent[] }) {
+function RunInspector({ events }: { events: FeedEvent[] }) {
   const recent = events.slice(-80);
   const turn = latestTurn(recent);
   const attention = recent
@@ -521,92 +842,141 @@ function MissionControl({ events }: { events: FeedEvent[] }) {
     .reverse();
   const tools = toolMix(recent);
   const lastModel = [...recent].reverse().find((e) => e.event === "llm_call");
+  const runService = turn.steps[0]?.service ?? turn.user?.service ?? lastModel?.service ?? "idle";
+  const runAge = turn.steps.length
+    ? `${Math.max(0, Math.floor((Date.now() - new Date(turn.steps[turn.steps.length - 1].ts).getTime()) / 1000))}s ago`
+    : "no run";
 
   return (
     <div className="overview-mission-grid mb-10">
       <div className="overview-ops-card">
-        <SectionKicker label="mission trace" value={turn.steps.length ? `${turn.steps.length} steps` : "idle"} />
-        {turn.user ? (
-          <div style={{ marginBottom: 14 }}>
-            <div className="text-[10px] uppercase tracking-[0.18em] mb-2" style={{ color: "var(--color-text-faint)" }}>
-              latest instruction
+        <div className="overview-ops-head">
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.28em]" style={{ color: "var(--color-text-muted)" }}>
+              run inspector
             </div>
-            <div
-              className="text-[13px] leading-[1.65]"
-              style={{ color: "var(--color-text)", overflowWrap: "anywhere", wordBreak: "break-word" }}
-            >
-              <span style={{ color: "var(--color-accent)" }}>›</span>{" "}
-              {clip(turn.user.text ?? "", 150)}
+            <div className="text-[11px] mt-1" style={{ color: "var(--color-text-faint)" }}>
+              latest directive · execution trace · reply
             </div>
           </div>
-        ) : (
-          <EmptyLine text="no user turn in the current event window" />
-        )}
-
-        <div>
-          {turn.steps.map((step, i) => (
-            <MissionStep key={`${step.ts}-${i}`} event={step} />
-          ))}
+          <div className="text-[9px] uppercase tracking-[0.18em]" style={{ color: turn.steps.length ? "var(--color-accent)" : "var(--color-text-faint)" }}>
+            {turn.steps.length ? `${turn.steps.length} steps` : "idle"}
+          </div>
         </div>
 
-        {turn.reply && (
-          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--color-border)" }}>
-            <div className="text-[10px] uppercase tracking-[0.18em] mb-2" style={{ color: "var(--color-text-faint)" }}>
-              last reply
+        <div className="overview-run-summary">
+          <SummaryCell label="service" value={runService} />
+          <SummaryCell label="last event" value={turn.steps.at(-1)?.event.replace(/_/g, " ") ?? "none"} />
+          <SummaryCell label="age" value={runAge} />
+        </div>
+
+        <div className="overview-ops-body">
+          {turn.user ? (
+            <div style={{ marginBottom: 14 }}>
+              <div className="text-[10px] uppercase tracking-[0.18em] mb-2" style={{ color: "var(--color-text-faint)" }}>
+                latest directive
+              </div>
+              <div
+                className="text-[13px] leading-[1.65]"
+                style={{ color: "var(--color-text)", overflowWrap: "anywhere", wordBreak: "break-word" }}
+              >
+                <span style={{ color: "var(--color-accent)" }}>›</span>{" "}
+                {clip(turn.user.text ?? "", 150)}
+              </div>
             </div>
-            <div
-              className="text-[12px] leading-[1.7]"
-              style={{ color: "var(--color-text-dim)", overflowWrap: "anywhere", wordBreak: "break-word" }}
-            >
-              {clip(turn.reply.text ?? "", 220)}
-            </div>
+          ) : (
+            <EmptyLine text="no user directive in the current event window" />
+          )}
+
+          <div>
+            {turn.steps.map((step, i) => (
+              <MissionStep key={`${step.ts}-${i}`} event={step} />
+            ))}
           </div>
-        )}
+
+          {turn.reply && (
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--color-border)" }}>
+              <div className="text-[10px] uppercase tracking-[0.18em] mb-2" style={{ color: "var(--color-text-faint)" }}>
+                last reply
+              </div>
+              <div
+                className="text-[12px] leading-[1.7]"
+                style={{ color: "var(--color-text-dim)", overflowWrap: "anywhere", wordBreak: "break-word" }}
+              >
+                {clip(turn.reply.text ?? "", 220)}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="overview-ops-card">
-        <SectionKicker label="attention" value={attention.length ? `${attention.length} open` : "clear"} tone={attention.length ? "warn" : "ok"} />
-        {attention.length ? (
-          <div style={{ marginBottom: 18 }}>
-            {attention.map((e, i) => (
-              <AttentionRow key={`${e.ts}-${i}`} event={e} />
-            ))}
+        <div className="overview-ops-head">
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.28em]" style={{ color: "var(--color-text-muted)" }}>
+              operations lane
+            </div>
+            <div className="text-[11px] mt-1" style={{ color: "var(--color-text-faint)" }}>
+              attention · tools · model route
+            </div>
           </div>
-        ) : (
-          <div style={{ marginBottom: 18 }}>
-            <EmptyLine text="no guards, failures, or cooldowns in view" />
+          <div className="text-[9px] uppercase tracking-[0.18em]" style={{ color: attention.length ? "var(--color-amber)" : "var(--color-accent)" }}>
+            {attention.length ? `${attention.length} open` : "clear"}
           </div>
-        )}
+        </div>
+        <div className="overview-ops-body">
+          <SectionKicker label="attention" value={attention.length ? `${attention.length} open` : "clear"} tone={attention.length ? "warn" : "ok"} />
+          {attention.length ? (
+            <div style={{ marginBottom: 18 }}>
+              {attention.map((e, i) => (
+                <AttentionRow key={`${e.ts}-${i}`} event={e} />
+              ))}
+            </div>
+          ) : (
+            <div style={{ marginBottom: 18 }}>
+              <EmptyLine text="no guards, failures, or cooldowns in view" />
+            </div>
+          )}
 
-        <SectionKicker label="tool mix" value={tools.length ? `${tools.length} active` : "quiet"} />
-        {tools.length ? (
-          <div style={{ marginBottom: 18 }}>
-            {tools.map((t) => <ToolMixRow key={t.name} {...t} />)}
-          </div>
-        ) : (
-          <div style={{ marginBottom: 18 }}>
-            <EmptyLine text="no tool calls in the current window" />
-          </div>
-        )}
+          <SectionKicker label="tool mix" value={tools.length ? `${tools.length} active` : "quiet"} />
+          {tools.length ? (
+            <div style={{ marginBottom: 18 }}>
+              {tools.map((t) => <ToolMixRow key={t.name} {...t} />)}
+            </div>
+          ) : (
+            <div style={{ marginBottom: 18 }}>
+              <EmptyLine text="no tool calls in the current window" />
+            </div>
+          )}
 
-        <SectionKicker label="model lane" value={lastModel?.model ? "live" : "empty"} />
-        {lastModel ? (
-          <div className="text-[11px] leading-[1.7]" style={{ color: "var(--color-text-dim)" }}>
-            <div style={{ color: "var(--color-text)", overflowWrap: "anywhere" }}>
-              {lastModel.model}
+          <SectionKicker label="model lane" value={lastModel?.model ? "live" : "empty"} />
+          {lastModel ? (
+            <div className="text-[11px] leading-[1.7]" style={{ color: "var(--color-text-dim)" }}>
+              <div style={{ color: "var(--color-text)", overflowWrap: "anywhere" }}>
+                {lastModel.model}
+              </div>
+              <div className="uppercase tracking-[0.12em]" style={{ color: "var(--color-text-faint)", fontSize: 9 }}>
+                {lastModel.host ?? "unknown host"}
+              </div>
+              <div style={{ marginTop: 6, fontVariantNumeric: "tabular-nums" }}>
+                {(lastModel.input_tokens ?? 0).toLocaleString()} in · {(lastModel.output_tokens ?? 0).toLocaleString()} out
+                {lastModel.cached_tokens ? ` · ${lastModel.cached_tokens.toLocaleString()} cached` : ""}
+              </div>
             </div>
-            <div className="uppercase tracking-[0.12em]" style={{ color: "var(--color-text-faint)", fontSize: 9 }}>
-              {lastModel.host ?? "unknown host"}
-            </div>
-            <div style={{ marginTop: 6, fontVariantNumeric: "tabular-nums" }}>
-              {(lastModel.input_tokens ?? 0).toLocaleString()} in · {(lastModel.output_tokens ?? 0).toLocaleString()} out
-              {lastModel.cached_tokens ? ` · ${lastModel.cached_tokens.toLocaleString()} cached` : ""}
-            </div>
-          </div>
-        ) : (
-          <EmptyLine text="no model call in the current window" />
-        )}
+          ) : (
+            <EmptyLine text="no model call in the current window" />
+          )}
+        </div>
       </div>
+    </div>
+  );
+}
+
+function SummaryCell({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-[9px] uppercase tracking-[0.16em]" style={{ color: "var(--color-text-muted)" }}>{label}</div>
+      <div className="mt-1 text-[11px] uppercase tracking-[0.08em]" style={{ color: "var(--color-text)", overflowWrap: "anywhere" }}>{value}</div>
     </div>
   );
 }

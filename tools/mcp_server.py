@@ -207,6 +207,50 @@ def conversation_search(
     return f"Found {len(hits)} match(es) for '{query}':\n\n" + "\n\n---\n\n".join(hits)
 
 
+# ── archival memory (item 6 of robustness plan) ──────────────────────
+
+
+@mcp.tool(annotations={"readOnlyHint": False})
+def archival_memory_insert(
+    content: Annotated[str, Field(description="Full text to persist to archival memory. No size limit; long content stays out of conversation.")],
+    tags: Annotated[
+        list[str] | None,
+        Field(description="Optional free-form tags to help filter results in archival_memory_search."),
+    ] = None,
+) -> str:
+    """Save content to archival memory and return a short reference token.
+
+    Use when a tool result (e.g. a long web_fetch or large file) is useful
+    to keep around but too big to leave in your conversation history.
+    The token (arch_YYYYMMDDHHMMSS_xxxxxx) is searchable later via
+    archival_memory_search. Letta/MemGPT pattern.
+    """
+    from ._state import get_memory as _get_memory
+    mem = _get_memory()
+    if mem is None:
+        return "ERROR: memory not initialised"
+    return mem.archival_memory_insert(content, tags)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def archival_memory_search(
+    query: Annotated[str, Field(description="Search query — semantic similarity over the archival store.")],
+    k: Annotated[int, Field(description="Number of top results to return. Default 5, max 20.", ge=1, le=20)] = 5,
+) -> str:
+    """Search archival memory by semantic similarity.
+
+    Returns up to k matching entries with their token, similarity score,
+    tags, and a preview of the content. Use the token in your reply if
+    you need to refer back to a specific entry.
+    Letta/MemGPT pattern.
+    """
+    from ._state import get_memory as _get_memory
+    mem = _get_memory()
+    if mem is None:
+        return "ERROR: memory not initialised"
+    return mem.archival_memory_search(query, k)
+
+
 @mcp.tool(annotations={"readOnlyHint": True})
 def get_world_state() -> str:
     """Read the current session world state.
@@ -289,25 +333,39 @@ def _resolve_tz(timezone: str):
 @mcp.tool(annotations={"readOnlyHint": True})
 def get_current_time(
     timezones: Annotated[
-        list[str],
+        list[str] | None,
         Field(
             description=(
-                "One or more IANA timezone names. Pass ALL needed timezones in one call "
-                "instead of calling this multiple times. "
-                "Examples: ['Asia/Tokyo'], ['Asia/Tokyo','Europe/London','America/New_York']. "
-                "Never pass an empty list."
+                "One or more IANA timezone names. If omitted (or empty), the user's "
+                "configured timezone (HOMUNCULUS_USER_TZ, default Asia/Kolkata) is "
+                "used. Pass ALL needed timezones in one call instead of calling this "
+                "multiple times. "
+                "Examples: ['Asia/Tokyo'], ['Asia/Tokyo','Europe/London','America/New_York']."
             )
         ),
-    ],
+    ] = None,
 ) -> str:
     """Return the current date and time for one or more IANA timezones in a single call.
 
     Use this for ANY time/timezone question — it is instant and accurate.
     Pass all requested timezones together so one call handles the whole query.
     Do NOT use web_search for time queries.
+
+    Defaults to the user's configured timezone when called without arguments,
+    so the agent doesn't have to remember the user's TZ — single source of truth.
     """
     if not timezones:
-        return "ERROR: 'timezones' list is empty — pass at least one IANA timezone name."
+        # User TZ is autodetected from the browser on first visit (see
+        # user_tz.py). Heartbeat and chat both read from the same file
+        # so there's a single source of truth — no env var, no manual
+        # config. Falls back to system local then UTC if no detection
+        # has happened yet.
+        try:
+            from user_tz import get_user_tz_name
+            default_tz = get_user_tz_name()
+        except Exception:
+            default_tz = "UTC"
+        timezones = [default_tz]
     lines = []
     for tz_name in timezones:
         tz, err = _resolve_tz(tz_name)

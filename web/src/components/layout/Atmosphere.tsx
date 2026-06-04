@@ -20,9 +20,10 @@ interface Props {
   vignette?: boolean;
   flicker?: boolean;
   topLight?: boolean;
+  breath?: boolean;
 }
 
-export function Atmosphere({ vignette = true, flicker = true, topLight = true }: Props) {
+export function Atmosphere({ vignette = true, flicker = true, topLight = true, breath = true }: Props) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   if (!mounted) return null;
@@ -32,6 +33,7 @@ export function Atmosphere({ vignette = true, flicker = true, topLight = true }:
       {vignette && <div className="atmo-layer atmo-vignette" aria-hidden />}
       {topLight && <div className="atmo-layer atmo-toplight" aria-hidden />}
       {flicker && <div className="atmo-layer atmo-flicker" aria-hidden />}
+      {breath && <div className="atmo-layer atmo-breath" aria-hidden />}
     </>
   );
 }

@@ -384,24 +384,37 @@ input, textarea { caret-color: var(--color-accent); }
 
 /* Lists — custom ▸ bullets, decimal-leading-zero for ordered */
 .brut-md ul, .brut-md ol { list-style: none; padding-left: 0; margin: 4px 0; }
-.brut-md li             { padding-left: 20px; position: relative; margin: 3px 0; }
+/* Counter slot is left-aligned at x=0, no width clipping. Text starts
+   at li padding-left = 32px so the period always has at least ~6px of
+   air after it for double-digit counters like "99.". */
+.brut-md li             { padding-left: 32px; position: relative; margin: 3px 0; }
 .brut-md ul > li::before {
   content: "▸";
-  position: absolute; left: 2px;
+  position: absolute; left: 10px; top: 0;
   color: var(--color-accent);
-  font-size: 11px; line-height: 1.7;
+  /* Inherit font-size from the list item so the marker shares a
+     baseline with the body text (was 11px vs 13px → misalignment). */
+  font-size: inherit;
+  line-height: inherit;
 }
 .brut-md ol             { counter-reset: brut-ol; }
 .brut-md ol > li        { counter-increment: brut-ol; }
 .brut-md ol > li::before {
   content: counter(brut-ol, decimal-leading-zero) ".";
-  position: absolute; left: 0; min-width: 18px;
+  position: absolute; left: 4px; top: 0;
   color: var(--color-accent);
   font-variant-numeric: tabular-nums;
-  font-size: 11px;
+  /* Match the body text size so the counter sits on the same baseline. */
+  font-size: inherit;
+  line-height: inherit;
 }
 .brut-md li li { padding-left: 16px; }
 .brut-md li li::before { content: "·" !important; color: var(--color-text-muted) !important; }
+/* Suppress the bullet for empty nested items — the agent occasionally
+   emits a trailing list with no content (e.g. "  -" on a hanging line)
+   and the bare "·" leaks into the rendered message. */
+.brut-md li li:empty,
+.brut-md li li:empty::before { display: none !important; }
 
 /* Inline code */
 .brut-md-inline-code {
