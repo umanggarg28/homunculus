@@ -4,6 +4,8 @@ import { api } from "@/lib/api";
 import { BackLink } from "@/components/ui/BackLink";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
+import { MemoryContent } from "@/components/memory/MemoryContent";
+import type { MemoryEntry } from "@/lib/types";
 
 /** Memory entry view + inline edit.
  *
@@ -19,6 +21,7 @@ export function MemoryEntryPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [entries, setEntries] = useState<MemoryEntry[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -27,6 +30,10 @@ export function MemoryEntryPage() {
       .then((t) => { setOriginal(t); setDraft(t); })
       .catch((e) => setError(String(e)));
   }, [filename]);
+
+  useEffect(() => {
+    api.memoryList().then(setEntries).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!editing) return;
@@ -122,19 +129,7 @@ export function MemoryEntryPage() {
           }}
         />
       ) : (
-        <pre
-          className="whitespace-pre-wrap break-words"
-          style={{
-            border: "1px solid var(--color-border)",
-            background: "var(--color-surface-1)",
-            color: "var(--color-text)",
-            fontFamily: "var(--font-mono)",
-            fontSize: 13,
-            lineHeight: 1.65,
-            padding: "16px 18px",
-            margin: 0,
-          }}
-        >{original}</pre>
+        <MemoryContent text={original ?? ""} entries={entries} />
       )}
     </PageShell>
   );
@@ -156,24 +151,10 @@ function Bracketed({
     <button
       onClick={onClick}
       disabled={disabled}
-      className="text-[10px] uppercase tracking-[0.14em] px-2 py-1 transition-colors disabled:opacity-30"
+      data-tone={color === "var(--color-accent)" ? "accent" : undefined}
+      className="hm-bracket-link text-[10px] uppercase tracking-[0.14em] px-2 py-1 disabled:opacity-30"
       style={{
-        background: "transparent",
-        color,
-        border: `1px solid ${color}`,
         fontFamily: "var(--font-mono)",
-      }}
-      onMouseEnter={(e) => {
-        if (disabled) return;
-        const el = e.currentTarget as HTMLButtonElement;
-        el.style.background = color;
-        el.style.color = "var(--color-bg)";
-      }}
-      onMouseLeave={(e) => {
-        if (disabled) return;
-        const el = e.currentTarget as HTMLButtonElement;
-        el.style.background = "transparent";
-        el.style.color = color;
       }}
     >
       [{children}]
