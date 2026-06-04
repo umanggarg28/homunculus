@@ -599,11 +599,106 @@ async def tasks_cancel(task_id: str, request: Request) -> JSONResponse:
 
 @app.post("/api/tasks/{task_id}/run-now", dependencies=[Depends(require_web_auth)])
 def tasks_run_now(task_id: str) -> JSONResponse:
+    """Legacy "schedule the task to fire on the next heartbeat tick" endpoint.
+
+    For interactive streamed execution use POST /api/tasks/{task_id}/run-stream
+    which actually runs the task right now and streams the events back.
+    """
     try:
         task = _task_store().run_now(task_id)
     except KeyError:
         raise HTTPException(404, f"task '{task_id}' not found")
     return JSONResponse(task)
+
+
+@app.post("/api/tasks/{task_id}/run-stream", dependencies=[Depends(require_web_auth)])
+async def tasks_run_stream(task_id: str, request: Request):
+    """Run a single task right now and stream the agent's execution as SSE.
+
+    The agent is fresh (NOT the chat agent — task execution is isolated, like
+    a heartbeat tick is). TaskGuard installs the same success_criteria guard
+    we use during scheduled runs. The post-execution housekeeping (record
+    failure / advance due_at) is identical to heartbeat.tick().
+
+    This is T1.4 of docs/CAPABILITY_ROADMAP.md — the "click ARMED → stream
+    in place" UX that removes the trip to Traces for ad-hoc task runs.
+    """
+    _check_chat_rate(request)
+    store = _task_store()
+    task = store.get(task_id)
+    if task is None:
+        raise HTTPException(404, f"task '{task_id}' not found")
+    if task.get("status") != "active":
+        raise HTTPException(409, f"task is {task.get('status')} — only active tasks can be run")
+
+    # Import lazily to avoid pulling heartbeat at module-import time.
+    from heartbeat import HEARTBEAT_PROMPT_TEMPLATE, TaskGuard, _format_due_tasks
+    from user_tz import now_user_tz
+
+    # Stamp last_fired_at and executing=True before we start so concurrent
+    # heartbeat ticks don't pick up the same task. Heartbeat's 30-min
+    # suppression window does the rest.
+    store.mark_fired(task_id)
+
+    # Fresh agent — task execution must NOT share history with the chat
+    # session (would pollute future chat turns with task-execution noise).
+    fresh_agent = Agent(memory=_chat_memory)
+    prompt = HEARTBEAT_PROMPT_TEMPLATE.format(
+        now_iso=now_user_tz().isoformat(timespec="seconds"),
+        due_tasks=_format_due_tasks([task]),
+    )
+
+    guard = TaskGuard({task_id: task.get("success_criteria") or []})
+    tools.set_pre_execute_hook(guard.on_tool_call)
+    tools.set_pre_turn_hook(guard.on_pre_turn)
+    due_at_before = task.get("due_at")
+    started_iso = datetime.now().isoformat(timespec="seconds")
+
+    def gen():
+        try:
+            yield _format_sse_data(f"[run-now started at {started_iso}]")
+            try:
+                for chunk in fresh_agent.chat_stream(prompt):
+                    yield _format_sse_data(chunk)
+            except Exception as e:
+                err = f"{type(e).__name__}: {e}"
+                yield _format_sse_data(f"[loop error: {err}]")
+                # Match heartbeat.tick's post-tick: only record_failure if
+                # due_at didn't advance (the task wasn't completed before crash).
+                try:
+                    current = store.get(task_id)
+                    if current and current.get("due_at") == due_at_before:
+                        store.record_failure(task_id, err, increment_failures=False)
+                except Exception:
+                    pass
+                yield "event: done\ndata: end\n\n"
+                return
+
+            # Post-success check: did due_at advance? If yes, complete_task
+            # ran. If no, the agent silently dropped — record soft failure.
+            current = store.get(task_id)
+            if current and current.get("due_at") == due_at_before and task_id in guard.expected_remaining():
+                store.record_failure(
+                    task_id,
+                    "run-now: agent finished without complete_task or record_failure",
+                    increment_failures=False,
+                )
+                yield _format_sse_data("[silent drop — recorded soft failure]")
+            else:
+                yield _format_sse_data("[run-now finished]")
+        finally:
+            tools.set_pre_execute_hook(None)
+            tools.set_pre_turn_hook(None)
+            yield "event: done\ndata: end\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.delete("/api/tasks/{task_id}", dependencies=[Depends(require_web_auth)])
