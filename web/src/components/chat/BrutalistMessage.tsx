@@ -3,8 +3,16 @@ import { motion } from "framer-motion";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { BrutalistToolBlock } from "./BrutalistToolBlock";
 import { ThinkingIndicator } from "./ThinkingIndicator";
+import { Tooltip } from "@/components/ui/Tooltip";
 import type { ChatMessage } from "@/hooks/useChatStream";
 import type { ToolCallEntry } from "./ToolCallCard";
+
+const SOURCE_BLURB: Record<string, string> = {
+  telegram:     "This turn arrived via the Telegram bot.",
+  repl:         "This turn arrived via the local REPL transport.",
+  heartbeat:    "This turn was produced by the autonomous heartbeat loop.",
+  "ios-shortcut": "This turn arrived via the iOS Shortcuts quick-capture endpoint.",
+};
 
 interface Props {
   message: ChatMessage;
@@ -70,13 +78,17 @@ export function BrutalistMessage({ message, toolCalls, sending }: Props) {
             : timeStr}
         </div>
         {message.source && message.source !== "web" && (
-          <div
-            className="mt-1 uppercase tracking-[0.12em]"
-            style={{ color: "var(--color-text-muted)", fontSize: 9 }}
-            title={`via ${message.source}`}
+          <Tooltip
+            text={<><strong>via {message.source}</strong> — {SOURCE_BLURB[message.source] ?? "non-web origin"}</>}
+            placement="right"
           >
-            via {message.source === "telegram" ? "tg" : message.source}
-          </div>
+            <div
+              className="mt-1 uppercase tracking-[0.12em]"
+              style={{ color: "var(--color-text-muted)", fontSize: 9, cursor: "help" }}
+            >
+              via {message.source === "telegram" ? "tg" : message.source === "ios-shortcut" ? "ios" : message.source}
+            </div>
+          </Tooltip>
         )}
         {!isUser && toolCalls.length > 0 && !inFlight && (
           <div className="mt-1.5 uppercase tracking-[0.06em]" style={{ color: "var(--color-text-faint)" }}>

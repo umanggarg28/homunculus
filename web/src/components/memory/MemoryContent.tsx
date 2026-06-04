@@ -1,6 +1,7 @@
 import { Fragment, useMemo } from "react";
 import { Link } from "react-router-dom";
 import type { MemoryEntry } from "@/lib/types";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 interface Props {
   text: string;
@@ -45,33 +46,42 @@ export function MemoryContent({ text, entries }: Props) {
         const hit = byName.get(p.name.toLowerCase());
         if (hit) {
           return (
-            <Link
+            <Tooltip
               key={i}
-              to={`/memory/${encodeURIComponent(hit.filename)}`}
-              style={{
-                color: "var(--color-accent)",
-                textDecoration: "underline",
-                textUnderlineOffset: 2,
-              }}
-              title={hit.description || hit.filename}
+              text={<><strong>{hit.name}</strong> · {hit.type}<br />{hit.description || hit.filename}</>}
+              placement="top"
             >
-              [[{p.name}]]
-            </Link>
+              <Link
+                to={`/memory/${encodeURIComponent(hit.filename)}`}
+                style={{
+                  color: "var(--color-accent)",
+                  textDecoration: "underline",
+                  textUnderlineOffset: 2,
+                }}
+              >
+                [[{p.name}]]
+              </Link>
+            </Tooltip>
           );
         }
         return (
-          <span
+          <Tooltip
             key={i}
-            title="no matching memory — link is dangling"
-            style={{
-              color: "var(--color-text-faint)",
-              fontStyle: "italic",
-              textDecoration: "underline dotted",
-              textUnderlineOffset: 2,
-            }}
+            text={<>No memory file matches <strong>[[{p.name}]]</strong> — link is dangling. Create the file or fix the reference.</>}
+            placement="top"
           >
-            [[{p.name}]]
-          </span>
+            <span
+              style={{
+                color: "var(--color-text-faint)",
+                fontStyle: "italic",
+                textDecoration: "underline dotted",
+                textUnderlineOffset: 2,
+                cursor: "help",
+              }}
+            >
+              [[{p.name}]]
+            </span>
+          </Tooltip>
         );
       })}
     </pre>

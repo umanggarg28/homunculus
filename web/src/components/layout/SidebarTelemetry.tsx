@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { StatusMap } from "@/lib/types";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 /**
  * SidebarTelemetry — ambient operator readouts that fill the previously
@@ -84,44 +85,59 @@ export function SidebarTelemetry() {
       }}
     >
       {/* Next autonomous fire */}
-      <Row label="next fire" value={untilLabel} valueColor={untilSec !== null && untilSec < 60 ? "var(--color-warning)" : "var(--color-text-dim)"} />
+      <Tooltip text={<>Countdown to the next autonomous run. Includes the next scheduled task and the regular heartbeat interval (~60 min by default).</>} placement="right">
+        <div style={{ cursor: "help" }}>
+          <Row label="next fire" value={untilLabel} valueColor={untilSec !== null && untilSec < 60 ? "var(--color-warning)" : "var(--color-text-dim)"} />
+        </div>
+      </Tooltip>
 
       {/* Heartbeat liveness */}
-      <Row
-        label="heartbeat"
-        value={heartbeatLabel}
-        valueColor={status?.heartbeat?.state === "live"
-          ? "var(--color-accent)"
-          : status?.heartbeat?.state === "idle"
-            ? "var(--color-text-muted)"
-            : "var(--color-warning)"}
-      />
+      <Tooltip text={<>Time since the last heartbeat tick was observed. Tick runs every {upcoming?.default_interval_min ?? 60} min and on every due task.</>} placement="right">
+        <div style={{ cursor: "help" }}>
+          <Row
+            label="heartbeat"
+            value={heartbeatLabel}
+            valueColor={status?.heartbeat?.state === "live"
+              ? "var(--color-accent)"
+              : status?.heartbeat?.state === "idle"
+                ? "var(--color-text-muted)"
+                : "var(--color-warning)"}
+          />
+        </div>
+      </Tooltip>
 
       {/* Budget bar */}
-      <div>
-        <div className="flex justify-between mb-1">
-          <span>budget</span>
-          <span style={{ color: "var(--color-text-muted)" }}>
-            ¢{spent.toFixed(1)} / ¢{budget.toFixed(0)}
-          </span>
+      <Tooltip text={<>Estimated LLM spend today, in cents. Free-tier providers don't count. Bar turns amber at 80% of the configured daily budget.</>} placement="right">
+        <div style={{ cursor: "help" }}>
+          <div className="flex justify-between mb-1">
+            <span>budget</span>
+            <span style={{ color: "var(--color-text-muted)" }}>
+              ¢{spent.toFixed(1)} / ¢{budget.toFixed(0)}
+            </span>
+          </div>
+          <div style={{ height: 2, background: "var(--color-border)", overflow: "hidden" }}>
+            <div style={{
+              width: `${spentPct}%`,
+              height: "100%",
+              background: spendTone,
+              transition: "width 400ms ease",
+            }} />
+          </div>
         </div>
-        <div style={{ height: 2, background: "var(--color-border)", overflow: "hidden" }}>
-          <div style={{
-            width: `${spentPct}%`,
-            height: "100%",
-            background: spendTone,
-            transition: "width 400ms ease",
-          }} />
-        </div>
-      </div>
+      </Tooltip>
 
       {/* Current model */}
-      <div title={model?.model} style={{ cursor: model ? "help" : "default" }}>
-        <div>model</div>
-        <div className="mt-1" style={{ color: "var(--color-text-muted)", letterSpacing: "0.06em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {modelShort}
+      <Tooltip
+        text={<><strong>{model?.model ?? "no model yet"}</strong><br />Last LLM model used. Swap with <kbd>/use &lt;model&gt;</kbd> in chat.</>}
+        placement="right"
+      >
+        <div style={{ cursor: model ? "help" : "default" }}>
+          <div>model</div>
+          <div className="mt-1" style={{ color: "var(--color-text-muted)", letterSpacing: "0.06em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {modelShort}
+          </div>
         </div>
-      </div>
+      </Tooltip>
     </div>
   );
 }

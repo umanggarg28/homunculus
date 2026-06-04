@@ -591,3 +591,41 @@ input, textarea { caret-color: var(--color-accent); }
 
 /* Legacy .markdown-message kept in case any non-brut-md components still use it */
 .markdown-message { font-family: var(--font-mono); font-size: 13px; line-height: 1.6; color: var(--color-text); }
+
+/* ===========================================================
+ * Tooltip — brutalist phosphor hover bubble. Replaces native
+ * title="" so the hint matches the rest of the UI instead of
+ * the OS chrome.
+ * =========================================================== */
+.hm-tooltip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  color: var(--color-text);
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border-strong);
+  padding: 7px 10px;
+  text-align: left;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: anywhere;
+  box-shadow: 0 0 0 1px var(--color-bg), 0 8px 24px rgba(0, 0, 0, 0.45);
+  animation: hm-tooltip-in 0.12s ease-out;
+}
+.hm-tooltip strong, .hm-tooltip b {
+  color: var(--color-accent);
+  font-weight: 500;
+}
+.hm-tooltip kbd {
+  display: inline-block;
+  padding: 0 4px;
+  border: 1px solid var(--color-border-strong);
+  font-size: 10px;
+  color: var(--color-accent);
+  background: var(--color-surface-2);
+}
+@keyframes hm-tooltip-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
