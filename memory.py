@@ -614,7 +614,7 @@ class Memory:
         return self.root / "memory.db"
 
     def _init_db(self) -> None:
-        """Create memory.db and the embeddings table if they don't exist."""
+        """Create memory.db and the embeddings + archival tables if they don't exist."""
         import sqlite3
         try:
             con = sqlite3.connect(str(self._db_path))
@@ -622,6 +622,23 @@ class Memory:
             con.execute(
                 "CREATE TABLE IF NOT EXISTS embeddings "
                 "(filename TEXT PRIMARY KEY, vec TEXT NOT NULL)"
+            )
+            # Item 6 of the robustness plan — Letta-style archival memory.
+            # Tool results that are too large to keep in conversation history
+            # land here. Agent retrieves on demand via archival_memory_search.
+            #   token       — short reference returned to the agent
+            #   content     — full original text
+            #   tags        — comma-separated free-form labels
+            #   vec         — JSON-encoded Gemini embedding for semantic search
+            #   created_at  — unix timestamp for chronological ordering
+            con.execute(
+                "CREATE TABLE IF NOT EXISTS archival_memory ("
+                "  token TEXT PRIMARY KEY,"
+                "  content TEXT NOT NULL,"
+                "  tags TEXT NOT NULL DEFAULT '',"
+                "  vec TEXT,"
+                "  created_at REAL NOT NULL"
+                ")"
             )
             con.commit()
             con.close()
@@ -753,6 +770,96 @@ class Memory:
                 f"name='{best_fn[:-3]}' to update it instead of creating a duplicate."
             )
         return None
+
+    # ── Archival memory (Letta-style) ────────────────────────────────
+    #
+    # Tool results that exceed the conversation history's char budget can
+    # be offloaded here. The agent gets back a short token reference and
+    # can retrieve full content later via semantic search.
+    #
+    # API mirrors Letta:
+    #   archival_memory_insert(content, tags=[]) -> token
+    #   archival_memory_search(query, k=5)       -> formatted snippets
+
+    def archival_memory_insert(self, content: str, tags: list[str] | None = None) -> str:
+        """Persist a piece of content to archival memory and return its token.
+
+        Token format: arch_YYYYMMDDHHMMSS_<6char-id> so it sorts chronologically
+        and is grep-able in event logs.
+        """
+        import sqlite3
+        import secrets
+        import time as _time
+        from datetime import datetime as _dt
+        now = _time.time()
+        token = (
+            "arch_"
+            + _dt.now().strftime("%Y%m%d%H%M%S")
+            + "_"
+            + secrets.token_urlsafe(4).replace("_", "").replace("-", "").lower()[:6]
+        )
+        tags_str = ",".join(tags or [])
+        vec = self._embed(content[:4000])  # embed up to ~4KB; longer content is fine but won't help retrieval
+        vec_json = json.dumps(vec) if vec else None
+        try:
+            con = sqlite3.connect(str(self._db_path))
+            con.execute(
+                "INSERT INTO archival_memory (token, content, tags, vec, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (token, content, tags_str, vec_json, now),
+            )
+            con.commit()
+            con.close()
+        except Exception as e:
+            return f"ERROR: archival_memory_insert failed: {e}"
+        return token
+
+    def archival_memory_search(self, query: str, k: int = 5, max_chars: int = 900) -> str:
+        """Retrieve top-k archival memory entries by semantic similarity.
+
+        Falls back to chronological-most-recent if no embedding is available.
+        Returned content is per-entry-trimmed to max_chars so the agent can
+        scan many results without context-bloating itself.
+        """
+        import sqlite3
+        try:
+            con = sqlite3.connect(str(self._db_path))
+            rows = con.execute(
+                "SELECT token, content, tags, vec, created_at FROM archival_memory"
+            ).fetchall()
+            con.close()
+        except Exception as e:
+            return f"ERROR: archival_memory_search failed: {e}"
+        if not rows:
+            return "(archival memory empty)"
+
+        query_vec = self._embed(query[:2000])
+        scored: list[tuple[float, str, str, str]] = []
+        if query_vec:
+            for token, content, tags, vec_json, _ts in rows:
+                if not vec_json:
+                    continue
+                try:
+                    vec = json.loads(vec_json)
+                except Exception:
+                    continue
+                sim = self._cosine(query_vec, vec)
+                scored.append((sim, token, content, tags))
+            scored.sort(reverse=True)
+        if not scored:
+            # Fallback: most-recent first
+            scored = [(0.0, r[0], r[1], r[2]) for r in sorted(rows, key=lambda r: -r[4])]
+        top = scored[:k]
+        if not top:
+            return "(no matches)"
+        out = []
+        for sim, token, content, tags in top:
+            preview = content[:max_chars]
+            ellipsis = f"… (+{len(content) - max_chars} chars; full content stays in token {token})" if len(content) > max_chars else ""
+            tag_str = f" [tags: {tags}]" if tags else ""
+            sim_str = f" [sim {sim:.2f}]" if sim > 0 else ""
+            out.append(f"── {token}{tag_str}{sim_str}\n{preview}{ellipsis}")
+        return "\n\n".join(out)
 
     def search(self, query: str, limit: int = 3, max_chars: int = 900) -> str:
         """Return the most relevant memory snippets for a query.
