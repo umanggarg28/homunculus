@@ -168,6 +168,45 @@ _PROVIDER_COOLDOWN: dict[str, float] = {}
 # LLM could call tools forever. 20 is plenty for any realistic task.
 MAX_TURNS = 20
 
+# Hard cap on per-tool-result content that lands in conversation history.
+# Without this, a single web_fetch of a long page (e.g. a 50KB GitHub
+# README markdown) dumps the entire payload into history, leaving no
+# token budget for the final LLM call that would actually USE the data.
+# The agent loop then drops into the empty-content fallback path and
+# the task never completes.
+#
+# 6000 chars ≈ 1500 tokens — enough to capture the gist of most useful
+# tool results while preserving room for reasoning. The harness adds a
+# hint at the cut so the agent knows it can refine the query to see more.
+#
+# Note: this only affects what's appended to history. The `tool_result`
+# event emitted to _events.jsonl keeps the full payload (truncated for
+# display by the UI's per-kind COMPACT_LEN_BY_KIND) so the Traces page
+# can still show the complete tool output for debugging.
+TOOL_RESULT_HARD_CAP = 6000
+
+
+def _trim_tool_result_for_history(name: str, result: object) -> object:
+    """Cap oversized tool result strings before they enter conversation history.
+
+    Non-string results pass through unchanged (some tools return dicts/lists).
+    ERROR strings under the cap pass through (they're already short).
+    Anything over the cap gets head-truncated with a clear hint that the
+    agent can re-call the tool with a more targeted query.
+    """
+    if not isinstance(result, str):
+        return result
+    if len(result) <= TOOL_RESULT_HARD_CAP:
+        return result
+    head_budget = TOOL_RESULT_HARD_CAP - 200  # reserve room for the hint
+    trimmed_count = len(result) - head_budget
+    return (
+        f"{result[:head_budget]}\n\n"
+        f"[+{trimmed_count:,} chars trimmed by harness — re-call with a "
+        f"more targeted query/path if needed, or use recall() / "
+        f"search_files() to find specific content]"
+    )
+
 # Mid-session compaction thresholds.
 #
 # COMPACT_TRIGGER counts USER turns (not raw messages). When we exceed
@@ -1208,10 +1247,13 @@ class Agent:
                     name=name,
                     result=events.truncate_preview(result, limit=2000),
                 )
+                # Trim oversized results before they enter history. The full
+                # payload is preserved in the events log; the agent can
+                # re-call the tool with a refined query if it needs more.
                 self.history.append({
                     "role": "tool",
                     "tool_call_id": call["id"],
-                    "content": result,
+                    "content": _trim_tool_result_for_history(name, result),
                 })
 
         fallback = "(hit MAX_TURNS without a final answer)"
