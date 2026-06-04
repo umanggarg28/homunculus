@@ -168,6 +168,27 @@ _PROVIDER_COOLDOWN: dict[str, float] = {}
 # LLM could call tools forever. 20 is plenty for any realistic task.
 MAX_TURNS = 20
 
+# Read-only tools whose results can be safely cached within a single turn.
+# When the LLM re-calls one of these with the same arguments, the harness
+# returns the cached result + a hint instead of re-executing. Saves an
+# LLM call's worth of cycles AND prevents the worse stuck-loop error
+# path (which fires at count 3 and tells the model to "pivot" — useful
+# only for true non-idempotent loops). Tools with side effects (notify,
+# complete_task, write_file, python with mutations) are deliberately
+# excluded — their results should NEVER be cached.
+READ_ONLY_CACHEABLE_TOOLS = frozenset({
+    "read_file",
+    "recall",
+    "search_files",
+    "get_current_time",
+    "list_tasks",
+    "get_world_state",
+    "conversation_search",
+    "archival_memory_search",
+    "web_fetch",      # idempotent on a given URL within a turn
+    "web_search",     # query is the cache key; same query → same answer
+})
+
 # Hard cap on per-tool-result content that lands in conversation history.
 # Without this, a single web_fetch of a long page (e.g. a 50KB GitHub
 # README markdown) dumps the entire payload into history, leaving no
@@ -1101,6 +1122,9 @@ class Agent:
 
         tool_names_used: set[str] = set()
         call_counts: dict[tuple[str, str], int] = {}
+        # Per-turn cache for READ_ONLY_CACHEABLE_TOOLS — same (name, args) → same
+        # result, no need to re-execute. Cleared at the start of every turn.
+        tool_result_cache: dict[tuple[str, str], str] = {}
 
         for _turn_idx in range(MAX_TURNS):
             # Budget nudge: 2 iterations before the hard cap, inject a synthetic
@@ -1224,7 +1248,31 @@ class Agent:
                 canon_args = json.dumps(args, sort_keys=True)
                 call_key = (name, canon_args)
                 call_counts[call_key] = call_counts.get(call_key, 0) + 1
-                if call_counts[call_key] >= 3:
+                # Per-turn cache hit: read-only tools with the same args this
+                # turn return the cached result with a hint. Saves wasted
+                # round trips and prevents read_file/recall thrashing —
+                # the most common shape of the "stuck loop" failure in
+                # production was 3× read_file with identical args.
+                if (
+                    name in READ_ONLY_CACHEABLE_TOOLS
+                    and call_key in tool_result_cache
+                ):
+                    cached = tool_result_cache[call_key]
+                    result = (
+                        f"(harness-cached result from earlier this turn — "
+                        f"call #{call_counts[call_key]} for '{name}' with "
+                        f"identical args)\n\n"
+                        f"{cached}\n\n"
+                        f"[Hint: you already called {name} with these arguments. "
+                        f"No need to re-call — proceed with the next step.]"
+                    )
+                    events.emit(
+                        "output_guard",
+                        name=name,
+                        text=f"cache hit: {name} × {call_counts[call_key]}",
+                        result=canon_args[:120],
+                    )
+                elif call_counts[call_key] >= 3:
                     result = (
                         f"STUCK_LOOP: '{name}' has been called with these exact arguments "
                         f"{call_counts[call_key]} times this session. You are in a loop. "
@@ -1247,6 +1295,15 @@ class Agent:
                     )
                 else:
                     result = tools.execute(name, args)
+                    # Populate the per-turn cache for read-only tools.
+                    # Only cache real (non-error) results so a failed call
+                    # can still be retried with the same args.
+                    if (
+                        name in READ_ONLY_CACHEABLE_TOOLS
+                        and isinstance(result, str)
+                        and not result.startswith("ERROR")
+                    ):
+                        tool_result_cache[call_key] = result
 
                 # Auto-update world state after every tool call so the agent
                 # can resume correctly after a restart without relying on the
