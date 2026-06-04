@@ -133,6 +133,40 @@ def config() -> JSONResponse:
     return JSONResponse({"auth_required": bool(WEB_AUTH_TOKEN)})
 
 
+@app.post("/api/user-tz")
+async def user_tz_set(request: Request) -> JSONResponse:
+    """Persist the browser-detected timezone so heartbeat and agent tools
+    can use it. Called by the web UI on first load.
+
+    Body: {"tz": "Asia/Kolkata"} — an IANA timezone name.
+    Invalid names are silently ignored (better than 4xx-ing the user's
+    perfectly normal session for a TZ we can't parse).
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "reason": "invalid json"}, status_code=400)
+    tz = (body or {}).get("tz") if isinstance(body, dict) else None
+    if not isinstance(tz, str) or not tz:
+        return JSONResponse({"ok": False, "reason": "missing tz"}, status_code=400)
+    try:
+        from user_tz import set_user_tz_name, get_user_tz_name
+        set_user_tz_name(tz)
+        return JSONResponse({"ok": True, "stored": get_user_tz_name()})
+    except Exception as e:
+        return JSONResponse({"ok": False, "reason": str(e)}, status_code=500)
+
+
+@app.get("/api/user-tz")
+def user_tz_get() -> JSONResponse:
+    """Return the currently stored user TZ (for debugging / UI display)."""
+    try:
+        from user_tz import get_user_tz_name
+        return JSONResponse({"tz": get_user_tz_name()})
+    except Exception as e:
+        return JSONResponse({"tz": "UTC", "error": str(e)})
+
+
 @app.get("/api/model")
 def model_info() -> JSONResponse:
     """Return the model that actually handled the last request.

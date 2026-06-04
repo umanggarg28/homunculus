@@ -265,13 +265,19 @@ class TaskGuard:
         return failures
 
 
+# User TZ is autodetected from the browser (see user_tz module) — no env
+# var, no hardcoding. The browser writes workspace/user_tz.txt on its first
+# visit; this module reads from there and falls back to system local.
+from user_tz import now_user_tz as _now_user_tz  # noqa: E402
+
+
 def _today_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+    return _now_user_tz().strftime("%Y-%m-%d")
 
 
 def _yesterday_iso_and_path() -> tuple[str, str]:
-    """Return (YYYY-MM-DD, YYYY/MM/YYYY-MM-DD) for yesterday."""
-    y = datetime.now() - timedelta(days=1)
+    """Return (YYYY-MM-DD, YYYY/MM/YYYY-MM-DD) for yesterday in user TZ."""
+    y = _now_user_tz() - timedelta(days=1)
     iso = y.strftime("%Y-%m-%d")
     path_form = y.strftime("%Y/%m/%Y-%m-%d")
     return iso, path_form
@@ -284,7 +290,10 @@ def tick(memory: Memory, model: str | None) -> None:
     heartbeat consider reflection (once per calendar day). This prevents the
     reflection branch from starving overdue tasks on the first tick of a new day.
     """
-    now_iso = datetime.now().isoformat(timespec="seconds")
+    # Use user-TZ-aware now for the prompt — the agent quotes this back to
+    # the user, so naive UTC here causes "the current time is 06:30 IST"
+    # mismatches in chat replies.
+    now_iso = _now_user_tz().isoformat(timespec="seconds")
     tasks = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
 
     # Auto-recover stale executing flags before computing due_tasks. The
