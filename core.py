@@ -228,6 +228,42 @@ def _trim_tool_result_for_history(name: str, result: object) -> object:
         f"search_files() to find specific content]"
     )
 
+# Stub written in place of an old tool result. Includes original char
+# count so the agent knows the result existed and can re-call the tool
+# if it still needs the payload. tool_call_id is preserved on the
+# message itself, so the API's tool_call/tool_result pairing rule holds.
+_EVICTED_TOOL_RESULT_TEMPLATE = (
+    "[tool result evicted from prior turn — was {chars:,} chars. "
+    "Re-call the tool if you still need it; full payload is in the events log.]"
+)
+
+
+def _evict_prior_tool_results(history: list[dict]) -> int:
+    """Replace tool-message content from prior turns with a short stub.
+
+    Called at the start of each new user turn — before the new user
+    message is appended. Tool results from the just-finished turn (and
+    older) are no longer needed in-context: the assistant already
+    consumed them to produce its reply. Keeping them full-fidelity
+    burns tokens linearly with conversation length.
+
+    Returns the number of messages that were evicted (for logging).
+    Idempotent — already-stubbed messages are skipped.
+    """
+    evicted = 0
+    for msg in history:
+        if msg.get("role") != "tool":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, str):
+            continue
+        if content.startswith("[tool result evicted from prior turn"):
+            continue
+        msg["content"] = _EVICTED_TOOL_RESULT_TEMPLATE.format(chars=len(content))
+        evicted += 1
+    return evicted
+
+
 # Mid-session compaction thresholds.
 #
 # COMPACT_TRIGGER counts USER turns (not raw messages). When we exceed
@@ -1142,6 +1178,18 @@ class Agent:
         # Refresh the system prompt with the current date/time each turn so
         # the agent always has accurate temporal context (e.g. for scheduling).
         self.history[0]["content"] = self._current_system_prompt()
+
+        evicted = _evict_prior_tool_results(self.history)
+        if evicted:
+            try:
+                events.emit(
+                    "tool_results_evicted",
+                    text=events.truncate_preview(
+                        f"stubbed {evicted} tool result(s) from prior turns"
+                    ),
+                )
+            except Exception:
+                pass
 
         self._maybe_compact()
         self.history.append({"role": "user", "content": user_message})
