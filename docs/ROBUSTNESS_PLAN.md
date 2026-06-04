@@ -1,8 +1,40 @@
 # Homunculus — Agent Robustness Refactor
 
-**Date:** 2026-06-04
+**Date:** 2026-06-04 (started + completed same day)
 **Branch:** `feat/agent-robustness`
-**Scope:** 6 changes, ≈1 week of focused work
+**Scope:** 8 changes (6 original + 2 added during execution)
+**Status:** **All 8 items shipped.** 162 tests pass, no regressions.
+
+## Status as of 2026-06-04 EOD
+
+| # | Item | Status | Tests |
+|---|---|---|---|
+| 1 | Tool result trimming | ✓ shipped | 5 |
+| 2 | MAX_TURNS budget nudge | ✓ shipped | 3 |
+| 3 | Per-turn read-only cache | ✓ shipped | 4 |
+| 4 | TaskGuard completion tracking + prompt tightening | ✓ shipped | 6 |
+| 5 | Pre-turn hook (pragmatic slice) + TaskGuard forced completion | ✓ shipped | 5 |
+| 6 | Letta-style archival memory | ✓ shipped | 8 |
+| 7 | Task-intake clarifier | ✓ shipped | 9 |
+| 8 | Autonomous fallback notify | ✓ shipped | 2 |
+| + | Skill memory rewrite + BLOCKED message rewrite + prompt "text ≠ tool call" | ✓ |  |
+| + | TZ autodetect from browser (merged from feat/timezone-consistency) | ✓ |  |
+
+**Real-world validation:** the LeetCode 9-AM-IST task that had been silently
+failing for three days delivered cleanly on the first forced-tick after the
+fixes were live (`notify(text="Rotate Array...```python...```")` →
+`complete_task` → due_at advanced → user got Telegram).
+
+Item 5 is the **pragmatic slice** — a single `set_pre_turn_hook` parallel to
+the existing `set_pre_execute_hook`. The full LoopConfig refactor with
+four hooks à la Pi's `agent-loop.ts` (`transformContext`, `prepareNextTurn`,
+`shouldStopAfterTurn`, `on_tool_result`) is the deferred work and remains
+in the original "what we'd do if we had 2 days" section below. The slice
+unblocks the forced-completion feature today; future hooks slot in cleanly
+next to `_pre_turn_hook` when there's time for a fuller refactor.
+
+---
+
 **Goal:** eliminate the recurring failure shapes we've patched piecewise, and make future iterations of the agent inherently more robust.
 
 ---
