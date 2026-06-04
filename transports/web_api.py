@@ -44,6 +44,10 @@ MEMORY_DIR = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
 TASKS_DIR = Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks"))
 SPA_DIST_DIR = Path(os.environ.get("HOMUNCULUS_WEB_DIST", "/app/web-dist"))
 WEB_AUTH_TOKEN = os.environ.get("HOMUNCULUS_WEB_AUTH_TOKEN", "").strip()
+# Dedicated token for the iOS Shortcut / quick-capture endpoint. Kept
+# separate from the web auth token so a leaked Shortcut config can't
+# also open the full dashboard. If unset, the endpoint refuses.
+QUICK_CAPTURE_TOKEN = os.environ.get("HOMUNCULUS_QUICK_CAPTURE_TOKEN", "").strip()
 
 POLL_INTERVAL = 0.25
 # Minimum number of "real" (non-infra-ping) events that the SSE initial
@@ -716,6 +720,82 @@ def tasks_meta() -> JSONResponse:
     return JSONResponse({
         "recurrence_options": sorted(ALLOWED_RECURRENCE),
     })
+
+
+# --- iOS Shortcuts quick-capture -------------------------------------------
+# Lowest-latency way to add a task or note from a phone. The Shortcut
+# (see docs/ios_shortcut.md) POSTs the user's spoken text here; the
+# server feeds it to a one-shot agent with a narrow tool set and
+# returns a short confirmation that Siri reads back.
+
+_QUICK_CAPTURE_RATE: dict[str, list[float]] = defaultdict(list)
+_QUICK_CAPTURE_RATE_WINDOW = 60.0
+_QUICK_CAPTURE_RATE_MAX = 5
+
+_QUICK_CAPTURE_PROMPT = """\
+You received this message via the iOS Shortcut quick-capture endpoint:
+
+> {text}
+
+Kind hint from caller: {kind}
+
+Decide between two actions:
+- "task" → call create_task(title=..., description=..., due_at=...,
+  recurrence="none|daily|weekly"). Parse natural-language times like
+  "Friday at 3pm" into ISO using get_current_time() if needed.
+- "note" → call archival_memory_insert(content=...) to save it as a
+  searchable archival entry.
+
+After the tool call, reply with EXACTLY ONE short line (≤ 80 chars)
+confirming what you did — this is what Siri reads back to the user.
+Examples:
+  "Created task: Call dentist, Friday 15:00 IST."
+  "Saved note about the book recommendation."
+"""
+
+
+def require_quick_capture_token(
+    x_capture_token: str = Header(default=""),
+) -> None:
+    if not QUICK_CAPTURE_TOKEN:
+        raise HTTPException(503, "quick-capture is not configured on this server")
+    if not secrets.compare_digest(x_capture_token, QUICK_CAPTURE_TOKEN):
+        raise HTTPException(401, "Invalid or missing X-Capture-Token")
+
+
+def _check_quick_capture_rate(request: Request) -> None:
+    ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    bucket = _QUICK_CAPTURE_RATE[ip]
+    _QUICK_CAPTURE_RATE[ip] = [t for t in bucket if now - t < _QUICK_CAPTURE_RATE_WINDOW]
+    if len(_QUICK_CAPTURE_RATE[ip]) >= _QUICK_CAPTURE_RATE_MAX:
+        raise HTTPException(429, "quick-capture rate limit exceeded — max 5/min")
+    _QUICK_CAPTURE_RATE[ip].append(now)
+
+
+@app.post("/api/quick-capture", dependencies=[Depends(require_quick_capture_token)])
+async def quick_capture(request: Request) -> JSONResponse:
+    """Single-turn agent call to create a task or note from a phone."""
+    _check_quick_capture_rate(request)
+    payload = await request.json()
+    text = (payload or {}).get("text", "").strip()
+    kind = ((payload or {}).get("kind") or "auto").strip()
+    if not text:
+        raise HTTPException(400, "missing 'text'")
+    if len(text) > 2000:
+        raise HTTPException(400, "text too long (max 2000 chars)")
+
+    # Fresh agent — must NOT share history with the chat session.
+    agent = Agent(memory=_chat_memory)
+    prompt = _QUICK_CAPTURE_PROMPT.format(text=text, kind=kind)
+    try:
+        reply = agent.chat(prompt, source="ios-shortcut")
+    except Exception as e:
+        return JSONResponse(
+            {"ok": False, "reply": f"Quick capture failed: {type(e).__name__}"},
+            status_code=500,
+        )
+    return JSONResponse({"ok": True, "reply": reply.strip()})
 
 
 # --- Webhooks ---------------------------------------------------------------
