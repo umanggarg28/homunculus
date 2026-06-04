@@ -252,6 +252,63 @@ hooks land.
 
 ---
 
+### Item 7 · Task-intake clarifier  *(½ day, added 2026-06-04)*
+
+**Problem:** under-specified tasks ship to the heartbeat and silently fail.
+Examples from history: `"Remind me about my interview"` (no time), `"Apply for jobs"` (no time, no measurable outcome). The agent tries to be helpful, fills in defaults, and the first heartbeat run inevitably misses what the user wanted.
+
+**Change:** wrap `create_task` (`tasks.py:TaskStore.create`) so that when the description is too vague to act on, the agent surfaces a clarification request via the active channel (Telegram / Web Chat) **before** saving.
+
+A task is "vague" when any of:
+- No `due_at` and the title doesn't encode a clear time (heuristic: no AM/PM, day name, or "in N hours").
+- Description is empty AND no `success_criteria`.
+- Action verb is ambiguous ("handle", "deal with", "look into") and no criteria.
+
+In autonomous (heartbeat) context, the clarifier path doesn't apply — there's no user to ask. The check only runs when the caller is Telegram or Web Chat.
+
+```python
+def needs_clarification(title: str, due_at: str | None, ...) -> str | None:
+    if not due_at and not _has_temporal_marker(title):
+        return "I can save this, but when should it fire? (e.g. tomorrow 9am)"
+    if not description and not success_criteria:
+        return "What does success look like for this task?"
+    return None  # clear enough
+```
+
+**Tests:** call `create_task("apply for jobs")` from a chat context, assert clarification is asked, no task is created. Call same with `"apply for jobs daily at 11am"`, assert task created.
+
+**Files:** `tasks.py` (~30 LoC), `tools/__init__.py` (clarifier hook, ~20 LoC), `tests/test_task_intake_clarifier.py`.
+
+---
+
+### Item 8 · Autonomous fallback policy  *(¼ day, added 2026-06-04)*
+
+**Problem:** when the agent loop ends without a useful reply during a heartbeat tick, it currently surfaces `"(I'm not sure how to respond — could you rephrase?)"` — text aimed at an interactive user who isn't there. The user only learns about the silent failure if they check Traces.
+
+**Change:** `heartbeat.py:tick` — when the post-success check fires (any due task whose `due_at` didn't advance), additionally call `notify()` with a human-readable summary so the user *always* hears about it:
+
+```python
+if not completed and task.get("notify"):
+    transports.notify_user(
+        f"⚠️ I tried to complete '{task['title']}' but ran out of "
+        f"iterations / context before finishing. I'll retry on the "
+        f"next tick. Last action: {last_event_summary}."
+    )
+```
+
+Result: under no circumstance does an autonomous failure happen quietly.
+Combined with item 4 (TaskGuard completion required) and item 2 (budget nudge), the agent now has three layers of "don't fail silently":
+
+1. iter 18 — nudge to wrap up
+2. iter 19 — forced completion-or-failure
+3. post-tick — if both failed, user is *notified* of the unfinished task
+
+**Tests:** force an agent that exhausts the loop without completing; assert `notify()` was called with the task title.
+
+**Files:** `heartbeat.py` (~25 LoC), test (~30 LoC).
+
+---
+
 ### Item 6 · Letta-style archival memory for tool results  *(3 days)*
 
 **Problem:** even with item 1's trimming, a long-running session accumulates
@@ -300,12 +357,14 @@ change and passes after.** Test files map 1:1 to items:
 
 ```
 tests/
-  test_tool_result_trimming.py    (item 1)
-  test_max_turns_nudge.py         (item 2)
-  test_tick_tool_cache.py         (item 3)
-  test_task_guard_completion.py   (item 4)
-  test_loop_hooks.py              (item 5 — large, covers all hooks)
-  test_archival_memory.py         (item 6)
+  test_tool_result_trimming.py        (item 1)
+  test_max_turns_nudge.py             (item 2)
+  test_tick_tool_cache.py             (item 3)
+  test_task_guard_completion.py       (item 4)
+  test_loop_hooks.py                  (item 5 — large, covers all hooks)
+  test_archival_memory.py             (item 6)
+  test_task_intake_clarifier.py       (item 7)
+  test_autonomous_fallback_notify.py  (item 8)
 ```
 
 For items 5–6, also add an **integration test** that replays today's
@@ -321,12 +380,20 @@ later items can rely on earlier hooks without re-plumbing:
 
 1. **Items 1, 2, 3** — tactical bundle. Each touches one file each. Land
    together in one PR (~½ day total) since they're small and additive.
-2. **Item 4** — TaskGuard extension. Independent PR.
-3. **Item 5** — `_run_loop` refactor. Independent PR. Must pass entire
+2. **Item 8** — autonomous fallback policy. ¼ day. Independent.
+3. **Item 4** — TaskGuard extension. Independent PR.
+4. **Item 7** — task-intake clarifier. ½ day. Independent of 1-6 but
+   benefits from item 5's hooks if it lands first.
+5. **Item 5** — `_run_loop` refactor. Independent PR. Must pass entire
    existing test suite unchanged before any hook-based item lands on top.
-4. **Item 6** — archival memory. Depends on item 5's `on_tool_result` hook.
+6. **Item 6** — archival memory. Depends on item 5's `on_tool_result` hook.
 
-**Estimated total: 5 working days + 1 day integration buffer.**
+**Estimated total: 6 working days + 1 day integration buffer.**
+
+Items 7 and 8 were added 2026-06-04 in response to "we need autonomy and
+no failures" feedback. Item 8 completes the "don't fail silently" layer
+that item 2 and item 4 begin; item 7 cuts off failure shapes at task
+intake before they can ship to the heartbeat.
 
 ---
 
