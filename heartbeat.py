@@ -47,8 +47,16 @@ Examples of useful proactive actions:
 - For notification tasks, use `notify()` with a concise message.
 - For research/delivery tasks, do the minimal needed work and save or
   notify the result as the task description asks.
-- When a task is handled, call `complete_task(task_id, result)` so
-  one-shot tasks stop firing and recurring tasks advance.
+
+EVERY DUE TASK MUST END WITH EXACTLY ONE OF THESE TWO CALLS:
+  ✓ complete_task(task_id, result)   — delivered, recurring task advances
+  ✗ record_failure(task_id, reason)  — could not be done, stays active
+
+Not calling either is a silent failure — the task gets stuck and you'll see
+this same prompt next tick. If you find yourself running out of room or
+hitting tool errors you can't recover from, prefer record_failure with a
+brief reason over silence. Even a partial delivery + complete_task is better
+than a perfect plan you never executed.
 
 SUCCESS CRITERIA (important):
 Some tasks list `success_criteria` — machine-checked rules that your output
@@ -65,7 +73,6 @@ Important rules:
 - DO NOT read the daily log files unless you have a specific recall
   task. Logs contain your own previous heartbeat output and reading
   them every tick creates a feedback loop. Trust your memory index.
-- If a due task cannot be completed, leave it active and briefly say why.
 - shell_exec is disabled. If a task would need shell access, call
   remember() to leave a note for the user.
 """
@@ -153,6 +160,13 @@ class TaskGuard:
         # text here, then send directly (bypassing subprocess boundary) once
         # complete_task passes all criteria.
         self._buffering = any(v for v in criteria_by_task.values())
+        # Item 4 of the robustness plan — track which due tasks have had
+        # complete_task called successfully. Combined with expected_remaining(),
+        # the heartbeat tick can detect the silent-failure mode (agent loop
+        # ran but no due task was completed) and report a *specific* failure
+        # like "task X never got complete_task" instead of the generic
+        # "agent loop returned without complete_task".
+        self._completed_tasks: set[str] = set()
 
     def on_tool_call(self, name: str, arguments: dict) -> str | None:
         """Hook fn passed to tools.set_pre_execute_hook().
@@ -174,11 +188,13 @@ class TaskGuard:
             criteria = self._criteria.get(task_id, [])
             if not criteria:
                 self._flush()  # no guard — send any buffered notifies now
+                self._completed_tasks.add(task_id)
                 return None
 
             failures = self._check(criteria)
             if not failures:
                 self._flush()  # criteria passed — deliver buffered notifications
+                self._completed_tasks.add(task_id)
                 return None
 
             # Criteria failed — discard queued notifications so the agent
@@ -193,7 +209,26 @@ class TaskGuard:
             )
             return msg
 
+        # record_failure is also a way to close out a task — track it so the
+        # heartbeat tick doesn't double-report a task that the agent already
+        # marked as failed.
+        if name == "record_failure":
+            task_id = arguments.get("task_id", "")
+            if task_id:
+                self._completed_tasks.add(task_id)
+            return None
+
         return None  # all other tools pass through unmodified
+
+    def expected_remaining(self) -> list[str]:
+        """Task IDs that were due at the start of this tick but have not yet
+        had complete_task (or record_failure) called.
+
+        Used by heartbeat.tick() after the agent loop returns to produce a
+        more specific diagnostic than the generic post-success check — and
+        to drive the autonomous notify() pattern from item 8 of the plan.
+        """
+        return [tid for tid in self._criteria if tid not in self._completed_tasks]
 
     def _flush(self) -> None:
         """Send all buffered notifications directly (bypasses MCP subprocess).
@@ -449,6 +484,11 @@ def tick(memory: Memory, model: str | None) -> None:
     # Detect by checking whether due_at advanced (the dedupe signal we
     # already use in the failure handler) and record_failure on any
     # task whose due_at is unchanged so the next tick can pick it up.
+    # Item 4: use guard.expected_remaining() to distinguish "agent explicitly
+    # called record_failure" (intentional fail with reason — don't double-log)
+    # from "agent never touched the task" (silent fall-through — the bug
+    # this whole layer exists to catch).
+    silently_dropped = set(guard.expected_remaining())
     for task in due_tasks:
         try:
             current = tasks.get(task["id"])
@@ -456,24 +496,32 @@ def tick(memory: Memory, model: str | None) -> None:
                 continue
             if current.get("due_at") != due_at_before.get(task["id"]):
                 continue  # complete_task ran, advanced due_at — good
-            # Task didn't complete. Record as a failure so executing clears.
-            # Treat as provider-exhaustion-like (don't penalise the task)
-            # because the most common cause is the LLM degrading mid-loop.
+            # Distinguish the failure shape so we can act on it differently:
+            #   - silent drop  → agent never called complete_task or record_failure.
+            #                    The post-success check has to clean up.
+            #   - explicit fail → agent called record_failure with a reason
+            #                     (which the TaskGuard tracked). The reason is
+            #                     already in the task's last_runs; don't double-log.
+            if task["id"] not in silently_dropped:
+                # Agent called record_failure — respect its decision.
+                continue
             print(
-                f"[heartbeat] {task['id']} returned without complete_task — "
-                f"recording soft failure to clear executing flag",
+                f"[heartbeat] {task['id']} silently dropped — agent did not call "
+                f"complete_task OR record_failure. Recording soft failure to clear "
+                f"executing flag.",
                 flush=True,
             )
             tasks.record_failure(
                 task["id"],
-                "agent loop returned without complete_task — likely provider degradation",
+                "silent drop — agent did not complete_task or record_failure "
+                "(likely provider degradation or context bloat)",
                 duration_s=(datetime.now() - started).total_seconds(),
                 increment_failures=False,
             )
             events.emit(
                 "task_failure",
                 name=task["id"],
-                text="returned without complete_task",
+                text="silent drop (no complete_task, no record_failure)",
                 result="executing flag cleared · consecutive_failures unchanged",
             )
         except Exception as inner:
