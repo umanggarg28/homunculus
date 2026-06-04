@@ -286,6 +286,41 @@ def tick(memory: Memory, model: str | None) -> None:
     """
     now_iso = datetime.now().isoformat(timespec="seconds")
     tasks = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
+
+    # Auto-recover stale executing flags before computing due_tasks. The
+    # main() startup cleanup only runs on container restart; if the agent
+    # finishes without calling complete_task or record_failure (e.g.,
+    # provider-exhaustion limp-along where the loop returns a fallback
+    # string instead of raising), the flag stays True forever and the
+    # task is filtered from due(). Anything older than the stale window
+    # is forcibly cleared so the next tick can re-fire it.
+    STALE_EXECUTING_SEC = 10 * 60
+    now_dt = datetime.now()
+    for t in tasks.all():
+        if not t.get("executing"):
+            continue
+        last_fired = t.get("last_fired_at")
+        if not last_fired:
+            continue
+        try:
+            age = (now_dt - datetime.fromisoformat(last_fired)).total_seconds()
+        except ValueError:
+            continue
+        if age > STALE_EXECUTING_SEC:
+            try:
+                tasks.record_failure(
+                    t["id"],
+                    f"executing flag stale ({int(age)}s old) — auto-cleared",
+                    increment_failures=False,
+                )
+                print(
+                    f"[heartbeat] auto-cleared stale executing flag on {t['id']!r} "
+                    f"(age={int(age)}s)",
+                    flush=True,
+                )
+            except Exception as _e:
+                print(f"[heartbeat] auto-clear failed for {t['id']}: {_e}", flush=True)
+
     due_tasks = tasks.due()
     events.emit("service_ping", name="heartbeat", text="alive")
 
@@ -404,6 +439,45 @@ def tick(memory: Memory, model: str | None) -> None:
     finally:
         tools.set_pre_execute_hook(None)
     print(f"[agent] {response}", flush=True)
+
+    # Post-success completion check. agent.chat() returned without an
+    # exception, but that doesn't mean the task was actually delivered —
+    # under heavy provider rate-limiting the loop can drop into the
+    # "I'm not sure how to respond — could you rephrase?" fallback path
+    # without ever calling notify() or complete_task(). When that
+    # happens, due_at stays put and executing=True remains stuck.
+    # Detect by checking whether due_at advanced (the dedupe signal we
+    # already use in the failure handler) and record_failure on any
+    # task whose due_at is unchanged so the next tick can pick it up.
+    for task in due_tasks:
+        try:
+            current = tasks.get(task["id"])
+            if current is None:
+                continue
+            if current.get("due_at") != due_at_before.get(task["id"]):
+                continue  # complete_task ran, advanced due_at — good
+            # Task didn't complete. Record as a failure so executing clears.
+            # Treat as provider-exhaustion-like (don't penalise the task)
+            # because the most common cause is the LLM degrading mid-loop.
+            print(
+                f"[heartbeat] {task['id']} returned without complete_task — "
+                f"recording soft failure to clear executing flag",
+                flush=True,
+            )
+            tasks.record_failure(
+                task["id"],
+                "agent loop returned without complete_task — likely provider degradation",
+                duration_s=(datetime.now() - started).total_seconds(),
+                increment_failures=False,
+            )
+            events.emit(
+                "task_failure",
+                name=task["id"],
+                text="returned without complete_task",
+                result="executing flag cleared · consecutive_failures unchanged",
+            )
+        except Exception as inner:
+            print(f"[heartbeat] post-tick check failed for {task['id']}: {inner}", flush=True)
 
 
 def _format_due_tasks(tasks: list[dict]) -> str:
