@@ -14,6 +14,29 @@ function ScrollToTop() {
   return null;
 }
 
+/** Auto-detect the user's IANA timezone from the browser and tell the server.
+ *  Backend persists it; heartbeat / chat-agent / get_current_time all read
+ *  from the same place. No env var, no hardcoding — the system learns it
+ *  the first time the UI loads. */
+function UserTimezoneSync() {
+  useEffect(() => {
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (!tz) return;
+      // Fire-and-forget; failures are silent. The server falls back to
+      // its own system local TZ if this never arrives.
+      fetch("/api/user-tz", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tz }),
+      }).catch(() => undefined);
+    } catch {
+      // Intl.DateTimeFormat is missing on very old browsers — skip silently.
+    }
+  }, []);
+  return null;
+}
+
 const LandingPage = lazy(() => import("@/pages/LandingPage").then((m) => ({ default: m.LandingPage })));
 const OverviewPage = lazy(() => import("@/pages/OverviewPage").then((m) => ({ default: m.OverviewPage })));
 const ChatPage = lazy(() => import("@/pages/ChatPage").then((m) => ({ default: m.ChatPage })));
@@ -42,6 +65,7 @@ export default function App() {
     <AuthGate>
       <BrowserRouter>
         <ScrollToTop />
+        <UserTimezoneSync />
         <DashboardShell>
           <Suspense fallback={<RouteFallback />}>
             <Routes>

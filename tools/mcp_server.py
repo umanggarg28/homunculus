@@ -289,25 +289,39 @@ def _resolve_tz(timezone: str):
 @mcp.tool(annotations={"readOnlyHint": True})
 def get_current_time(
     timezones: Annotated[
-        list[str],
+        list[str] | None,
         Field(
             description=(
-                "One or more IANA timezone names. Pass ALL needed timezones in one call "
-                "instead of calling this multiple times. "
-                "Examples: ['Asia/Tokyo'], ['Asia/Tokyo','Europe/London','America/New_York']. "
-                "Never pass an empty list."
+                "One or more IANA timezone names. If omitted (or empty), the user's "
+                "configured timezone (HOMUNCULUS_USER_TZ, default Asia/Kolkata) is "
+                "used. Pass ALL needed timezones in one call instead of calling this "
+                "multiple times. "
+                "Examples: ['Asia/Tokyo'], ['Asia/Tokyo','Europe/London','America/New_York']."
             )
         ),
-    ],
+    ] = None,
 ) -> str:
     """Return the current date and time for one or more IANA timezones in a single call.
 
     Use this for ANY time/timezone question — it is instant and accurate.
     Pass all requested timezones together so one call handles the whole query.
     Do NOT use web_search for time queries.
+
+    Defaults to the user's configured timezone when called without arguments,
+    so the agent doesn't have to remember the user's TZ — single source of truth.
     """
     if not timezones:
-        return "ERROR: 'timezones' list is empty — pass at least one IANA timezone name."
+        # User TZ is autodetected from the browser on first visit (see
+        # user_tz.py). Heartbeat and chat both read from the same file
+        # so there's a single source of truth — no env var, no manual
+        # config. Falls back to system local then UTC if no detection
+        # has happened yet.
+        try:
+            from user_tz import get_user_tz_name
+            default_tz = get_user_tz_name()
+        except Exception:
+            default_tz = "UTC"
+        timezones = [default_tz]
     lines = []
     for tz_name in timezones:
         tz, err = _resolve_tz(tz_name)
