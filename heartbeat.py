@@ -524,6 +524,26 @@ def tick(memory: Memory, model: str | None) -> None:
                 text="silent drop (no complete_task, no record_failure)",
                 result="executing flag cleared · consecutive_failures unchanged",
             )
+            # Item 8: autonomous fallback notify. For notify-flagged tasks
+            # the user explicitly opted in to hearing about them; if the
+            # agent silently dropped one we tell the user directly so
+            # they don't discover it later by checking Traces. Best-effort:
+            # any failure to send the notification is swallowed (we still
+            # want the failure recorded above to land).
+            if task.get("notify"):
+                try:
+                    title = task.get("title") or task["id"]
+                    _send_to_telegram(
+                        f"⚠️ I tried to handle '{title}' just now but ran out of "
+                        f"iterations / context before finishing. The task is still "
+                        f"active and I'll retry on the next tick."
+                    )
+                except Exception as notify_err:
+                    print(
+                        f"[heartbeat] fallback-notify failed for {task['id']}: "
+                        f"{notify_err}",
+                        flush=True,
+                    )
         except Exception as inner:
             print(f"[heartbeat] post-tick check failed for {task['id']}: {inner}", flush=True)
 
