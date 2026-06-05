@@ -24,7 +24,7 @@ def test_evicts_tool_messages_and_returns_count():
     ]
     n = _evict_prior_tool_results(history)
     assert n == 1
-    assert "evicted from prior turn" in history[3]["content"]
+    assert "tool result evicted" in history[3]["content"]
     assert "2,000" in history[3]["content"]
     # tool_call_id must survive — required for API pairing.
     assert history[3]["tool_call_id"] == "a"
@@ -55,6 +55,35 @@ def test_handles_non_string_content_gracefully():
     assert history[0]["content"] == {"k": "v"}
 
 
+def test_keep_recent_protects_most_recent_n_tool_results():
+    """In-loop eviction (keep_recent=2) must leave the two most recent
+    tool messages full-fidelity and stub everything older. This is the
+    contract that keeps per-call input from growing linearly with
+    iteration count inside a single agent loop."""
+    history = [
+        _tool_msg("a", "A" * 500),
+        _tool_msg("b", "B" * 500),
+        _tool_msg("c", "C" * 500),
+        _tool_msg("d", "D" * 500),
+    ]
+    evicted = _evict_prior_tool_results(history, keep_recent=2)
+    assert evicted == 2
+    # Oldest two stubbed
+    assert "tool result evicted" in history[0]["content"]
+    assert "tool result evicted" in history[1]["content"]
+    # Newest two preserved
+    assert history[2]["content"] == "C" * 500
+    assert history[3]["content"] == "D" * 500
+
+
+def test_keep_recent_zero_evicts_everything():
+    """keep_recent=0 (the default — used between user turns) must stub
+    every tool result with no exceptions."""
+    history = [_tool_msg("a", "A" * 100), _tool_msg("b", "B" * 100)]
+    assert _evict_prior_tool_results(history, keep_recent=0) == 2
+    assert all("tool result evicted" in m["content"] for m in history)
+
+
 def test_multiple_tool_results_all_evicted():
     history = [
         _tool_msg("a", "first" * 100),
@@ -63,4 +92,4 @@ def test_multiple_tool_results_all_evicted():
     ]
     assert _evict_prior_tool_results(history) == 3
     for msg in history:
-        assert "evicted from prior turn" in msg["content"]
+        assert "tool result evicted" in msg["content"]

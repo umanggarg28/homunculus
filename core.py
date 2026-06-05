@@ -233,33 +233,56 @@ def _trim_tool_result_for_history(name: str, result: object) -> object:
 # if it still needs the payload. tool_call_id is preserved on the
 # message itself, so the API's tool_call/tool_result pairing rule holds.
 _EVICTED_TOOL_RESULT_TEMPLATE = (
-    "[tool result evicted from prior turn — was {chars:,} chars. "
-    "Re-call the tool if you still need it; full payload is in the events log.]"
+    "[tool result evicted — was {chars:,} chars. "
+    "Re-call the tool if you still need this content; the full payload "
+    "is in the events log.]"
 )
 
 
-def _evict_prior_tool_results(history: list[dict]) -> int:
-    """Replace tool-message content from prior turns with a short stub.
+def _evict_prior_tool_results(history: list[dict], keep_recent: int = 0) -> int:
+    """Replace tool-message content with a short stub, leaving the
+    most recent `keep_recent` tool messages untouched.
 
-    Called at the start of each new user turn — before the new user
-    message is appended. Tool results from the just-finished turn (and
-    older) are no longer needed in-context: the assistant already
-    consumed them to produce its reply. Keeping them full-fidelity
-    burns tokens linearly with conversation length.
+    Two call sites:
 
-    Returns the number of messages that were evicted (for logging).
+    1. **Between user turns** (`keep_recent=0`): every tool result from
+       prior turns becomes a stub. The assistant has already consumed
+       them to produce its reply; keeping full payloads burns tokens
+       linearly with conversation length.
+
+    2. **Between iterations within an agent loop** (`keep_recent=2`):
+       only the most recent 2 tool results stay full-fidelity. The
+       agent's next reasoning step needs to look at the last one or
+       two tool calls it made; anything older was already reasoned
+       over and condensed into the assistant's next decision. Without
+       this, a tool-heavy task (web_fetch + web_search + read_file +
+       …) sees per-call input grow linearly across iterations — at
+       iter 15 the agent is re-sending 90K+ of stale tool payloads on
+       every LLM call. That's why a "simple" task can burn 500K+
+       tokens in one run on free-tier providers.
+
+    `tool_call_id` is preserved on the message itself, so the API's
+    tool_call/tool_result pairing rule still holds.
+
+    Returns the number of messages that were stubbed (for logging).
     Idempotent — already-stubbed messages are skipped.
     """
+    # Indices of full (non-stubbed) tool messages, in order. We
+    # protect the last `keep_recent` of these from eviction.
+    full_tool_idxs = [
+        i for i, m in enumerate(history)
+        if m.get("role") == "tool"
+        and isinstance(m.get("content"), str)
+        and not m["content"].startswith("[tool result evicted")
+    ]
+    protected = set(full_tool_idxs[-keep_recent:]) if keep_recent else set()
+
     evicted = 0
-    for msg in history:
-        if msg.get("role") != "tool":
+    for i in full_tool_idxs:
+        if i in protected:
             continue
-        content = msg.get("content")
-        if not isinstance(content, str):
-            continue
-        if content.startswith("[tool result evicted from prior turn"):
-            continue
-        msg["content"] = _EVICTED_TOOL_RESULT_TEMPLATE.format(chars=len(content))
+        msg = history[i]
+        msg["content"] = _EVICTED_TOOL_RESULT_TEMPLATE.format(chars=len(msg["content"]))
         evicted += 1
     return evicted
 
@@ -1242,6 +1265,28 @@ class Agent:
         tool_result_cache: dict[tuple[str, str], str] = {}
 
         for _turn_idx in range(MAX_TURNS):
+            # Mid-loop eviction: keep only the two most recent tool results
+            # full-fidelity; stub everything older. Without this, per-call
+            # input grows linearly with iteration count — a 15-iter task
+            # that does several web_fetches can balloon to 90K+ of stale
+            # payloads on every LLM call, hitting free-tier TPM caps. The
+            # last two are enough for the agent to reason over the call(s)
+            # it just made; anything older has already been condensed into
+            # the assistant's prior decision.
+            if _turn_idx > 0:
+                in_loop_evicted = _evict_prior_tool_results(self.history, keep_recent=2)
+                if in_loop_evicted:
+                    try:
+                        events.emit(
+                            "tool_results_evicted",
+                            text=events.truncate_preview(
+                                f"in-loop: stubbed {in_loop_evicted} older "
+                                f"tool result(s) at iter {_turn_idx + 1}"
+                            ),
+                        )
+                    except Exception:
+                        pass
+
             # Item 5: pre-turn hook. Lets a caller (heartbeat TaskGuard, tests)
             # inject a synthetic user message at the start of any iteration.
             # The TaskGuard uses this at iter MAX_TURNS-1 to force a forced
