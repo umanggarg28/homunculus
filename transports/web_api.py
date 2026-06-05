@@ -655,8 +655,11 @@ async def tasks_run_stream(task_id: str, request: Request):
     guard = TaskGuard({task_id: task.get("success_criteria") or []})
     tools.set_pre_execute_hook(guard.on_tool_call)
     tools.set_pre_turn_hook(guard.on_pre_turn)
+    from datetime import timezone as _tz
+    from core import measure_llm_usage_since
     due_at_before = task.get("due_at")
     started_iso = datetime.now().isoformat(timespec="seconds")
+    started_utc = datetime.now(_tz.utc)
 
     def gen():
         try:
@@ -667,12 +670,13 @@ async def tasks_run_stream(task_id: str, request: Request):
             except Exception as e:
                 err = f"{type(e).__name__}: {e}"
                 yield _format_sse_data(f"[loop error: {err}]")
-                # Match heartbeat.tick's post-tick: only record_failure if
-                # due_at didn't advance (the task wasn't completed before crash).
                 try:
                     current = store.get(task_id)
                     if current and current.get("due_at") == due_at_before:
-                        store.record_failure(task_id, err, increment_failures=False)
+                        store.record_failure(
+                            task_id, err, increment_failures=False,
+                            usage=measure_llm_usage_since(started_utc),
+                        )
                 except Exception:
                     pass
                 yield "event: done\ndata: end\n\n"
@@ -681,15 +685,19 @@ async def tasks_run_stream(task_id: str, request: Request):
             # Post-success check: did due_at advance? If yes, complete_task
             # ran. If no, the agent silently dropped — mark partial so
             # the scratchpad survives and the next attempt resumes.
+            usage = measure_llm_usage_since(started_utc)
             current = store.get(task_id)
             if current and current.get("due_at") == due_at_before and task_id in guard.expected_remaining():
                 store.mark_partial(
                     task_id,
                     "run-now: agent finished without complete_task / "
                     "continue_task / cancel_task",
+                    usage=usage,
                 )
                 yield _format_sse_data("[silent drop — marked partial, will resume next tick]")
             else:
+                # complete_task ran — retrofit usage onto the success run.
+                store.attribute_usage_to_last_run(task_id, usage)
                 yield _format_sse_data("[run-now finished]")
         finally:
             tools.set_pre_execute_hook(None)
