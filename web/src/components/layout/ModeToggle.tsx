@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 type Mode = "plan" | "build";
 
@@ -30,8 +31,18 @@ export function ModeToggle() {
       className="flex"
       style={{ border: "1px solid var(--color-border)", fontFamily: "var(--font-mono)" }}
     >
-      <ToggleBtn active={mode === "plan"} onClick={() => switchTo("plan")}>PLAN</ToggleBtn>
-      <ToggleBtn active={mode === "build"} onClick={() => switchTo("build")}>BUILD</ToggleBtn>
+      <Tooltip
+        text={<><strong>PLAN</strong> mode — read-only. Mutating tools (write_file, notify, create_task, python) return a structured refusal instead of running. Use it to ask the agent to think before it acts.</>}
+        placement="top"
+      >
+        <ToggleBtn active={mode === "plan"} onClick={() => switchTo("plan")}>PLAN</ToggleBtn>
+      </Tooltip>
+      <Tooltip
+        text={<><strong>BUILD</strong> mode — default. The agent can execute any tool. Switch to PLAN before sensitive work.</>}
+        placement="top"
+      >
+        <ToggleBtn active={mode === "build"} onClick={() => switchTo("build")}>BUILD</ToggleBtn>
+      </Tooltip>
     </div>
   );
 }

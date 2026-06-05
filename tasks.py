@@ -262,6 +262,20 @@ class TaskStore:
                         f"auto-cancelled after {failures} consecutive failures · "
                         f"last error: {error.strip()[:200]}"
                     )
+                else:
+                    # Advance due_at on real (non-transient) failures of
+                    # recurring tasks. Otherwise due_at stays in the past
+                    # and the task re-fires on every heartbeat tick →
+                    # failure-notify spam until consecutive_failures hits
+                    # the auto-cancel limit. Transient failures (provider
+                    # exhaustion etc.) come in with increment_failures=
+                    # False and DO retry on the next tick, which is what
+                    # the user actually wants for those.
+                    recurrence = task.get("recurrence", "none")
+                    if recurrence in {"daily", "weekly"}:
+                        task["due_at"] = self._advance_due(
+                            task.get("due_at"), recurrence, now,
+                        )
             self._write(tasks)
             return task
 

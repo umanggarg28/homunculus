@@ -37,16 +37,15 @@ export function SkillsPage() {
 
   const { needsAttention, used, unused, totalCalls, overallSuccess } = useMemo(() => {
     const list = skills ?? [];
-    // V.4 "Needs attention": skills that have recently failed or have
-    // consecutive failures. These get a dedicated subsection at the top
-    // of the Catalog so the user sees what's breaking before scrolling
-    // through the healthy tools.
+    // V.4 "Needs attention" — only the system's own broken-right-now
+    // signal: `consecutive_failures > 0`. The counter is incremented
+    // by record_failure and reset to 0 by complete_task, so it
+    // self-clears the instant the next call succeeds. No magic
+    // thresholds, no failure-ratio heuristics — historical-imperfection
+    // is not the same as currently-broken, and tools like read_file
+    // legitimately fail (missing path) without being broken.
     const needsAttention = list
-      .filter((s) =>
-        (s.consecutive_failures ?? 0) > 0
-        || s.last_status === "failure"
-        || (s.failure_count > 0 && s.call_count > 0)
-      )
+      .filter((s) => (s.consecutive_failures ?? 0) > 0)
       .sort((a, b) => {
         // Highest signal first: consecutive failures, then failure ratio
         const aCons = a.consecutive_failures ?? 0;

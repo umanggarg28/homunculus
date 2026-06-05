@@ -591,3 +591,82 @@ input, textarea { caret-color: var(--color-accent); }
 
 /* Legacy .markdown-message kept in case any non-brut-md components still use it */
 .markdown-message { font-family: var(--font-mono); font-size: 13px; line-height: 1.6; color: var(--color-text); }
+
+/* ===========================================================
+ * Info-helpable cursor + hover affordance.
+ * Replaces the OS "?" help cursor with a phosphor crosshair-
+ * bracket on tooltipped elements so the hint feels native to
+ * the brutalist terminal aesthetic. The SVG is inlined as a
+ * data URL — no extra asset, no flash on first hover. On
+ * hover, the trigger picks up a faint accent underline so the
+ * affordance also reads on touch devices.
+ * =========================================================== */
+.hm-info {
+  cursor:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'><g fill='none' stroke='%2377FF3D' stroke-width='1.4'><path d='M2 2h4M2 2v4M18 2h-4M18 2v4M2 18h4M2 18v-4M18 18h-4M18 18v-4'/><circle cx='10' cy='10' r='1.2' fill='%2377FF3D' stroke='none'/></g></svg>") 10 10,
+    help;
+  position: relative;
+  transition: color 0.12s ease;
+}
+.hm-info:hover {
+  color: var(--color-accent);
+}
+.hm-info::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 1px;
+  background: var(--color-accent);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.18s ease;
+  pointer-events: none;
+  opacity: 0.55;
+}
+.hm-info:hover::after,
+.hm-info:focus-visible::after {
+  transform: scaleX(1);
+}
+/* Bare variant for triggers that are already underlined (wikilinks,
+   links, etc.) — suppress the second underline. */
+.hm-info--bare::after { display: none; }
+
+/* ===========================================================
+ * Tooltip — brutalist phosphor hover bubble. Replaces native
+ * title="" so the hint matches the rest of the UI instead of
+ * the OS chrome.
+ * =========================================================== */
+.hm-tooltip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  color: var(--color-text);
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border-strong);
+  padding: 7px 10px;
+  text-align: left;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: anywhere;
+  box-shadow: 0 0 0 1px var(--color-bg), 0 8px 24px rgba(0, 0, 0, 0.45);
+  animation: hm-tooltip-in 0.12s ease-out;
+}
+.hm-tooltip strong, .hm-tooltip b {
+  color: var(--color-accent);
+  font-weight: 500;
+}
+.hm-tooltip kbd {
+  display: inline-block;
+  padding: 0 4px;
+  border: 1px solid var(--color-border-strong);
+  font-size: 10px;
+  color: var(--color-accent);
+  background: var(--color-surface-2);
+}
+@keyframes hm-tooltip-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

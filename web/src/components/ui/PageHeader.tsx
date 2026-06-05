@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useRobotState } from "@/hooks/useRobotState";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 interface PageHeaderProps {
   /** @deprecated alias for title — kept for older pages. */
@@ -65,16 +66,18 @@ export function PageHeader({ latin, title, subtitle, actions }: PageHeaderProps)
 
       {/* Right: unit crumb + actions */}
       <div className="shrink-0 flex items-center gap-4">
+        <Tooltip
+          text={<><strong>HMCL-01</strong> — Homunculus Unit 01, this instance's identifier (cosmetic; only relevant if you run more than one).<br /><strong>STATE</strong> — the agent's liveness: active when it's running a turn, idle otherwise.</>}
+          placement="bottom"
+        >
         <div
-          className="unit-crumb"
-          title="HMCL-01 = Homunculus Unit 01 (instance identifier). STATE shows the agent's liveness."
+          className="unit-crumb hm-info hm-info--bare"
           style={{
             fontSize: 9,
             letterSpacing: "0.18em",
             color: "var(--color-text-muted)",
             textTransform: "uppercase",
             whiteSpace: "nowrap",
-            cursor: "help",
           }}
         >
           UNIT · <span style={{ color: "var(--color-accent)" }}>HMCL-01</span>
@@ -83,6 +86,7 @@ export function PageHeader({ latin, title, subtitle, actions }: PageHeaderProps)
             {stateLabel}
           </span>
         </div>
+        </Tooltip>
         {actions && <div className="flex items-center gap-2">{actions}</div>}
       </div>
     </div>

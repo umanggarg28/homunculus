@@ -1117,13 +1117,21 @@ def _autonomous_replay_label(service: str, event: str | None, rec: dict) -> str:
 
 @app.get("/api/stats/today", dependencies=[Depends(require_web_auth)])
 def stats_today() -> JSONResponse:
-    """Return activity counts since UTC midnight today.
+    """Return activity counts since the user's local midnight today.
 
-    Uses server-side UTC midnight so the window is consistent regardless
-    of the client's timezone.
+    Windows on the *user's* timezone (not UTC) so the budget visibly
+    resets when the user's calendar day flips, not at 05:30 IST.
+    Falls back to UTC if user_tz isn't set yet.
     """
     from datetime import timezone
-    cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    try:
+        from user_tz import get_user_tz_name
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(get_user_tz_name())
+        local_midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        cutoff = local_midnight.astimezone(timezone.utc)
+    except Exception:
+        cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
     events_path = Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
     total_events = 0

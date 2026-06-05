@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useEventStream } from "@/hooks/useEventStream";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 interface ModelInfo { model: string; host: string; is_fallback?: boolean; }
 
@@ -38,27 +39,40 @@ export function ProviderInline() {
 
   const fallback = info.is_fallback;
 
+  const tip = (
+    <>
+      <strong>{info.model}</strong>
+      {info.host ? <> · via {info.host}</> : null}
+      <br />
+      {fallback
+        ? <>Primary model is rate-limited; serving from a fallback provider in the configured chain.</>
+        : <>Current model serving chat + heartbeat. Swap mid-session with <kbd>/use &lt;model&gt;</kbd>.</>}
+    </>
+  );
+
   return (
-    <div className="flex flex-col gap-0.5" style={{ fontFamily: "var(--font-mono)" }}>
-      {fallback && (
-        <div className="text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--color-warn, #f59e0b)" }}>
-          ⚠ fallback active
-        </div>
-      )}
-      <div
-        className="text-[10.5px] truncate"
-        style={{ color: fallback ? "var(--color-warn, #f59e0b)" : "var(--color-text-dim)" }}
-      >
-        {info.model}
-      </div>
-      {info.host && (
+    <Tooltip text={tip} placement="top">
+      <div className="flex flex-col gap-0.5 hm-info hm-info--bare" style={{ fontFamily: "var(--font-mono)" }}>
+        {fallback && (
+          <div className="text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--color-warn, #f59e0b)" }}>
+            ⚠ fallback active
+          </div>
+        )}
         <div
-          className="text-[9px] uppercase tracking-[0.16em] truncate"
-          style={{ color: "var(--color-text-faint)" }}
+          className="text-[10.5px] truncate"
+          style={{ color: fallback ? "var(--color-warn, #f59e0b)" : "var(--color-text-dim)" }}
         >
-          via {info.host}
+          {info.model}
         </div>
-      )}
-    </div>
+        {info.host && (
+          <div
+            className="text-[9px] uppercase tracking-[0.16em] truncate"
+            style={{ color: "var(--color-text-faint)" }}
+          >
+            via {info.host}
+          </div>
+        )}
+      </div>
+    </Tooltip>
   );
 }
