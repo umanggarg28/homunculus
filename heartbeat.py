@@ -20,7 +20,7 @@ import re
 import sys
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +28,7 @@ from dotenv import load_dotenv
 
 import events
 import tools
-from core import Agent
+from core import Agent, measure_llm_usage_since
 from memory import Memory
 from tasks import TaskStore
 from tools.notify import _send_to_telegram
@@ -505,6 +505,8 @@ def tick(memory: Memory, model: str | None) -> None:
     tools.set_pre_turn_hook(guard.on_pre_turn)
 
     started = datetime.now()
+    # Wall-clock UTC for events.jsonl scan; events log timestamps are UTC.
+    started_utc = datetime.now(timezone.utc)
     try:
         response = agent.chat(prompt)
     except Exception as e:
@@ -539,7 +541,8 @@ def tick(memory: Memory, model: str | None) -> None:
                         f"marking partial, will retry shortly",
                         flush=True,
                     )
-                    tasks.mark_partial(task["id"], err, duration_s=duration)
+                    usage = measure_llm_usage_since(started_utc)
+                    tasks.mark_partial(task["id"], err, duration_s=duration, usage=usage)
                     events.emit(
                         "task_partial",
                         name=task["id"],
@@ -547,7 +550,8 @@ def tick(memory: Memory, model: str | None) -> None:
                         result="provider_exhaustion · retry in ~10 min",
                     )
                 else:
-                    updated = tasks.record_failure(task["id"], err, duration_s=duration)
+                    usage = measure_llm_usage_since(started_utc)
+                    updated = tasks.record_failure(task["id"], err, duration_s=duration, usage=usage)
                     events.emit(
                         "task_failure",
                         name=task["id"],
@@ -579,13 +583,20 @@ def tick(memory: Memory, model: str | None) -> None:
     # from "agent never touched the task" (silent fall-through — the bug
     # this whole layer exists to catch).
     silently_dropped = set(guard.expected_remaining())
+    # Measure once for the whole tick — attribute to each task that
+    # ran. When multiple tasks share a tick the attribution is
+    # over-counted; in practice most ticks fire one task at a time.
+    tick_usage = measure_llm_usage_since(started_utc)
     for task in due_tasks:
         try:
             current = tasks.get(task["id"])
             if current is None:
                 continue
             if current.get("due_at") != due_at_before.get(task["id"]):
-                continue  # complete_task ran, advanced due_at — good
+                # complete_task ran, due_at advanced. Retrofit usage
+                # onto the success run that the tool layer appended.
+                tasks.attribute_usage_to_last_run(task["id"], tick_usage)
+                continue
             # Distinguish the failure shape so we can act on it differently:
             #   - silent drop  → agent never called complete_task or record_failure.
             #                    The post-success check has to clean up.
@@ -610,6 +621,7 @@ def tick(memory: Memory, model: str | None) -> None:
                 "silent drop — agent didn't call complete_task / "
                 "continue_task / cancel_task",
                 duration_s=(datetime.now() - started).total_seconds(),
+                usage=measure_llm_usage_since(started_utc),
             )
             events.emit(
                 "task_partial",

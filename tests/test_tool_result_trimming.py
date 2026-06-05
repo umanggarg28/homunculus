@@ -26,9 +26,11 @@ def test_exactly_at_cap_passes_through_unchanged():
 
 
 def test_oversized_result_is_trimmed_with_hint():
-    """A result over the cap is head-truncated and the hint is appended."""
+    """A result over the cap is head-truncated and the hint is appended.
+    Uses search_files (not in per-tool overrides) so the test exercises
+    the default cap path, not a per-tool override."""
     body = "L" * (TOOL_RESULT_HARD_CAP * 5)  # 30 KB
-    out = _trim_tool_result_for_history("web_fetch", body)
+    out = _trim_tool_result_for_history("search_files", body)
     assert isinstance(out, str)
     assert len(out) < len(body)
     # Trimming reserves 200 chars for the hint
@@ -38,6 +40,29 @@ def test_oversized_result_is_trimmed_with_hint():
     assert f"{trimmed_count:,}" in out
     # The trimmed content stays under the cap
     assert len(out) < TOOL_RESULT_HARD_CAP + 250  # cap + ~hint length
+
+
+def test_per_tool_cap_is_tighter_for_web_fetch():
+    """web_fetch returns whole pages; most callers only need the lead.
+    Per-tool cap was added to prevent 6K of nav/footer dumping into
+    history — the dominant remaining cost source after eviction."""
+    body = "W" * 10_000
+    out_default = _trim_tool_result_for_history("search_files", body)
+    out_web_fetch = _trim_tool_result_for_history("web_fetch", body)
+    assert len(out_web_fetch) < len(out_default), (
+        "web_fetch must be capped tighter than the default"
+    )
+
+
+def test_tail_preserving_truncation_for_python():
+    """python stdout often has the final value/exception trace at the
+    end. Per-tool config opts python into head+tail truncation so the
+    informative tail isn't lost."""
+    body = ("BEGIN " + "x" * 8000 + " END_OF_OUTPUT_MARKER")
+    out = _trim_tool_result_for_history("python", body)
+    assert "BEGIN" in out
+    assert "END_OF_OUTPUT_MARKER" in out
+    assert "elided" in out
 
 
 def test_non_string_result_passes_through():

@@ -206,23 +206,82 @@ READ_ONLY_CACHEABLE_TOOLS = frozenset({
 # can still show the complete tool output for debugging.
 TOOL_RESULT_HARD_CAP = 6000
 
+# Per-tool caps. Default falls back to TOOL_RESULT_HARD_CAP. Tighter
+# caps reflect what the agent actually needs from each tool's result:
+# - web_fetch: usually only the lead paragraphs matter; the rest is
+#   nav + footer. 2500 chars (~625 tok) is enough for the gist.
+# - python: stdout-heavy executions are useful but usually the tail
+#   matters more than the head (final value, exception trace).
+# - write_file: a "Wrote N bytes" confirmation is all that's needed.
+# - notify: same — a "delivered" confirmation.
+# - get_current_time: trivially short.
+# - update_world_state: confirmation only.
+_PER_TOOL_RESULT_CAPS: dict[str, int] = {
+    "web_fetch": 2500,
+    "python": 4000,
+    "write_file": 400,
+    "notify": 400,
+    "get_current_time": 200,
+    "update_world_state": 200,
+    "complete_task": 300,
+    "continue_task": 400,
+    "cancel_task": 300,
+    "load_tool": 300,
+    "mark_fired": 200,
+    "schedule_next_tick": 200,
+    "schedule_task": 300,
+}
+
+# Tools whose final ~20% of output matters more than the head — keep
+# both ends when we need to truncate. python stdout usually has the
+# final result / exception trace at the tail.
+_TAIL_PRESERVING_TOOLS = frozenset({"python"})
+
 
 def _trim_tool_result_for_history(name: str, result: object) -> object:
     """Cap oversized tool result strings before they enter conversation history.
 
     Non-string results pass through unchanged (some tools return dicts/lists).
     ERROR strings under the cap pass through (they're already short).
-    Anything over the cap gets head-truncated with a clear hint that the
-    agent can re-call the tool with a more targeted query.
+    Anything over the cap gets head-truncated (or head+tail for tools
+    where the tail is informative) with a clear hint that the agent
+    can re-call with a more targeted query.
+
+    Per-tool caps live in `_PER_TOOL_RESULT_CAPS`; missing entries fall
+    back to `TOOL_RESULT_HARD_CAP`. Tightening these per-tool was a
+    surprising win — web_fetch alone was dumping 6K of page chrome
+    into history when the agent only needed the lead paragraphs.
     """
     if not isinstance(result, str):
         return result
-    if len(result) <= TOOL_RESULT_HARD_CAP:
+    cap = _PER_TOOL_RESULT_CAPS.get(name, TOOL_RESULT_HARD_CAP)
+    if len(result) <= cap:
         return result
-    head_budget = TOOL_RESULT_HARD_CAP - 200  # reserve room for the hint
-    trimmed_count = len(result) - head_budget
+    hint_budget = 200
+    body_budget = cap - hint_budget
+
+    if name in _TAIL_PRESERVING_TOOLS:
+        # head + tail split, weighted 70/30. python stdout often has
+        # the final value or exception trace at the very end.
+        head_chars = int(body_budget * 0.7)
+        tail_chars = body_budget - head_chars
+        elided = len(result) - body_budget
+        body = (
+            f"{result[:head_chars]}\n\n"
+            f"[... {elided:,} chars elided ...]\n\n"
+            f"{result[-tail_chars:]}"
+        )
+        return (
+            f"{body}\n\n"
+            f"[harness: trimmed {elided:,} chars from the middle. "
+            f"Tail preserved for tools like python where the final value "
+            f"or exception is most informative.]"
+        )
+
+    head_chars = body_budget
+    trimmed_count = len(result) - head_chars
     return (
-        f"{result[:head_budget]}\n\n"
+        f"{result[:head_chars]}\n\n"
         f"[+{trimmed_count:,} chars trimmed by harness — re-call with a "
         f"more targeted query/path if needed, or use recall() / "
         f"search_files() to find specific content]"
@@ -493,6 +552,68 @@ def _today_spend_cents() -> float:
         uncached = max(0, input_tok - cached_tok)
         total += (uncached * price_in + cached_tok * price_in * 0.1 + output_tok * price_out) / 1_000_000
     return total
+
+
+def measure_llm_usage_since(
+    cutoff_ts: datetime,
+) -> dict[str, float | int]:
+    """Aggregate LLM token counts and cost from events.jsonl since cutoff.
+
+    Used by the task layer to attribute per-task spend. We scan
+    backward from the end of the events log and stop once we cross
+    the cutoff timestamp, so the scan is bounded by recent activity
+    not the full log size. Returns zeros if the file is missing or
+    no llm_call events lie in the window.
+
+    Output shape:
+        {input_tokens, output_tokens, cached_tokens, cost_cents, calls}
+    """
+    out: dict[str, float | int] = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": 0,
+        "cost_cents": 0.0,
+        "calls": 0,
+    }
+    events_path = Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
+    if not events_path.exists():
+        return out
+    try:
+        lines = events_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return out
+    cutoff = cutoff_ts if cutoff_ts.tzinfo is not None else cutoff_ts.replace(tzinfo=timezone.utc)
+    for line in reversed(lines):
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        ts_raw = rec.get("ts", "")
+        try:
+            ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if ts < cutoff:
+            break
+        if rec.get("event") != "llm_call":
+            continue
+        in_tok = int(rec.get("input_tokens") or 0)
+        out_tok = int(rec.get("output_tokens") or 0)
+        cached_tok = int(rec.get("cached_tokens") or 0)
+        out["input_tokens"] += in_tok
+        out["output_tokens"] += out_tok
+        out["cached_tokens"] += cached_tok
+        out["calls"] += 1
+        model = rec.get("model") or rec.get("name") or ""
+        if _is_known_paid_model(model):
+            price_in, price_out = _MODEL_PRICING_CENTS[model]
+            uncached = max(0, in_tok - cached_tok)
+            out["cost_cents"] += (
+                uncached * price_in + cached_tok * price_in * 0.1 + out_tok * price_out
+            ) / 1_000_000
+    return out
 
 
 def _budget_blocks_model(model_id: str) -> bool:
@@ -1632,7 +1753,21 @@ class Agent:
                         )
                         if requested and requested in known:
                             self._active_tool_names.add(requested)
+                    _t_start = time.monotonic()
                     result = tools.execute(name, args)
+                    _t_duration_ms = int((time.monotonic() - _t_start) * 1000)
+                    # Emit a follow-up tool_call_duration event so the
+                    # dashboard can surface slow tools. Cheap — only the
+                    # tool name + ms; the call itself was already logged.
+                    try:
+                        events.emit(
+                            "tool_call_duration",
+                            name=name,
+                            text=f"{_t_duration_ms}ms",
+                            result=str(_t_duration_ms),
+                        )
+                    except Exception:
+                        pass
                     # Populate the per-turn cache for read-only tools.
                     # Only cache real (non-error) results so a failed call
                     # can still be retried with the same args.

@@ -27,7 +27,7 @@ def _stub_llm_with_tool_call(history, tool_schemas, model=None):
             {
                 "id": "call-1",
                 "type": "function",
-                "function": {"name": "get_current_time", "arguments": "{}"},
+                "function": {"name": "search_files", "arguments": "{}"},
             }
         ],
     }
@@ -101,7 +101,7 @@ def test_mid_loop_eviction_keeps_per_call_input_bounded(monkeypatch):
             "tool_calls": [{
                 "id": f"call-{iter_counter['n']}",
                 "type": "function",
-                "function": {"name": "get_current_time", "arguments": "{}"},
+                "function": {"name": "search_files", "arguments": "{}"},
             }],
         }
 

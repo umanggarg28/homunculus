@@ -277,7 +277,13 @@ class TaskStore:
                 seconds.append(delta)
         return min(seconds) if seconds else None
 
-    def complete(self, task_id: str, result: str = "", duration_s: float | None = None) -> dict[str, Any]:
+    def complete(
+        self,
+        task_id: str,
+        result: str = "",
+        duration_s: float | None = None,
+        usage: dict | None = None,
+    ) -> dict[str, Any]:
         with self._locked():
             tasks = self.all()
             task = self._find(tasks, task_id)
@@ -288,7 +294,7 @@ class TaskStore:
             task["consecutive_failures"] = 0  # successful run resets counter
             task["consecutive_partials"] = 0  # successful run also resets partials
             task["executing"] = False
-            self._append_run(task, now, "success", result, duration_s)
+            self._append_run(task, now, "success", result, duration_s, usage)
 
             recurrence = task.get("recurrence", "none")
             if recurrence in {"daily", "weekly"}:
@@ -305,6 +311,7 @@ class TaskStore:
         error: str,
         duration_s: float | None = None,
         increment_failures: bool = True,
+        usage: dict | None = None,
     ) -> dict[str, Any]:
         """Log a failed run.
 
@@ -321,7 +328,7 @@ class TaskStore:
             task["updated_at"] = now.isoformat(timespec="seconds")
             task["last_result"] = error.strip()
             task["executing"] = False
-            self._append_run(task, now, "failure", error, duration_s)
+            self._append_run(task, now, "failure", error, duration_s, usage)
             if increment_failures:
                 failures = int(task.get("consecutive_failures", 0)) + 1
                 task["consecutive_failures"] = failures
@@ -354,6 +361,7 @@ class TaskStore:
         reason: str,
         duration_s: float | None = None,
         advance_minutes: int = PARTIAL_RETRY_MINUTES,
+        usage: dict | None = None,
     ) -> dict[str, Any]:
         """Log a partial run — work in progress, not yet complete.
 
@@ -376,7 +384,7 @@ class TaskStore:
             task["updated_at"] = now.isoformat(timespec="seconds")
             task["last_result"] = f"partial: {reason.strip()}"
             task["executing"] = False
-            self._append_run(task, now, "partial", reason, duration_s)
+            self._append_run(task, now, "partial", reason, duration_s, usage)
 
             partials = int(task.get("consecutive_partials", 0)) + 1
             task["consecutive_partials"] = partials
@@ -491,7 +499,14 @@ class TaskStore:
         status: str,
         result: str,
         duration_s: float | None,
+        usage: dict | None = None,
     ) -> None:
+        """Append a run record; `usage` carries token + cost metrics.
+
+        `usage` shape (all fields optional):
+            input_tokens, output_tokens, cached_tokens, cost_cents,
+            calls (number of LLM round-trips during this run)
+        """
         run = {
             "ts": ts.isoformat(timespec="seconds"),
             "status": status,
@@ -499,10 +514,48 @@ class TaskStore:
         }
         if duration_s is not None:
             run["duration_s"] = round(duration_s, 2)
+        if usage:
+            # Round cost to 4 decimals so a daily-brief that costs
+            # 0.0023¢ doesn't render as 0.
+            for key in ("input_tokens", "output_tokens", "cached_tokens", "calls"):
+                if usage.get(key):
+                    run[key] = int(usage[key])
+            if usage.get("cost_cents"):
+                run["cost_cents"] = round(float(usage["cost_cents"]), 4)
         runs = task.setdefault("last_runs", [])
         runs.append(run)
         if len(runs) > RUN_HISTORY_CAP:
             del runs[: len(runs) - RUN_HISTORY_CAP]
+
+    def attribute_usage_to_last_run(
+        self,
+        task_id: str,
+        usage: dict,
+    ) -> None:
+        """Retrofit usage metrics onto the most recent run entry.
+
+        Used by heartbeat after a successful complete_task call: the
+        run was appended by the tool layer (which doesn't see usage),
+        and we measure usage at the orchestration layer once the agent
+        loop returns. Idempotent — re-attribution overwrites, doesn't
+        accumulate. No-op if the task has no runs yet.
+        """
+        with self._locked():
+            tasks = self.all()
+            try:
+                task = self._find(tasks, task_id)
+            except KeyError:
+                return
+            runs = task.get("last_runs") or []
+            if not runs:
+                return
+            run = runs[-1]
+            for key in ("input_tokens", "output_tokens", "cached_tokens", "calls"):
+                if usage.get(key):
+                    run[key] = int(usage[key])
+            if usage.get("cost_cents"):
+                run["cost_cents"] = round(float(usage["cost_cents"]), 4)
+            self._write(tasks)
 
     def schedule(
         self,
