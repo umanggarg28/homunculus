@@ -13,7 +13,16 @@ import { useEventStream } from "@/hooks/useEventStream";
  *  agent's pulse — it's not decoration, it's data with one job:
  *  proving to you the thing is alive.
  */
-export function SignatureHeartbeat() {
+interface SignatureHeartbeatProps {
+  /** Compact mode for use in a constrained cell (e.g. the Overview
+   *  command-status grid). Drops the header strip + footer scale,
+   *  halves the bin density, and shrinks the vertical padding. The
+   *  default full mode bleeds edge-to-edge and is the page's
+   *  signature element. */
+  compact?: boolean;
+}
+
+export function SignatureHeartbeat({ compact = false }: SignatureHeartbeatProps = {}) {
   const { events } = useEventStream(500);
   const [now, setNow] = useState(() => Date.now());
 
@@ -22,9 +31,11 @@ export function SignatureHeartbeat() {
     return () => clearInterval(t);
   }, []);
 
-  // 288 bins for 24h × 5min — dense enough to fill the screen,
-  // coarse enough to actually show patterns.
-  const bins = useMemo(() => buildBins(events, 288, now), [events, now]);
+  // Bin density: 288 (5-min bins for 24h) in full mode, 144 (10-min
+  // bins) in compact mode — half the density so the smaller strip
+  // still reads as a coherent shape, not noise.
+  const nBins = compact ? 144 : 288;
+  const bins = useMemo(() => buildBins(events, nBins, now), [events, now, nBins]);
   const lastEvent = events[events.length - 1];
   const live = lastEvent && now - new Date(lastEvent.ts).getTime() < 5000;
 
@@ -32,42 +43,47 @@ export function SignatureHeartbeat() {
   const phase = (now / 1000) % (2 * Math.PI * 4);
 
   return (
-    <div className="relative overflow-hidden" style={{ marginBottom: 48 }}>
+    <div className="relative overflow-hidden" style={{ marginBottom: compact ? 0 : 48 }}>
       <RibbonGradient />
 
-      {/* Header strip above the waveform */}
-      <div
-        className="flex items-baseline justify-between mb-2 px-10"
-        style={{ fontFamily: "var(--font-mono)" }}
-      >
-        <span
-          className="text-[10px] uppercase tracking-[0.32em]"
-          style={{ color: "var(--color-text-muted)" }}
+      {!compact && (
+        // Header strip above the waveform (full mode only — the
+        // compact panel uses its own container header).
+        <div
+          className="flex items-baseline justify-between mb-2 px-10"
+          style={{ fontFamily: "var(--font-mono)" }}
         >
-          ── pulse · last 24h
-        </span>
-        <span
-          className="text-[10px] uppercase tracking-[0.18em]"
-          style={{ color: live ? "var(--color-accent)" : "var(--color-text-faint)" }}
-        >
-          {live ? "● spiking" : "● steady"} · {events.length} events in window
-        </span>
-      </div>
+          <span
+            className="text-[10px] uppercase tracking-[0.32em]"
+            style={{ color: "var(--color-text-muted)" }}
+          >
+            ── pulse · last 24h
+          </span>
+          <span
+            className="text-[10px] uppercase tracking-[0.18em]"
+            style={{ color: live ? "var(--color-accent)" : "var(--color-text-faint)" }}
+          >
+            {live ? "● spiking" : "● steady"} · {events.length} events in window
+          </span>
+        </div>
+      )}
 
       {/* The waveform — bleeds full width, breaks the page grid */}
-      <Strip bins={bins} phase={phase} live={!!live} />
+      <Strip bins={bins} phase={phase} live={!!live} compact={compact} />
 
-      {/* Footer: timeline scale */}
-      <div
-        className="flex justify-between mt-2 px-10 text-[9px] uppercase tracking-[0.18em]"
-        style={{ color: "var(--color-text-faint)", fontFamily: "var(--font-mono)" }}
-      >
-        <span>−24h</span>
-        <span>−18h</span>
-        <span>−12h</span>
-        <span>−6h</span>
-        <span>now ▸</span>
-      </div>
+      {!compact && (
+        // Footer timeline scale (full mode only).
+        <div
+          className="flex justify-between mt-2 px-10 text-[9px] uppercase tracking-[0.18em]"
+          style={{ color: "var(--color-text-faint)", fontFamily: "var(--font-mono)" }}
+        >
+          <span>−24h</span>
+          <span>−18h</span>
+          <span>−12h</span>
+          <span>−6h</span>
+          <span>now ▸</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -90,11 +106,12 @@ function RibbonGradient() {
 const BAR_GLYPHS = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 function Strip({
-  bins, phase, live,
+  bins, phase, live, compact = false,
 }: {
   bins: number[]; // 0..1 normalized
   phase: number;
   live: boolean;
+  compact?: boolean;
 }) {
   // Render two stacked ASCII rows + a center hairline. Each row is
   // right-anchored — when the strip is wider than the container, the
@@ -107,7 +124,7 @@ function Strip({
         background: "var(--color-bg)",
         borderTop: "1px solid var(--color-border)",
         borderBottom: "1px solid var(--color-border)",
-        padding: "20px 0",
+        padding: compact ? "10px 0" : "20px 0",
         zIndex: 1,
       }}
     >
