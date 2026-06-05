@@ -35,6 +35,16 @@ RUN_HISTORY_CAP = 20
 # the logs / wastes LLM quota.
 CONSECUTIVE_FAILURE_LIMIT = 3
 
+# Resumable-task continuation policy. A task that didn't finish but
+# made progress (provider exhaustion, iteration cap, explicit
+# continue_task call) becomes "partial" instead of failing. It's
+# rescheduled PARTIAL_RETRY_MINUTES from now so the work survives
+# without burning a full recurrence interval. After N consecutive
+# partials with no completion in between, escalate to a real failure
+# so the user finds out instead of the task quietly looping forever.
+PARTIAL_RETRY_MINUTES = 10
+MAX_CONSECUTIVE_PARTIALS = 3
+
 # A task that already fired within this window is suppressed from a
 # subsequent `due()` call. Prevents heartbeat-restart double-fires:
 # heartbeat crashes mid-tick → next tick sees the same overdue task →
@@ -44,6 +54,61 @@ RE_FIRE_SUPPRESSION_SECONDS = 30 * 60  # 30 minutes — covers provider outages 
 # `_advance_due()` can in theory loop forever if `recurrence_step` is
 # 0 or if `now` keeps advancing during a slow operation. Cap iterations.
 ADVANCE_DUE_MAX_ITERS = 366 * 2  # ~2 years of daily steps
+
+
+def scratchpad_dir(tasks_root: Path) -> Path:
+    """Where per-task scratchpads live. Lazily created on first write."""
+    return tasks_root / "scratchpads"
+
+
+def scratchpad_path(tasks_root: Path, task_id: str) -> Path:
+    """Filesystem path for a task's scratchpad. Filename mirrors task_id
+    to avoid collisions; .md extension keeps the file legible to the
+    user via the dashboard's file browser."""
+    safe = re.sub(r"[^a-zA-Z0-9._-]", "_", task_id)
+    return scratchpad_dir(tasks_root) / f"{safe}.md"
+
+
+def read_scratchpad(tasks_root: Path, task_id: str) -> str:
+    """Return the scratchpad content for a task, or empty string if none.
+    Never raises — a missing scratchpad is just an empty result."""
+    p = scratchpad_path(tasks_root, task_id)
+    try:
+        return p.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def write_scratchpad(tasks_root: Path, task_id: str, content: str) -> Path:
+    """Overwrite a task's scratchpad with `content`. Returns the path
+    written. Creates the parent directory on first write."""
+    p = scratchpad_path(tasks_root, task_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    return p
+
+
+def append_scratchpad(tasks_root: Path, task_id: str, content: str) -> Path:
+    """Append `content` to a task's scratchpad (creating it if needed).
+    Each append is separated by a newline so successive notes don't
+    smash together."""
+    p = scratchpad_path(tasks_root, task_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    prefix = "" if not p.exists() or p.read_text(encoding="utf-8").endswith("\n") else "\n"
+    with p.open("a", encoding="utf-8") as f:
+        f.write(prefix + content + ("\n" if not content.endswith("\n") else ""))
+    return p
+
+
+def clear_scratchpad(tasks_root: Path, task_id: str) -> None:
+    """Remove a task's scratchpad. Called when complete_task succeeds —
+    the work is delivered, the scratchpad would only confuse the next
+    recurring run. No-op if the file doesn't exist."""
+    p = scratchpad_path(tasks_root, task_id)
+    try:
+        p.unlink()
+    except FileNotFoundError:
+        pass
 
 
 class TaskStore:
@@ -124,6 +189,9 @@ class TaskStore:
                 # Dedupe + circuit breaker fields.
                 "last_fired_at": None,
                 "consecutive_failures": 0,
+                # Resumable-task state — tracks runs that made partial
+                # progress but didn't complete. Reset by complete().
+                "consecutive_partials": 0,
                 # Machine-checked before complete_task is accepted.
                 "success_criteria": success_criteria or [],
             }
@@ -218,6 +286,7 @@ class TaskStore:
             task["updated_at"] = now.isoformat(timespec="seconds")
             task["completed_at"] = now.isoformat(timespec="seconds")
             task["consecutive_failures"] = 0  # successful run resets counter
+            task["consecutive_partials"] = 0  # successful run also resets partials
             task["executing"] = False
             self._append_run(task, now, "success", result, duration_s)
 
@@ -276,6 +345,75 @@ class TaskStore:
                         task["due_at"] = self._advance_due(
                             task.get("due_at"), recurrence, now,
                         )
+            self._write(tasks)
+            return task
+
+    def mark_partial(
+        self,
+        task_id: str,
+        reason: str,
+        duration_s: float | None = None,
+        advance_minutes: int = PARTIAL_RETRY_MINUTES,
+    ) -> dict[str, Any]:
+        """Log a partial run — work in progress, not yet complete.
+
+        Used when a task ran out of iterations / hit provider exhaustion /
+        explicitly called continue_task. The task's scratchpad survives
+        so the next attempt can resume, and due_at advances by a SHORT
+        interval (default 10 min) instead of the full recurrence step.
+
+        After MAX_CONSECUTIVE_PARTIALS in a row without an intervening
+        completion, escalates to a real failure so the user finds out.
+
+        Returns the updated task. The caller can inspect `status` —
+        "active" means it's been rescheduled, "active" with
+        consecutive_failures > 0 means it escalated.
+        """
+        with self._locked():
+            tasks = self.all()
+            task = self._find(tasks, task_id)
+            now = datetime.now()
+            task["updated_at"] = now.isoformat(timespec="seconds")
+            task["last_result"] = f"partial: {reason.strip()}"
+            task["executing"] = False
+            self._append_run(task, now, "partial", reason, duration_s)
+
+            partials = int(task.get("consecutive_partials", 0)) + 1
+            task["consecutive_partials"] = partials
+
+            if partials >= MAX_CONSECUTIVE_PARTIALS:
+                # Escalate. Use record_failure inline so consecutive_
+                # failures advances and CONSECUTIVE_FAILURE_LIMIT logic
+                # still applies. We reset partials so the next escalation
+                # is also a fresh count, not a tail effect.
+                task["consecutive_partials"] = 0
+                failures = int(task.get("consecutive_failures", 0)) + 1
+                task["consecutive_failures"] = failures
+                task["last_result"] = (
+                    f"escalated: {partials} consecutive partials. "
+                    f"Last reason: {reason.strip()[:200]}"
+                )
+                if failures >= CONSECUTIVE_FAILURE_LIMIT:
+                    task["status"] = "cancelled"
+                else:
+                    recurrence = task.get("recurrence", "none")
+                    if recurrence in {"daily", "weekly"}:
+                        task["due_at"] = self._advance_due(
+                            task.get("due_at"), recurrence, now,
+                        )
+            else:
+                # Reschedule for the near future so the next tick can
+                # resume from the scratchpad. We bypass _advance_due
+                # because we want a short delta, not a recurrence step.
+                task["due_at"] = (
+                    now + timedelta(minutes=advance_minutes)
+                ).isoformat(timespec="seconds")
+                # Clear the dedupe stamp so the new due_at fires on the
+                # very next tick — otherwise RE_FIRE_SUPPRESSION_SECONDS
+                # would block it for 30 min even though we want it
+                # back in ~10 min.
+                task["last_fired_at"] = None
+
             self._write(tasks)
             return task
 

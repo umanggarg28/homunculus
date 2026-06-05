@@ -48,9 +48,19 @@ Examples of useful proactive actions:
 - For research/delivery tasks, do the minimal needed work and save or
   notify the result as the task description asks.
 
-EVERY DUE TASK MUST END WITH EXACTLY ONE OF THESE TWO ACTUAL TOOL CALLS:
-  ✓ complete_task(task_id, result)   — delivered, recurring task advances
-  ✗ record_failure(task_id, reason)  — could not be done, stays active
+EVERY DUE TASK MUST END WITH EXACTLY ONE OF THESE TOOL CALLS:
+  ✓ complete_task(task_id, result)        — delivered cleanly
+  ↻ continue_task(task_id, reason,        — partial progress; resume next tick
+                  scratchpad_update=...)
+  ✗ cancel_task(task_id, reason)          — give up, task is wrong/done/obsolete
+
+CONTINUATION (use this when a task is bigger than one tick):
+  - If you're partway through and notice you're close to the iteration
+    budget OR a provider just throttled, call continue_task() with a
+    one-line scratchpad summary of what's done. The task will fire
+    again in ~10 min and the NEXT run will see your scratchpad.
+  - Read task_scratchpad(task_id) at the START of any task — if there's
+    content from a prior run, resume from there instead of starting over.
 
 CRITICAL: writing "Task completed." or "Done." in your reply text does NOT
 count. The harness only sees actual tool invocations, not prose. If you've
@@ -519,19 +529,22 @@ def tick(memory: Memory, model: str | None) -> None:
                     )
                     continue
                 if is_provider_exhaustion:
-                    # Log the failure but don't increment consecutive_failures.
+                    # Provider exhaustion is a partial — work was in
+                    # flight when the infrastructure ran out, not a
+                    # broken task. mark_partial reschedules ~10 min
+                    # later so the same provider's TPM window can
+                    # refresh; the scratchpad survives.
                     print(
-                        f"[heartbeat] {task['id']} provider-exhaustion failure — "
-                        f"logging but not counting toward auto-cancel",
+                        f"[heartbeat] {task['id']} provider-exhaustion — "
+                        f"marking partial, will retry shortly",
                         flush=True,
                     )
-                    tasks.record_failure(task["id"], err, duration_s=duration,
-                                        increment_failures=False)
+                    tasks.mark_partial(task["id"], err, duration_s=duration)
                     events.emit(
-                        "task_failure",
+                        "task_partial",
                         name=task["id"],
                         text=events.truncate_preview(err),
-                        result="provider_exhaustion · consecutive_failures unchanged",
+                        result="provider_exhaustion · retry in ~10 min",
                     )
                 else:
                     updated = tasks.record_failure(task["id"], err, duration_s=duration)
@@ -588,18 +601,24 @@ def tick(memory: Memory, model: str | None) -> None:
                 f"executing flag.",
                 flush=True,
             )
-            tasks.record_failure(
+            # Silent drop → mark partial (the work was in progress,
+            # the agent just didn't call any termination tool). The
+            # next tick fires the same task ~10 min later, and the
+            # scratchpad (if the skill wrote to one) survives.
+            updated = tasks.mark_partial(
                 task["id"],
-                "silent drop — agent did not complete_task or record_failure "
-                "(likely provider degradation or context bloat)",
+                "silent drop — agent didn't call complete_task / "
+                "continue_task / cancel_task",
                 duration_s=(datetime.now() - started).total_seconds(),
-                increment_failures=False,
             )
             events.emit(
-                "task_failure",
+                "task_partial",
                 name=task["id"],
-                text="silent drop (no complete_task, no record_failure)",
-                result="executing flag cleared · consecutive_failures unchanged",
+                text="silent drop (no termination tool called)",
+                result=(
+                    f"consecutive_partials={updated.get('consecutive_partials', '?')}"
+                    f" · retry in ~10 min"
+                ),
             )
             # T1.2: skill auto-refinement. Append a Watch-out note to the
             # related skill_*.md so next-run's agent has the lesson available
@@ -626,32 +645,44 @@ def tick(memory: Memory, model: str | None) -> None:
                     f"{refine_err}",
                     flush=True,
                 )
-            # Item 8: autonomous fallback notify. For notify-flagged tasks
-            # the user explicitly opted in to hearing about them; if the
-            # agent silently dropped one we tell the user directly so
-            # they don't discover it later by checking Traces. Best-effort:
-            # any failure to send the notification is swallowed (we still
-            # want the failure recorded above to land).
+            # Autonomous fallback notify — only when mark_partial
+            # ESCALATED to a real failure (consecutive_failures > 0
+            # after the call). Plain partials are routine continuation
+            # state, not user-actionable, so notifying on each would
+            # spam the user every 10 min. Refresh `updated` from disk
+            # because mark_partial mutated it.
             if task.get("notify"):
-                try:
-                    title = task.get("title") or task["id"]
-                    _send_to_telegram(
-                        f"⚠️ I tried to handle '{title}' just now but ran out of "
-                        f"iterations / context before finishing. The task is still "
-                        f"active and I'll retry on the next tick."
-                    )
-                except Exception as notify_err:
+                refreshed = tasks.get(task["id"]) or {}
+                escalated = int(refreshed.get("consecutive_failures", 0)) > 0
+                if not escalated:
                     print(
-                        f"[heartbeat] fallback-notify failed for {task['id']}: "
-                        f"{notify_err}",
+                        f"[heartbeat] {task['id']} partial — suppressing user "
+                        f"notification (will only fire on escalation)",
                         flush=True,
                     )
+                else:
+                    try:
+                        title = task.get("title") or task["id"]
+                        _send_to_telegram(
+                            f"⚠️ I tried '{title}' multiple times today and "
+                            f"couldn't get it through (provider limits or "
+                            f"task is broken). Pausing automatic retries; "
+                            f"check Traces if you want to know why."
+                        )
+                    except Exception as notify_err:
+                        print(
+                            f"[heartbeat] fallback-notify failed for {task['id']}: "
+                            f"{notify_err}",
+                            flush=True,
+                        )
         except Exception as inner:
             print(f"[heartbeat] post-tick check failed for {task['id']}: {inner}", flush=True)
 
 
 def _format_due_tasks(tasks: list[dict]) -> str:
     import json as _json
+    from tasks import read_scratchpad
+    tasks_root = Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks"))
     lines = []
     for task in tasks:
         block = (
@@ -665,6 +696,20 @@ def _format_due_tasks(tasks: list[dict]) -> str:
         criteria = task.get("success_criteria") or []
         if criteria:
             block += f"\n  success_criteria: {_json.dumps(criteria)}"
+        partials = int(task.get("consecutive_partials", 0))
+        if partials > 0:
+            block += f"\n  RESUMING — consecutive_partials: {partials}"
+        scratch = read_scratchpad(tasks_root, task.get("id", ""))
+        if scratch.strip():
+            # Inline the scratchpad so the agent sees it in the same
+            # prompt that lists the task — no separate read needed.
+            # Capped at 2000 chars (the rest is available via
+            # task_scratchpad() if it grew large) but typically 1-2
+            # lines of "what I did last time".
+            preview = scratch.strip()
+            if len(preview) > 2000:
+                preview = preview[:2000] + f"\n... [+{len(scratch) - 2000} more chars in scratchpad]"
+            block += f"\n  scratchpad (from prior run):\n    " + preview.replace("\n", "\n    ")
         lines.append(block)
     return "\n".join(lines)
 

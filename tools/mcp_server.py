@@ -491,6 +491,56 @@ def schedule_task(
     return scheduling.schedule_task(task_id, due_at, recurrence)
 
 
+@mcp.tool(annotations={"readOnlyHint": False})
+def continue_task(
+    task_id: Annotated[str, Field(description="Task id of the task you're partway through.")],
+    reason: Annotated[
+        str,
+        Field(description="Why you're yielding (e.g. 'fetched problem, will solve next tick')."),
+    ] = "",
+    scratchpad_update: Annotated[
+        str | None,
+        Field(description="Optional short note appended to the task's scratchpad — what you've completed so the next run resumes cleanly."),
+    ] = None,
+) -> str:
+    """Yield the current task to the next tick WITH state preserved.
+
+    Call this when you're making real progress but won't finish *this*
+    tick (provider throttling, iteration budget tightening, large
+    payloads pushing context). Strictly better than running out the
+    loop silently: no failure counter increment, no failure
+    notification, and the scratchpad you've written survives so the
+    next attempt can resume from where you stopped.
+
+    Task is rescheduled ~10 min from now. After 3 consecutive
+    continuations without a completion in between, the harness
+    escalates to a real failure so the user finds out.
+    """
+    return scheduling.continue_task(task_id, reason, scratchpad_update)
+
+
+@mcp.tool(annotations={"readOnlyHint": False})
+def task_scratchpad(
+    task_id: Annotated[str, Field(description="Task id whose scratchpad to read or write.")],
+    content: Annotated[
+        str | None,
+        Field(description="If provided, REPLACES the scratchpad with this content. Omit to read."),
+    ] = None,
+) -> str:
+    """Read or overwrite a task's scratchpad.
+
+    Scratchpads are per-task working state that survives across
+    attempts — read at the start of each run, written as you make
+    progress, automatically cleared when complete_task succeeds.
+    Use this to remember what you've done so a future continuation
+    doesn't redo work.
+
+    Read: omit `content`. Overwrite: pass new `content`. To append
+    instead of replace, prefer continue_task(scratchpad_update=...).
+    """
+    return scheduling.task_scratchpad(task_id, content)
+
+
 # ── notify ────────────────────────────────────────────────────────────
 
 
