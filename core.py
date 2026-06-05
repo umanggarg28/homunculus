@@ -1417,15 +1417,29 @@ class Agent:
         return content
 
     def _current_system_prompt(self) -> str:
-        """Return the base system prompt with a fresh current-datetime line appended."""
-        tz_name = os.environ.get("TZ", "Asia/Kolkata")
-        try:
-            tz = ZoneInfo(tz_name)
-        except ZoneInfoNotFoundError:
-            tz = ZoneInfo("UTC")
-        now = datetime.now(tz=tz)
-        date_line = now.strftime("Current date/time: %A, %Y-%m-%d %H:%M %Z")
-        prompt = self._base_system_prompt + f"\n\n{date_line}"
+        """Build the system prompt for this turn.
+
+        STRUCTURE FOR PROVIDER CACHE HIT RATE — order matters here.
+
+        Gemini 2.5's implicit cache + OpenRouter/Anthropic explicit cache
+        both prefix-match. ANY change to bytes earlier in the prompt
+        invalidates the cache for everything after. So we layer:
+
+            [stable]    base system prompt
+            [stable]    AGENTS.md (mtime-cached)
+            [stable]    loadable tools catalogue
+            ──── implicit cache boundary ────
+            [volatile]  current date/time (changes every minute)
+            [volatile]  session world state (changes every turn)
+            [sporadic]  rate-limit signal (only when a provider just cooled)
+
+        Pre-reorder we were appending the date line right after the base
+        prompt, which invalidated the cache for AGENTS.md + everything
+        downstream on every turn. Hit rate measured at ~40% on Gemini;
+        target after this change is 70-80%+.
+        """
+        # ── STABLE PREFIX (cacheable) ────────────────────────────────
+        prompt = self._base_system_prompt
 
         # AGENTS.md hot-reload. Lazy + mtime-cached so unchanged files
         # don't hit the disk on every turn. Lets the user edit AGENTS.md
@@ -1434,15 +1448,9 @@ class Agent:
         if agents_md:
             prompt += "\n\n# Identity (AGENTS.md — user-owned persona)\n\n" + agents_md
 
-        if self.memory is not None:
-            state = self.memory.get_world_state()
-            if state:
-                prompt += "\n\n# Session world state\n\n" + json.dumps(state, indent=2)
-
-        # Loadable tool catalogue. Anything NOT already in the active
-        # set is listed by name + one-line description here instead of
-        # being sent as a full schema on every call. Agent uses
-        # load_tool(name) to promote one into the active set.
+        # Loadable tool catalogue. Stays stable as long as the active
+        # set doesn't change — which it usually doesn't within a single
+        # task run. Belongs in the cacheable prefix.
         loadable = (
             tools.tool_overview(exclude=self._active_tool_names)
             if self._active_tool_names is not None
@@ -1455,6 +1463,21 @@ class Agent:
                 desc = row["description"].split("\n", 1)[0][:120]
                 lines.append(f"- `{row['name']}` — {desc}")
             prompt += "\n".join(lines)
+
+        # ── VOLATILE SUFFIX (re-rendered every turn) ─────────────────
+        tz_name = os.environ.get("TZ", "Asia/Kolkata")
+        try:
+            tz = ZoneInfo(tz_name)
+        except ZoneInfoNotFoundError:
+            tz = ZoneInfo("UTC")
+        now = datetime.now(tz=tz)
+        date_line = now.strftime("Current date/time: %A, %Y-%m-%d %H:%M %Z")
+        prompt += f"\n\n{date_line}"
+
+        if self.memory is not None:
+            state = self.memory.get_world_state()
+            if state:
+                prompt += "\n\n# Session world state\n\n" + json.dumps(state, indent=2)
 
         # Recent rate-limit signal. When a provider just cooled in the
         # last 2 minutes, nudge the agent to checkpoint / continue_task
