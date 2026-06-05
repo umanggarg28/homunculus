@@ -679,15 +679,16 @@ async def tasks_run_stream(task_id: str, request: Request):
                 return
 
             # Post-success check: did due_at advance? If yes, complete_task
-            # ran. If no, the agent silently dropped — record soft failure.
+            # ran. If no, the agent silently dropped — mark partial so
+            # the scratchpad survives and the next attempt resumes.
             current = store.get(task_id)
             if current and current.get("due_at") == due_at_before and task_id in guard.expected_remaining():
-                store.record_failure(
+                store.mark_partial(
                     task_id,
-                    "run-now: agent finished without complete_task or record_failure",
-                    increment_failures=False,
+                    "run-now: agent finished without complete_task / "
+                    "continue_task / cancel_task",
                 )
-                yield _format_sse_data("[silent drop — recorded soft failure]")
+                yield _format_sse_data("[silent drop — marked partial, will resume next tick]")
             else:
                 yield _format_sse_data("[run-now finished]")
         finally:

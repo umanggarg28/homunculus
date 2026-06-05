@@ -6,7 +6,13 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from tasks import TaskStore
+from tasks import (
+    TaskStore,
+    append_scratchpad,
+    clear_scratchpad,
+    read_scratchpad,
+    write_scratchpad,
+)
 
 from ._state import get_memory
 
@@ -95,15 +101,82 @@ def list_tasks(status: str = "active") -> str:
 
 
 def complete_task(task_id: str, result: str = "") -> str:
-    task = _task_store().complete(task_id, result)
+    store = _task_store()
+    task = store.complete(task_id, result)
+    # Scratchpad is per-attempt working state; a delivered task no
+    # longer needs it and the next recurring run should start clean.
+    clear_scratchpad(store.root, task_id)
     if task.get("status") == "active":
         return f"Completed recurring task {task_id}; next due {task.get('due_at')}"
     return f"Completed task {task_id}"
 
 
 def cancel_task(task_id: str, reason: str = "") -> str:
-    _task_store().cancel(task_id, reason)
+    store = _task_store()
+    store.cancel(task_id, reason)
+    clear_scratchpad(store.root, task_id)
     return f"Cancelled task {task_id}"
+
+
+def continue_task(
+    task_id: str,
+    reason: str = "",
+    scratchpad_update: str | None = None,
+) -> str:
+    """Mark the current run as PARTIAL and save state for the next tick.
+
+    Use this when the task is making real progress but you've hit a
+    limit (provider throttling, iteration cap, big-payload context
+    pressure) and won't finish *this* tick. The task gets rescheduled
+    to ~10 min from now, your scratchpad survives, and the next run
+    can read it via the standard task prompt.
+
+    Calling this is strictly better than running out the loop silently:
+    the harness records a "partial" run (no failure counter increment),
+    and the user does not get a failure notification.
+
+    `scratchpad_update` is optional. If provided it is APPENDED to the
+    scratchpad — pass a short summary of what you've done so the next
+    run can pick up cleanly ("Fetched problem statement; solution
+    pending"). Use write_file directly if you want full control.
+    """
+    store = _task_store()
+    if scratchpad_update:
+        append_scratchpad(store.root, task_id, scratchpad_update)
+    task = store.mark_partial(task_id, reason or "agent requested continuation")
+    partials = task.get("consecutive_partials", 0)
+    if partials == 0 and task.get("consecutive_failures", 0) > 0:
+        # mark_partial reset partials → escalated to a real failure.
+        return (
+            f"continue_task: too many consecutive partials — escalated "
+            f"task {task_id} to a real failure. The user will be notified."
+        )
+    return (
+        f"continue_task: task {task_id} marked partial (#{partials}); "
+        f"next attempt due at {task.get('due_at')}."
+    )
+
+
+def task_scratchpad(task_id: str, content: str | None = None) -> str:
+    """Read or overwrite a task's scratchpad.
+
+    With `content=None` (default): returns the current scratchpad
+    content for the task, or an empty string if none exists.
+    With a non-None `content`: REPLACES the scratchpad and returns
+    a short confirmation. To append instead of replace, prefer
+    continue_task(scratchpad_update=...).
+
+    Scratchpads survive across attempts and are cleared automatically
+    when complete_task succeeds.
+    """
+    store = _task_store()
+    if content is None:
+        existing = read_scratchpad(store.root, task_id)
+        if not existing:
+            return f"Scratchpad for {task_id} is empty."
+        return existing
+    write_scratchpad(store.root, task_id, content)
+    return f"Scratchpad for {task_id} updated ({len(content):,} chars)."
 
 
 def schedule_task(
