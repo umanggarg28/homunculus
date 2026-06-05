@@ -429,7 +429,16 @@ def _today_spend_cents() -> float:
     events_path = Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
     if not events_path.exists():
         return 0.0
-    cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    # Window on the user's local midnight, not UTC — otherwise the
+    # budget appears to roll over at 05:30 IST for an IST user.
+    try:
+        from user_tz import get_user_tz_name
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(get_user_tz_name())
+        local_midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        cutoff = local_midnight.astimezone(timezone.utc)
+    except Exception:
+        cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     total = 0.0
     try:
         lines = events_path.read_text(encoding="utf-8", errors="replace").splitlines()

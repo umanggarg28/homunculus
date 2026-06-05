@@ -71,12 +71,12 @@ export function MemoryContent({ text, entries }: Props) {
             placement="top"
           >
             <span
+              className="hm-info hm-info--bare"
               style={{
                 color: "var(--color-text-faint)",
                 fontStyle: "italic",
                 textDecoration: "underline dotted",
                 textUnderlineOffset: 2,
-                cursor: "help",
               }}
             >
               [[{p.name}]]

@@ -71,14 +71,13 @@ export function PageHeader({ latin, title, subtitle, actions }: PageHeaderProps)
           placement="bottom"
         >
         <div
-          className="unit-crumb"
+          className="unit-crumb hm-info hm-info--bare"
           style={{
             fontSize: 9,
             letterSpacing: "0.18em",
             color: "var(--color-text-muted)",
             textTransform: "uppercase",
             whiteSpace: "nowrap",
-            cursor: "help",
           }}
         >
           UNIT · <span style={{ color: "var(--color-accent)" }}>HMCL-01</span>

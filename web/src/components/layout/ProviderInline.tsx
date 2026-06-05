@@ -52,7 +52,7 @@ export function ProviderInline() {
 
   return (
     <Tooltip text={tip} placement="top">
-      <div className="flex flex-col gap-0.5" style={{ fontFamily: "var(--font-mono)", cursor: "help" }}>
+      <div className="flex flex-col gap-0.5 hm-info hm-info--bare" style={{ fontFamily: "var(--font-mono)" }}>
         {fallback && (
           <div className="text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--color-warn, #f59e0b)" }}>
             ⚠ fallback active

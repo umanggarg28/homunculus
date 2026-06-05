@@ -3,6 +3,7 @@ import { useEventStream } from "@/hooks/useEventStream";
 import { api, parseServerIso } from "@/lib/api";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { SignatureHeartbeat } from "@/components/overview/SignatureHeartbeat";
 import { HomunculusRobot } from "@/components/robot/HomunculusRobot";
 import { useRobotState } from "@/hooks/useRobotState";
@@ -459,33 +460,37 @@ function ContextStatusCell({ contextData }: { contextData: CtxData | null }) {
       ? "var(--color-accent)"
       : "var(--color-text-faint)";
   const fillColor = tone === "warn" ? "var(--color-amber)" : "var(--color-accent)";
+  const tip = hasContext ? (
+    <>
+      <strong>{contextData.used_tokens.toLocaleString()}</strong> of {contextData.limit_tokens.toLocaleString()} tokens
+      on <strong>{contextData.model}</strong>. Not cost — this measures how full the model's context window is.
+      <br />
+      Tool results from prior turns are auto-evicted to keep this low. Hard summarisation kicks in past 8 user turns.
+    </>
+  ) : (
+    <>Context window usage. No model call yet this session — the gauge will populate after the first chat turn.</>
+  );
   return (
-    <div
-      className="overview-status-wide"
-      title={
-        hasContext
-          ? `Context window usage on ${contextData.model}: ${contextData.used_tokens.toLocaleString()} of ${contextData.limit_tokens.toLocaleString()} tokens. Not cost.`
-          : "Context window usage — no model call yet this session."
-      }
-      style={{ cursor: "help" }}
-    >
-      <div className="flex items-end justify-between gap-4">
-        <div>
-          <div className="text-[9px] uppercase tracking-[0.18em]" style={{ color: "var(--color-text-muted)" }}>
-            context
+    <Tooltip text={tip} placement="bottom">
+      <div className="overview-status-wide hm-info hm-info--bare">
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <div className="text-[9px] uppercase tracking-[0.18em]" style={{ color: "var(--color-text-muted)" }}>
+              context
+            </div>
+            <div className="mt-2 text-[22px] leading-none" style={{ color, fontVariantNumeric: "tabular-nums", letterSpacing: "0" }}>
+              {hasContext ? `${pct.toFixed(0)}%` : "COLD"}
+            </div>
           </div>
-          <div className="mt-2 text-[22px] leading-none" style={{ color, fontVariantNumeric: "tabular-nums", letterSpacing: "0" }}>
-            {hasContext ? `${pct.toFixed(0)}%` : "COLD"}
+          <div className="text-[9px] uppercase tracking-[0.1em] text-right" style={{ color: "var(--color-text-faint)", overflowWrap: "anywhere" }}>
+            {hasContext ? compactTokens(contextData.used_tokens, contextData.limit_tokens) : "no model call"}
           </div>
         </div>
-        <div className="text-[9px] uppercase tracking-[0.1em] text-right" style={{ color: "var(--color-text-faint)", overflowWrap: "anywhere" }}>
-          {hasContext ? compactTokens(contextData.used_tokens, contextData.limit_tokens) : "no model call"}
+        <div className="overview-context-bar">
+          <span style={{ width: `${pct}%`, background: fillColor }} />
         </div>
       </div>
-      <div className="overview-context-bar">
-        <span style={{ width: `${pct}%`, background: fillColor }} />
-      </div>
-    </div>
+    </Tooltip>
   );
 }
 

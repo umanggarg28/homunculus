@@ -83,8 +83,8 @@ export function BrutalistMessage({ message, toolCalls, sending }: Props) {
             placement="right"
           >
             <div
-              className="mt-1 uppercase tracking-[0.12em]"
-              style={{ color: "var(--color-text-muted)", fontSize: 9, cursor: "help" }}
+              className="mt-1 uppercase tracking-[0.12em] hm-info hm-info--bare"
+              style={{ color: "var(--color-text-muted)", fontSize: 9 }}
             >
               via {message.source === "telegram" ? "tg" : message.source === "ios-shortcut" ? "ios" : message.source}
             </div>

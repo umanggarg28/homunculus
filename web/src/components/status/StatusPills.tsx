@@ -64,10 +64,7 @@ function Pill({
 
   return (
     <Tooltip text={tip} placement="bottom">
-      <div
-        className="flex items-center gap-1.5 mono-caps text-[var(--color-text-muted)]"
-        style={{ cursor: "help" }}
-      >
+      <div className="flex items-center gap-1.5 mono-caps text-[var(--color-text-muted)] hm-info hm-info--bare">
         <motion.span
           className={`inline-block w-[6px] h-[6px] rounded-full bg-current ${color}`}
           animate={state === "live" ? { opacity: [1, 0.35, 1] } : { opacity: 1 }}

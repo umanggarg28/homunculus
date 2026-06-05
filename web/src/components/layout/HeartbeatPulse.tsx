@@ -34,7 +34,7 @@ export function HeartbeatPulse() {
 
   return (
     <Tooltip text={tip} placement="bottom">
-      <div className="relative w-3 h-3 flex items-center justify-center" style={{ cursor: "help" }}>
+      <div className="relative w-3 h-3 flex items-center justify-center hm-info hm-info--bare">
         {/* Outer halo — softer, slower */}
         <motion.span
           aria-hidden

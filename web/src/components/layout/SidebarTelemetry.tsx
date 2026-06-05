@@ -85,15 +85,15 @@ export function SidebarTelemetry() {
       }}
     >
       {/* Next autonomous fire */}
-      <Tooltip text={<>Countdown to the next autonomous run. Includes the next scheduled task and the regular heartbeat interval (~60 min by default).</>} placement="right">
-        <div style={{ cursor: "help" }}>
+      <Tooltip text={<>Countdown to the next autonomous run. Includes the next scheduled task and the regular heartbeat interval (~60 min by default).</>} placement="top">
+        <div className="hm-info hm-info--bare">
           <Row label="next fire" value={untilLabel} valueColor={untilSec !== null && untilSec < 60 ? "var(--color-warning)" : "var(--color-text-dim)"} />
         </div>
       </Tooltip>
 
       {/* Heartbeat liveness */}
-      <Tooltip text={<>Time since the last heartbeat tick was observed. Tick runs every {upcoming?.default_interval_min ?? 60} min and on every due task.</>} placement="right">
-        <div style={{ cursor: "help" }}>
+      <Tooltip text={<>Time since the last heartbeat tick was observed. Tick runs every {upcoming?.default_interval_min ?? 60} min and on every due task.</>} placement="top">
+        <div className="hm-info hm-info--bare">
           <Row
             label="heartbeat"
             value={heartbeatLabel}
@@ -107,8 +107,8 @@ export function SidebarTelemetry() {
       </Tooltip>
 
       {/* Budget bar */}
-      <Tooltip text={<>Estimated LLM spend today, in cents. Free-tier providers don't count. Bar turns amber at 80% of the configured daily budget.</>} placement="right">
-        <div style={{ cursor: "help" }}>
+      <Tooltip text={<>Estimated LLM spend today, in cents. Free-tier providers don't count. Bar turns amber at 80% of the configured daily budget.</>} placement="top">
+        <div className="hm-info hm-info--bare">
           <div className="flex justify-between mb-1">
             <span>budget</span>
             <span style={{ color: "var(--color-text-muted)" }}>
@@ -129,9 +129,9 @@ export function SidebarTelemetry() {
       {/* Current model */}
       <Tooltip
         text={<><strong>{model?.model ?? "no model yet"}</strong><br />Last LLM model used. Swap with <kbd>/use &lt;model&gt;</kbd> in chat.</>}
-        placement="right"
+        placement="top"
       >
-        <div style={{ cursor: model ? "help" : "default" }}>
+        <div className={model ? "hm-info hm-info--bare" : ""}>
           <div>model</div>
           <div className="mt-1" style={{ color: "var(--color-text-muted)", letterSpacing: "0.06em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {modelShort}
