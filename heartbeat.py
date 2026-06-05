@@ -789,14 +789,28 @@ def _interruptible_sleep(total_seconds: float, poll_interval: float = 60.0) -> N
     notification problem: tasks created mid-sleep are picked up within
     one poll interval instead of the full default sleep window.
     No LLM cost — the due() check is a local JSON read.
+
+    Also emits a `service_ping` every ~10 minutes so /api/status keeps
+    reporting heartbeat as "live" between hourly ticks. Without this,
+    a healthy heartbeat sleeping its full hour flaps from "live" → "idle"
+    → "stale" before its next wake, making the Overview dashboard's
+    liveness signal unreliable.
     """
     task_store = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
+    keepalive_every = 10 * 60.0
     deadline = time.monotonic() + total_seconds
+    last_ping = time.monotonic()
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
         time.sleep(min(poll_interval, remaining))
+        if time.monotonic() - last_ping >= keepalive_every:
+            try:
+                events.emit("service_ping", name="heartbeat", text="alive")
+            except Exception:
+                pass
+            last_ping = time.monotonic()
         if task_store.due():
             print("[heartbeat] task became due mid-sleep — waking early", flush=True)
             break

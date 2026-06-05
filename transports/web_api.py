@@ -15,6 +15,7 @@ import asyncio
 import json
 import os
 import secrets
+import threading
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -103,6 +104,13 @@ _chat_memory: Memory = Memory(MEMORY_DIR)
 # so shell_exec is disabled rather than hanging on a prompt.
 tools.init(_chat_memory, autonomous=True)
 _chat_agent: Agent | None = None
+# Serialises mutations to the shared _chat_agent (history append, tool
+# results, memory writes). Without this, two concurrent /api/chat/send
+# streams race on the same history list and reply with corrupted /
+# cross-mixed content. Held for the full duration of a chat stream —
+# concurrent requests queue rather than interleave. Single-user app, so
+# head-of-line blocking is acceptable; correctness > throughput.
+_chat_agent_lock = threading.Lock()
 
 
 def _get_chat_agent() -> Agent:
@@ -1505,15 +1513,15 @@ async def chat_send(request: Request):
             },
         )
 
-    # Drain any notifications fired by heartbeat (or other processes)
-    # since the last chat turn, so follow-ups like "explain it" arrive
-    # with context. Same mechanism the Telegram bot uses.
-    _drain_notifications_for_chat(agent)
-
     def gen():
         _active_streams.add(stream_id)
         cancelled = False
+        # Acquire the agent lock for the full stream lifetime so a
+        # concurrent /api/chat/send cannot mutate history mid-turn.
+        # Drain happens inside the lock too — it appends to history.
+        _chat_agent_lock.acquire()
         try:
+            _drain_notifications_for_chat(agent)
             for chunk in agent.chat_stream(user_message, source="web"):
                 if stream_id in _cancelled_streams:
                     cancelled = True
@@ -1534,6 +1542,7 @@ async def chat_send(request: Request):
                 yield _format_sse_data("\n\n[stopped by user]")
             if _chat_memory is not None:
                 _chat_memory.save_session(agent.history)
+            _chat_agent_lock.release()
             yield "event: done\ndata: end\n\n"
 
     return StreamingResponse(
