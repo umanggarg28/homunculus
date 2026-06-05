@@ -1349,6 +1349,7 @@ def _visible_chat_history(history: list[dict]) -> list[dict]:
                 "role": role,
                 "content": content,
                 "source": msg.get("source", "web"),
+                "ts": msg.get("ts"),
             }
             continue
         if role == "assistant":
@@ -1367,6 +1368,7 @@ def _visible_chat_history(history: list[dict]) -> list[dict]:
                 "role": role,
                 "content": content,
                 "source": msg.get("source", "web"),
+                "ts": msg.get("ts"),
             })
     return messages
 
