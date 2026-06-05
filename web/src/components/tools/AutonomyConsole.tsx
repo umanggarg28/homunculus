@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { api } from "@/lib/api";
-import type { AgentControls, AgentReplayTool, AgentReplayTurn, Skill } from "@/lib/types";
+import type { AgentBudgetStats, AgentControls, AgentReplayTool, AgentReplayTurn, Skill } from "@/lib/types";
 
 interface Props {
   controls: AgentControls;
   skills: Skill[];
   replay: AgentReplayTurn[];
+  budgetStats?: AgentBudgetStats | null;
   onControlsChange: (next: AgentControls) => void;
   onReplayChange: (next: AgentReplayTurn[]) => void;
 }
 
-export function AutonomyConsole({ controls, skills, replay, onControlsChange, onReplayChange }: Props) {
+export function AutonomyConsole({ controls, skills, replay, budgetStats, onControlsChange, onReplayChange }: Props) {
   const [draft, setDraft] = useState(controls);
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -251,6 +252,7 @@ export function AutonomyConsole({ controls, skills, replay, onControlsChange, on
               />
             </div>
           </ControlRow>
+          <BudgetRow stats={budgetStats} />
           <div className="grid gap-4 autonomy-pane-pad" style={{ borderTop: "1px solid var(--color-border)" }}>
             <ToolListEditor label="allowed tools" value={draft.allowed_tools} placeholder="empty = all registered tools allowed" onChange={(allowed_tools) => setDraft({ ...draft, allowed_tools })} />
             <ToolListEditor label="blocked tools" value={draft.blocked_tools} placeholder="one tool per line" onChange={(blocked_tools) => setDraft({ ...draft, blocked_tools })} />
@@ -296,6 +298,54 @@ export function AutonomyConsole({ controls, skills, replay, onControlsChange, on
         </div>
       </div>
     </section>
+  );
+}
+
+function BudgetRow({ stats }: { stats: AgentBudgetStats | null | undefined }) {
+  // Today's spend vs daily envelope, expressed in cents. Pct turns
+  // amber at 80% (the same threshold the SidebarTelemetry bar uses)
+  // and red at 100%. Renders even when stats is null so the operator
+  // sees the row exists and knows what to expect — empty values
+  // indicate the /stats/today endpoint hasn't responded yet.
+  const spent = stats?.cost_cents ?? null;
+  const budget = stats?.budget_cents ?? 17;  // matches DAILY_BUDGET_USD default
+  const pct = spent !== null && budget > 0
+    ? Math.min(100, Math.max(0, (spent / budget) * 100))
+    : 0;
+  const tone = pct >= 100
+    ? "var(--color-danger)"
+    : pct >= 80
+      ? "var(--color-amber)"
+      : "var(--color-accent)";
+  const valueLabel = spent === null
+    ? "—"
+    : `¢${spent.toFixed(2)} / ¢${budget.toFixed(0)}`;
+  const subnote = stats
+    ? `${stats.input_tokens.toLocaleString()} in / ${stats.output_tokens.toLocaleString()} out · ${stats.tasks_fired} tasks`
+    : "loading today's stats";
+
+  return (
+    <div className="autonomy-control-row">
+      <div>
+        <div className="text-[11px] uppercase tracking-[0.16em]" style={{ color: "var(--color-text)" }}>budget</div>
+        <div className="text-[11px] mt-1" style={{ color: "var(--color-text-muted)" }}>{subnote}</div>
+      </div>
+      <div style={{ minWidth: 160, fontFamily: "var(--font-mono)" }}>
+        <div className="flex items-baseline justify-end gap-2 mb-1">
+          <span className="text-[12px]" style={{ color: tone, fontVariantNumeric: "tabular-nums" }}>
+            {valueLabel}
+          </span>
+          {spent !== null && (
+            <span className="text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--color-text-faint)" }}>
+              {pct.toFixed(0)}%
+            </span>
+          )}
+        </div>
+        <div style={{ height: 2, background: "var(--color-border)", overflow: "hidden" }}>
+          <div style={{ width: `${pct}%`, height: "100%", background: tone, transition: "width 400ms ease" }} />
+        </div>
+      </div>
+    </div>
   );
 }
 

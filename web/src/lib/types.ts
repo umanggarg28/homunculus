@@ -87,6 +87,24 @@ export interface Skill {
   consecutive_failures: number | null; // from rate_skill() in skill_*.md
 }
 
+// Mirrors transports/web_api.stats_today response shape. Used by the
+// AutonomyConsole to surface today's budget burn alongside the tuning
+// controls — the operator can see at a glance whether the agent is on
+// track or about to exhaust the $5/month envelope.
+export interface AgentBudgetStats {
+  since: string;
+  events: number;
+  unique_tools: number;
+  tasks_fired: number;
+  memory_writes: number;
+  memory_forgets: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  cost_cents: number;
+  budget_cents: number;
+}
+
 export interface AgentControls {
   mode: "plan" | "build";
   max_steps: number;
