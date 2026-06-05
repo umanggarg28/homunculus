@@ -65,12 +65,58 @@ def test_eviction_fires_between_turns(monkeypatch, tmp_path):
     # now be a stub. Turn 2 also called a tool, so the most recent
     # tool message in this history will be a fresh full payload.
     turn1_msg = tool_msgs[0]
-    assert "evicted from prior turn" in turn1_msg["content"], (
+    assert "tool result evicted" in turn1_msg["content"], (
         f"turn-1 tool result was NOT evicted: {turn1_msg['content'][:80]!r}"
     )
     assert "1,500" in turn1_msg["content"], "stub should record original size"
     # tool_call_id must survive — required for OpenAI-style API pairing.
     assert turn1_msg.get("tool_call_id") == "call-1"
+
+
+def test_mid_loop_eviction_keeps_per_call_input_bounded(monkeypatch):
+    """The user-visible symptom we're fixing: per-call input shouldn't
+    grow linearly across iterations within a single agent loop. With
+    keep_recent=2, after iter 5 we should still have only 2 full tool
+    payloads in history — the rest must be stubs.
+    """
+    monkeypatch.setenv("HOMUNCULUS_API_KEY", "stub")
+
+    agent = core.Agent()
+    big = "Z" * 2000
+    import tools as tools_pkg
+    monkeypatch.setattr(tools_pkg, "execute", lambda n, a: big, raising=False)
+    monkeypatch.setattr(core, "_validate_tool_args", lambda n, a: None)
+
+    # LLM stub: keep emitting tool_calls for 5 iterations, then a plain
+    # reply. Models a tool-heavy task like the leetcode delivery.
+    iter_counter = {"n": 0}
+
+    def stub(history, tool_schemas, model=None):
+        iter_counter["n"] += 1
+        if iter_counter["n"] >= 6:
+            return {"role": "assistant", "content": "done."}
+        return {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": f"call-{iter_counter['n']}",
+                "type": "function",
+                "function": {"name": "get_current_time", "arguments": "{}"},
+            }],
+        }
+
+    monkeypatch.setattr(core, "call_llm", stub)
+    agent.chat("kick off")
+
+    # Count full vs evicted tool messages after the loop.
+    tool_msgs = [m for m in agent.history if m.get("role") == "tool"]
+    full = [m for m in tool_msgs if "tool result evicted" not in m["content"]]
+    stubs = [m for m in tool_msgs if "tool result evicted" in m["content"]]
+    # 5 tool calls fired → 5 tool messages; with keep_recent=2 only the
+    # last 2 should be full payload, the other 3 must be stubs.
+    assert len(tool_msgs) == 5, [m["content"][:40] for m in tool_msgs]
+    assert len(full) == 2, f"expected 2 full, got {len(full)}"
+    assert len(stubs) == 3, f"expected 3 stubs, got {len(stubs)}"
 
 
 def test_eviction_emits_observability_event(monkeypatch):
