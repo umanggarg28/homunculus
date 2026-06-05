@@ -8,6 +8,12 @@ export interface ChatMessage {
   content: string;
   inFlight?: boolean;
   source?: "web" | "telegram" | "repl" | "heartbeat" | string;
+  /** ISO timestamp when this message was created. Live messages
+   *  stamp it at send; persisted messages pick it up from the
+   *  session record if available, omit otherwise. The UI must NOT
+   *  fabricate a timestamp from Date.now() — that lies about when
+   *  the message actually happened. */
+  ts?: string;
 }
 
 interface UseChatStream {
@@ -52,8 +58,8 @@ export function useChatStream(): UseChatStream {
 
     setMessages((prev) => [
       ...prev,
-      { id: userId, role: "user", content: text },
-      { id: assistantId, role: "assistant", content: "", inFlight: true },
+      { id: userId, role: "user", content: text, ts: new Date().toISOString() },
+      { id: assistantId, role: "assistant", content: "", inFlight: true, ts: new Date().toISOString() },
     ]);
 
     try {

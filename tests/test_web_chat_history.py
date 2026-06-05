@@ -34,12 +34,12 @@ def test_visible_chat_history_keeps_complete_visible_pairs():
     ]
 
     assert web_api._visible_chat_history(history) == [
-        {"id": "persisted-0", "role": "user", "content": "what are my goals?", "source": "web"},
+        {"id": "persisted-0", "role": "user", "content": "what are my goals?", "source": "web", "ts": None},
         {
             "id": "persisted-1",
             "role": "assistant",
             "content": "leetcode and job applications",
-            "source": "web",
+            "source": "web", "ts": None,
         },
     ]
 
@@ -53,12 +53,12 @@ def test_visible_chat_history_hides_heartbeat_notifications():
     ]
 
     assert web_api._visible_chat_history(history) == [
-        {"id": "persisted-1", "role": "user", "content": "explain that", "source": "web"},
+        {"id": "persisted-1", "role": "user", "content": "explain that", "source": "web", "ts": None},
         {
             "id": "persisted-2",
             "role": "assistant",
             "content": "I notified you about the task.",
-            "source": "web",
+            "source": "web", "ts": None,
         },
     ]
 
@@ -70,8 +70,8 @@ def test_visible_chat_history_preserves_source_tag():
     history = [
         {"role": "user", "content": "hi from phone", "source": "telegram"},
         {"role": "assistant", "content": "hey", "source": "telegram"},
-        {"role": "user", "content": "hi from laptop", "source": "web"},
-        {"role": "assistant", "content": "hello", "source": "web"},
+        {"role": "user", "content": "hi from laptop", "source": "web", "ts": None},
+        {"role": "assistant", "content": "hello", "source": "web", "ts": None},
     ]
     out = web_api._visible_chat_history(history)
     assert out[0]["source"] == "telegram"
@@ -111,11 +111,11 @@ def test_visible_chat_history_hides_contentful_tool_planning_messages():
     ]
 
     assert web_api._visible_chat_history(history) == [
-        {"id": "persisted-0", "role": "user", "content": "save a comparison table", "source": "web"},
+        {"id": "persisted-0", "role": "user", "content": "save a comparison table", "source": "web", "ts": None},
         {
             "id": "persisted-5",
             "role": "assistant",
             "content": "Saved the table to notes/frameworks.md.",
-            "source": "web",
+            "source": "web", "ts": None,
         },
     ]

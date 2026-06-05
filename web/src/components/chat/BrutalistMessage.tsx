@@ -33,7 +33,7 @@ interface Props {
  */
 export function BrutalistMessage({ message, toolCalls, sending }: Props) {
   const isUser = message.role === "user";
-  const timeStr = useMemo(() => fmtTime(message.id), [message.id]);
+  const timeStr = useMemo(() => fmtTime(message.ts), [message.ts]);
   const inFlight = message.inFlight ?? false;
 
   return (
@@ -209,8 +209,12 @@ function Cursor() {
   );
 }
 
-function fmtTime(id: string) {
-  const n = parseInt(id.replace(/[^0-9]/g, "").slice(0, 13), 10);
-  const d = Number.isFinite(n) && n > 1_000_000_000_000 ? new Date(n) : new Date();
+function fmtTime(ts?: string) {
+  // No timestamp → render an em-dash. Fabricating from Date.now()
+  // makes restored history appear to have happened now, which is
+  // confusing when the persisted content references a different time.
+  if (!ts) return "—";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "—";
   return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
 }

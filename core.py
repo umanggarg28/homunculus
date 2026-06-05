@@ -693,7 +693,7 @@ def _is_transient_provider_error(response: httpx.Response) -> bool:
 # want to leak into the LLM request. Providers vary on strictness — most
 # OpenAI-compatible endpoints tolerate extras, but Anthropic-via-OpenRouter
 # and some others reject unknown keys outright.
-_INTERNAL_MESSAGE_KEYS = frozenset({"source"})
+_INTERNAL_MESSAGE_KEYS = frozenset({"source", "ts"})
 
 
 def _strip_internal_fields(messages: list[dict]) -> list[dict]:
@@ -1313,20 +1313,11 @@ class Agent:
             else None
         )
         full_prompt = system_prompt
-        # T2.7 of the capability roadmap — AGENTS.md is the user-owned
-        # identity layer (OpenClaw calls it SOUL.md; same pattern). It
-        # loads AFTER the codebase's hardcoded behavior rules and BEFORE
-        # the memory blocks, so the codebase sets the foundation and the
-        # user can shape persona on top without forking core.py.
-        agents_md_path = _resolve_agents_md()
-        if agents_md_path is not None:
-            try:
-                full_prompt += (
-                    "\n\n# Identity (AGENTS.md — user-owned persona)\n\n"
-                    + agents_md_path.read_text(encoding="utf-8")
-                )
-            except OSError:
-                pass  # missing file is fine; corrupt encoding falls through
+        # AGENTS.md is now loaded lazily by _current_system_prompt so
+        # edits to the file take effect on the next turn without a
+        # restart. The cache key is (path, mtime) — re-read only when
+        # the file changes on disk.
+        self._agents_md_cache: tuple[str, float, str] | None = None
         if memory is not None:
             # Pinned core block: user profile + key feedback rules (full bodies,
             # capped small). Always in context so the agent knows who it's
@@ -1397,6 +1388,34 @@ class Agent:
         """
         yield from self._run_loop(user_message, streaming=True, source=source)
 
+    def _load_agents_md_cached(self) -> str:
+        """Read AGENTS.md, cached by (path, mtime). Returns '' if missing.
+
+        Refreshing per-turn means edits to the user-owned persona file
+        land on the next agent turn without a service restart. The
+        cache prevents re-reading the same content every turn.
+        """
+        path = _resolve_agents_md()
+        if path is None:
+            self._agents_md_cache = None
+            return ""
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return self._agents_md_cache[2] if self._agents_md_cache else ""
+        key = (str(path), mtime)
+        if (
+            self._agents_md_cache is not None
+            and (self._agents_md_cache[0], self._agents_md_cache[1]) == key
+        ):
+            return self._agents_md_cache[2]
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            return self._agents_md_cache[2] if self._agents_md_cache else ""
+        self._agents_md_cache = (str(path), mtime, content)
+        return content
+
     def _current_system_prompt(self) -> str:
         """Return the base system prompt with a fresh current-datetime line appended."""
         tz_name = os.environ.get("TZ", "Asia/Kolkata")
@@ -1407,6 +1426,14 @@ class Agent:
         now = datetime.now(tz=tz)
         date_line = now.strftime("Current date/time: %A, %Y-%m-%d %H:%M %Z")
         prompt = self._base_system_prompt + f"\n\n{date_line}"
+
+        # AGENTS.md hot-reload. Lazy + mtime-cached so unchanged files
+        # don't hit the disk on every turn. Lets the user edit AGENTS.md
+        # and see persona changes on the next turn without `docker restart`.
+        agents_md = self._load_agents_md_cached()
+        if agents_md:
+            prompt += "\n\n# Identity (AGENTS.md — user-owned persona)\n\n" + agents_md
+
         if self.memory is not None:
             state = self.memory.get_world_state()
             if state:
@@ -1492,7 +1519,12 @@ class Agent:
                 pass
 
         self._maybe_compact()
-        self.history.append({"role": "user", "content": user_message, "source": source})
+        self.history.append({
+            "role": "user",
+            "content": user_message,
+            "source": source,
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        })
         if self.memory is not None:
             self.memory.log_turn("user", user_message)
             # Auto-stamp world state at turn start so resume after restart
@@ -1557,6 +1589,40 @@ class Agent:
                         text=f"pre_turn_hook injection at iter {_turn_idx + 1}/{MAX_TURNS}",
                         result=str(injected.get("content", ""))[:100],
                     )
+
+            # Mid-loop modifier re-injection (mem0's instruction-dilution fix).
+            # At the halfway point the original user message is buried under
+            # ~10 messages of tool calls + results — attention weight on the
+            # original task drops as it moves toward the middle of context.
+            # Restating it as a fresh system note brings it back to high-
+            # attention position. We also list which tools have been used so
+            # the agent doesn't re-do work already completed.
+            if _turn_idx == MAX_TURNS // 2 and user_message:
+                used_summary = (
+                    f" Tools used so far: {', '.join(sorted(tool_names_used))}."
+                    if tool_names_used
+                    else " No tools called yet."
+                )
+                # First 500 chars of the original task — enough for the
+                # framing, not so much that we re-bloat the context.
+                task_snippet = user_message[:500]
+                if len(user_message) > 500:
+                    task_snippet += "…"
+                self.history.append({
+                    "role": "system",
+                    "content": (
+                        f"# Reminder of the current goal\n\n"
+                        f"You are still working on this request:\n\n"
+                        f"> {task_snippet}\n\n"
+                        f"{used_summary} You have {MAX_TURNS - _turn_idx} "
+                        f"iterations left."
+                    ),
+                })
+                events.emit(
+                    "self_correction",
+                    text=f"goal re-injection at iter {_turn_idx + 1}/{MAX_TURNS}",
+                    result=task_snippet[:80],
+                )
 
             # Budget nudge: 2 iterations before the hard cap, inject a synthetic
             # harness message reminding the model to wrap up. Without this the
@@ -1627,6 +1693,7 @@ class Agent:
             # Inherit source from the user turn so the unified chat log
             # can tag the reply to the channel it went out on.
             cleaned["source"] = source
+            cleaned["ts"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
             self.history.append(cleaned)
 
             tool_calls = assistant_msg.get("tool_calls")
