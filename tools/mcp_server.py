@@ -26,7 +26,7 @@ from typing import Annotated, Literal
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from . import filesystem, memory_tools, notify as notify_mod, sandbox, scheduling, web
+from . import _meta, filesystem, memory_tools, notify as notify_mod, sandbox, scheduling, web
 
 
 mcp = FastMCP("homunculus-builtin")
@@ -517,6 +517,23 @@ def continue_task(
     escalates to a real failure so the user finds out.
     """
     return scheduling.continue_task(task_id, reason, scratchpad_update)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def load_tool(
+    name: Annotated[str, Field(description="Name of the tool to load (from the 'Loadable tools' list in your system prompt).")],
+) -> str:
+    """Load a tool's full schema into the active set for this session.
+
+    Most tools are listed by name + one-line description in your
+    system prompt under "Loadable tools" — sending their full
+    JSONSchema on every call is wasteful when you don't need them.
+    Call load_tool('foo') to bring 'foo' into your tool catalogue for
+    the next LLM call, then invoke it normally.
+
+    Idempotent — re-loading a tool that's already active is a no-op.
+    """
+    return _meta.load_tool(name)
 
 
 @mcp.tool(annotations={"readOnlyHint": False})

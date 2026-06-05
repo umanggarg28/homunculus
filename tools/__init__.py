@@ -127,6 +127,68 @@ class _SchemasProxy(list):
 SCHEMAS = _SchemasProxy()
 
 
+# Tools whose full JSONSchema is sent on EVERY LLM call. Anything not in
+# this set ships as just a name + one-line description in the system
+# prompt; the agent has to call `load_tool(name)` to bring the full
+# schema into the next call's tool catalogue. Slashes per-call input
+# from ~5K to ~1K when most tools aren't needed for the current turn —
+# the dominant cost of every loop iteration.
+#
+# Inclusion criterion: "used in essentially every turn." Tools that
+# only matter for specific task shapes (web research, sandboxed python,
+# git ops) stay out of the always-loaded set.
+ALWAYS_LOADED: frozenset[str] = frozenset({
+    # Memory: the agent reads/writes these constantly.
+    "read_file",
+    "write_file",
+    "recall",
+    # Task lifecycle: every heartbeat-fired turn needs exactly one of these.
+    "complete_task",
+    "continue_task",
+    "cancel_task",
+    "list_tasks",
+    # Communication & time: needed almost universally.
+    "notify",
+    "get_current_time",
+    # The meta-tool itself — agent must always be able to load others.
+    "load_tool",
+})
+
+
+def schemas_for(active: set[str] | frozenset[str]) -> list[dict]:
+    """Filter the live schema list to a subset by tool name.
+
+    The agent loop passes a per-Agent allow-set so each session can grow
+    its tool catalogue without restart and without exposing the full
+    surface on every call. Tool names already include the server prefix
+    where applicable; we match on the function name as the LLM sees it.
+    """
+    out = []
+    for s in _manager.schemas():
+        name = s.get("function", {}).get("name", "")
+        if name in active:
+            out.append(s)
+    return out
+
+
+def tool_overview(exclude: set[str] | frozenset[str] = frozenset()) -> list[dict]:
+    """One-line summary per tool — name + description, no parameters.
+
+    Goes into the system prompt as a catalogue of what's loadable via
+    `load_tool(name)`. Schema is ~30 tokens per entry instead of the
+    ~170 a full JSONSchema averages. Tools already in `exclude` (e.g.
+    the always-loaded set, or a session's loaded set) are omitted.
+    """
+    rows = []
+    for s in _manager.schemas():
+        fn = s.get("function", {})
+        name = fn.get("name", "")
+        if name in exclude:
+            continue
+        rows.append({"name": name, "description": fn.get("description", "")})
+    return rows
+
+
 def tool_names() -> set[str]:
     return _manager.tool_names()
 

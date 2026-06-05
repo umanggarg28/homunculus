@@ -504,13 +504,29 @@ def _budget_blocks_model(model_id: str) -> bool:
     return _today_spend_cents() >= budget
 
 
+# Wall-clock timestamp of the most recent provider cool event. Used by
+# the agent's system-prompt builder to inject a rate-limit-awareness
+# heads-up when something just got throttled — the agent can checkpoint
+# via continue_task instead of burning through fallbacks blindly.
+_PROVIDER_LAST_COOLED_AT: float = 0.0
+
+
 def _cool_provider(
     url: str,
     model_id: str,
     seconds: float = PROVIDER_COOLDOWN_SECONDS,
 ) -> None:
     """Mark a provider as temporarily unavailable; skip until expiry."""
+    global _PROVIDER_LAST_COOLED_AT
     _PROVIDER_COOLDOWN[_provider_key(url, model_id)] = time.time() + seconds
+    _PROVIDER_LAST_COOLED_AT = time.time()
+
+
+def _recent_provider_cool_seconds() -> float | None:
+    """How long since the most recent provider cool, or None if never."""
+    if _PROVIDER_LAST_COOLED_AT == 0.0:
+        return None
+    return time.time() - _PROVIDER_LAST_COOLED_AT
 
 
 def _is_transient_provider_error(response: httpx.Response) -> bool:
@@ -566,6 +582,60 @@ def _strip_internal_fields(messages: list[dict]) -> list[dict]:
     ]
 
 
+# Providers whose backend supports OpenAI-style ephemeral cache_control
+# markers on message content. OpenRouter passes through to Anthropic /
+# certain OpenAI models, both of which honour the breakpoint. Gemini's
+# native API uses a totally different cachedContent reference model;
+# we don't try to support that yet. We match on the host substring so
+# custom proxies (e.g. self-hosted OpenRouter mirror) still benefit if
+# the user names them with the canonical hostname.
+_CACHE_CONTROL_PROVIDER_HOSTS = ("openrouter.ai", "anthropic.com")
+
+
+def _provider_supports_cache_control(url: str) -> bool:
+    u = url.lower()
+    return any(host in u for host in _CACHE_CONTROL_PROVIDER_HOSTS)
+
+
+def _maybe_add_cache_control(messages: list[dict], url: str) -> list[dict]:
+    """Add an ephemeral cache_control breakpoint to the system message
+    when the provider supports it.
+
+    The system message + tool schemas + AGENTS.md are stable across
+    most calls within a session — together they're ~7-8K tokens of
+    pure overhead. With cache hits, Anthropic charges ~10% of normal
+    for cached tokens; cumulative cost over a tick can drop by 60-70%.
+
+    No-op for providers that don't recognise the cache_control field —
+    sending it to Gemini would just be silently ignored, but the
+    structured-content shape might trip stricter validators, so we
+    only convert when we know it's safe.
+
+    Returns a NEW list (does not mutate caller's input).
+    """
+    if not _provider_supports_cache_control(url):
+        return messages
+    if not messages or messages[0].get("role") != "system":
+        return messages
+    head = messages[0]
+    raw = head.get("content")
+    if not isinstance(raw, str):
+        # Already structured — leave alone rather than risk
+        # double-wrapping. The agent's own pipeline always uses strings.
+        return messages
+    cached_head = {
+        **head,
+        "content": [
+            {
+                "type": "text",
+                "text": raw,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+    }
+    return [cached_head, *messages[1:]]
+
+
 def call_llm(
     messages: list[dict],
     tool_schemas: list[dict] | None,
@@ -607,7 +677,12 @@ def call_llm(
             except Exception:
                 pass
             continue
-        payload: dict[str, Any] = {"model": model_id, "messages": _strip_internal_fields(messages)}
+        payload: dict[str, Any] = {
+            "model": model_id,
+            "messages": _maybe_add_cache_control(
+                _strip_internal_fields(messages), url,
+            ),
+        }
         if tool_schemas is not None:
             payload["tools"] = tool_schemas
             payload["tool_choice"] = "auto"
@@ -695,7 +770,12 @@ def call_llm(
             except Exception:
                 pass
             continue
-        payload = {"model": model_id, "messages": _strip_internal_fields(messages)}
+        payload = {
+            "model": model_id,
+            "messages": _maybe_add_cache_control(
+                _strip_internal_fields(messages), url,
+            ),
+        }
         if tool_schemas is not None:
             payload["tools"] = tool_schemas
             payload["tool_choice"] = "auto"
@@ -818,7 +898,9 @@ def call_llm_stream(
             continue
         payload: dict[str, Any] = {
             "model": model_id,
-            "messages": _strip_internal_fields(messages),
+            "messages": _maybe_add_cache_control(
+                _strip_internal_fields(messages), url,
+            ),
             "stream": True,
             "stream_options": {"include_usage": True},
         }
@@ -1097,6 +1179,18 @@ class Agent:
     ) -> None:
         self.memory = memory
         self.model = model or MODEL
+        # Per-session active tool set. Starts with the always-loaded
+        # core; the agent grows it by calling load_tool(name). Lets
+        # us send ~1K tokens of schemas per call instead of ~5K when
+        # most tools aren't needed for the current turn. The stub
+        # `tools` module used by tests has no ALWAYS_LOADED — fall
+        # back to None, which _run_loop interprets as "send all
+        # schemas" (preserving legacy behaviour for those tests).
+        self._active_tool_names: set[str] | None = (
+            set(tools.ALWAYS_LOADED)
+            if hasattr(tools, "ALWAYS_LOADED")
+            else None
+        )
         full_prompt = system_prompt
         # T2.7 of the capability roadmap — AGENTS.md is the user-owned
         # identity layer (OpenClaw calls it SOUL.md; same pattern). It
@@ -1196,6 +1290,39 @@ class Agent:
             state = self.memory.get_world_state()
             if state:
                 prompt += "\n\n# Session world state\n\n" + json.dumps(state, indent=2)
+
+        # Loadable tool catalogue. Anything NOT already in the active
+        # set is listed by name + one-line description here instead of
+        # being sent as a full schema on every call. Agent uses
+        # load_tool(name) to promote one into the active set.
+        loadable = (
+            tools.tool_overview(exclude=self._active_tool_names)
+            if self._active_tool_names is not None
+            and hasattr(tools, "tool_overview")
+            else []
+        )
+        if loadable:
+            lines = ["", "# Loadable tools (call load_tool('name') to enable)", ""]
+            for row in loadable:
+                desc = row["description"].split("\n", 1)[0][:120]
+                lines.append(f"- `{row['name']}` — {desc}")
+            prompt += "\n".join(lines)
+
+        # Recent rate-limit signal. When a provider just cooled in the
+        # last 2 minutes, nudge the agent to checkpoint / continue_task
+        # rather than blindly retry — otherwise it'll burn through every
+        # fallback in the chain and trigger the silent-drop path.
+        recent_cool = _recent_provider_cool_seconds()
+        if recent_cool is not None and recent_cool < 120:
+            prompt += (
+                f"\n\n# Heads up\n\nA provider just rate-limited "
+                f"{int(recent_cool)}s ago. Fallback providers will serve "
+                f"the next ~{max(60 - int(recent_cool), 10)}s and they're "
+                f"slower/weaker. If you're mid-task, prefer "
+                f"continue_task() with a scratchpad note over burning "
+                f"the rest of your iteration budget on retries."
+            )
+
         return prompt
 
     def _run_loop(self, user_message: str, streaming: bool, source: str = "web"):
@@ -1342,8 +1469,14 @@ class Agent:
                 # before anything reaches the client.
                 assistant_msg = None
                 stream_chunks: list[str] = []
+                active_schemas = (
+                    tools.SCHEMAS
+                    if self._active_tool_names is None
+                    or not hasattr(tools, "schemas_for")
+                    else tools.schemas_for(self._active_tool_names)
+                )
                 for kind, payload in call_llm_stream(
-                    self.history, tools.SCHEMAS, model=self.model
+                    self.history, active_schemas, model=self.model
                 ):
                     if kind == "content":
                         stream_chunks.append(payload)
@@ -1353,7 +1486,13 @@ class Agent:
                     yield "\n(empty stream)\n"
                     return
             else:
-                assistant_msg = call_llm(self.history, tools.SCHEMAS, model=self.model)
+                active_schemas = (
+                    tools.SCHEMAS
+                    if self._active_tool_names is None
+                    or not hasattr(tools, "schemas_for")
+                    else tools.schemas_for(self._active_tool_names)
+                )
+                assistant_msg = call_llm(self.history, active_schemas, model=self.model)
 
             # Strip provider-specific extras (reasoning, null fields) that
             # the API rejects when replayed as part of the next request.
@@ -1480,6 +1619,19 @@ class Agent:
                         f"Check the tool schema and retry with corrected arguments."
                     )
                 else:
+                    # Intercept load_tool BEFORE dispatching so the
+                    # active set is updated for the next LLM call. The
+                    # tool function itself just returns a confirmation
+                    # string; the side effect is here on the Agent.
+                    if name == "load_tool" and self._active_tool_names is not None:
+                        requested = (args or {}).get("name", "").strip()
+                        known = (
+                            tools.tool_names()
+                            if hasattr(tools, "tool_names")
+                            else set()
+                        )
+                        if requested and requested in known:
+                            self._active_tool_names.add(requested)
                     result = tools.execute(name, args)
                     # Populate the per-turn cache for read-only tools.
                     # Only cache real (non-error) results so a failed call
