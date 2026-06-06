@@ -53,11 +53,18 @@ export function useChatStream(): UseChatStream {
   // the chat log so the transcript reflects messages from any source —
   // telegram, heartbeat-driven notifications, OR a parallel browser
   // tab / curl call hitting /api/chat/send. The `sending` guard is
-  // what prevents double-rendering during the local stream; once the
-  // local send completes, this effect picks up any concurrent changes
-  // that landed in the meantime.
+  // what prevents double-rendering during the local stream.
+  //
+  // Initialised lazily on first event arrival to the newest existing
+  // ts, so events that were already buffered when the component mounted
+  // do NOT trigger a redundant refetch. Without this guard, an empty
+  // ref means EVERY mount fires a refetch using stale buffered events;
+  // that second setMessages with identical content but a new array
+  // reference re-renders BrutalistChatLog without changing the
+  // autoscroll trigger string, breaking scroll-to-bottom on tab open.
   const { events: feedEvents } = useEventStream(40);
   const lastSyncedEventTsRef = useRef<string | null>(null);
+  const baselinedRef = useRef(false);
   useEffect(() => {
     if (sending) return;
     const triggers = feedEvents.filter(
@@ -65,7 +72,15 @@ export function useChatStream(): UseChatStream {
     );
     if (triggers.length === 0) return;
     const newest = triggers[triggers.length - 1];
-    if (!newest.ts || newest.ts === lastSyncedEventTsRef.current) return;
+    if (!newest.ts) return;
+    if (!baselinedRef.current) {
+      // First time we've seen any turn-events. Treat the current newest
+      // as already-known so we only refetch for arrivals after now.
+      baselinedRef.current = true;
+      lastSyncedEventTsRef.current = newest.ts;
+      return;
+    }
+    if (newest.ts === lastSyncedEventTsRef.current) return;
     lastSyncedEventTsRef.current = newest.ts;
     api.chatHistory()
       .then((history) => setMessages(history))
