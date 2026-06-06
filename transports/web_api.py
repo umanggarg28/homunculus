@@ -377,6 +377,7 @@ def chapter_close() -> JSONResponse:
         encoding="utf-8",
     )
     memory.clear_session()
+    memory.clear_chat_log()
     if _chat_agent is not None:
         _chat_agent.reset()
 
@@ -1328,13 +1329,29 @@ def log_entry_raw(rel: str) -> PlainTextResponse:
 def chat_history() -> JSONResponse:
     """Return complete persisted user/assistant chat turns for UI hydration.
 
-    Saved sessions can contain interrupted turns: user message, assistant
-    tool_call message, tool results, then no final assistant text because the
-    stream was cancelled or the process stopped mid-turn. Rendering those user
-    messages alone makes the chat page look like the agent never replied. For
-    the UI transcript, keep only visible user→assistant pairs.
+    Reads from the append-only chat log so mid-session compaction (which
+    rewrites the in-memory LLM context to a summary + tail) cannot
+    truncate what the user sees. The log is written turn-by-turn in
+    chat_send's finally block. Falls back to load_session for legacy
+    sessions started before the log existed.
     """
     memory = _chat_memory or Memory(MEMORY_DIR)
+    log = memory.load_chat_log()
+    if log:
+        out = []
+        for idx, msg in enumerate(log):
+            content = msg.get("content")
+            if not isinstance(content, str) or not content.strip():
+                continue
+            out.append({
+                "id": f"log-{idx}",
+                "role": msg.get("role"),
+                "content": content,
+                "source": msg.get("source", "web"),
+                "ts": msg.get("ts"),
+            })
+        return JSONResponse(out)
+    # Legacy path: session from before the chat log existed.
     return JSONResponse(_visible_chat_history(memory.load_session()))
 
 
@@ -1520,28 +1537,57 @@ async def chat_send(request: Request):
         # concurrent /api/chat/send cannot mutate history mid-turn.
         # Drain happens inside the lock too — it appends to history.
         _chat_agent_lock.acquire()
+        reply_buf: list[str] = []
+        user_ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
         try:
             _drain_notifications_for_chat(agent)
             for chunk in agent.chat_stream(user_message, source="web"):
                 if stream_id in _cancelled_streams:
                     cancelled = True
                     break
+                reply_buf.append(chunk)
                 yield _format_sse_data(chunk)
         except Exception as e:
             msg = str(e)
             if "All providers exhausted" in msg or "token_quota_exceeded" in msg or "Tokens per minute" in msg:
-                yield _format_sse_data("[All AI providers are currently rate-limited. Wait a moment and try again.]")
+                err_chunk = "[All AI providers are currently rate-limited. Wait a moment and try again.]"
             elif "All providers exhausted" in type(e).__name__ or "RuntimeError" in type(e).__name__ and "provider" in msg.lower():
-                yield _format_sse_data("[All AI providers are currently unavailable. Try again shortly.]")
+                err_chunk = "[All AI providers are currently unavailable. Try again shortly.]"
             else:
-                yield _format_sse_data(f"[error: {type(e).__name__}: {e}]")
+                err_chunk = f"[error: {type(e).__name__}: {e}]"
+            reply_buf.append(err_chunk)
+            yield _format_sse_data(err_chunk)
         finally:
             _active_streams.discard(stream_id)
             _cancelled_streams.discard(stream_id)
             if cancelled:
-                yield _format_sse_data("\n\n[stopped by user]")
+                cancel_marker = "\n\n[stopped by user]"
+                reply_buf.append(cancel_marker)
+                yield _format_sse_data(cancel_marker)
             if _chat_memory is not None:
                 _chat_memory.save_session(agent.history)
+                # Persist the full turn to the append-only chat log so
+                # mid-session compaction (which rewrites self.history
+                # to a summary + tail for LLM efficiency) cannot delete
+                # what the user actually saw. The UI's /api/chat/history
+                # reads from this log, not the LLM-context session file.
+                assistant_text = "".join(reply_buf).strip()
+                try:
+                    _chat_memory.append_chat_turn({
+                        "role": "user",
+                        "content": user_message,
+                        "source": "web",
+                        "ts": user_ts,
+                    })
+                    if assistant_text:
+                        _chat_memory.append_chat_turn({
+                            "role": "assistant",
+                            "content": assistant_text,
+                            "source": "web",
+                            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        })
+                except Exception as _e:
+                    print(f"[web] chat log append failed: {_e}", flush=True)
             _chat_agent_lock.release()
             yield "event: done\ndata: end\n\n"
 
