@@ -48,22 +48,20 @@ export function useChatStream(): UseChatStream {
     return () => { cancelled = true; };
   }, []);
 
-  // Cross-transport sync: when a message arrives from telegram or the
-  // autonomous heartbeat (anything that isn't this browser's own send),
-  // pull the persisted chat log so the visible transcript stays current
-  // without needing a manual refresh. The local /api/chat/send path
-  // already updates state optimistically, so we deliberately skip web-
-  // sourced events here to avoid double-rendering.
+  // Cross-transport sync: when a persisted turn lands in the events
+  // stream and the local /api/chat/send isn't actively writing, pull
+  // the chat log so the transcript reflects messages from any source —
+  // telegram, heartbeat-driven notifications, OR a parallel browser
+  // tab / curl call hitting /api/chat/send. The `sending` guard is
+  // what prevents double-rendering during the local stream; once the
+  // local send completes, this effect picks up any concurrent changes
+  // that landed in the meantime.
   const { events: feedEvents } = useEventStream(40);
   const lastSyncedEventTsRef = useRef<string | null>(null);
   useEffect(() => {
     if (sending) return;
-    // Find the newest user_message / assistant_reply event from a
-    // non-web source.
     const triggers = feedEvents.filter(
-      (e) =>
-        (e.event === "user_message" || e.event === "assistant_reply") &&
-        e.service && e.service !== "web",
+      (e) => e.event === "user_message" || e.event === "assistant_reply",
     );
     if (triggers.length === 0) return;
     const newest = triggers[triggers.length - 1];
