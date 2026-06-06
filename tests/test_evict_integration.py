@@ -52,9 +52,11 @@ def test_eviction_fires_between_turns(monkeypatch, tmp_path):
     reply1 = agent.chat("first turn")
     assert reply1 == "Got it."
     # Confirm a tool message landed in history with the full payload.
+    # search_files is an untrusted-content tool so its result is wrapped
+    # in a delimited envelope; the original payload must still be inside.
     tool_msgs = [m for m in agent.history if m.get("role") == "tool"]
     assert len(tool_msgs) == 1
-    assert tool_msgs[0]["content"] == big_payload
+    assert big_payload in tool_msgs[0]["content"]
 
     # Turn 2 — eviction should fire at the start, stubbing the prior
     # tool result before the new user message is appended.
@@ -68,7 +70,13 @@ def test_eviction_fires_between_turns(monkeypatch, tmp_path):
     assert "tool result evicted" in turn1_msg["content"], (
         f"turn-1 tool result was NOT evicted: {turn1_msg['content'][:80]!r}"
     )
-    assert "1,500" in turn1_msg["content"], "stub should record original size"
+    # Stub should record the evicted size. Untrusted-content tools are
+    # wrapped in a delimited envelope before eviction, so the recorded
+    # size is the wrapped size (≈original + a small constant) — assert
+    # on order of magnitude rather than the exact byte count.
+    assert "1," in turn1_msg["content"], (
+        f"stub should mention the size of the evicted payload: {turn1_msg['content']!r}"
+    )
     # tool_call_id must survive — required for OpenAI-style API pairing.
     assert turn1_msg.get("tool_call_id") == "call-1"
 
