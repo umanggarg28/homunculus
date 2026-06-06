@@ -62,9 +62,9 @@ ONE concise Telegram message in the morning. Calm by default, informative when t
 
 ## Steps
 
-1. **Read structured task state** via `read_file("tasks/tasks.json")`.
-2. **Identify TODAY'S commitments** — every active task whose `due_at` falls between now and 24h from now.
-3. **Identify RECENT FAILURES** — every active task whose latest run in `last_runs` has `status == "failure"` AND the failure timestamp is within the last 36h. These are tasks the system tried to handle and couldn't.
+1. **Call `task_health_summary()`** — this is the ONLY source of truth for what to put in the brief. It returns JSON with `today_commitments`, `alerts`, and `recently_recovered`. Do NOT re-read `tasks.json` and second-guess. Reading the raw `last_runs` array has consistently led to misreporting historic failures as current alerts.
+2. **`today_commitments`** is your commitments list. Use it as-is.
+3. **`alerts`** is your alerts list. Use it as-is. An empty `alerts` array means **no alerts** — say so by omitting the Alerts section entirely. Never invent alerts from `recently_recovered` (those have already healed).
 4. **Read recent reflection memory** (if it exists) — `read_file("memory/_brief_carryover.md")`. This is where yesterday's brief leaves notes for today (e.g. "user said they'll deal with X today — check in").
 5. **Compose the message** in the shape below.
 6. **Call `notify(text=<message>)`** as the ACTUAL tool call (not in your assistant_reply prose — see skill_deliver_daily_leetcode for the contract).

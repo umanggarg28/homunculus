@@ -57,6 +57,80 @@ _GUARD_ACTION_CLAIM_PHRASES = (
     "done! i've", "done. i've",
 )
 
+# Map tool names → which arg holds the targeted resource (file path or
+# URL). The claim/result consistency check uses this to recover the
+# "target" of a tool call, so it can match a path mentioned in the reply
+# against the tool calls that touched it.
+_CLAIM_TARGET_TOOLS: dict[str, str] = {
+    "read_file": "path",
+    "write_file": "path",
+    "append_file": "path",
+    "web_fetch": "url",
+}
+
+# Phrases preceding a positive-action claim about a specific target.
+# Tuned for false-negative bias: if a reply uses any of these followed
+# by a path/URL, we look up whether the matching tool call actually
+# succeeded.
+_CLAIM_VERBS_RE = re.compile(
+    r"(?i)\b(?:i\s+(?:successfully\s+)?(?:read|found|fetched|wrote|"
+    r"saved|opened|loaded|retrieved|got)|(?:successfully|just)\s+"
+    r"(?:read|fetched|wrote|saved|loaded|retrieved))\b"
+)
+
+# Match a path or URL in the reply. Allows /etc/foo, /tmp/bar.yaml, and
+# https://example.com/x. Conservative — only catches absolute paths and
+# fully-qualified URLs, since relative names like "config" are too noisy.
+_CLAIM_TARGET_RE = re.compile(
+    r"(?:`|'|\"|^|\s)"
+    r"(/[A-Za-z0-9_.\-/]+|https?://[^\s'\"`]+)"
+    r"(?:`|'|\"|\.|\s|$)"
+)
+
+
+def _claim_target_inconsistencies(reply: str, tool_outcomes: list[dict]) -> list[str]:
+    """Find paths/URLs the reply claims to have acted on successfully,
+    where every matching tool call this turn failed.
+
+    Returns the list of (target) strings that triggered. Empty list = no
+    inconsistency. The check is intentionally conservative: it only
+    fires when (a) a claim verb appears in the reply, (b) followed by an
+    absolute path or fully-qualified URL within a few words, and (c)
+    EVERY tool call against that target in this turn returned an error.
+    """
+    # Quick exit: no claim verbs → nothing to check.
+    if not _CLAIM_VERBS_RE.search(reply):
+        return []
+
+    # Build a map: target → list of success-bools across this turn's calls.
+    target_outcomes: dict[str, list[bool]] = {}
+    for outcome in tool_outcomes:
+        arg_name = _CLAIM_TARGET_TOOLS.get(outcome.get("name", ""))
+        if not arg_name:
+            continue
+        target = (outcome.get("args") or {}).get(arg_name)
+        if not isinstance(target, str) or not target.strip():
+            continue
+        target_outcomes.setdefault(target, []).append(bool(outcome.get("success")))
+
+    if not target_outcomes:
+        return []
+
+    # For each claim verb occurrence, scan forward up to ~120 chars for
+    # a target and check whether any tool call against it succeeded.
+    inconsistent: list[str] = []
+    for verb_match in _CLAIM_VERBS_RE.finditer(reply):
+        window = reply[verb_match.end(): verb_match.end() + 120]
+        for tgt_match in _CLAIM_TARGET_RE.finditer(window):
+            target = tgt_match.group(1)
+            outcomes = target_outcomes.get(target)
+            if outcomes is None:
+                continue
+            if not any(outcomes):
+                inconsistent.append(target)
+    return inconsistent
+
+
 # Load .env at module import so config reads below see its values. Safe
 # to call twice (main.py also calls it) — load_dotenv won't overwrite
 # env vars that are already set, e.g. by docker-compose's env_file.
@@ -1566,6 +1640,11 @@ class Agent:
         # Per-turn cache for READ_ONLY_CACHEABLE_TOOLS — same (name, args) → same
         # result, no need to re-execute. Cleared at the start of every turn.
         tool_result_cache: dict[tuple[str, str], str] = {}
+        # Per-turn ledger of tool outcomes used by the output guard's
+        # claim-consistency check. Records (name, args, success) for every
+        # tool call so we can answer "did the agent actually succeed at the
+        # action it's now claiming to have done?"
+        tool_outcomes: list[dict] = []
 
         for _turn_idx in range(MAX_TURNS):
             # Mid-loop eviction: keep only the two most recent tool results
@@ -1727,7 +1806,7 @@ class Agent:
                     # it once (Letta empty-response recovery pattern).
                     raw_reply = self._nudge_for_reply()
                 raw_reply = raw_reply or "(I'm not sure how to respond — could you rephrase?)"
-                clean, violations = self._output_guard(raw_reply, tool_names_used)
+                clean, violations = self._output_guard(raw_reply, tool_names_used, tool_outcomes)
 
                 if clean is None:
                     # Guard fired — self-correct (AutoGen/Letta pattern).
@@ -1745,7 +1824,7 @@ class Agent:
                             "content": self._ACTION_CLAIM_CORRECTION_PROMPT,
                         })
                         continue  # next iteration picks up the correction
-                    reply = self._self_correct(tool_names_used, violations)
+                    reply = self._self_correct(tool_names_used, violations, tool_outcomes)
                     self.history[-1]["content"] = reply
                 else:
                     reply = clean
@@ -1893,6 +1972,18 @@ class Agent:
                     name=name,
                     result=events.truncate_preview(result, limit=2000),
                 )
+                # Record the outcome for the output guard's claim-consistency
+                # check. We deliberately record raw args (not canonicalized)
+                # so the path/URL is recoverable for regex matching.
+                _outcome_success = not (
+                    isinstance(result, str)
+                    and (result.startswith("ERROR") or result.startswith("Error"))
+                )
+                tool_outcomes.append({
+                    "name": name,
+                    "args": args,
+                    "success": _outcome_success,
+                })
                 # Trim oversized results before they enter history. The full
                 # payload is preserved in the events log; the agent can
                 # re-call the tool with a refined query if it needs more.
@@ -1908,21 +1999,26 @@ class Agent:
         else:
             yield f"\n{fallback}\n"
 
-    def _output_guard(self, reply: str, tool_names_used: set[str]) -> tuple[str | None, list[str]]:
+    def _output_guard(self, reply: str, tool_names_used: set[str], tool_outcomes: list[dict] | None = None) -> tuple[str | None, list[str]]:
         """Validate a final reply before it reaches the user.
 
-        Catches four failure modes deterministically:
+        Catches deterministic failure modes:
           1. Memory filename leak — internal *.md paths in reply
           2. Internal path leak — workspace/memory/… strings in reply
           3. Error echo — LLM forwarded a tool ERROR string verbatim
           4. Example.com confabulation — placeholder site cited with no
              web tool active this turn
+          5. Claim/result inconsistency — the reply claims to have read,
+             fetched, written, or saved a specific path/URL, but the
+             matching tool call in this turn returned an error. Catches
+             hallucinated tool success (stress probe #22).
 
         Returns (reply, []) if clean, or (None, violations) if not.
         None signals the caller to attempt self-correction before
         falling back to a static error message.
         """
         violations: list[str] = []
+        tool_outcomes = tool_outcomes or []
 
         # File-path guards are intentionally bypassed when the agent explicitly
         # searched or listed files — those results belong in the reply.
@@ -1948,6 +2044,18 @@ class Agent:
         if not tool_names_used and tools.SCHEMAS:
             if any(phrase in lower_reply for phrase in _GUARD_ACTION_CLAIM_PHRASES):
                 violations.append("action_claim_without_tool_call")
+
+        # Claim/result inconsistency — the reply asserts a successful action
+        # against a specific target (file path or URL) but the matching tool
+        # call in this turn errored. Stress probe #22: agent called
+        # read_file three times, all returned ENOENT, then replied "I found
+        # and read /etc/secret_config.yaml". The check is conservative —
+        # only fires when (a) a target is explicitly mentioned and (b) ALL
+        # tool calls in this turn against that target failed.
+        if tool_outcomes:
+            inconsistencies = _claim_target_inconsistencies(reply, tool_outcomes)
+            if inconsistencies:
+                violations.append("claim_inconsistent_with_tool_result")
 
         if not violations:
             return reply, []
@@ -2000,7 +2108,15 @@ class Agent:
         "the user asked. Do not explain — just call the tool."
     )
 
-    def _self_correct(self, tool_names_used: set[str], violations: list[str] | None = None) -> str:
+    _CLAIM_INCONSISTENT_CORRECTION_PROMPT = (
+        "Your previous reply claimed you successfully read, fetched, or wrote a file or URL, "
+        "but the tool calls in this turn against that target ALL returned errors. Do not "
+        "fabricate success. Restate honestly what you tried and what failed, naming the "
+        "actual error. If the user needs the action attempted differently, say so — do not "
+        "pretend it succeeded."
+    )
+
+    def _self_correct(self, tool_names_used: set[str], violations: list[str] | None = None, tool_outcomes: list[dict] | None = None) -> str:
         """Inject a correction prompt and re-call the LLM once (non-streaming).
 
         This is the AutoGen / Letta self-correction pattern: when the guard
@@ -2011,6 +2127,8 @@ class Agent:
         """
         if violations and "action_claim_without_tool_call" in violations:
             correction = self._ACTION_CLAIM_CORRECTION_PROMPT
+        elif violations and "claim_inconsistent_with_tool_result" in violations:
+            correction = self._CLAIM_INCONSISTENT_CORRECTION_PROMPT
         else:
             correction = self._SELF_CORRECTION_PROMPT
         self.history.append({
@@ -2031,7 +2149,7 @@ class Agent:
         if not corrected_reply:
             return "I can help with that — could you rephrase your question?"
 
-        clean, _ = self._output_guard(corrected_reply, tool_names_used)
+        clean, _ = self._output_guard(corrected_reply, tool_names_used, tool_outcomes or [])
         if clean is not None:
             return clean
 

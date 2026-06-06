@@ -20,6 +20,8 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from user_tz import now_user_naive
 from typing import Any, Iterator
 
 
@@ -171,7 +173,7 @@ class TaskStore:
         if recurrence not in ALLOWED_RECURRENCE:
             raise ValueError(f"recurrence must be one of {sorted(ALLOWED_RECURRENCE)}")
         with self._locked():
-            now = datetime.now().isoformat(timespec="seconds")
+            now = now_user_naive().isoformat(timespec="seconds")
             tasks = self.all()
             task = {
                 "id": self._unique_id(title, tasks),
@@ -219,7 +221,7 @@ class TaskStore:
         recently (within RE_FIRE_SUPPRESSION_SECONDS). The suppression
         check prevents heartbeat-restart double-fires.
         """
-        now = now or datetime.now()
+        now = now or now_user_naive()
         due_tasks: list[dict[str, Any]] = []
         for task in self.list("active"):
             due_at = task.get("due_at")
@@ -252,7 +254,7 @@ class TaskStore:
         runs the task. Prevents double-fire if heartbeat restarts mid-tick.
         `executing` is cleared by record_success/record_failure/complete.
         """
-        now = now or datetime.now()
+        now = now or now_user_naive()
         with self._locked():
             tasks = self.all()
             task = self._find(tasks, task_id)
@@ -262,7 +264,7 @@ class TaskStore:
             return task
 
     def next_due_seconds(self, now: datetime | None = None) -> float | None:
-        now = now or datetime.now()
+        now = now or now_user_naive()
         seconds: list[float] = []
         for task in self.list("active"):
             due_at = task.get("due_at")
@@ -287,7 +289,7 @@ class TaskStore:
         with self._locked():
             tasks = self.all()
             task = self._find(tasks, task_id)
-            now = datetime.now()
+            now = now_user_naive()
             task["last_result"] = result.strip()
             task["updated_at"] = now.isoformat(timespec="seconds")
             task["completed_at"] = now.isoformat(timespec="seconds")
@@ -324,7 +326,7 @@ class TaskStore:
         with self._locked():
             tasks = self.all()
             task = self._find(tasks, task_id)
-            now = datetime.now()
+            now = now_user_naive()
             task["updated_at"] = now.isoformat(timespec="seconds")
             task["last_result"] = error.strip()
             task["executing"] = False
@@ -380,7 +382,7 @@ class TaskStore:
         with self._locked():
             tasks = self.all()
             task = self._find(tasks, task_id)
-            now = datetime.now()
+            now = now_user_naive()
             task["updated_at"] = now.isoformat(timespec="seconds")
             task["last_result"] = f"partial: {reason.strip()}"
             task["executing"] = False
@@ -456,7 +458,7 @@ class TaskStore:
                 task["notify"] = bool(notify)
             if success_criteria is not None:
                 task["success_criteria"] = success_criteria
-            task["updated_at"] = datetime.now().isoformat(timespec="seconds")
+            task["updated_at"] = now_user_naive().isoformat(timespec="seconds")
             self._write(tasks)
             return task
 
@@ -473,7 +475,7 @@ class TaskStore:
         with self._locked():
             tasks = self.all()
             task = self._find(tasks, task_id)
-            now_iso = datetime.now().isoformat(timespec="seconds")
+            now_iso = now_user_naive().isoformat(timespec="seconds")
             task["due_at"] = now_iso
             task["status"] = "active"
             task["updated_at"] = now_iso
@@ -485,7 +487,7 @@ class TaskStore:
         with self._locked():
             tasks = self.all()
             task = self._find(tasks, task_id)
-            now = datetime.now().isoformat(timespec="seconds")
+            now = now_user_naive().isoformat(timespec="seconds")
             task["status"] = "cancelled"
             task["updated_at"] = now
             task["last_result"] = reason.strip()
@@ -572,7 +574,7 @@ class TaskStore:
                 task["recurrence"] = recurrence
             task["due_at"] = self._normalize_datetime(due_at)
             task["status"] = "active"
-            task["updated_at"] = datetime.now().isoformat(timespec="seconds")
+            task["updated_at"] = now_user_naive().isoformat(timespec="seconds")
             task["last_fired_at"] = None  # rescheduled tasks fire fresh
             self._write(tasks)
             return task
@@ -636,3 +638,89 @@ class TaskStore:
             candidate = f"{slug}-{i}"
             i += 1
         return candidate
+
+
+# --- Brief synthesis -----------------------------------------------------
+#
+# task_health_summary computes the deterministic morning-brief state.
+# Lives here (not in tools/scheduling.py) so it has zero MCP / package
+# coupling and can be unit-tested standalone. The MCP tool wrapper is a
+# thin pass-through.
+
+def task_health_summary(store: "TaskStore") -> dict:
+    """Return a snapshot for the morning brief.
+
+    - today_commitments: active tasks whose due_at is within the next
+      24 user-local hours.
+    - alerts: active tasks whose MOST RECENT run is a failure within the
+      last 36h. Tasks where the latest run is a success/partial are not
+      alerts even if older runs failed.
+    - recently_recovered: tasks with prior failures within the window
+      that the latest run resolved (latest = success or partial).
+
+    The LLM-driven brief used to read raw last_runs and judge for
+    itself, which consistently misreported old failures as current. By
+    centralizing the judgment here, the brief becomes deterministic.
+    """
+    now = now_user_naive()
+    soon = now + timedelta(hours=24)
+    failure_window = now - timedelta(hours=36)
+
+    commitments: list[dict] = []
+    alerts: list[dict] = []
+    recovered: list[dict] = []
+
+    for task in store.list("active"):
+        title = task.get("title", task.get("id", "untitled"))
+
+        due_at_raw = task.get("due_at")
+        if due_at_raw:
+            try:
+                due_at = datetime.fromisoformat(due_at_raw)
+                if now <= due_at <= soon:
+                    commitments.append({
+                        "id": task.get("id"),
+                        "title": title,
+                        "due_at": due_at_raw,
+                    })
+            except ValueError:
+                pass
+
+        runs = task.get("last_runs") or []
+        if not runs:
+            continue
+        latest = runs[-1]
+        try:
+            latest_ts = datetime.fromisoformat(latest.get("ts", ""))
+        except ValueError:
+            continue
+
+        latest_status = latest.get("status", "")
+        if latest_status == "failure" and latest_ts >= failure_window:
+            alerts.append({
+                "id": task.get("id"),
+                "title": title,
+                "ts": latest.get("ts"),
+                "result": (latest.get("result") or "")[:200],
+            })
+        elif latest_status in ("success", "partial"):
+            prior_failures = [
+                r for r in runs[:-1]
+                if r.get("status") == "failure"
+                and r.get("ts", "") >= failure_window.isoformat()
+            ]
+            if prior_failures:
+                recovered.append({
+                    "id": task.get("id"),
+                    "title": title,
+                    "latest_ts": latest.get("ts"),
+                    "latest_status": latest_status,
+                    "prior_failure_count": len(prior_failures),
+                })
+
+    return {
+        "now": now.isoformat(timespec="seconds"),
+        "today_commitments": commitments,
+        "alerts": alerts,
+        "recently_recovered": recovered,
+    }
