@@ -460,6 +460,16 @@ def list_tasks(
     return scheduling.list_tasks(status)
 
 
+@mcp.tool(annotations={"readOnlyHint": True})
+def task_health_summary() -> str:
+    """Deterministic snapshot for the morning brief: today's commitments,
+    real alerts (only tasks whose most recent run failed), and recovered
+    tasks. Use this instead of reading raw last_runs and judging
+    yourself — the latter consistently misreports old failures as
+    current state."""
+    return scheduling.task_health_summary()
+
+
 @mcp.tool(annotations={"readOnlyHint": False})
 def complete_task(
     task_id: Annotated[str, Field(description="Task id to complete.")],

@@ -376,7 +376,7 @@ class TaskGuard:
 # User TZ is autodetected from the browser (see user_tz module) — no env
 # var, no hardcoding. The browser writes workspace/user_tz.txt on its first
 # visit; this module reads from there and falls back to system local.
-from user_tz import now_user_tz as _now_user_tz  # noqa: E402
+from user_tz import now_user_tz as _now_user_tz, now_user_naive as _now_user_naive  # noqa: E402
 
 
 def _today_str() -> str:
@@ -412,7 +412,10 @@ def tick(memory: Memory, model: str | None) -> None:
     # task is filtered from due(). Anything older than the stale window
     # is forcibly cleared so the next tick can re-fire it.
     STALE_EXECUTING_SEC = 10 * 60
-    now_dt = datetime.now()
+    # Use user-local naive — last_fired_at is written by tasks.py in the
+    # user's wall-clock TZ. Mixing container UTC here would treat
+    # recently-fired tasks as stale on UTC containers in non-UTC zones.
+    now_dt = _now_user_naive()
     for t in tasks.all():
         if not t.get("executing"):
             continue
@@ -837,7 +840,10 @@ def _compute_sleep(memory: Memory, default_seconds: float) -> float:
     # comparing to datetime.now() (which is naive).
     if target.tzinfo is not None:
         target = target.astimezone().replace(tzinfo=None)
-    delta = (target - datetime.now()).total_seconds()
+    # `scheduled` is a naive ISO string written in the user's TZ — compare
+    # in the same frame so a 9-AM-IST schedule doesn't fire 5.5 hours late
+    # on a container running in UTC.
+    delta = (target - _now_user_naive()).total_seconds()
     if delta <= 0:
         print(f"[heartbeat] scheduled time {scheduled} is in the past, using default", flush=True)
         return min(default_seconds, next_task) if next_task is not None else default_seconds

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { decodeJsonSseData, parseSseChunks } from "@/lib/sse";
+import { useEventStream } from "@/hooks/useEventStream";
 
 export interface ChatMessage {
   id: string;
@@ -46,6 +47,32 @@ export function useChatStream(): UseChatStream {
       .finally(() => { if (!cancelled) setHistoryLoading(false); });
     return () => { cancelled = true; };
   }, []);
+
+  // Cross-transport sync: when a message arrives from telegram or the
+  // autonomous heartbeat (anything that isn't this browser's own send),
+  // pull the persisted chat log so the visible transcript stays current
+  // without needing a manual refresh. The local /api/chat/send path
+  // already updates state optimistically, so we deliberately skip web-
+  // sourced events here to avoid double-rendering.
+  const { events: feedEvents } = useEventStream(40);
+  const lastSyncedEventTsRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (sending) return;
+    // Find the newest user_message / assistant_reply event from a
+    // non-web source.
+    const triggers = feedEvents.filter(
+      (e) =>
+        (e.event === "user_message" || e.event === "assistant_reply") &&
+        e.service && e.service !== "web",
+    );
+    if (triggers.length === 0) return;
+    const newest = triggers[triggers.length - 1];
+    if (!newest.ts || newest.ts === lastSyncedEventTsRef.current) return;
+    lastSyncedEventTsRef.current = newest.ts;
+    api.chatHistory()
+      .then((history) => setMessages(history))
+      .catch(() => undefined);
+  }, [feedEvents, sending]);
 
   const send = useCallback(async (text: string) => {
     if (!text.trim() || sending) return;

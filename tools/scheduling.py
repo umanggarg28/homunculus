@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -11,8 +12,10 @@ from tasks import (
     append_scratchpad,
     clear_scratchpad,
     read_scratchpad,
+    task_health_summary as _task_health_summary,
     write_scratchpad,
 )
+from user_tz import now_user_naive
 
 from ._state import get_memory
 
@@ -82,6 +85,12 @@ def create_task(
             return f"Updated existing task {task['id']} (was {existing['status']}): {task['title']} — due {task.get('due_at')}, recurrence: {task.get('recurrence')}"
     task = store.create(title, description, due_at, recurrence, notify)
     return f"Created task {task['id']}: {task['title']}"
+
+
+def task_health_summary() -> str:
+    """Pre-computed brief snapshot — JSON wrapper around the pure-data
+    helper in tasks.py. See tasks.task_health_summary for the schema."""
+    return json.dumps(_task_health_summary(_task_store()), indent=2)
 
 
 def list_tasks(status: str = "active") -> str:
