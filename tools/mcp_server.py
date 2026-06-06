@@ -384,7 +384,7 @@ def get_current_time(
 def web_search(
     query: Annotated[str, Field(description="Search query.")],
 ) -> str:
-    """Search the web. Returns a DIRECT ANSWER (use this first) plus supporting snippets. Cite full URLs in your reply."""
+    """Search the web. You CAN search the web via this tool — never tell the user you can't. Returns a DIRECT ANSWER plus supporting snippets. Cite full URLs in your reply."""
     return web.web_search(query)
 
 
@@ -392,7 +392,7 @@ def web_search(
 def web_fetch(
     url: Annotated[str, Field(description="URL to fetch.")],
 ) -> str:
-    """Fetch a URL and return its main text. Capped ~16K chars."""
+    """Fetch a URL and return its main text. You CAN fetch URLs via this tool — never tell the user you can't. Capped ~16K chars."""
     return web.web_fetch(url)
 
 
@@ -445,7 +445,7 @@ def create_task(
     ] = "none",
     notify: Annotated[bool, Field(description="Whether the due task is expected to notify the user.")] = False,
 ) -> str:
-    """Create a new task (reminder, recurring job, or one-shot). IMPORTANT: Before calling this, always call list_tasks(status='all') and check if a task with a similar title already exists. If one does, use schedule_task() or update the existing task instead of creating a duplicate."""
+    """Create a new task (reminder, recurring job, or one-shot). You CAN create reminders and schedule things for the user via this tool — never tell the user you can't set reminders or schedule tasks. Use recurrence='none' (default) for one-shot reminders ('remind me at 8pm'), 'daily' / 'weekly' for recurring. Set notify=True for anything the user phrased as a reminder. IMPORTANT: Before calling this, list_tasks(status='all') is automatically deduped — same title overwrites, so just call create_task directly."""
     return scheduling.create_task(title, description, due_at, recurrence, notify)
 
 
@@ -597,7 +597,7 @@ def notify(
         ),
     ] = False,
 ) -> str:
-    """Push a plain-text Telegram message. INTERRUPTS the user — use only for time-sensitive things. Routine summaries belong in files."""
+    """Push a plain-text Telegram message. You CAN send Telegram messages via this tool — never tell the user you can't notify or message them. INTERRUPTS the user — use only for time-sensitive things. Routine summaries belong in files."""
     return notify_mod.notify(text, preview=preview)
 
 
