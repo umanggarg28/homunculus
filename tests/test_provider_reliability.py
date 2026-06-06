@@ -25,7 +25,10 @@ def _load_real_tasks():
 
 
 _tasks = _load_real_tasks()
-RE_FIRE_SUPPRESSION_SECONDS = _tasks.RE_FIRE_SUPPRESSION_SECONDS
+# The constant moved into HomunculusConfig.task during the agent
+# refactor. Keep the local alias so the rest of this test file reads
+# the same way.
+RE_FIRE_SUPPRESSION_SECONDS = _tasks.get_config().task.re_fire_suppression_seconds
 TaskStore = _tasks.TaskStore
 
 

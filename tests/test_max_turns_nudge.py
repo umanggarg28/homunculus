@@ -15,7 +15,13 @@ from unittest.mock import patch
 
 import core
 import tools
-from core import Agent, MAX_TURNS
+from core import Agent
+from config import get_config
+
+# MAX_TURNS moved into HomunculusConfig.loop.max_turns during the
+# agent refactor. Tests keep a local alias for readability — the value
+# is identical to the legacy constant unless the test overrides config.
+MAX_TURNS = get_config().loop.max_turns
 
 
 # Other test modules stub events.truncate_preview with `n=` kwarg, but core.py

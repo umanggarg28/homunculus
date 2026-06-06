@@ -6,9 +6,10 @@ import os
 import re
 from pathlib import Path
 
+from config import get_config
+
 from ._helpers import (
     PathOutsideWorkspace,
-    READ_FILE_MAX_CHARS,
     normalize_workspace_path,
 )
 
@@ -36,10 +37,11 @@ def read_file(path: str) -> str:
     except PathOutsideWorkspace as e:
         return _sandbox_error(path, e)
     text = Path(safe).read_text(encoding="utf-8")
-    if len(text) <= READ_FILE_MAX_CHARS:
+    max_chars = get_config().loop.read_file_max_chars
+    if len(text) <= max_chars:
         return text
-    truncated = text[-READ_FILE_MAX_CHARS:]
-    omitted = len(text) - READ_FILE_MAX_CHARS
+    truncated = text[-max_chars:]
+    omitted = len(text) - max_chars
     return f"[...{omitted} chars omitted from start; showing tail...]\n\n{truncated}"
 
 

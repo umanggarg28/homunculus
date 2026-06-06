@@ -6,10 +6,9 @@ import os
 
 import httpx
 
+from config import get_config
+
 from ._helpers import (
-    READ_FILE_MAX_CHARS,
-    WEB_FETCH_CACHE_SECONDS,
-    WEB_SEARCH_CACHE_SECONDS,
     cache_get,
     cache_set,
 )
@@ -17,7 +16,7 @@ from ._helpers import (
 
 def web_search(query: str) -> str:
     cache_id = query.strip().lower()
-    cached = cache_get("web_search", cache_id, WEB_SEARCH_CACHE_SECONDS)
+    cached = cache_get("web_search", cache_id, get_config().cache.web_search_seconds)
     if cached is not None:
         return f"[cache hit]\n{cached}"
 
@@ -74,7 +73,7 @@ def _search_tavily(query: str) -> str:
 
 def web_fetch(url: str) -> str:
     cache_id = url.strip()
-    cached = cache_get("web_fetch", cache_id, WEB_FETCH_CACHE_SECONDS)
+    cached = cache_get("web_fetch", cache_id, get_config().cache.web_fetch_seconds)
     if cached is not None:
         return f"[cache hit]\n{cached}"
 
@@ -110,10 +109,11 @@ def web_fetch(url: str) -> str:
         text = soup.get_text(separator="\n", strip=True)
         text = "\n".join(line for line in text.splitlines() if line.strip())
 
-    if len(text) > READ_FILE_MAX_CHARS:
+    max_chars = get_config().loop.read_file_max_chars
+    if len(text) > max_chars:
         text = (
-            text[:READ_FILE_MAX_CHARS]
-            + f"\n\n[...{len(text) - READ_FILE_MAX_CHARS} chars truncated]"
+            text[:max_chars]
+            + f"\n\n[...{len(text) - max_chars} chars truncated]"
         )
     cache_set("web_fetch", cache_id, text)
     return text

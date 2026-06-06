@@ -21,6 +21,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from config import get_config
 from user_tz import now_user_naive
 from typing import Any, Iterator
 
@@ -28,34 +29,18 @@ from typing import Any, Iterator
 ALLOWED_RECURRENCE = {"none", "daily", "weekly"}
 ALLOWED_STATUS = {"active", "completed", "cancelled"}
 
-# How many historical runs to keep per task. Old ones roll off so
-# tasks.json stays small even after a year of daily firings.
-RUN_HISTORY_CAP = 20
-
-# After N consecutive failures the task auto-cancels. Without a circuit
-# breaker, a broken task fires every heartbeat tick forever and spams
-# the logs / wastes LLM quota.
-CONSECUTIVE_FAILURE_LIMIT = 3
-
-# Resumable-task continuation policy. A task that didn't finish but
-# made progress (provider exhaustion, iteration cap, explicit
-# continue_task call) becomes "partial" instead of failing. It's
-# rescheduled PARTIAL_RETRY_MINUTES from now so the work survives
-# without burning a full recurrence interval. After N consecutive
-# partials with no completion in between, escalate to a real failure
-# so the user finds out instead of the task quietly looping forever.
-PARTIAL_RETRY_MINUTES = 10
-MAX_CONSECUTIVE_PARTIALS = 3
-
-# A task that already fired within this window is suppressed from a
-# subsequent `due()` call. Prevents heartbeat-restart double-fires:
-# heartbeat crashes mid-tick → next tick sees the same overdue task →
-# fires it again without this check.
-RE_FIRE_SUPPRESSION_SECONDS = 30 * 60  # 30 minutes — covers provider outages without duplicate notifications
-
-# `_advance_due()` can in theory loop forever if `recurrence_step` is
-# 0 or if `now` keeps advancing during a slow operation. Cap iterations.
-ADVANCE_DUE_MAX_ITERS = 366 * 2  # ~2 years of daily steps
+# All numeric tunables for task lifecycle live in
+# HomunculusConfig.task (see config.py). Each method below reads them
+# via `get_config().task.*` so tests can override via set_config(...)
+# without monkey-patching this module.
+#
+# Knobs and what they do:
+#   run_history_cap                — how many runs we keep per task
+#   consecutive_failure_limit      — auto-cancel after N failures
+#   partial_retry_minutes          — partials retry this many min later
+#   max_consecutive_partials       — escalate after N partials in a row
+#   re_fire_suppression_seconds    — dedup window for due() (restart-safe)
+#   advance_due_max_iters          — defence against pathological inputs
 
 
 def scratchpad_dir(tasks_root: Path) -> Path:
@@ -218,7 +203,7 @@ class TaskStore:
 
     def due(self, now: datetime | None = None) -> list[dict[str, Any]]:
         """Return active tasks whose due_at is <= now AND haven't fired
-        recently (within RE_FIRE_SUPPRESSION_SECONDS). The suppression
+        recently (within config.task.re_fire_suppression_seconds). The suppression
         check prevents heartbeat-restart double-fires.
         """
         now = now or now_user_naive()
@@ -244,7 +229,7 @@ class TaskStore:
                     last_fired_dt = None
                 if last_fired_dt is not None:
                     age = (now - last_fired_dt).total_seconds()
-                    if age < RE_FIRE_SUPPRESSION_SECONDS:
+                    if age < get_config().task.re_fire_suppression_seconds:
                         continue
             due_tasks.append(task)
         return due_tasks
@@ -318,7 +303,7 @@ class TaskStore:
         """Log a failed run.
 
         When increment_failures=True (default), increments consecutive_failures
-        and auto-cancels at CONSECUTIVE_FAILURE_LIMIT. Pass False for transient
+        and auto-cancels at config.task.consecutive_failure_limit. Pass False for transient
         infrastructure failures (provider exhaustion) that don't indicate a
         broken task — the run is still logged but the auto-cancel counter is
         left unchanged.
@@ -334,7 +319,7 @@ class TaskStore:
             if increment_failures:
                 failures = int(task.get("consecutive_failures", 0)) + 1
                 task["consecutive_failures"] = failures
-                if failures >= CONSECUTIVE_FAILURE_LIMIT:
+                if failures >= get_config().task.consecutive_failure_limit:
                     task["status"] = "cancelled"
                     task["last_result"] = (
                         f"auto-cancelled after {failures} consecutive failures · "
@@ -362,7 +347,7 @@ class TaskStore:
         task_id: str,
         reason: str,
         duration_s: float | None = None,
-        advance_minutes: int = PARTIAL_RETRY_MINUTES,
+        advance_minutes: int | None = None,
         usage: dict | None = None,
     ) -> dict[str, Any]:
         """Log a partial run — work in progress, not yet complete.
@@ -372,13 +357,16 @@ class TaskStore:
         so the next attempt can resume, and due_at advances by a SHORT
         interval (default 10 min) instead of the full recurrence step.
 
-        After MAX_CONSECUTIVE_PARTIALS in a row without an intervening
+        After config.task.max_consecutive_partials in a row without an intervening
         completion, escalates to a real failure so the user finds out.
 
         Returns the updated task. The caller can inspect `status` —
         "active" means it's been rescheduled, "active" with
         consecutive_failures > 0 means it escalated.
         """
+        cfg = get_config().task
+        if advance_minutes is None:
+            advance_minutes = cfg.partial_retry_minutes
         with self._locked():
             tasks = self.all()
             task = self._find(tasks, task_id)
@@ -391,9 +379,9 @@ class TaskStore:
             partials = int(task.get("consecutive_partials", 0)) + 1
             task["consecutive_partials"] = partials
 
-            if partials >= MAX_CONSECUTIVE_PARTIALS:
+            if partials >= cfg.max_consecutive_partials:
                 # Escalate. Use record_failure inline so consecutive_
-                # failures advances and CONSECUTIVE_FAILURE_LIMIT logic
+                # failures advances and consecutive_failure_limit logic
                 # still applies. We reset partials so the next escalation
                 # is also a fresh count, not a tail effect.
                 task["consecutive_partials"] = 0
@@ -403,7 +391,7 @@ class TaskStore:
                     f"escalated: {partials} consecutive partials. "
                     f"Last reason: {reason.strip()[:200]}"
                 )
-                if failures >= CONSECUTIVE_FAILURE_LIMIT:
+                if failures >= cfg.consecutive_failure_limit:
                     task["status"] = "cancelled"
                 else:
                     recurrence = task.get("recurrence", "none")
@@ -419,7 +407,7 @@ class TaskStore:
                     now + timedelta(minutes=advance_minutes)
                 ).isoformat(timespec="seconds")
                 # Clear the dedupe stamp so the new due_at fires on the
-                # very next tick — otherwise RE_FIRE_SUPPRESSION_SECONDS
+                # very next tick — otherwise config.task.re_fire_suppression_seconds
                 # would block it for 30 min even though we want it
                 # back in ~10 min.
                 task["last_fired_at"] = None
@@ -526,8 +514,9 @@ class TaskStore:
                 run["cost_cents"] = round(float(usage["cost_cents"]), 4)
         runs = task.setdefault("last_runs", [])
         runs.append(run)
-        if len(runs) > RUN_HISTORY_CAP:
-            del runs[: len(runs) - RUN_HISTORY_CAP]
+        cap = get_config().task.run_history_cap
+        if len(runs) > cap:
+            del runs[: len(runs) - cap]
 
     def attribute_usage_to_last_run(
         self,
@@ -614,13 +603,13 @@ class TaskStore:
     def _advance_due(due_at: str | None, recurrence: str, now: datetime) -> str:
         """Advance the next due timestamp until it lands past `now`.
 
-        Capped at ADVANCE_DUE_MAX_ITERS to guard against pathological
+        Capped at config.task.advance_due_max_iters to guard against pathological
         inputs (zero step, broken clock skew, etc.) so we don't loop
         forever inside a `complete()` call holding the file lock.
         """
         base = datetime.fromisoformat(due_at) if due_at else now
         step = timedelta(days=1 if recurrence == "daily" else 7)
-        for _ in range(ADVANCE_DUE_MAX_ITERS):
+        for _ in range(get_config().task.advance_due_max_iters):
             if base > now:
                 return base.isoformat(timespec="seconds")
             base += step

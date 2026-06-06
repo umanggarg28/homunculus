@@ -276,11 +276,11 @@ class TaskGuard:
         This is the structural complement to the prompt tightening — instead
         of HOPING the model wraps up, the harness ORDERS it to.
 
-        Imported locally to avoid a circular import of core.MAX_TURNS at
-        module load time.
+        Imported locally to avoid a circular import at module load.
         """
-        from core import MAX_TURNS  # local import — see docstring
-        if turn_idx != MAX_TURNS - 1:
+        from config import get_config  # local import — see docstring
+        max_turns = get_config().loop.max_turns
+        if turn_idx != max_turns - 1:
             return None
         remaining = self.expected_remaining()
         if not remaining:

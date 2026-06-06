@@ -32,7 +32,12 @@ events.truncate_preview = lambda s, limit=200, **_kw: str(s)[:limit]
 events.emit = lambda *_a, **_kw: None
 events.full_text = lambda t: t
 
-from core import Agent, MAX_TURNS  # noqa: E402
+from core import Agent  # noqa: E402
+from config import get_config  # noqa: E402
+
+# MAX_TURNS moved into HomunculusConfig.loop.max_turns. Tests keep a
+# local alias for readability.
+MAX_TURNS = get_config().loop.max_turns
 from heartbeat import TaskGuard  # noqa: E402
 
 

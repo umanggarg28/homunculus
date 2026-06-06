@@ -8,7 +8,12 @@ The fix is a hard cap on tool-result content that lands in conversation
 history. Full content is still preserved in _events.jsonl.
 """
 
-from core import TOOL_RESULT_HARD_CAP, _trim_tool_result_for_history
+from core import _trim_tool_result_for_history
+from config import get_config
+
+# The constant moved to HomunculusConfig.loop.tool_result_hard_cap_chars
+# during the agent refactor. Tests keep a local alias for readability.
+TOOL_RESULT_HARD_CAP = get_config().loop.tool_result_hard_cap_chars
 
 
 def test_short_result_passes_through_unchanged():
