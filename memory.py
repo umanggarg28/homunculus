@@ -235,6 +235,50 @@ class Memory:
         # It also keeps the file out of the MEMORY.md index pattern.
         return self.root / "_session.json"
 
+    @property
+    def chat_log_path(self) -> Path:
+        # Append-only transcript of every user/assistant turn. Decoupled
+        # from _session.json so that mid-session compaction (which
+        # rewrites self.history to a summary + recent tail for LLM
+        # efficiency) does NOT delete the user-visible chat from disk.
+        # Read by /api/chat/history; the LLM never sees this file.
+        return self.root / "_chat_log.jsonl"
+
+    def append_chat_turn(self, turn: dict) -> None:
+        """Append one chat turn entry to the persistent transcript.
+
+        `turn` is a JSON-serializable dict that should at minimum carry
+        a `role` ("user" or "assistant") and `content` (str). Callers
+        may include `ts`, `source`, and `id`. We never rewrite or
+        truncate this file — it's the canonical record of what the user
+        sent and what they were shown.
+        """
+        self.chat_log_path.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(turn, ensure_ascii=False)
+        with self.chat_log_path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+
+    def load_chat_log(self) -> list[dict]:
+        """Return every persisted chat turn in order.
+
+        Drops malformed lines rather than crashing — the transcript is
+        append-only but a partial write during shutdown could leave a
+        trailing fragment.
+        """
+        if not self.chat_log_path.exists():
+            return []
+        out: list[dict] = []
+        with self.chat_log_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        return out
+
     @contextmanager
     def _file_lock(self, lock_path: Path) -> Iterator[None]:
         """Exclusive fcntl flock on `lock_path` (sidecar).
@@ -332,6 +376,12 @@ class Memory:
         """Delete the saved session. Called when the user types reset."""
         if self.session_path.exists():
             self.session_path.unlink()
+
+    def clear_chat_log(self) -> None:
+        """Delete the persistent chat transcript. Called on chapter close
+        so a fresh chapter starts with an empty visible chat."""
+        if self.chat_log_path.exists():
+            self.chat_log_path.unlink()
 
     # ---- pending notifications queue -----------------------------------
     # When `notify()` fires (typically from the heartbeat daemon), it sends
