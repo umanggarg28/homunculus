@@ -6,14 +6,36 @@ import os
 import re
 from pathlib import Path
 
-from ._helpers import READ_FILE_MAX_CHARS, normalize_workspace_path
+from ._helpers import (
+    PathOutsideWorkspace,
+    READ_FILE_MAX_CHARS,
+    normalize_workspace_path,
+)
 
 _MAX_LIST_ENTRIES = 200
 _MAX_SEARCH_MATCHES = 50
 
 
+def _sandbox_error(path: str, exc: PathOutsideWorkspace) -> str:
+    """Convert a sandbox rejection into the agent-facing ERROR string.
+
+    The agent retries on ERROR-prefixed results, so the message must
+    name the rejected path and the actionable rule: stay inside the
+    workspace.
+    """
+    return (
+        f"ERROR: path '{path}' is outside the workspace sandbox. "
+        f"This tool can only read or write files under the workspace "
+        f"directory. Try a path relative to the workspace root."
+    )
+
+
 def read_file(path: str) -> str:
-    text = Path(normalize_workspace_path(path)).read_text(encoding="utf-8")
+    try:
+        safe = normalize_workspace_path(path)
+    except PathOutsideWorkspace as e:
+        return _sandbox_error(path, e)
+    text = Path(safe).read_text(encoding="utf-8")
     if len(text) <= READ_FILE_MAX_CHARS:
         return text
     truncated = text[-READ_FILE_MAX_CHARS:]
@@ -22,14 +44,22 @@ def read_file(path: str) -> str:
 
 
 def write_file(path: str, content: str) -> str:
-    p = Path(normalize_workspace_path(path))
+    try:
+        safe = normalize_workspace_path(path)
+    except PathOutsideWorkspace as e:
+        return _sandbox_error(path, e)
+    p = Path(safe)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
     return f"Wrote {len(content)} bytes to {p}"
 
 
 def append_file(path: str, content: str) -> str:
-    p = Path(normalize_workspace_path(path))
+    try:
+        safe = normalize_workspace_path(path)
+    except PathOutsideWorkspace as e:
+        return _sandbox_error(path, e)
+    p = Path(safe)
     p.parent.mkdir(parents=True, exist_ok=True)
     # Ensure appended content starts on its own line.
     prefix = ""
@@ -44,7 +74,11 @@ def append_file(path: str, content: str) -> str:
 
 def list_files(path: str = ".") -> str:
     """List files and directories under path (relative to workspace cwd)."""
-    root = Path(normalize_workspace_path(path))
+    try:
+        safe = normalize_workspace_path(path)
+    except PathOutsideWorkspace as e:
+        return _sandbox_error(path, e)
+    root = Path(safe)
     if not root.exists():
         return f"ERROR: path '{path}' does not exist"
     if root.is_file():
@@ -73,7 +107,11 @@ def list_files(path: str = ".") -> str:
 
 def search_files(query: str, path: str = ".", case_sensitive: bool = False) -> str:
     """Grep for query across text files under path."""
-    root = Path(normalize_workspace_path(path))
+    try:
+        safe = normalize_workspace_path(path)
+    except PathOutsideWorkspace as e:
+        return _sandbox_error(path, e)
+    root = Path(safe)
     if not root.exists():
         return f"ERROR: path '{path}' does not exist"
 

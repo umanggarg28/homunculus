@@ -57,6 +57,20 @@ _GUARD_ACTION_CLAIM_PHRASES = (
     "done! i've", "done. i've",
 )
 
+# Phrases that signal an imminent next action ("I will try X next").
+# When these appear in a FINAL reply, the loop has already ended — the
+# promised action will never happen. This is the same lie shape as
+# "action_claim_without_tool_call" but for future intent rather than past
+# action. Tight regex on purpose: only catches the construction where a
+# first-person promise is followed shortly by an action verb + scope,
+# so legitimate uses like "I will help if you tell me X" don't match.
+_GUARD_FUTURE_PROMISE_RE = re.compile(
+    r"(?i)\b(?:I\s+will|I'll|Let\s+me|Next\s+(?:I\s+(?:will|'ll)|I'll))"
+    r"\s+(?:try|attempt|check|read|fetch|search|look|find|see|continue)"
+    r"\s+(?:another|the\s+next|more|other|again|now|next)"
+)
+
+
 # Map tool names → which arg holds the targeted resource (file path or
 # URL). The claim/result consistency check uses this to recover the
 # "target" of a tool call, so it can match a path mentioned in the reply
@@ -2057,6 +2071,16 @@ class Agent:
             if inconsistencies:
                 violations.append("claim_inconsistent_with_tool_result")
 
+        # False future-promise: the reply ends the turn but commits to
+        # an imminent next action ("I will try another filename"). The
+        # loop has terminated; that promised action will never run. Same
+        # lie shape as action_claim_without_tool_call but for the future
+        # rather than the past. Stress probe: agent tried 3 paths,
+        # failed all, then said "I will try another configuration
+        # filename" with no further tool call.
+        if _GUARD_FUTURE_PROMISE_RE.search(reply):
+            violations.append("false_future_promise")
+
         if not violations:
             return reply, []
 
@@ -2116,6 +2140,16 @@ class Agent:
         "pretend it succeeded."
     )
 
+    _FUTURE_PROMISE_CORRECTION_PROMPT = (
+        "Your previous reply ended the turn with a promise of immediate next action "
+        "('I will try X next', 'Let me check Y', 'I'll search again'). This is dishonest: "
+        "your turn is over after you reply. If you genuinely intend to take that action, "
+        "DO IT NOW by calling the appropriate tool — don't say 'I will' and then stop. If "
+        "you're declining to continue, say so plainly: 'I tried X, Y, Z and they all "
+        "failed; I'm not going to keep guessing — tell me where to look.' Never promise "
+        "follow-up work you won't perform."
+    )
+
     def _self_correct(self, tool_names_used: set[str], violations: list[str] | None = None, tool_outcomes: list[dict] | None = None) -> str:
         """Inject a correction prompt and re-call the LLM once (non-streaming).
 
@@ -2129,6 +2163,8 @@ class Agent:
             correction = self._ACTION_CLAIM_CORRECTION_PROMPT
         elif violations and "claim_inconsistent_with_tool_result" in violations:
             correction = self._CLAIM_INCONSISTENT_CORRECTION_PROMPT
+        elif violations and "false_future_promise" in violations:
+            correction = self._FUTURE_PROMISE_CORRECTION_PROMPT
         else:
             correction = self._SELF_CORRECTION_PROMPT
         self.history.append({

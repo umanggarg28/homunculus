@@ -22,14 +22,73 @@ WEB_SEARCH_CACHE_SECONDS = int(os.environ.get("WEB_SEARCH_CACHE_SECONDS", str(36
 WEB_FETCH_CACHE_SECONDS = int(os.environ.get("WEB_FETCH_CACHE_SECONDS", str(6 * 3600)))  # 6h — pages change less often
 
 
+# The workspace root is the process cwd at module import — set by
+# docker-compose to /app/workspace in the production containers, and
+# the repo root in dev / tests. Captured once so a later os.chdir()
+# can't quietly widen the sandbox.
+WORKSPACE_ROOT = Path(os.environ.get("HOMUNCULUS_WORKSPACE_ROOT", os.getcwd())).resolve()
+
+
+class PathOutsideWorkspace(ValueError):
+    """Raised when a tool argument resolves outside the workspace sandbox."""
+
+
 def normalize_workspace_path(path: str) -> str:
-    """Strip 'workspace/' or '/app/workspace/' prefixes so paths land
-    correctly inside the container's cwd."""
-    if path.startswith("/app/workspace/"):
-        return path[len("/app/workspace/"):]
-    if path.startswith("workspace/"):
-        return path[len("workspace/"):]
-    return path
+    """Resolve `path` against the workspace root, enforcing that the
+    result stays inside the sandbox.
+
+    Accepts relative paths (resolved against the workspace root),
+    workspace-relative absolutes (`/app/workspace/...` or `workspace/...`),
+    and rejects anything that would escape: `/etc/passwd`, `..` traversal,
+    or symlinks pointing outside the workspace. Raises PathOutsideWorkspace
+    on rejection; callers convert that to a user-visible ERROR string so
+    the agent gets a clear failure to retry against.
+
+    Reference: pathlib resolve() + is_relative_to() is the standard
+    sandboxing pattern recommended in CWE-22 mitigation guides — handles
+    symlinks (string prefix checks don't).
+    """
+    if path is None:
+        raise PathOutsideWorkspace("path is required")
+    raw = str(path)
+    # Strip the well-known workspace prefixes so /app/workspace/memory/x
+    # and memory/x resolve to the same place. Done BEFORE join so the
+    # remainder is always treated as workspace-relative.
+    if raw.startswith("/app/workspace/"):
+        raw = raw[len("/app/workspace/"):]
+    elif raw == "/app/workspace":
+        raw = ""
+    elif raw.startswith("workspace/"):
+        raw = raw[len("workspace/"):]
+
+    candidate = Path(raw)
+    # Absolute paths that aren't under WORKSPACE_ROOT get rejected
+    # outright. Resolved form follows symlinks, so a symlink in the
+    # workspace pointing to /etc cannot launder access.
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+    else:
+        resolved = (WORKSPACE_ROOT / candidate).resolve()
+
+    try:
+        resolved.relative_to(WORKSPACE_ROOT)
+    except ValueError:
+        raise PathOutsideWorkspace(
+            f"path {path!r} resolves outside the workspace sandbox"
+        )
+
+    # Return relative-to-cwd form so the existing tool internals (which
+    # call Path(...).read_text() etc.) keep working unchanged. Using a
+    # relative path also keeps log lines compact.
+    try:
+        return str(resolved.relative_to(WORKSPACE_ROOT))
+    except ValueError:
+        # Belt-and-braces — the check above already guarantees this
+        # succeeds; included so a future refactor of WORKSPACE_ROOT
+        # can't silently drop sandboxing.
+        raise PathOutsideWorkspace(
+            f"path {path!r} resolved to {resolved} which is outside the workspace"
+        )
 
 
 def cache_key(kind: str, value: str) -> Path:
