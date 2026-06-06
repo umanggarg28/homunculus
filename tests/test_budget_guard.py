@@ -42,13 +42,33 @@ sys.modules.setdefault("tasks", tasks_stub)
 
 import core  # noqa: E402
 
+# Constants moved into HomunculusConfig; tests override via set_config().
+from config import (  # noqa: E402
+    HomunculusConfig,
+    ProviderConfig,
+    set_config,
+)
+
+
+def _set_enforce_budget(enabled: bool) -> None:
+    """Override the singleton config for this test's lifetime — the
+    teardown fixture resets it. Keeps every other field at default."""
+    set_config(HomunculusConfig(provider=ProviderConfig(enforce_daily_budget=enabled)))
+
+
+def _reset_config():
+    set_config(None)
+
 
 def test_budget_guard_allows_free_models(monkeypatch, tmp_path):
-    monkeypatch.setattr(core, "ENFORCE_DAILY_BUDGET", True)
+    _set_enforce_budget(True)
     monkeypatch.setenv("HOMUNCULUS_DAILY_BUDGET_USD", "0.01")
     monkeypatch.setenv("HOMUNCULUS_EVENTS_PATH", str(tmp_path / "_events.jsonl"))
 
-    assert core._budget_blocks_model("some/model:free") is False
+    try:
+        assert core._budget_blocks_model("some/model:free") is False
+    finally:
+        _reset_config()
 
 
 def test_budget_guard_blocks_known_paid_model_after_cap(monkeypatch, tmp_path):
@@ -65,16 +85,22 @@ def test_budget_guard_blocks_known_paid_model_after_cap(monkeypatch, tmp_path):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(core, "ENFORCE_DAILY_BUDGET", True)
+    _set_enforce_budget(True)
     monkeypatch.setenv("HOMUNCULUS_DAILY_BUDGET_USD", "0.01")
     monkeypatch.setenv("HOMUNCULUS_EVENTS_PATH", str(events))
 
-    assert core._budget_blocks_model("gemini-2.5-flash") is True
+    try:
+        assert core._budget_blocks_model("gemini-2.5-flash") is True
+    finally:
+        _reset_config()
 
 
 def test_budget_guard_does_not_block_when_disabled(monkeypatch, tmp_path):
-    monkeypatch.setattr(core, "ENFORCE_DAILY_BUDGET", False)
+    _set_enforce_budget(False)
     monkeypatch.setenv("HOMUNCULUS_DAILY_BUDGET_USD", "0.01")
     monkeypatch.setenv("HOMUNCULUS_EVENTS_PATH", str(tmp_path / "_events.jsonl"))
 
-    assert core._budget_blocks_model("gemini-2.5-flash") is False
+    try:
+        assert core._budget_blocks_model("gemini-2.5-flash") is False
+    finally:
+        _reset_config()

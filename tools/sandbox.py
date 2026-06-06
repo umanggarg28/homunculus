@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import subprocess
 
-from ._helpers import READ_FILE_MAX_CHARS
+from config import get_config
+
 from ._state import is_autonomous
 
 
@@ -54,10 +55,11 @@ def python_exec(code: str, timeout: int = 30) -> str:
         parts.append(f"(exit code: {result.returncode})")
 
     output = "\n\n".join(parts)
-    if len(output) > READ_FILE_MAX_CHARS:
+    max_chars = get_config().loop.read_file_max_chars
+    if len(output) > max_chars:
         output = (
-            output[:READ_FILE_MAX_CHARS]
-            + f"\n[...{len(output) - READ_FILE_MAX_CHARS} chars truncated]"
+            output[:max_chars]
+            + f"\n[...{len(output) - max_chars} chars truncated]"
         )
     return output
 

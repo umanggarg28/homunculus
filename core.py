@@ -29,6 +29,7 @@ from dotenv import load_dotenv
 
 import events
 import tools
+from config import get_config
 from memory import Memory
 from tasks import TaskStore
 
@@ -231,8 +232,8 @@ MODEL = os.environ.get("HOMUNCULUS_MODEL", "gemini-2.5-flash")
 
 # Fallback provider chain. Each slot is independent — set only the keys
 # you have. On 429 from one provider, we move to the next; a 429'd
-# provider is benched for PROVIDER_COOLDOWN_SECONDS so we don't hammer
-# a throttled endpoint.
+# provider is benched for config.provider.cooldown_seconds so we don't
+# hammer a throttled endpoint.
 #
 # Slot 1 (HOMUNCULUS_API_KEY_FALLBACK): OpenRouter — Kimi K2.6 and Qwen3 are
 #   purpose-built for agentic tool-calling; both have free tiers with generous
@@ -274,29 +275,16 @@ MODEL_FALLBACK_3 = os.environ.get("HOMUNCULUS_MODEL_FALLBACK_3", "gpt-oss-120b")
 # when the User-Agent is absent or looks like a raw Python script.
 _HTTP_HEADERS_BASE = {"User-Agent": "homunculus/1.0 (httpx)"}
 
-# How long to bench a provider after it returns 429. During this window
-# we skip it entirely and route to the next provider in the chain. 60s
-# is long enough for most rate-limit windows to refill (Groq TPM is
-# per-minute, Gemini RPM is per-minute).
-PROVIDER_COOLDOWN_SECONDS = 60.0
-PROVIDER_UNAVAILABLE_COOLDOWN_SECONDS = 10 * 60.0
-# If the primary provider 429s with a retry-after at or below this threshold,
-# wait and retry it once before falling to lower-quality fallbacks.
-# Keeps quality high for transient rate limits — a short wait is better than
-# degrading to a weaker model.
-PRIMARY_MAX_RETRY_WAIT = 45.0
-# When the primary 429s with no Retry-After header, wait this many seconds and
-# retry once before falling to weaker fallbacks. Gemini often omits the header.
-PRIMARY_DEFAULT_RETRY_WAIT = 8.0
-
-# Optional hard budget guard. The dashboard already reports estimated spend;
-# this flag turns that estimate into enforcement. Free endpoints (`:free`)
-# and unknown-priced models are allowed so the agent can degrade to free
-# providers instead of going completely dark.
-ENFORCE_DAILY_BUDGET = os.environ.get(
-    "HOMUNCULUS_ENFORCE_DAILY_BUDGET",
-    "",
-).strip().lower() in {"1", "true", "yes", "on"}
+# Provider cooldowns + retry policy now live in HomunculusConfig.provider
+# (see config.py). Callsites below use get_config().provider.* directly so
+# tests can override via set_config(...) without monkey-patching this module.
+#
+# Docs cheat-sheet:
+#   cooldown_seconds              — how long a 429'd provider stays cooled
+#   unavailable_cooldown_seconds  — same for 5xx / connect failures (longer)
+#   primary_max_retry_wait        — max Retry-After we'll honour from primary
+#   primary_default_retry_wait    — retry wait when 429 omits Retry-After
+#   enforce_daily_budget          — block calls that cross the daily envelope
 
 _MODEL_PRICING_CENTS: dict[str, tuple[float, float]] = {
     # cents per 1M input, cents per 1M output (updated June 2026)
@@ -318,8 +306,8 @@ _MODEL_PRICING_CENTS: dict[str, tuple[float, float]] = {
 _PROVIDER_COOLDOWN: dict[str, float] = {}
 
 # Hard cap on tool-use iterations per user turn. Without this, a broken
-# LLM could call tools forever. 20 is plenty for any realistic task.
-MAX_TURNS = 20
+# Loop iteration cap moved to HomunculusConfig.loop.max_turns. Callsites
+# below read it via get_config().loop.max_turns so tests can override.
 
 # Read-only tools whose results can be safely cached within a single turn.
 # When the LLM re-calls one of these with the same arguments, the harness
@@ -357,9 +345,10 @@ READ_ONLY_CACHEABLE_TOOLS = frozenset({
 # event emitted to _events.jsonl keeps the full payload (truncated for
 # display by the UI's per-kind COMPACT_LEN_BY_KIND) so the Traces page
 # can still show the complete tool output for debugging.
-TOOL_RESULT_HARD_CAP = 6000
+# Tool result hard cap moved to HomunculusConfig.loop.tool_result_hard_cap_chars.
+# _trim_tool_result_for_history reads it via get_config() so tests can override.
 
-# Per-tool caps. Default falls back to TOOL_RESULT_HARD_CAP. Tighter
+# Per-tool caps. Default falls back to config.loop.tool_result_hard_cap_chars. Tighter
 # caps reflect what the agent actually needs from each tool's result:
 # - web_fetch: usually only the lead paragraphs matter; the rest is
 #   nav + footer. 2500 chars (~625 tok) is enough for the gist.
@@ -450,13 +439,13 @@ def _trim_tool_result_for_history(name: str, result: object) -> object:
     can re-call with a more targeted query.
 
     Per-tool caps live in `_PER_TOOL_RESULT_CAPS`; missing entries fall
-    back to `TOOL_RESULT_HARD_CAP`. Tightening these per-tool was a
+    back to `config.loop.tool_result_hard_cap_chars`. Tightening these per-tool was a
     surprising win — web_fetch alone was dumping 6K of page chrome
     into history when the agent only needed the lead paragraphs.
     """
     if not isinstance(result, str):
         return result
-    cap = _PER_TOOL_RESULT_CAPS.get(name, TOOL_RESULT_HARD_CAP)
+    cap = _PER_TOOL_RESULT_CAPS.get(name, get_config().loop.tool_result_hard_cap_chars)
     if len(result) <= cap:
         return result
     hint_budget = 200
@@ -548,17 +537,14 @@ def _evict_prior_tool_results(history: list[dict], keep_recent: int = 0) -> int:
     return evicted
 
 
-# Mid-session compaction thresholds.
+# Mid-session compaction thresholds now live in
+# HomunculusConfig.loop.compact_trigger_user_turns +
+# .compact_keep_recent_user_turns. _maybe_compact reads them via
+# get_config() so tests can override.
 #
-# COMPACT_TRIGGER counts USER turns (not raw messages). When we exceed
-# this many user turns we summarize older ones into a single system-role
-# summary. COMPACT_KEEP_RECENT is the number of recent user turns kept
-# verbatim. We count user turns because tool-heavy assistant responses
-# can balloon raw message count by 10× without adding any new user
-# context — compacting on raw count was dropping context way too
-# aggressively (2-3 conversational turns triggered it).
-COMPACT_TRIGGER = 8   # heartbeat sessions are short; compact sooner to stay under context limits
-COMPACT_KEEP_RECENT = 4
+# Counts USER turns (not raw messages): tool-heavy assistant responses
+# can balloon raw message count by 10× without adding new user context,
+# so compacting on raw count drops context way too aggressively.
 
 
 def _resolve_agents_md():
@@ -855,7 +841,7 @@ def measure_llm_usage_since(
 
 
 def _budget_blocks_model(model_id: str) -> bool:
-    if not ENFORCE_DAILY_BUDGET:
+    if not get_config().provider.enforce_daily_budget:
         return False
     budget = _budget_cents()
     if budget <= 0 or not _is_known_paid_model(model_id):
@@ -873,9 +859,11 @@ _PROVIDER_LAST_COOLED_AT: float = 0.0
 def _cool_provider(
     url: str,
     model_id: str,
-    seconds: float = PROVIDER_COOLDOWN_SECONDS,
+    seconds: float | None = None,
 ) -> None:
     """Mark a provider as temporarily unavailable; skip until expiry."""
+    if seconds is None:
+        seconds = get_config().provider.cooldown_seconds
     global _PROVIDER_LAST_COOLED_AT
     _PROVIDER_COOLDOWN[_provider_key(url, model_id)] = time.time() + seconds
     _PROVIDER_LAST_COOLED_AT = time.time()
@@ -1065,8 +1053,8 @@ def call_llm(
             # Primary-provider retry: if this is the first provider we tried
             # and the retry-after is short (or absent — Gemini often omits it),
             # wait and retry once before falling to lower-quality fallbacks.
-            wait_for = retry_after if (retry_after is not None) else PRIMARY_DEFAULT_RETRY_WAIT
-            if idx == 0 and wait_for <= PRIMARY_MAX_RETRY_WAIT:
+            wait_for = retry_after if (retry_after is not None) else get_config().provider.primary_default_retry_wait
+            if idx == 0 and wait_for <= get_config().provider.primary_max_retry_wait:
                 print(f"[call_llm] {model_id} 429, waiting {wait_for:.0f}s — retrying primary", flush=True)
                 time.sleep(wait_for)
                 try:
@@ -1085,7 +1073,7 @@ def call_llm(
                     retry_after = _parse_retry_after(retry_resp)
                 except httpx.HTTPError:
                     pass
-            cool_for = retry_after if retry_after else PROVIDER_COOLDOWN_SECONDS
+            cool_for = retry_after if retry_after else get_config().provider.cooldown_seconds
             _cool_provider(url, model_id, cool_for)
             print(f"[call_llm] {model_id} 429 → cooling {cool_for:.0f}s, trying next", flush=True)
             try:
@@ -1095,7 +1083,7 @@ def call_llm(
             continue
         if _is_transient_provider_error(response):
             last_err = response.text
-            _cool_provider(url, model_id, PROVIDER_UNAVAILABLE_COOLDOWN_SECONDS)
+            _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
             print(
                 f"[call_llm] {model_id} unavailable ({response.status_code}) "
                 "→ cooling 10m, trying next",
@@ -1150,7 +1138,7 @@ def call_llm(
             continue
         if _is_transient_provider_error(response):
             last_err = response.text
-            _cool_provider(url, model_id, PROVIDER_UNAVAILABLE_COOLDOWN_SECONDS)
+            _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
             continue
         if response.status_code >= 400:
             raise RuntimeError(f"API error {response.status_code}: {response.text}")
@@ -1289,8 +1277,8 @@ def call_llm_stream(
             # Primary-provider retry: wait and retry the primary once before
             # falling to lower-quality fallbacks. When no Retry-After header is
             # present (Gemini often omits it), wait the short default instead.
-            wait_for = retry_after if (retry_after is not None) else PRIMARY_DEFAULT_RETRY_WAIT
-            if idx == 0 and wait_for <= PRIMARY_MAX_RETRY_WAIT:
+            wait_for = retry_after if (retry_after is not None) else get_config().provider.primary_default_retry_wait
+            if idx == 0 and wait_for <= get_config().provider.primary_max_retry_wait:
                 response_ctx.__exit__(None, None, None)
                 response_ctx = None
                 response = None
@@ -1319,13 +1307,13 @@ def call_llm_stream(
                     response_ctx = None
                     response = None
             if response_ctx is None:
-                cool_for = retry_after if retry_after else PROVIDER_COOLDOWN_SECONDS
+                cool_for = retry_after if retry_after else get_config().provider.cooldown_seconds
                 _cool_provider(url, model_id, cool_for)
                 print(f"[call_llm_stream] {model_id} 429 → cooling {cool_for:.0f}s, trying next", flush=True)
                 continue
             # No retry was attempted (not primary, or retry_after too long) —
             # close the original 429 stream and cool this provider.
-            cool_for = retry_after if retry_after else PROVIDER_COOLDOWN_SECONDS
+            cool_for = retry_after if retry_after else get_config().provider.cooldown_seconds
             response_ctx.__exit__(None, None, None)
             response_ctx = None
             response = None
@@ -1339,7 +1327,7 @@ def call_llm_stream(
             response_ctx.__exit__(None, None, None)
             response_ctx = None
             response = None
-            _cool_provider(url, model_id, PROVIDER_UNAVAILABLE_COOLDOWN_SECONDS)
+            _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
             print(
                 f"[call_llm_stream] {model_id} unavailable ({_status}) "
                 "→ cooling 10m, trying next",
@@ -1826,7 +1814,13 @@ class Agent:
         # every final reply by _detect_prompt_leak.
         self._turn_canary = _make_canary()
 
-        for _turn_idx in range(MAX_TURNS):
+        # Snapshot the loop ceiling once per request — it's used in many
+        # branches below (nudges, prompts, the for-loop bound). Reading
+        # the singleton each time would be cheap but noisy; a local keeps
+        # the call sites readable and lets tests override via set_config.
+        max_turns = get_config().loop.max_turns
+
+        for _turn_idx in range(max_turns):
             # Mid-loop eviction: keep only the two most recent tool results
             # full-fidelity; stub everything older. Without this, per-call
             # input grows linearly with iteration count — a 15-iter task
@@ -1868,7 +1862,7 @@ class Agent:
                     self.history.append(injected)
                     events.emit(
                         "self_correction",
-                        text=f"pre_turn_hook injection at iter {_turn_idx + 1}/{MAX_TURNS}",
+                        text=f"pre_turn_hook injection at iter {_turn_idx + 1}/{max_turns}",
                         result=str(injected.get("content", ""))[:100],
                     )
 
@@ -1879,7 +1873,7 @@ class Agent:
             # Restating it as a fresh system note brings it back to high-
             # attention position. We also list which tools have been used so
             # the agent doesn't re-do work already completed.
-            if _turn_idx == MAX_TURNS // 2 and user_message:
+            if _turn_idx == max_turns // 2 and user_message:
                 used_summary = (
                     f" Tools used so far: {', '.join(sorted(tool_names_used))}."
                     if tool_names_used
@@ -1896,13 +1890,13 @@ class Agent:
                         f"# Reminder of the current goal\n\n"
                         f"You are still working on this request:\n\n"
                         f"> {task_snippet}\n\n"
-                        f"{used_summary} You have {MAX_TURNS - _turn_idx} "
+                        f"{used_summary} You have {max_turns - _turn_idx} "
                         f"iterations left."
                     ),
                 })
                 events.emit(
                     "self_correction",
-                    text=f"goal re-injection at iter {_turn_idx + 1}/{MAX_TURNS}",
+                    text=f"goal re-injection at iter {_turn_idx + 1}/{max_turns}",
                     result=task_snippet[:80],
                 )
 
@@ -1913,12 +1907,12 @@ class Agent:
             # post-success check in heartbeat.py:tick which then has to clean
             # up after the fact). The nudge gives the model a chance to call
             # complete_task / record_failure before the hard cap fires.
-            if _turn_idx == MAX_TURNS - 2:
+            if _turn_idx == max_turns - 2:
                 self.history.append({
                     "role": "user",
                     "content": (
                         "Heads-up from the harness: you have 2 iterations left "
-                        f"of a {MAX_TURNS}-step budget. If a task is still "
+                        f"of a {max_turns}-step budget. If a task is still "
                         "active, call complete_task() now with what you have "
                         "(it's better to deliver a partial answer than nothing). "
                         "If the task cannot be completed, briefly explain why "
@@ -1928,7 +1922,7 @@ class Agent:
                 })
                 events.emit(
                     "self_correction",
-                    text=f"harness budget nudge at iter {_turn_idx + 1}/{MAX_TURNS}",
+                    text=f"harness budget nudge at iter {_turn_idx + 1}/{max_turns}",
                     result="injected wrap-up reminder",
                 )
 
@@ -2198,7 +2192,7 @@ class Agent:
                     "content": content_for_history,
                 })
 
-        fallback = "(hit MAX_TURNS without a final answer)"
+        fallback = "(hit max_turns without a final answer)"
         if not streaming:
             yield fallback
         else:
@@ -2476,13 +2470,14 @@ class Agent:
         (assistant tool_call → tool result) sequence — the API rejects
         orphaned tool messages.
         """
+        cfg = get_config().loop
         user_idxs = [i for i, m in enumerate(self.history) if m.get("role") == "user"]
-        if len(user_idxs) <= COMPACT_TRIGGER:
+        if len(user_idxs) <= cfg.compact_trigger_user_turns:
             return
-        if len(user_idxs) <= COMPACT_KEEP_RECENT:
+        if len(user_idxs) <= cfg.compact_keep_recent_user_turns:
             return  # nothing to summarize without dropping recent context
 
-        cut_at = user_idxs[-COMPACT_KEEP_RECENT]
+        cut_at = user_idxs[-cfg.compact_keep_recent_user_turns]
         # Slice [1:cut_at] = everything between system prompt and the
         # turn we're keeping.
         to_summarize = self.history[1:cut_at]

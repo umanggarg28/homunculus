@@ -9,17 +9,11 @@ import time
 from pathlib import Path
 
 
-# How much of a file to return at most. Above this, we keep the TAIL
-# (most recent content) and prepend a note. Keeps daily logs from
-# blowing up the context window — each heartbeat tick reads the log,
-# writes more to it, etc.
-READ_FILE_MAX_CHARS = 16_000
-
-# Small disk cache for network tools. Saves quota and repeated fetches
-# during agent loops. Stored under workspace/cache/ in Docker.
+# Disk cache directory for network-touching tools (web_search,
+# web_fetch). The TTLs themselves live in HomunculusConfig.cache —
+# consumers read those via get_config() at the call site so tests can
+# override.
 CACHE_DIR = Path(os.environ.get("HOMUNCULUS_CACHE_DIR", "./cache"))
-WEB_SEARCH_CACHE_SECONDS = int(os.environ.get("WEB_SEARCH_CACHE_SECONDS", str(3600)))  # 1h — real-time queries must be fresh
-WEB_FETCH_CACHE_SECONDS = int(os.environ.get("WEB_FETCH_CACHE_SECONDS", str(6 * 3600)))  # 6h — pages change less often
 
 
 # The workspace root is the process cwd at module import — set by
