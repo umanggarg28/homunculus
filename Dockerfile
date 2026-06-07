@@ -38,7 +38,7 @@ COPY pyproject.toml ./
 RUN uv sync --no-install-project
 
 # Copy the source code into the image.
-COPY core.py memory.py tasks.py heartbeat.py events.py agent_controls.py user_tz.py homunculus.yaml AGENTS.md ./
+COPY core.py memory.py tasks.py heartbeat.py events.py agent_controls.py user_tz.py config.py messages.py homunculus.yaml AGENTS.md ./
 COPY tools/ ./tools/
 COPY transports/ ./transports/
 COPY scripts/ ./scripts/

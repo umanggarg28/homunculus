@@ -160,13 +160,27 @@ class TaskStore:
         with self._locked():
             now = now_user_naive().isoformat(timespec="seconds")
             tasks = self.all()
+            normalized_due = self._normalize_datetime(due_at) if due_at else None
+            # Anchor the recurring time-of-day at creation. _advance_due
+            # snaps each next-cycle due_at to this wall-clock time so
+            # partial-recovery shifts (mark_partial → due_at advances by
+            # +10min) don't permanently drift a "daily at 7 AM" task to
+            # firing at 1:40 AM after a few weeks of retries.
+            recur_anchor = None
+            if recurrence in ("daily", "weekly") and normalized_due:
+                try:
+                    parsed = datetime.fromisoformat(normalized_due)
+                    recur_anchor = parsed.strftime("%H:%M:%S")
+                except ValueError:
+                    pass
             task = {
                 "id": self._unique_id(title, tasks),
                 "title": title.strip(),
                 "description": description.strip(),
                 "status": "active",
-                "due_at": self._normalize_datetime(due_at) if due_at else None,
+                "due_at": normalized_due,
                 "recurrence": recurrence,
+                "recur_anchor": recur_anchor,
                 "notify": bool(notify),
                 "created_at": now,
                 "updated_at": now,
@@ -285,7 +299,9 @@ class TaskStore:
 
             recurrence = task.get("recurrence", "none")
             if recurrence in {"daily", "weekly"}:
-                task["due_at"] = self._advance_due(task.get("due_at"), recurrence, now)
+                task["due_at"] = self._advance_due(
+                    task.get("due_at"), recurrence, now, task.get("recur_anchor"),
+                )
                 task["status"] = "active"
             else:
                 task["status"] = "completed"
@@ -338,6 +354,7 @@ class TaskStore:
                     if recurrence in {"daily", "weekly"}:
                         task["due_at"] = self._advance_due(
                             task.get("due_at"), recurrence, now,
+                            task.get("recur_anchor"),
                         )
             self._write(tasks)
             return task
@@ -398,6 +415,7 @@ class TaskStore:
                     if recurrence in {"daily", "weekly"}:
                         task["due_at"] = self._advance_due(
                             task.get("due_at"), recurrence, now,
+                            task.get("recur_anchor"),
                         )
             else:
                 # Reschedule for the near future so the next tick can
@@ -600,15 +618,45 @@ class TaskStore:
         return target.isoformat(timespec="seconds")
 
     @staticmethod
-    def _advance_due(due_at: str | None, recurrence: str, now: datetime) -> str:
+    def _advance_due(
+        due_at: str | None,
+        recurrence: str,
+        now: datetime,
+        recur_anchor: str | None = None,
+    ) -> str:
         """Advance the next due timestamp until it lands past `now`.
 
         Capped at config.task.advance_due_max_iters to guard against pathological
         inputs (zero step, broken clock skew, etc.) so we don't loop
         forever inside a `complete()` call holding the file lock.
+
+        If `recur_anchor` (HH:MM:SS) is provided, the next due_at SNAPS
+        to that wall-clock time on the next valid calendar day. Without
+        anchor snapping, partial-recovery shifts (which advance due_at
+        by +10 minutes) compound across cycles and silently drift a
+        "daily at 7 AM" task into firing at 1:40 AM after a few weeks.
+        With the anchor, the time-of-day is restored each cycle.
         """
-        base = datetime.fromisoformat(due_at) if due_at else now
         step = timedelta(days=1 if recurrence == "daily" else 7)
+
+        if recur_anchor and recurrence in ("daily", "weekly"):
+            # Anchor mode: the next fire is exactly one step after `now`'s
+            # calendar day, at the anchored time-of-day. This prevents
+            # double-fires within a single calendar period — if the
+            # current run drifted to a weird hour (1:40 AM), we don't
+            # circle back to 7 AM the SAME day and fire again.
+            try:
+                anchor_h, anchor_m, anchor_s = (int(x) for x in recur_anchor.split(":"))
+                base = now.replace(
+                    hour=anchor_h, minute=anchor_m, second=anchor_s, microsecond=0,
+                ) + step
+                while base <= now:
+                    base += step
+                return base.isoformat(timespec="seconds")
+            except (ValueError, AttributeError):
+                pass  # malformed anchor — fall through to legacy behaviour
+
+        base = datetime.fromisoformat(due_at) if due_at else now
         for _ in range(get_config().task.advance_due_max_iters):
             if base > now:
                 return base.isoformat(timespec="seconds")

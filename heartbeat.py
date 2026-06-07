@@ -767,20 +767,56 @@ def main() -> None:
     print(f"[heartbeat] starting, interval = {interval_min} min, model = {model}", flush=True)
 
     default_interval = interval_min * 60
+    tick_failed = False
     while True:
         try:
             tick(memory, model=model)
-        except Exception:
+            tick_failed = False
+        except Exception as e:
             # Don't let one bad tick kill the daemon. Log and continue.
             print("[heartbeat] error during tick:", flush=True)
             traceback.print_exc()
+            # Network-class errors (DNS, connect refused) are usually
+            # transient — retry in 60s instead of waiting the full hour
+            # backoff. Without this, a single DNS blip during a recurring
+            # task's window loses the whole day's run.
+            tick_failed = _is_transient_network_error(e)
 
-        sleep_seconds = _compute_sleep(memory, default_interval)
+        if tick_failed:
+            sleep_seconds = 60.0
+        else:
+            sleep_seconds = _compute_sleep(memory, default_interval)
         wake_at = (datetime.now() + timedelta(seconds=sleep_seconds)).isoformat(timespec="seconds")
         print(f"[heartbeat] sleeping {sleep_seconds:.0f}s, next tick ~{wake_at}", flush=True)
         memory.set_next_tick(wake_at)
         _interruptible_sleep(sleep_seconds)
         memory.pop_next_tick()  # consumed — clear so stale value doesn't persist after waking
+
+
+def _is_transient_network_error(exc: BaseException) -> bool:
+    """True if exc is the kind of network blip worth retrying in 60s.
+
+    DNS resolution failures, connect refused, and connect timeouts on
+    the LLM provider call almost always clear within a minute. Backing
+    off to the default hour drops a whole task window over what's
+    usually a 30-second hiccup. We do NOT shortcut on 4xx/auth/quota
+    errors — those don't fix themselves and the longer cooldown is correct.
+    """
+    # Walk the cause/context chain so wrapped httpx errors are caught.
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        name = type(cur).__name__
+        msg = str(cur).lower()
+        if name in {"ConnectError", "ConnectTimeout", "ReadTimeout"}:
+            return True
+        if "name resolution" in msg or "temporary failure" in msg:
+            return True
+        if "connection refused" in msg or "network is unreachable" in msg:
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
 
 
 def _interruptible_sleep(total_seconds: float, poll_interval: float = 60.0) -> None:
@@ -801,19 +837,40 @@ def _interruptible_sleep(total_seconds: float, poll_interval: float = 60.0) -> N
     """
     task_store = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
     keepalive_every = 10 * 60.0
-    deadline = time.monotonic() + total_seconds
-    last_ping = time.monotonic()
+    # Wall-clock deadline, not monotonic. time.monotonic() pauses during
+    # host suspend (laptop lid close), so a 1-hour sleep can wall-clock
+    # into 9 hours and we miss everything overnight. time.time() jumps
+    # forward on resume, so the next iteration sees remaining <= 0 and
+    # exits — letting tick() run with the actual current time.
+    deadline = time.time() + total_seconds
+    last_ping = time.time()
     while True:
-        remaining = deadline - time.monotonic()
+        remaining = deadline - time.time()
         if remaining <= 0:
             break
         time.sleep(min(poll_interval, remaining))
-        if time.monotonic() - last_ping >= keepalive_every:
+        # After host resume, time.time() can jump by hours in a single
+        # sleep iteration. Detect the gap and break loudly so the next
+        # tick fires right away rather than continuing to spin keepalives.
+        now_wall = time.time()
+        if now_wall - last_ping >= keepalive_every * 1.5:
+            gap = now_wall - last_ping
+            print(f"[heartbeat] detected {gap:.0f}s wall-clock gap (host suspend?) — waking", flush=True)
+            try:
+                events.emit(
+                    "host_suspend_detected",
+                    name="heartbeat",
+                    text=f"gap={gap:.0f}s — host likely slept; firing tick",
+                )
+            except Exception:
+                pass
+            break
+        if now_wall - last_ping >= keepalive_every:
             try:
                 events.emit("service_ping", name="heartbeat", text="alive")
             except Exception:
                 pass
-            last_ping = time.monotonic()
+            last_ping = now_wall
         if task_store.due():
             print("[heartbeat] task became due mid-sleep — waking early", flush=True)
             break
