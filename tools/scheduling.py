@@ -49,7 +49,7 @@ def schedule_next_tick(iso_datetime: str) -> str:
             f"Schedule something sooner; you can always re-schedule from "
             f"the next tick."
         )
-    mem.set_next_tick(target.isoformat(timespec="seconds"))
+    mem.next_tick.set(target.isoformat(timespec="seconds"))
     delta = target - now
     return f"Scheduled next heartbeat for {target.isoformat(timespec='seconds')} (in {delta})."
 

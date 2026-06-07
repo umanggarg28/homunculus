@@ -450,7 +450,7 @@ def tick(memory: Memory, model: str | None) -> None:
     else:
         # No due tasks — consider running the daily reflection instead.
         today = _today_str()
-        last = memory.get_last_reflection_date()
+        last = memory.reflection.last_date()
         do_reflection = last is None or last < today
         if do_reflection:
             agent = Agent(memory=memory, model=model)
@@ -463,7 +463,7 @@ def tick(memory: Memory, model: str | None) -> None:
                 yesterday_path=yesterday_path,
             )
             response = agent.chat(prompt)
-            memory.set_last_reflection_date(today)
+            memory.reflection.mark(today)
             print(f"[agent] {response}", flush=True)
             return
 
@@ -788,9 +788,9 @@ def main() -> None:
             sleep_seconds = _compute_sleep(memory, default_interval)
         wake_at = (datetime.now() + timedelta(seconds=sleep_seconds)).isoformat(timespec="seconds")
         print(f"[heartbeat] sleeping {sleep_seconds:.0f}s, next tick ~{wake_at}", flush=True)
-        memory.set_next_tick(wake_at)
+        memory.next_tick.set(wake_at)
         _interruptible_sleep(sleep_seconds)
-        memory.pop_next_tick()  # consumed — clear so stale value doesn't persist after waking
+        memory.next_tick.pop()  # consumed — clear so stale value doesn't persist after waking
 
 
 def _is_transient_network_error(exc: BaseException) -> bool:
@@ -884,7 +884,7 @@ def _compute_sleep(memory: Memory, default_seconds: float) -> float:
     """
     task_store = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
     next_task = task_store.next_due_seconds()
-    scheduled = memory.pop_next_tick()
+    scheduled = memory.next_tick.pop()
     if scheduled is None:
         return min(default_seconds, next_task) if next_task is not None else default_seconds
     try:

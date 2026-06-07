@@ -1672,7 +1672,7 @@ class Agent:
                 )
         if self.memory is not None:
             self.memory.clear_session()
-            self.memory.clear_world_state()
+            self.memory.world_state.clear()
 
     def restore_session(self) -> int:
         """Opt-in: load previously-saved conversation history.
@@ -1829,7 +1829,7 @@ class Agent:
         prompt += f"\n\n{date_line}"
 
         if self.memory is not None:
-            state = self.memory.get_world_state()
+            state = self.memory.world_state.read()
             if state:
                 prompt += "\n\n# Session world state\n\n" + json.dumps(state, indent=2)
 
@@ -1914,7 +1914,7 @@ class Agent:
             # Auto-stamp world state at turn start so resume after restart
             # always has a current focus, regardless of whether the LLM
             # chooses to call update_world_state itself.
-            self.memory.update_world_state({
+            self.memory.world_state.update({
                 "focus": user_message[:120],
                 "step": 0,
                 "last_action": None,
@@ -2274,7 +2274,7 @@ class Agent:
                         isinstance(result, str) and result.startswith("ERROR")
                     )
                     try:
-                        self.memory.update_world_state({
+                        self.memory.world_state.update({
                             "last_action": name,
                             "last_ok": succeeded,
                             "step": step,
