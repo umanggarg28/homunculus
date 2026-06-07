@@ -77,8 +77,13 @@ def web_api(tmp_path, monkeypatch):
         "clear_world_state": lambda self: None,
         "log_turn": lambda self, *a: None,
         "update_world_state": lambda self, *a, **k: None,
-        "drain_pending_notifications": lambda self: [],
         "peek_next_tick": lambda self: None,
+        # NotificationQueue substitute — must support both .queue(text)
+        # and .drain() since callers go through memory.notifications.X
+        "notifications": type("FakeNotifQ", (), {
+            "queue": lambda self, text: None,
+            "drain": lambda self: [],
+        })(),
     })()
 
     return mod
