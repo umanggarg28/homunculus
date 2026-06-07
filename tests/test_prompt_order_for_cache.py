@@ -50,7 +50,7 @@ def test_world_state_comes_after_stable_prefix(tmp_path, monkeypatch):
     from memory import Memory
     monkeypatch.setenv("HOMUNCULUS_AGENTS_MD", str(tmp_path / "nope.md"))
     mem = Memory(tmp_path)
-    mem.update_world_state({"focus": "testing", "step": 1})
+    mem.world_state.update({"focus": "testing", "step": 1})
     agent = core.Agent(memory=mem)
     prompt = agent._current_system_prompt()
     world_marker = "Session world state"

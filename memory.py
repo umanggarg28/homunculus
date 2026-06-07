@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Iterator
 
 from notifications import NotificationQueue
+from stores import NextTickStore, ReflectionStore, WorldStateStore
 
 try:
     import events as _events
@@ -120,6 +121,9 @@ class Memory:
         # Lazy-instantiated so tests that only touch markdown memory
         # don't pay for queue setup.
         self._notifications: NotificationQueue | None = None
+        self._world_state: WorldStateStore | None = None
+        self._next_tick: NextTickStore | None = None
+        self._reflection: ReflectionStore | None = None
 
     # ---- read side -----------------------------------------------------
 
@@ -373,48 +377,15 @@ class Memory:
         return self._notifications
 
     # ---- world state ---------------------------------------------------
-    # A small typed JSON object that tracks what the agent is doing *right
-    # now* in the current session. Unlike message history (raw turns) this
-    # is a structured summary the agent actively maintains: current focus,
-    # active task, last action outcome, step counter. The heartbeat and web
-    # UI can read it to show live status; multi-step tasks use it to avoid
-    # re-running completed steps after a restart.
     #
-    # Conventional keys (all agent-defined, free-form):
-    #   focus        — short description of current goal
-    #   active_task  — task_id currently being executed
-    #   step         — step number in a multi-step flow
-    #   last_action  — last tool called
-    #   last_ok      — bool, did the last action succeed
-    #   notes        — scratch pad for mid-task context
-    #   updated_at   — ISO timestamp (auto-set by update_world_state)
+    # Owned by stores.WorldStateStore. Access via mem.world_state.read() /
+    # .update() / .clear(). See stores.py for the schema and rationale.
 
     @property
-    def world_state_path(self) -> Path:
-        return self.root / "_world_state.json"
-
-    def get_world_state(self) -> dict:
-        if not self.world_state_path.exists():
-            return {}
-        try:
-            return json.loads(self.world_state_path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-
-    def update_world_state(self, updates: dict) -> dict:
-        """Merge `updates` into the world state and persist atomically."""
-        with self._file_lock(self.world_state_path.with_suffix(".json.lock")):
-            state = self.get_world_state()
-            state.update(updates)
-            state["updated_at"] = datetime.now().isoformat(timespec="seconds")
-            tmp = self.world_state_path.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-            tmp.replace(self.world_state_path)
-        return state
-
-    def clear_world_state(self) -> None:
-        if self.world_state_path.exists():
-            self.world_state_path.unlink()
+    def world_state(self) -> WorldStateStore:
+        if self._world_state is None:
+            self._world_state = WorldStateStore(self.root)
+        return self._world_state
 
     # ---- skill evaluation ----------------------------------------------
     # Skills are `skill_*.md` memories. We track `uses` and `consecutive_failures`
@@ -468,63 +439,27 @@ class Memory:
         return f"Rated '{path.stem}': {outcome} (uses={uses}, consecutive_failures={consec}){flag}"
 
     # ---- self-scheduled heartbeat --------------------------------------
-    # The heartbeat daemon can be told (by the agent itself, via the
-    # schedule_next_tick tool) when to wake up next. We store the target
-    # ISO datetime in a single-line file at memory/_next_tick.txt.
+    #
+    # Owned by stores.NextTickStore. Access via mem.next_tick.set() /
+    # .peek() / .pop(). The pop-on-read semantics are documented there.
 
     @property
-    def next_tick_path(self) -> Path:
-        return self.root / "_next_tick.txt"
-
-    def set_next_tick(self, iso_datetime: str) -> None:
-        """Persist the target wake time."""
-        self.next_tick_path.write_text(iso_datetime.strip(), encoding="utf-8")
-
-    def peek_next_tick(self) -> str | None:
-        """Read the target wake time without consuming it (UI display)."""
-        if not self.next_tick_path.exists():
-            return None
-        try:
-            return self.next_tick_path.read_text(encoding="utf-8").strip() or None
-        except Exception:
-            return None
-
-    def pop_next_tick(self) -> str | None:
-        """Return the target wake time and delete the file.
-
-        We pop (not just read) so each tick starts fresh — if the agent
-        forgets to schedule itself next time, we fall back to the default
-        interval instead of using a stale schedule.
-        """
-        if not self.next_tick_path.exists():
-            return None
-        try:
-            value = self.next_tick_path.read_text(encoding="utf-8").strip()
-        finally:
-            self.next_tick_path.unlink()
-        return value or None
+    def next_tick(self) -> NextTickStore:
+        if self._next_tick is None:
+            self._next_tick = NextTickStore(self.root)
+        return self._next_tick
 
     # ---- self-improvement / daily reflection ---------------------------
-    # The heartbeat runs at most one reflection per calendar day. We
-    # remember the last reflection date as a plain YYYY-MM-DD string in
-    # memory/_last_reflection.txt so the daemon can decide whether the
-    # next tick should reflect (review yesterday's logs and save feedback
-    # memories) or run a normal proactive tick.
+    #
+    # Owned by stores.ReflectionStore. Access via mem.reflection.last_date()
+    # / .mark(). The log-paths helper below stays on Memory because it
+    # touches logs/ directly, not the reflection pointer.
 
     @property
-    def last_reflection_path(self) -> Path:
-        return self.root / "_last_reflection.txt"
-
-    def get_last_reflection_date(self) -> str | None:
-        """Return the YYYY-MM-DD string of the last reflection, or None."""
-        if not self.last_reflection_path.exists():
-            return None
-        value = self.last_reflection_path.read_text(encoding="utf-8").strip()
-        return value or None
-
-    def set_last_reflection_date(self, date_str: str) -> None:
-        """Mark a YYYY-MM-DD as having had its reflection done."""
-        self.last_reflection_path.write_text(date_str.strip(), encoding="utf-8")
+    def reflection(self) -> ReflectionStore:
+        if self._reflection is None:
+            self._reflection = ReflectionStore(self.root)
+        return self._reflection
 
     def recent_log_paths(self, days: int = 3) -> list[Path]:
         """Return paths to log files from the last `days` days (newest first).

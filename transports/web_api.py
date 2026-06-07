@@ -883,7 +883,7 @@ def agent_upcoming() -> JSONResponse:
     """
     mem = _chat_memory or Memory(MEMORY_DIR)
     interval_min = int(os.environ.get("HEARTBEAT_INTERVAL_MINUTES", "60"))
-    explicit_tick = mem.peek_next_tick()
+    explicit_tick = mem.next_tick.peek()
 
     # When no explicit tick is scheduled, fall back to estimate from last heartbeat event + interval.
     # The heartbeat now also writes its wake time to memory/_next_tick.txt while sleeping, so

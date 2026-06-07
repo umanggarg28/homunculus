@@ -70,16 +70,21 @@ def web_api(tmp_path, monkeypatch):
         "root": tmp_path / "memory",
         "load_index": lambda self, **k: "",
         "load_core_block": lambda self: "",
-        "get_world_state": lambda self: {},
         "save_session": lambda self, h: None,
         "load_session": lambda self: [],
         "clear_session": lambda self: None,
-        "clear_world_state": lambda self: None,
         "log_turn": lambda self, *a: None,
-        "update_world_state": lambda self, *a, **k: None,
-        "peek_next_tick": lambda self: None,
-        # NotificationQueue substitute — must support both .queue(text)
-        # and .drain() since callers go through memory.notifications.X
+        # Sub-stores extracted from Memory in Bundle 2 #2. Each is a
+        # tiny stub object exposing only the methods the web_api endpoints
+        # actually call — full fakes would obscure what's used.
+        "world_state": type("FakeWorldState", (), {
+            "read": lambda self: {},
+            "update": lambda self, updates: {},
+            "clear": lambda self: None,
+        })(),
+        "next_tick": type("FakeNextTick", (), {
+            "peek": lambda self: None,
+        })(),
         "notifications": type("FakeNotifQ", (), {
             "queue": lambda self, text: None,
             "drain": lambda self: [],

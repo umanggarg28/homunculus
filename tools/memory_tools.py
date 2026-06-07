@@ -47,14 +47,14 @@ def get_world_state() -> dict:
     mem = get_memory()
     if mem is None:
         return {}
-    return mem.get_world_state()
+    return mem.world_state.read()
 
 
 def update_world_state(updates: dict) -> dict:
     mem = get_memory()
     if mem is None:
         return {}
-    return mem.update_world_state(updates)
+    return mem.world_state.update(updates)
 
 
 def rate_skill(name: str, outcome: str, notes: str = "") -> str:
