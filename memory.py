@@ -39,6 +39,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
+from notifications import NotificationQueue
+
 try:
     import events as _events
 except ImportError:
@@ -114,6 +116,10 @@ class Memory:
             readme_path.write_text(_README_CONTENT, encoding="utf-8")
         self._init_db()
         self._migrate_vec_sidecars()
+        # Sub-stores extracted from the Memory god class (Bundle 2 #2).
+        # Lazy-instantiated so tests that only touch markdown memory
+        # don't pay for queue setup.
+        self._notifications: NotificationQueue | None = None
 
     # ---- read side -----------------------------------------------------
 
@@ -354,97 +360,17 @@ class Memory:
             self.transcript_path.unlink()
 
     # ---- pending notifications queue -----------------------------------
-    # When `notify()` fires (typically from the heartbeat daemon), it sends
-    # a Telegram message but doesn't touch the Telegram bot's in-memory
-    # `_agent.history`. Without bridging, a follow-up like "explain it"
-    # arrives with zero context and the agent confabulates an unrelated
-    # answer. We append every notification to this jsonl queue; the
-    # Telegram bot drains entries newer than `_notifications_consumed_ts`
-    # into its history before processing the next user message.
+    #
+    # The queue itself lives in notifications.NotificationQueue (extracted
+    # in Bundle 2 #2). Memory exposes it as a property so existing
+    # callers can do `memory.notifications.queue(text)` /
+    # `memory.notifications.drain()` without holding a separate handle.
 
     @property
-    def notifications_path(self) -> Path:
-        return self.root / "_notifications.jsonl"
-
-    @property
-    def _notifications_pointer_path(self) -> Path:
-        return self.root / "_notifications_consumed_ts.txt"
-
-    @property
-    def _notifications_lock_path(self) -> Path:
-        return self.root / "_notifications.lock"
-
-    def queue_notification(self, text: str) -> None:
-        """Append a notification to the persistent queue.
-
-        Safe to call from any process (heartbeat, telegram bot, web).
-        The Telegram bot (and web API) drain via
-        `drain_pending_notifications` before processing each user message.
-
-        POSIX O_APPEND on a single line is atomic up to PIPE_BUF (4096
-        bytes), so concurrent appenders won't interleave for normal-
-        sized messages. Locking is only needed for the drain pointer.
-        """
-        self.notifications_path.parent.mkdir(parents=True, exist_ok=True)
-        entry = {"ts": time.time(), "text": text}
-        with self.notifications_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-
-    def drain_pending_notifications(self) -> list[dict]:
-        """Return notifications sent since the last drain.
-
-        Reads the consumption pointer (a unix-timestamp string), returns
-        entries newer than that pointer, then advances the pointer to the
-        timestamp of the newest returned entry.
-
-        Atomically protected by a lock so two drainers (Telegram bot and
-        Web API both running) don't both see the same entries and double-
-        inject them.
-
-        Each returned dict has keys `ts` (float) and `text` (str).
-        Returns [] if the queue is empty or all entries are already
-        consumed.
-        """
-        if not self.notifications_path.exists():
-            return []
-        with self._file_lock(self._notifications_lock_path):
-            last_ts = 0.0
-            if self._notifications_pointer_path.exists():
-                try:
-                    last_ts = float(self._notifications_pointer_path.read_text(encoding="utf-8").strip())
-                except (ValueError, OSError):
-                    last_ts = 0.0
-            fresh: list[dict] = []
-            try:
-                with self.notifications_path.open("r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            entry = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        if not isinstance(entry, dict):
-                            continue
-                        try:
-                            ts = float(entry.get("ts", 0))
-                        except (TypeError, ValueError):
-                            continue
-                        if ts > last_ts:
-                            fresh.append(entry)
-            except OSError:
-                return []
-            if not fresh:
-                return []
-            new_ts = max(float(e["ts"]) for e in fresh)
-            tmp = self._notifications_pointer_path.with_suffix(".tmp")
-            try:
-                tmp.write_text(f"{new_ts}\n", encoding="utf-8")
-                tmp.replace(self._notifications_pointer_path)
-            except OSError:
-                pass
-            return fresh
+    def notifications(self) -> "NotificationQueue":
+        if self._notifications is None:
+            self._notifications = NotificationQueue(self.root)
+        return self._notifications
 
     # ---- world state ---------------------------------------------------
     # A small typed JSON object that tracks what the agent is doing *right

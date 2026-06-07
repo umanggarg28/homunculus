@@ -73,19 +73,20 @@ def main() -> int:
     memory = Memory(memory_dir)
 
     # Wipe any prior notification state so this run is deterministic.
-    if memory.notifications_path.exists():
-        memory.notifications_path.unlink()
+    nq = memory.notifications
+    if nq.log_path.exists():
+        nq.log_path.unlink()
         print("  cleared existing notifications.jsonl")
-    if memory._notifications_pointer_path.exists():  # noqa: SLF001
-        memory._notifications_pointer_path.unlink()  # noqa: SLF001
+    if nq.pointer_path.exists():
+        nq.pointer_path.unlink()
         print("  cleared existing consumption pointer")
 
     section("STEP 1 — heartbeat queues the leetcode notification")
     # Skip the actual Telegram HTTP send (would spam the user). Just exercise
     # the queue helper directly — same code path notify() calls internally
     # after a successful send.
-    memory.queue_notification(LEETCODE_PROBLEM)
-    raw = memory.notifications_path.read_text(encoding="utf-8").strip()
+    nq.queue(LEETCODE_PROBLEM)
+    raw = nq.log_path.read_text(encoding="utf-8").strip()
     queued = [json.loads(line) for line in raw.splitlines() if line.strip()]
     assert len(queued) == 1, f"expected 1 queued entry, got {len(queued)}"
     print(f"  queued 1 entry · ts={queued[0]['ts']:.0f} · "

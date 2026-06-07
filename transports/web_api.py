@@ -854,7 +854,7 @@ async def webhook(request: Request) -> JSONResponse:
         # turn picks it up as context, without creating a persistent task.
         if not message:
             raise HTTPException(400, "'message' is required for mode=inject")
-        _chat_memory.queue_notification(f"[{source}] {message}")
+        _chat_memory.notifications.queue(f"[{source}] {message}")
         return JSONResponse({"ok": True, "mode": "inject", "source": source})
 
     # Default: create a task due immediately so the heartbeat fires it.
@@ -1430,7 +1430,7 @@ def _drain_notifications_for_chat(agent) -> None:
     if getattr(agent, "memory", None) is None:
         return
     try:
-        fresh = agent.memory.drain_pending_notifications()
+        fresh = agent.memory.notifications.drain()
     except Exception as e:
         print(f"[web] notification drain failed: {e}", flush=True)
         return

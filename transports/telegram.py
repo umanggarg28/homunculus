@@ -208,7 +208,7 @@ def _drain_notifications_into_history(agent: Agent) -> None:
     if agent.memory is None:
         return
     try:
-        fresh = agent.memory.drain_pending_notifications()
+        fresh = agent.memory.notifications.drain()
     except Exception as e:
         logging.warning("notification drain failed: %s", e)
         return
