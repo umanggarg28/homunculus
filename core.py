@@ -31,6 +31,7 @@ import events
 import tools
 from config import get_config
 from memory import Memory
+from transcript import Transcript
 from tasks import TaskStore
 
 # Output guard — compiled once at module load.
@@ -1561,6 +1562,97 @@ class Agent:
             full_prompt += "\n\n# Memory index\n\n" + memory.load_index(max_entries=8)
         self._base_system_prompt = full_prompt
         self.history: list[dict] = [{"role": "system", "content": full_prompt}]
+        # Letta-pattern transcript + pointer list. The transcript is the
+        # canonical append-only record of every non-system message; the
+        # pointer list mirrors self.history[1:] (skipping the system
+        # prompt). Compaction rewrites the pointer list and appends a
+        # summary, but never deletes from the transcript — so the chat
+        # surface and heartbeat replay always have the original turns
+        # available. PR #112 will cut chat history endpoint reads over;
+        # this PR just journals as a passive observer.
+        if memory is not None:
+            self._transcript: Transcript | None = Transcript(memory.root / "_transcript.jsonl")
+        else:
+            self._transcript = None
+        self._message_ids: list[str] = []
+
+    # ---- transcript journaling ----------------------------------------
+    #
+    # _journal_append: append a real message to history AND write through
+    # to the transcript. Called from every non-transient append site
+    # (user message, tool result, cleaned assistant, goal re-injection,
+    # budget nudge, pre-turn hook, action-claim correction).
+    #
+    # Transient appends (final-reply nudge, self-correction probe) that
+    # are immediately popped do NOT journal — they never reach a stable
+    # state worth persisting and would inflate the transcript with noise.
+    #
+    # In-place edits to self.history[-1]['content'] (self-correct reply
+    # rewrites) are handled by _journal_replace_last_content, which
+    # appends a new transcript record and swaps the trailing pointer.
+    # The pre-edit record remains on disk as evidence — the transcript
+    # never mutates a prior record.
+
+    def _journal_append(self, msg: dict) -> None:
+        """Append `msg` to history and persist it to the transcript."""
+        self.history.append(msg)
+        if self._transcript is not None:
+            try:
+                rid = self._transcript.append(msg)
+                self._message_ids.append(rid)
+            except Exception as e:
+                # Journaling must never break the loop. The history is
+                # still the live source of truth; transcript drift is
+                # logged and surfaces in the dashboard.
+                events.emit(
+                    "transcript_drift",
+                    text=f"journal_append failed: {type(e).__name__}: {e}",
+                )
+
+    def _journal_replace_last_content(self, new_content: str) -> None:
+        """In-place edit `self.history[-1]['content']` and journal the
+        rewritten message. The pre-edit record stays on disk."""
+        if not self.history:
+            return
+        self.history[-1]["content"] = new_content
+        if self._transcript is not None and self._message_ids:
+            try:
+                rid = self._transcript.append(self.history[-1])
+                self._message_ids[-1] = rid
+            except Exception as e:
+                events.emit(
+                    "transcript_drift",
+                    text=f"journal_replace_last failed: {type(e).__name__}: {e}",
+                )
+
+    def _rebuild_message_ids_after_compaction(
+        self, summary_msg: dict, kept_tail: list[dict], cut_at: int,
+    ) -> None:
+        """Compaction rewrote self.history to [system, summary, *tail].
+        Append the summary to transcript and rebuild the pointer list
+        to point at [summary_id, *tail_ids_from_before]. The pre-summary
+        messages stay on disk — their IDs are simply no longer in the
+        in-context pointer list."""
+        if self._transcript is None:
+            return
+        try:
+            summary_id = self._transcript.append(summary_msg)
+        except Exception as e:
+            events.emit(
+                "transcript_drift",
+                text=f"compaction summary append failed: {type(e).__name__}: {e}",
+            )
+            return
+        # cut_at is the index in self.history (which includes system at 0)
+        # where the kept tail begins. self._message_ids skips the system
+        # prompt, so the equivalent tail in message_ids starts at cut_at-1.
+        tail_start = max(0, cut_at - 1)
+        # Defensive: if message_ids drifted (a missed journal callsite),
+        # truncate the pointer list to whatever we have rather than
+        # crashing. The dropped IDs stay on disk and resurface in PR #112's
+        # full transcript read.
+        kept_ids = self._message_ids[tail_start:tail_start + len(kept_tail)]
+        self._message_ids = [summary_id] + kept_ids
 
     def reset(self) -> None:
         """Wipe history except for the system prompt.
@@ -1569,6 +1661,15 @@ class Agent:
         doesn't restore the cleared turns.
         """
         self.history = self.history[:1]
+        self._message_ids = []
+        if self._transcript is not None:
+            try:
+                self._transcript.clear()
+            except Exception as e:
+                events.emit(
+                    "transcript_drift",
+                    text=f"reset clear failed: {type(e).__name__}: {e}",
+                )
         if self.memory is not None:
             self.memory.clear_session()
             self.memory.clear_world_state()
@@ -1586,6 +1687,28 @@ class Agent:
             return 0
         saved = self.memory.load_session()
         self.history.extend(saved)
+        # Seed the pointer list. Migration path: if the transcript is
+        # empty but a saved session exists (first run after this PR
+        # lands), backfill the transcript so the canonical record isn't
+        # missing the pre-Transcript history. After PR #112 lands, the
+        # chat history endpoint reads from transcript, so without this
+        # backfill old conversations would appear blank.
+        if self._transcript is not None and saved:
+            try:
+                existing_ids = self._transcript.all_ids()
+                if not existing_ids:
+                    self._message_ids = self._transcript.append_many(saved)
+                else:
+                    # Transcript already has content (returning agent).
+                    # Trust the order: the last len(saved) IDs are the
+                    # in-context tail. This is a best-effort match; if it
+                    # drifts, the dashboard will show transcript_drift.
+                    self._message_ids = existing_ids[-len(saved):]
+            except Exception as e:
+                events.emit(
+                    "transcript_drift",
+                    text=f"restore_session seed failed: {type(e).__name__}: {e}",
+                )
         return len(saved)
 
     def reflect(self) -> str:
@@ -1780,7 +1903,7 @@ class Agent:
                 pass
 
         self._maybe_compact()
-        self.history.append({
+        self._journal_append({
             "role": "user",
             "content": user_message,
             "source": source,
@@ -1859,7 +1982,7 @@ class Agent:
                         result="hook ignored",
                     )
                 if injected is not None:
-                    self.history.append(injected)
+                    self._journal_append(injected)
                     events.emit(
                         "self_correction",
                         text=f"pre_turn_hook injection at iter {_turn_idx + 1}/{max_turns}",
@@ -1884,7 +2007,7 @@ class Agent:
                 task_snippet = user_message[:500]
                 if len(user_message) > 500:
                     task_snippet += "…"
-                self.history.append({
+                self._journal_append({
                     "role": "system",
                     "content": (
                         f"# Reminder of the current goal\n\n"
@@ -1908,7 +2031,7 @@ class Agent:
             # up after the fact). The nudge gives the model a chance to call
             # complete_task / record_failure before the hard cap fires.
             if _turn_idx == max_turns - 2:
-                self.history.append({
+                self._journal_append({
                     "role": "user",
                     "content": (
                         "Heads-up from the harness: you have 2 iterations left "
@@ -1970,7 +2093,7 @@ class Agent:
             # can tag the reply to the channel it went out on.
             cleaned["source"] = source
             cleaned["ts"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            self.history.append(cleaned)
+            self._journal_append(cleaned)
 
             tool_calls = assistant_msg.get("tool_calls")
             if not tool_calls:
@@ -2011,16 +2134,16 @@ class Agent:
                         # Model claimed to do something without calling tools.
                         # Re-enter the loop with a correction injected so the
                         # model can actually call the tool this time.
-                        self.history.append({
+                        self._journal_append({
                             "role": "user",
                             "content": self._ACTION_CLAIM_CORRECTION_PROMPT,
                         })
                         continue  # next iteration picks up the correction
                     reply = self._self_correct(tool_names_used, violations, tool_outcomes)
-                    self.history[-1]["content"] = reply
+                    self._journal_replace_last_content(reply)
                 else:
                     reply = clean
-                    self.history[-1]["content"] = reply
+                    self._journal_replace_last_content(reply)
 
                 if streaming:
                     # Stream was buffered — now flush the final reply.
@@ -2186,7 +2309,7 @@ class Agent:
                 # injection defense; the system prompt is the first.
                 if name in _UNTRUSTED_CONTENT_TOOLS and isinstance(content_for_history, str):
                     content_for_history = _wrap_untrusted_content(name, content_for_history)
-                self.history.append({
+                self._journal_append({
                     "role": "tool",
                     "tool_call_id": call["id"],
                     "content": content_for_history,
@@ -2490,7 +2613,13 @@ class Agent:
             "content": f"# Summary of earlier conversation\n\n{summary}",
         }
         # New history: [original system prompt, summary, recent turns]
-        self.history = [self.history[0], summary_msg] + self.history[cut_at:]
+        kept_tail = self.history[cut_at:]
+        self.history = [self.history[0], summary_msg] + kept_tail
+        # Mirror the rewrite into the pointer list. The pre-summary
+        # message IDs stay on disk in the transcript — that's the whole
+        # point of the split. PR #112's chat history endpoint will read
+        # the full transcript and surface them to the UI.
+        self._rebuild_message_ids_after_compaction(summary_msg, kept_tail, cut_at)
         try:
             events.emit(
                 "context_compacted",
