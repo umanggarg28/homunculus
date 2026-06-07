@@ -64,9 +64,16 @@ class Transcript:
 
     # ---- lifecycle ----------------------------------------------------
 
-    def _ensure_seq(self) -> None:
-        if self._next_seq is not None:
-            return
+    def _resolve_next_seq_from_disk(self) -> None:
+        """Scan the file and set `_next_seq` to max(existing) + 1.
+
+        MUST be called inside _flock(). Single-instance writers can
+        get away with caching the counter, but two Transcript objects
+        pointing at the same file (e.g. web + telegram transports
+        sharing a Memory dir) would collide. Re-resolving inside the
+        lock makes the sequence cross-process safe at the cost of one
+        file scan per append.
+        """
         if not self.path.exists():
             self._next_seq = 1
             return
@@ -119,7 +126,7 @@ class Transcript:
         if not isinstance(msg, dict):
             raise TypeError(f"transcript.append expects dict, got {type(msg).__name__}")
         with self._flock():
-            self._ensure_seq()
+            self._resolve_next_seq_from_disk()
             assert self._next_seq is not None  # for type checker
             rid = f"{self._next_seq:06d}"
             self._next_seq += 1
@@ -145,7 +152,7 @@ class Transcript:
         if not msgs:
             return []
         with self._flock():
-            self._ensure_seq()
+            self._resolve_next_seq_from_disk()
             assert self._next_seq is not None
             ids: list[str] = []
             now_ts = datetime.now().isoformat(timespec="seconds")

@@ -236,48 +236,18 @@ class Memory:
         return self.root / "_session.json"
 
     @property
-    def chat_log_path(self) -> Path:
-        # Append-only transcript of every user/assistant turn. Decoupled
-        # from _session.json so that mid-session compaction (which
-        # rewrites self.history to a summary + recent tail for LLM
-        # efficiency) does NOT delete the user-visible chat from disk.
-        # Read by /api/chat/history; the LLM never sees this file.
-        return self.root / "_chat_log.jsonl"
+    def transcript_path(self) -> Path:
+        """Path to the append-only message transcript (Letta pattern).
 
-    def append_chat_turn(self, turn: dict) -> None:
-        """Append one chat turn entry to the persistent transcript.
-
-        `turn` is a JSON-serializable dict that should at minimum carry
-        a `role` ("user" or "assistant") and `content` (str). Callers
-        may include `ts`, `source`, and `id`. We never rewrite or
-        truncate this file — it's the canonical record of what the user
-        sent and what they were shown.
+        Replaces the old _chat_log.jsonl band-aid. The transcript
+        records every non-system message the agent produces — chat
+        turns, tool calls, tool results, compaction summaries. Mid-
+        session compaction rewrites the in-context pointer list inside
+        the Agent (PR #111) but never deletes from this file, so the
+        chat history endpoint and future heartbeat replay can always
+        recover the original turns.
         """
-        self.chat_log_path.parent.mkdir(parents=True, exist_ok=True)
-        line = json.dumps(turn, ensure_ascii=False)
-        with self.chat_log_path.open("a", encoding="utf-8") as f:
-            f.write(line + "\n")
-
-    def load_chat_log(self) -> list[dict]:
-        """Return every persisted chat turn in order.
-
-        Drops malformed lines rather than crashing — the transcript is
-        append-only but a partial write during shutdown could leave a
-        trailing fragment.
-        """
-        if not self.chat_log_path.exists():
-            return []
-        out: list[dict] = []
-        with self.chat_log_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    out.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-        return out
+        return self.root / "_transcript.jsonl"
 
     @contextmanager
     def _file_lock(self, lock_path: Path) -> Iterator[None]:
@@ -377,11 +347,11 @@ class Memory:
         if self.session_path.exists():
             self.session_path.unlink()
 
-    def clear_chat_log(self) -> None:
-        """Delete the persistent chat transcript. Called on chapter close
-        so a fresh chapter starts with an empty visible chat."""
-        if self.chat_log_path.exists():
-            self.chat_log_path.unlink()
+    def clear_transcript(self) -> None:
+        """Delete the persistent message transcript. Called on chapter
+        close so a fresh chapter starts with an empty record."""
+        if self.transcript_path.exists():
+            self.transcript_path.unlink()
 
     # ---- pending notifications queue -----------------------------------
     # When `notify()` fires (typically from the heartbeat daemon), it sends
@@ -846,7 +816,7 @@ class Memory:
             "arch_"
             + _dt.now().strftime("%Y%m%d%H%M%S")
             + "_"
-            + secrets.token_urlsafe(4).replace("_", "").replace("-", "").lower()[:6]
+            + secrets.token_hex(3)  # exactly 6 hex chars, no URL-safe escape variance
         )
         tags_str = ",".join(tags or [])
         vec = self._embed(content[:4000])  # embed up to ~4KB; longer content is fine but won't help retrieval

@@ -35,6 +35,7 @@ import agent_controls
 import tools
 from core import Agent, API_URL, MODEL
 from memory import Memory
+from transcript import Transcript
 from tasks import ALLOWED_RECURRENCE, TaskStore
 
 
@@ -377,7 +378,7 @@ def chapter_close() -> JSONResponse:
         encoding="utf-8",
     )
     memory.clear_session()
-    memory.clear_chat_log()
+    memory.clear_transcript()
     if _chat_agent is not None:
         _chat_agent.reset()
 
@@ -1329,34 +1330,42 @@ def log_entry_raw(rel: str) -> PlainTextResponse:
 def chat_history() -> JSONResponse:
     """Return complete persisted user/assistant chat turns for UI hydration.
 
-    Reads from the append-only chat log so mid-session compaction (which
-    rewrites the in-memory LLM context to a summary + tail) cannot
-    truncate what the user sees. The log is written turn-by-turn in
-    chat_send's finally block. Falls back to load_session for legacy
-    sessions started before the log existed.
+    Reads from the append-only Transcript (Letta pattern, PRs #110/#111)
+    so mid-session compaction — which rewrites the agent's in-context
+    pointer list to summary + tail — cannot truncate what the user sees.
+    The transcript file records every message ever; we filter to the
+    visible user/final-assistant turns here.
+
+    Falls back to load_session for sessions that pre-date the transcript
+    (one-time migration after the Agent runs once, restore_session
+    backfills the transcript from session.json — see PR #111).
     """
     memory = _chat_memory or Memory(MEMORY_DIR)
-    log = memory.load_chat_log()
-    if log:
-        out = []
-        for idx, msg in enumerate(log):
-            content = msg.get("content")
-            if not isinstance(content, str) or not content.strip():
-                continue
-            out.append({
-                "id": f"log-{idx}",
-                "role": msg.get("role"),
-                "content": content,
-                "source": msg.get("source", "web"),
-                "ts": msg.get("ts"),
-            })
+    transcript = Transcript(memory.transcript_path)
+    records = transcript.all()
+    if records:
+        # Stash the stable transcript IDs alongside each message so
+        # _visible_chat_history can stamp them onto the visible turns
+        # it emits — the existing filter already drops intermediate
+        # tool-planning turns and orphaned user messages.
+        msgs_with_ids = [{**msg, "_tx_id": rid} for rid, msg in records]
+        out = _visible_chat_history(msgs_with_ids)
+        for entry in out:
+            tx_id = entry.pop("_source_tx_id", None)
+            if tx_id is not None:
+                entry["id"] = f"tx-{tx_id}"
         return JSONResponse(out)
-    # Legacy path: session from before the chat log existed.
+    # Legacy path: session from before the transcript existed.
     return JSONResponse(_visible_chat_history(memory.load_session()))
 
 
 def _visible_chat_history(history: list[dict]) -> list[dict]:
-    """Filter persisted agent history down to visible complete chat turns."""
+    """Filter persisted agent history down to visible complete chat turns.
+
+    If an input message carries `_tx_id` (from the transcript path), the
+    output entry passes it through as `_source_tx_id` so the caller can
+    rewrite the entry's id to a stable transcript-based form.
+    """
     messages = []
     pending_user: dict | None = None
     for idx, msg in enumerate(history):
@@ -1368,6 +1377,7 @@ def _visible_chat_history(history: list[dict]) -> list[dict]:
         # follow-up questions but shouldn't appear as chat bubbles.
         if content.startswith("[notification I sent you at"):
             continue
+        tx_id = msg.get("_tx_id")
         if role == "user":
             pending_user = {
                 "id": f"persisted-{idx}",
@@ -1376,6 +1386,8 @@ def _visible_chat_history(history: list[dict]) -> list[dict]:
                 "source": msg.get("source", "web"),
                 "ts": msg.get("ts"),
             }
+            if tx_id is not None:
+                pending_user["_source_tx_id"] = tx_id
             continue
         if role == "assistant":
             # Providers may return visible-looking content together with
@@ -1388,13 +1400,16 @@ def _visible_chat_history(history: list[dict]) -> list[dict]:
             if pending_user is not None:
                 messages.append(pending_user)
                 pending_user = None
-            messages.append({
+            entry = {
                 "id": f"persisted-{idx}",
                 "role": role,
                 "content": content,
                 "source": msg.get("source", "web"),
                 "ts": msg.get("ts"),
-            })
+            }
+            if tx_id is not None:
+                entry["_source_tx_id"] = tx_id
+            messages.append(entry)
     return messages
 
 
@@ -1566,28 +1581,10 @@ async def chat_send(request: Request):
                 yield _format_sse_data(cancel_marker)
             if _chat_memory is not None:
                 _chat_memory.save_session(agent.history)
-                # Persist the full turn to the append-only chat log so
-                # mid-session compaction (which rewrites self.history
-                # to a summary + tail for LLM efficiency) cannot delete
-                # what the user actually saw. The UI's /api/chat/history
-                # reads from this log, not the LLM-context session file.
-                assistant_text = "".join(reply_buf).strip()
-                try:
-                    _chat_memory.append_chat_turn({
-                        "role": "user",
-                        "content": user_message,
-                        "source": "web",
-                        "ts": user_ts,
-                    })
-                    if assistant_text:
-                        _chat_memory.append_chat_turn({
-                            "role": "assistant",
-                            "content": assistant_text,
-                            "source": "web",
-                            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                        })
-                except Exception as _e:
-                    print(f"[web] chat log append failed: {_e}", flush=True)
+                # No longer writes _chat_log.jsonl — the Agent
+                # journaled both turns into _transcript.jsonl as they
+                # happened (PR #111), and /api/chat/history now reads
+                # from there.
             _chat_agent_lock.release()
             yield "event: done\ndata: end\n\n"
 
