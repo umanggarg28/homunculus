@@ -51,7 +51,9 @@ refine_tools = _load_real_tool_submodule("skill_refinement")
 
 
 from skill_refiner import (
+    DEFAULT_REFINEMENT_MODEL,
     RefinementResult,
+    _resolve_refinement_model,
     build_refinement_prompt,
     refine_skill,
 )
@@ -261,6 +263,88 @@ def test_refine_skill_with_stubbed_agent_saves(tmp_path: Path) -> None:
     assert "graphql" in result.rationale.lower()
     # On-disk: v2 replaced v1
     assert "graphql" in (Skills(tmp_path).load("skill_x") or "")
+
+
+# ---- model dispatch ---------------------------------------------------
+
+
+def test_default_refinement_model_is_haiku() -> None:
+    """Documents the cost/quality trade for the rare refinement-mode use
+    case. If this default changes, the cost projection in the docstring
+    must be updated too."""
+    assert DEFAULT_REFINEMENT_MODEL == "anthropic/claude-haiku-4-5"
+
+
+def test_resolve_refinement_model_priority_explicit_over_env(monkeypatch) -> None:
+    monkeypatch.setenv("HOMUNCULUS_MODEL_REFINEMENT", "from-env")
+    assert _resolve_refinement_model("explicit-arg") == "explicit-arg"
+
+
+def test_resolve_refinement_model_falls_back_to_env(monkeypatch) -> None:
+    monkeypatch.setenv("HOMUNCULUS_MODEL_REFINEMENT", "from-env")
+    assert _resolve_refinement_model(None) == "from-env"
+
+
+def test_resolve_refinement_model_falls_back_to_default(monkeypatch) -> None:
+    monkeypatch.delenv("HOMUNCULUS_MODEL_REFINEMENT", raising=False)
+    assert _resolve_refinement_model(None) == DEFAULT_REFINEMENT_MODEL
+
+
+def test_refine_skill_passes_resolved_model_to_agent(tmp_path: Path, monkeypatch) -> None:
+    """End-to-end: when no explicit model is passed, the Agent gets
+    constructed with DEFAULT_REFINEMENT_MODEL — not gpt-oss-120b."""
+    monkeypatch.delenv("HOMUNCULUS_MODEL_REFINEMENT", raising=False)
+    mem = Memory(tmp_path)
+    Skills(tmp_path).save("skill_x", "old body", source="bootstrap")
+
+    seen_models: list[str | None] = []
+
+    class CaptureAgent:
+        def __init__(self, memory=None, system_prompt="", model=None):
+            seen_models.append(model)
+            self.memory = memory
+            self.history = [{"role": "system", "content": system_prompt}]
+
+        def chat(self, user_message, source="web"):
+            return "stub done"
+
+    with patch("core.Agent", CaptureAgent):
+        refine_skill(
+            skill_name="skill_x",
+            failure_context="ctx",
+            memory=mem,
+        )
+
+    assert seen_models == [DEFAULT_REFINEMENT_MODEL]
+
+
+def test_refine_skill_explicit_model_wins(tmp_path: Path, monkeypatch) -> None:
+    """Explicit --model on the CLI must override the default — operator
+    experiments should be able to swap Haiku for Sonnet on one run."""
+    monkeypatch.setenv("HOMUNCULUS_MODEL_REFINEMENT", "from-env")
+    mem = Memory(tmp_path)
+    Skills(tmp_path).save("skill_x", "old body", source="bootstrap")
+
+    seen_models: list[str | None] = []
+
+    class CaptureAgent:
+        def __init__(self, memory=None, system_prompt="", model=None):
+            seen_models.append(model)
+            self.memory = memory
+            self.history = [{"role": "system", "content": system_prompt}]
+
+        def chat(self, user_message, source="web"):
+            return "stub done"
+
+    with patch("core.Agent", CaptureAgent):
+        refine_skill(
+            skill_name="skill_x",
+            failure_context="ctx",
+            memory=mem,
+            model="anthropic/claude-sonnet-4-6",
+        )
+
+    assert seen_models == ["anthropic/claude-sonnet-4-6"]
 
 
 def test_refine_skill_exhausted_when_neither_tool_called(tmp_path: Path) -> None:
