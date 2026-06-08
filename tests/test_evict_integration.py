@@ -14,7 +14,7 @@ from unittest.mock import patch
 import core
 
 
-def _stub_llm_with_tool_call(history, tool_schemas, model=None):
+def _stub_llm_with_tool_call(history, tool_schemas, model=None, tool_choice="auto"):
     """First call: agent decides to read_file. Second call (after the
     tool result lands): agent gives a plain reply."""
     has_tool_result = any(m.get("role") == "tool" for m in history)
@@ -99,7 +99,7 @@ def test_mid_loop_eviction_keeps_per_call_input_bounded(monkeypatch):
     # reply. Models a tool-heavy task like the leetcode delivery.
     iter_counter = {"n": 0}
 
-    def stub(history, tool_schemas, model=None):
+    def stub(history, tool_schemas, model=None, tool_choice="auto"):
         iter_counter["n"] += 1
         if iter_counter["n"] >= 6:
             return {"role": "assistant", "content": "done."}

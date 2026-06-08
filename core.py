@@ -1010,6 +1010,7 @@ def call_llm(
     messages: list[dict],
     tool_schemas: list[dict] | None,
     model: str | None = None,
+    tool_choice: str = "auto",
 ) -> dict:
     """One round-trip to the LLM chat completions endpoint.
 
@@ -1025,6 +1026,14 @@ def call_llm(
 
     tool_schemas=None makes it a plain-chat call (no tool use).
     model defaults to MODEL; services can override per-call.
+
+    tool_choice controls whether the model MUST call a tool ("required")
+    or merely MAY ("auto", default). Letta's `function_call: "required"`
+    pattern (see llm_api_tools.py:200 in letta-ai/letta) — forces every
+    turn to end in a tool call, removing the prose-vs-tool ambiguity that
+    eats heartbeat deliveries when the model drafts content as
+    assistant_reply instead of as notify(text=...). Pi exposes a
+    similar per-call knob in packages/ai/src/providers/*.ts.
     """
     primary_key = os.environ.get("HOMUNCULUS_API_KEY")
     if not primary_key:
@@ -1055,7 +1064,7 @@ def call_llm(
         }
         if tool_schemas is not None:
             payload["tools"] = tool_schemas
-            payload["tool_choice"] = "auto"
+            payload["tool_choice"] = tool_choice
             payload["parallel_tool_calls"] = False
         _apply_reasoning_effort(payload, model_id)
 
@@ -1149,7 +1158,7 @@ def call_llm(
         }
         if tool_schemas is not None:
             payload["tools"] = tool_schemas
-            payload["tool_choice"] = "auto"
+            payload["tool_choice"] = tool_choice
             payload["parallel_tool_calls"] = False
         _apply_reasoning_effort(payload, model_id)
         response = httpx.post(
@@ -1250,6 +1259,7 @@ def call_llm_stream(
     messages: list[dict],
     tool_schemas: list[dict] | None,
     model: str | None = None,
+    tool_choice: str = "auto",
 ):
     """Streaming variant of call_llm.
 
@@ -1303,7 +1313,7 @@ def call_llm_stream(
         }
         if tool_schemas is not None:
             payload["tools"] = tool_schemas
-            payload["tool_choice"] = "auto"
+            payload["tool_choice"] = tool_choice
             payload["parallel_tool_calls"] = False
         _apply_reasoning_effort(payload, model_id)
         try:
@@ -1993,6 +2003,20 @@ class Agent:
         # the call sites readable and lets tests override via set_config.
         max_turns = get_config().loop.max_turns
 
+        # tool_choice mode for this whole run. Heartbeat ticks have no
+        # user watching free-form text — every effect must reach the user
+        # via a tool (notify, telegram, ...) or close the lifecycle via
+        # complete_task / record_failure / continue_task. Forcing the model
+        # to call a tool every turn removes the "wrote 588 tokens of
+        # LeetCode solution into the void" failure mode we kept hitting.
+        # Letta's `function_call: "required"` (see llm_api_tools.py:200
+        # in letta-ai/letta) — battle-tested in production.
+        #
+        # Chat paths (web/telegram/repl) DO show streaming text to the user
+        # in real time, so we keep tool_choice="auto" — the assistant's
+        # final reply is the product.
+        tool_choice = "required" if source == "heartbeat" else "auto"
+
         for _turn_idx in range(max_turns):
             # Mid-loop eviction: keep only the two most recent tool results
             # full-fidelity; stub everything older. Without this, per-call
@@ -2112,7 +2136,8 @@ class Agent:
                     else tools.schemas_for(self._active_tool_names)
                 )
                 for kind, payload in call_llm_stream(
-                    self.history, active_schemas, model=self.model
+                    self.history, active_schemas, model=self.model,
+                    tool_choice=tool_choice,
                 ):
                     if kind == "content":
                         stream_chunks.append(payload)
@@ -2128,7 +2153,10 @@ class Agent:
                     or not hasattr(tools, "schemas_for")
                     else tools.schemas_for(self._active_tool_names)
                 )
-                assistant_msg = call_llm(self.history, active_schemas, model=self.model)
+                assistant_msg = call_llm(
+                    self.history, active_schemas, model=self.model,
+                    tool_choice=tool_choice,
+                )
 
             # Strip provider-specific extras (reasoning, null fields) that
             # the API rejects when replayed as part of the next request.
