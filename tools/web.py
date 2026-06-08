@@ -119,3 +119,91 @@ def web_fetch(url: str) -> str:
     return text
 
 
+def web_post(
+    url: str,
+    json_body: dict | None = None,
+    headers: dict | None = None,
+    raw_body: str | None = None,
+) -> str:
+    """POST to a URL and return the response text.
+
+    Sibling of web_fetch for verbs that need a request body. Primary use
+    case: skill-refinement agents verifying API endpoints (GraphQL
+    queries, REST POSTs to documented APIs) before saving a new skill
+    body that depends on them. The python tool's sandbox blocks
+    network — this is the surfaced primitive.
+
+    Not cached: POST results depend on the body and are commonly
+    mutating. Callers that need idempotent POSTs (e.g. GraphQL reads)
+    can layer their own caching above the tool.
+
+    Body handling:
+      - `json_body` → application/json (sent via httpx's json= for
+        proper encoding)
+      - `raw_body` → sent verbatim (caller sets Content-Type via
+        `headers`); takes precedence over `json_body` if both supplied
+      - Neither → empty body POST
+
+    Response handling mirrors web_fetch: HTML stripped to text, length
+    capped at config.loop.read_file_max_chars.
+    """
+    request_headers = {
+        "User-Agent": "Mozilla/5.0 (Homunculus AI assistant)",
+        **(headers or {}),
+    }
+    try:
+        if raw_body is not None:
+            response = httpx.post(
+                url,
+                content=raw_body.encode("utf-8"),
+                headers=request_headers,
+                timeout=30.0,
+                follow_redirects=True,
+            )
+        else:
+            response = httpx.post(
+                url,
+                json=(json_body if json_body is not None else {}),
+                headers=request_headers,
+                timeout=30.0,
+                follow_redirects=True,
+            )
+    except httpx.HTTPError as e:
+        return f"ERROR: POST failed: {e}"
+
+    if response.status_code in {401, 403, 429}:
+        return (
+            f"BLOCKED: HTTP {response.status_code} POSTing to {url}. "
+            "The endpoint likely blocks automated calls or your auth "
+            "header is missing/wrong. Inspect the response shape with "
+            "a different endpoint or fix headers before retrying."
+        )
+    if response.status_code >= 400:
+        # 4xx/5xx still returned to the caller — GraphQL endpoints often
+        # respond 200 with errors in the body, but some validation errors
+        # come back as 400 with a useful body. Show it; let the caller
+        # decide if it's actionable.
+        return (
+            f"HTTP {response.status_code} from {url}\n"
+            f"{response.text[:2000]}"
+        )
+
+    content_type = response.headers.get("content-type", "").lower()
+    text = response.text
+    if "html" in content_type:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(text, "lxml")
+        for tag in soup(["script", "style", "nav", "footer", "aside", "header", "noscript"]):
+            tag.decompose()
+        text = soup.get_text(separator="\n", strip=True)
+        text = "\n".join(line for line in text.splitlines() if line.strip())
+
+    max_chars = get_config().loop.read_file_max_chars
+    if len(text) > max_chars:
+        text = (
+            text[:max_chars]
+            + f"\n\n[...{len(text) - max_chars} chars truncated]"
+        )
+    return text
+
+
