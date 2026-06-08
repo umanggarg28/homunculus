@@ -1011,6 +1011,7 @@ def call_llm(
     tool_schemas: list[dict] | None,
     model: str | None = None,
     tool_choice: str = "auto",
+    reasoning_effort: str = "low",
 ) -> dict:
     """One round-trip to the LLM chat completions endpoint.
 
@@ -1066,7 +1067,7 @@ def call_llm(
             payload["tools"] = tool_schemas
             payload["tool_choice"] = tool_choice
             payload["parallel_tool_calls"] = False
-        _apply_reasoning_effort(payload, model_id)
+        _apply_reasoning_effort(payload, model_id, reasoning_effort)
 
         try:
             response = httpx.post(
@@ -1160,7 +1161,7 @@ def call_llm(
             payload["tools"] = tool_schemas
             payload["tool_choice"] = tool_choice
             payload["parallel_tool_calls"] = False
-        _apply_reasoning_effort(payload, model_id)
+        _apply_reasoning_effort(payload, model_id, reasoning_effort)
         response = httpx.post(
             url,
             headers={**_HTTP_HEADERS_BASE, "Authorization": f"Bearer {key}"},
@@ -1191,7 +1192,9 @@ def _url_host(url: str) -> str:
         return url
 
 
-def _apply_reasoning_effort(payload: dict, model_id: str) -> None:
+def _apply_reasoning_effort(
+    payload: dict, model_id: str, effort: str = "low",
+) -> None:
     """Set OpenRouter `reasoning.effort` for models that default to high CoT.
 
     gpt-oss-* on OpenRouter returns chain-of-thought in a separate
@@ -1201,19 +1204,21 @@ def _apply_reasoning_effort(payload: dict, model_id: str) -> None:
     with `content: null`, observed in heartbeat ticks after switching
     to gpt-oss-120b.
 
-    For an agent loop, the iteration IS the reasoning structure (each
-    tick is a "thought" — recall, read file, call notify, complete).
-    Internal CoT duplicates that work and wastes tokens. Setting
-    effort=low keeps the model competent at procedural judgment while
-    freeing the output budget for the tool_call that actually advances
-    the loop.
+    For execution-mode loops (heartbeat, chat) the iteration IS the
+    reasoning structure — each tick is a "thought." Internal CoT
+    duplicates that work and wastes tokens, so we default to effort=low.
 
-    Other reasoning-capable models (Claude with extended thinking,
-    o1, DeepSeek-R1) use their own APIs; this helper only targets
-    the gpt-oss-* family because that's what's biting us.
+    For design-mode loops (skill refinement) the model genuinely needs
+    multi-step internal reasoning to explore options, debug API
+    contracts, and verify approaches. The caller passes effort="medium"
+    or "high" to give the model room.
+
+    Other reasoning-capable model families (Claude extended thinking,
+    o1, DeepSeek-R1) use their own APIs; this helper only targets the
+    gpt-oss-* family because that's what's biting us.
     """
     if "gpt-oss" in model_id:
-        payload["reasoning"] = {"effort": "low"}
+        payload["reasoning"] = {"effort": effort}
 
 
 def _emit_llm_call(model_id: str, url: str, messages: list[dict], usage: dict | None) -> None:
@@ -1260,6 +1265,7 @@ def call_llm_stream(
     tool_schemas: list[dict] | None,
     model: str | None = None,
     tool_choice: str = "auto",
+    reasoning_effort: str = "low",
 ):
     """Streaming variant of call_llm.
 
@@ -1315,7 +1321,7 @@ def call_llm_stream(
             payload["tools"] = tool_schemas
             payload["tool_choice"] = tool_choice
             payload["parallel_tool_calls"] = False
-        _apply_reasoning_effort(payload, model_id)
+        _apply_reasoning_effort(payload, model_id, reasoning_effort)
         try:
             response_ctx = httpx.stream(
                 "POST",
@@ -2003,19 +2009,31 @@ class Agent:
         # the call sites readable and lets tests override via set_config.
         max_turns = get_config().loop.max_turns
 
-        # tool_choice mode for this whole run. Heartbeat ticks have no
-        # user watching free-form text — every effect must reach the user
-        # via a tool (notify, telegram, ...) or close the lifecycle via
-        # complete_task / record_failure / continue_task. Forcing the model
-        # to call a tool every turn removes the "wrote 588 tokens of
-        # LeetCode solution into the void" failure mode we kept hitting.
-        # Letta's `function_call: "required"` (see llm_api_tools.py:200
-        # in letta-ai/letta) — battle-tested in production.
+        # Per-source loop personality. Two knobs together: tool_choice
+        # (does the model HAVE to call a tool every turn?) and
+        # reasoning_effort (how much internal CoT does it get?).
         #
-        # Chat paths (web/telegram/repl) DO show streaming text to the user
-        # in real time, so we keep tool_choice="auto" — the assistant's
-        # final reply is the product.
-        tool_choice = "required" if source == "heartbeat" else "auto"
+        #   chat        — auto / low.  Final reply IS text; user sees it.
+        #   heartbeat   — required / low.  No user is watching text;
+        #                 every effect goes through a tool. Letta's
+        #                 `function_call: "required"` pattern. Low CoT
+        #                 because each turn is one procedural step.
+        #   refinement  — required / medium.  Skill redesign IS a
+        #                 multi-step exploration that needs internal
+        #                 reasoning to debug API contracts and verify
+        #                 approaches. tool_choice still required so the
+        #                 agent can't drift into "I'll start the refinement"
+        #                 prose — it must call an exploratory tool or
+        #                 save_refined_skill / abandon_refinement.
+        if source == "refinement":
+            tool_choice = "required"
+            reasoning_effort = "medium"
+        elif source == "heartbeat":
+            tool_choice = "required"
+            reasoning_effort = "low"
+        else:  # chat (web/telegram/repl/anything else)
+            tool_choice = "auto"
+            reasoning_effort = "low"
 
         for _turn_idx in range(max_turns):
             # Mid-loop eviction: keep only the two most recent tool results
@@ -2138,6 +2156,7 @@ class Agent:
                 for kind, payload in call_llm_stream(
                     self.history, active_schemas, model=self.model,
                     tool_choice=tool_choice,
+                    reasoning_effort=reasoning_effort,
                 ):
                     if kind == "content":
                         stream_chunks.append(payload)
@@ -2156,6 +2175,7 @@ class Agent:
                 assistant_msg = call_llm(
                     self.history, active_schemas, model=self.model,
                     tool_choice=tool_choice,
+                    reasoning_effort=reasoning_effort,
                 )
 
             # Strip provider-specific extras (reasoning, null fields) that
