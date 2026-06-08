@@ -70,3 +70,40 @@ def test_explicit_effort_ignored_on_non_gpt_oss() -> None:
     payload: dict = {}
     _apply_reasoning_effort(payload, "gemini-2.5-flash", effort="high")
     assert "reasoning" not in payload
+
+
+def test_reasoning_skipped_on_non_openrouter_urls() -> None:
+    """Cerebras / Groq direct / Gemini direct reject unknown request
+    params with HTTP 400. The `reasoning` field is an OpenRouter/OpenAI
+    extension — silently omit it when the URL points elsewhere so
+    fallback routing doesn't break with 400 ('reasoning is unsupported').
+    """
+    for url in (
+        "https://api.cerebras.ai/v1/chat/completions",
+        "https://api.groq.com/openai/v1/chat/completions",
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    ):
+        payload: dict = {}
+        _apply_reasoning_effort(payload, "openai/gpt-oss-120b", url=url, effort="medium")
+        assert "reasoning" not in payload, (
+            f"non-OpenRouter URL {url} should not get reasoning field"
+        )
+
+
+def test_reasoning_set_on_openrouter_url() -> None:
+    payload: dict = {}
+    _apply_reasoning_effort(
+        payload, "openai/gpt-oss-120b",
+        url="https://openrouter.ai/api/v1/chat/completions",
+        effort="medium",
+    )
+    assert payload["reasoning"] == {"effort": "medium"}
+
+
+def test_reasoning_set_when_url_omitted_for_backcompat() -> None:
+    """The URL param defaults to '' so existing callers (tests without
+    URL context) still get reasoning applied — only the negative URL
+    check skips it."""
+    payload: dict = {}
+    _apply_reasoning_effort(payload, "openai/gpt-oss-120b", effort="low")
+    assert payload["reasoning"] == {"effort": "low"}
