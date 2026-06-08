@@ -2071,19 +2071,23 @@ class Agent:
             tool_choice = "auto"
             reasoning_effort = "low"
 
-        # Provider constraints (OpenRouter only). Required-tool-choice
-        # modes need a provider that actually honors tool_choice on the
-        # wire; OpenRouter round-robins across providers and some
-        # silently ignore it. `require_parameters: true` pins routing
-        # to providers that support every param we sent — which
-        # transitively means they enforce tool_choice when we ask.
-        # Discovered after PR #123 shipped: refinement runs returned
-        # text-only responses on Novita/Google routes even with
-        # tool_choice="required" set in the payload.
-        provider_constraints = (
-            {"require_parameters": True}
-            if tool_choice == "required" else None
-        )
+        # Provider constraints — historically used `require_parameters: True`
+        # to pin OpenRouter to providers that enforce tool_choice. In
+        # practice that constraint is too strict for our combined
+        # payload (tools + reasoning + tool_choice): OpenRouter returns
+        # 404 "No endpoints found that can handle the requested parameters"
+        # when no provider matches the full set. Empirically that happened
+        # within minutes of PR #124 shipping.
+        #
+        # We rely instead on PR #125's defense-in-depth detector: if a
+        # provider returns text without a tool_call when tool_choice was
+        # required, the loop injects a synthetic correction and retries.
+        # Costs one wasted turn per violation but degrades gracefully
+        # instead of hard-erroring.
+        #
+        # The provider_constraints plumbing stays — useful for future
+        # narrower hints like provider.order=[preferred,...].
+        provider_constraints = None
 
         # Counter for the required-tool-call defense-in-depth detector
         # (below the LLM call site). Even with provider_constraints set,

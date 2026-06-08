@@ -70,96 +70,46 @@ def test_apply_provider_constraints_copies_dict() -> None:
 # ---- end-to-end: source dispatch sets the right constraints ----------
 
 
-def test_refinement_source_sets_require_parameters() -> None:
-    """Refinement uses tool_choice=required, so the loop must also set
-    provider_constraints to pin routing to compliant providers."""
+def test_all_sources_send_no_provider_constraints_today() -> None:
+    """Historical: PR #124 set require_parameters=True for required-mode
+    sources. Real-world testing showed it dropped the OpenRouter provider
+    pool to zero ('No endpoints found that can handle the requested
+    parameters'). We now rely on PR #125's defense-in-depth detector to
+    catch tool_choice violations at the harness layer instead of
+    enforcing them via strict routing.
+
+    This test pins the current behavior: NO source sends provider
+    constraints. The plumbing stays in place for future narrower hints
+    (e.g. provider.order=[preferred,...] without require_parameters)."""
     agent = core.Agent(memory=None)
-    seen_constraints: list[dict | None] = []
 
-    def fake(messages, tool_schemas, model=None, tool_choice="auto",
-             reasoning_effort="low", provider_constraints=None):
-        seen_constraints.append(provider_constraints)
-        return {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [{
-                "id": "c1",
-                "type": "function",
-                "function": {
-                    "name": "complete_task",
-                    "arguments": '{"task_id": "x", "result": "done"}',
-                },
-            }],
-        }
+    def fake_for(source: str) -> tuple[list[dict | None], callable]:
+        seen: list[dict | None] = []
+        def fake(messages, tool_schemas, model=None, tool_choice="auto",
+                 reasoning_effort="low", provider_constraints=None):
+            seen.append(provider_constraints)
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "complete_task",
+                        "arguments": '{"task_id": "x", "result": "done"}',
+                    },
+                }],
+            }
+        return seen, fake
 
-    with patch.object(core, "call_llm", side_effect=fake):
-        list(agent._run_loop("kick", streaming=False, source="refinement"))
-
-    assert seen_constraints, "expected call_llm to fire"
-    assert all(
-        c == {"require_parameters": True} for c in seen_constraints
-    ), f"refinement must pin require_parameters, got: {seen_constraints}"
-
-
-def test_heartbeat_source_sets_require_parameters() -> None:
-    """Heartbeat also uses tool_choice=required (Letta pattern) so it
-    gets the same provider pinning — same failure mode would otherwise
-    bite it when the daily LeetCode/morning brief ticks fire."""
-    agent = core.Agent(memory=None)
-    seen_constraints: list[dict | None] = []
-
-    def fake(messages, tool_schemas, model=None, tool_choice="auto",
-             reasoning_effort="low", provider_constraints=None):
-        seen_constraints.append(provider_constraints)
-        return {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [{
-                "id": "c1",
-                "type": "function",
-                "function": {
-                    "name": "complete_task",
-                    "arguments": '{"task_id": "x", "result": "done"}',
-                },
-            }],
-        }
-
-    with patch.object(core, "call_llm", side_effect=fake):
-        list(agent._run_loop("tick", streaming=False, source="heartbeat"))
-
-    assert seen_constraints
-    assert all(c == {"require_parameters": True} for c in seen_constraints)
-
-
-def test_chat_source_sends_no_provider_constraints() -> None:
-    """Chat uses tool_choice=auto; provider pinning isn't needed and
-    would unnecessarily reduce the available provider pool. Send None."""
-    agent = core.Agent(memory=None)
-    seen_constraints: list[dict | None] = []
-
-    def fake(messages, tool_schemas, model=None, tool_choice="auto",
-             reasoning_effort="low", provider_constraints=None):
-        seen_constraints.append(provider_constraints)
-        return {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [{
-                "id": "c1",
-                "type": "function",
-                "function": {
-                    "name": "complete_task",
-                    "arguments": '{"task_id": "x", "result": "done"}',
-                },
-            }],
-        }
-
-    with patch.object(core, "call_llm", side_effect=fake):
-        list(agent._run_loop("hi", streaming=False, source="web"))
-
-    assert seen_constraints
-    assert all(c is None for c in seen_constraints), (
-        f"chat must not constrain providers, got: {seen_constraints}"
-    )
+    for source in ("web", "heartbeat", "refinement"):
+        seen, fake = fake_for(source)
+        with patch.object(core, "call_llm", side_effect=fake):
+            list(agent._run_loop("kick", streaming=False, source=source))
+        assert seen, f"source={source}: expected call_llm to fire"
+        assert all(c is None for c in seen), (
+            f"source={source} must send no provider constraints, got: {seen}"
+        )
 
 
 # ---- non-breaking API ------------------------------------------------
