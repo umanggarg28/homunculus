@@ -2080,6 +2080,13 @@ class Agent:
             if tool_choice == "required" else None
         )
 
+        # Counter for the required-tool-call defense-in-depth detector
+        # (below the LLM call site). Even with provider_constraints set,
+        # OpenRouter's routing can still occasionally land on a provider
+        # that ignores tool_choice. Cap at 2 retries within a single run
+        # so a genuinely-stuck model doesn't infinite-loop.
+        required_tool_violations = 0
+
         for _turn_idx in range(max_turns):
             # Mid-loop eviction: keep only the two most recent tool results
             # full-fidelity; stub everything older. Without this, per-call
@@ -2241,6 +2248,39 @@ class Agent:
             self._journal_append(cleaned)
 
             tool_calls = assistant_msg.get("tool_calls")
+            # Defense-in-depth: if tool_choice=required was set but the
+            # response has no tool_calls, the provider failed to enforce
+            # the contract (despite PR #124's require_parameters pin —
+            # which is itself best-effort across OpenRouter's provider
+            # pool). Inject a synthetic system message demanding a tool
+            # call and retry. Capped at 2 retries per run to avoid an
+            # infinite loop if the model genuinely cannot comply.
+            if (
+                not tool_calls
+                and tool_choice == "required"
+                and required_tool_violations < 2
+            ):
+                required_tool_violations += 1
+                events.emit(
+                    "required_tool_violation",
+                    text=(
+                        f"provider returned no tool_call despite "
+                        f"tool_choice=required (retry "
+                        f"{required_tool_violations}/2)"
+                    ),
+                    result=(assistant_msg.get("content") or "")[:200],
+                )
+                self._journal_append({
+                    "role": "user",
+                    "content": (
+                        "Your last reply did not include a tool call. In this "
+                        "mode every turn must end in exactly one tool call — "
+                        "no plain-text replies. Pick any tool from the catalogue "
+                        "and call it, or call record_failure / abandon_refinement "
+                        "if you genuinely cannot proceed."
+                    ),
+                })
+                continue  # re-enter the loop, force another LLM call
             if not tool_calls:
                 raw_reply = assistant_msg.get("content") or ""
                 if not raw_reply:
