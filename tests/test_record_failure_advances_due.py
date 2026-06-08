@@ -40,8 +40,16 @@ def test_recurring_daily_failure_advances_due_by_one_day(tmp_path):
     new_due = datetime.fromisoformat(updated["due_at"])
 
     advanced = (new_due - original_due).total_seconds()
-    # Daily advance — at least 23h gain, less than 25h (allow drift).
-    assert 23 * 3600 < advanced < 25 * 3600, advanced
+    # Anchor semantics (added 2026-06): _advance_due snaps to the anchor
+    # on the NEXT calendar day after `now`, not exactly +24h from
+    # original due_at. That's deliberate — prevents same-day double-
+    # firing when a partial-recovery succeeds before today's anchor.
+    # For this fixture (due_at ~2h ago, now in the same day past the
+    # anchor), next fire is tomorrow-at-anchor → 24h gap.
+    # If the test runs near midnight (due_at = yesterday-at-anchor,
+    # now = today-just-past-midnight), next fire is still tomorrow-at-
+    # anchor → 48h gap. Both are correct per the anchor contract.
+    assert 23 * 3600 < advanced <= 49 * 3600, advanced
     assert updated["consecutive_failures"] == 1
     assert updated["status"] == "active"
 

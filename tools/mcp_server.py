@@ -399,6 +399,32 @@ def web_fetch(
     return web.web_fetch(url)
 
 
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+def web_post(
+    url: Annotated[str, Field(description="URL to POST to.")],
+    json_body: Annotated[
+        dict | None,
+        Field(description="JSON-serializable body. Sent as application/json. Use this for GraphQL queries (e.g. {\"query\": \"...\"}) and most REST APIs."),
+    ] = None,
+    headers: Annotated[
+        dict | None,
+        Field(description="Optional extra request headers (e.g. Authorization). User-Agent is set automatically."),
+    ] = None,
+    raw_body: Annotated[
+        str | None,
+        Field(description="Optional raw body string. Takes precedence over json_body — use when you need a non-JSON content type (set it via headers)."),
+    ] = None,
+) -> str:
+    """POST to a URL and return the response. Verifies API endpoints
+    (GraphQL queries, REST POSTs) that web_fetch (GET-only) can't reach
+    and the python sandbox can't (sandbox is network-isolated).
+
+    Not cached — POSTs depend on the body and are commonly mutating.
+    Treat this as a side-effecting call: only use when you actually
+    want the call to happen on the remote end."""
+    return web.web_post(url, json_body=json_body, headers=headers, raw_body=raw_body)
+
+
 # ── sandbox ───────────────────────────────────────────────────────────
 
 
