@@ -229,7 +229,7 @@ def archival_memory_insert(
     mem = _get_memory()
     if mem is None:
         return "ERROR: memory not initialised"
-    return mem.archival_memory_insert(content, tags)
+    return mem.archival.insert(content, tags)
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -248,7 +248,7 @@ def archival_memory_search(
     mem = _get_memory()
     if mem is None:
         return "ERROR: memory not initialised"
-    return mem.archival_memory_search(query, k)
+    return mem.archival.search(query, k)
 
 
 @mcp.tool(annotations={"readOnlyHint": True})

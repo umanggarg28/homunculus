@@ -39,6 +39,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
+from archival import ArchivalMemory
 from notifications import NotificationQueue
 from stores import NextTickStore, ReflectionStore, WorldStateStore
 
@@ -124,6 +125,7 @@ class Memory:
         self._world_state: WorldStateStore | None = None
         self._next_tick: NextTickStore | None = None
         self._reflection: ReflectionStore | None = None
+        self._archival: ArchivalMemory | None = None
 
     # ---- read side -----------------------------------------------------
 
@@ -654,93 +656,16 @@ class Memory:
 
     # ── Archival memory (Letta-style) ────────────────────────────────
     #
-    # Tool results that exceed the conversation history's char budget can
-    # be offloaded here. The agent gets back a short token reference and
-    # can retrieve full content later via semantic search.
-    #
-    # API mirrors Letta:
-    #   archival_memory_insert(content, tags=[]) -> token
-    #   archival_memory_search(query, k=5)       -> formatted snippets
+    # Owned by archival.ArchivalMemory. Access via mem.archival.insert(...) /
+    # .search(...). Shares the same memory.db file as the markdown
+    # embeddings index (different tables); uses self._embed as the
+    # injected embedder so all Gemini-specific code stays on Memory.
 
-    def archival_memory_insert(self, content: str, tags: list[str] | None = None) -> str:
-        """Persist a piece of content to archival memory and return its token.
-
-        Token format: arch_YYYYMMDDHHMMSS_<6char-id> so it sorts chronologically
-        and is grep-able in event logs.
-        """
-        import sqlite3
-        import secrets
-        import time as _time
-        from datetime import datetime as _dt
-        now = _time.time()
-        token = (
-            "arch_"
-            + _dt.now().strftime("%Y%m%d%H%M%S")
-            + "_"
-            + secrets.token_hex(3)  # exactly 6 hex chars, no URL-safe escape variance
-        )
-        tags_str = ",".join(tags or [])
-        vec = self._embed(content[:4000])  # embed up to ~4KB; longer content is fine but won't help retrieval
-        vec_json = json.dumps(vec) if vec else None
-        try:
-            con = sqlite3.connect(str(self._db_path))
-            con.execute(
-                "INSERT INTO archival_memory (token, content, tags, vec, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (token, content, tags_str, vec_json, now),
-            )
-            con.commit()
-            con.close()
-        except Exception as e:
-            return f"ERROR: archival_memory_insert failed: {e}"
-        return token
-
-    def archival_memory_search(self, query: str, k: int = 5, max_chars: int = 900) -> str:
-        """Retrieve top-k archival memory entries by semantic similarity.
-
-        Falls back to chronological-most-recent if no embedding is available.
-        Returned content is per-entry-trimmed to max_chars so the agent can
-        scan many results without context-bloating itself.
-        """
-        import sqlite3
-        try:
-            con = sqlite3.connect(str(self._db_path))
-            rows = con.execute(
-                "SELECT token, content, tags, vec, created_at FROM archival_memory"
-            ).fetchall()
-            con.close()
-        except Exception as e:
-            return f"ERROR: archival_memory_search failed: {e}"
-        if not rows:
-            return "(archival memory empty)"
-
-        query_vec = self._embed(query[:2000])
-        scored: list[tuple[float, str, str, str]] = []
-        if query_vec:
-            for token, content, tags, vec_json, _ts in rows:
-                if not vec_json:
-                    continue
-                try:
-                    vec = json.loads(vec_json)
-                except Exception:
-                    continue
-                sim = self._cosine(query_vec, vec)
-                scored.append((sim, token, content, tags))
-            scored.sort(reverse=True)
-        if not scored:
-            # Fallback: most-recent first
-            scored = [(0.0, r[0], r[1], r[2]) for r in sorted(rows, key=lambda r: -r[4])]
-        top = scored[:k]
-        if not top:
-            return "(no matches)"
-        out = []
-        for sim, token, content, tags in top:
-            preview = content[:max_chars]
-            ellipsis = f"… (+{len(content) - max_chars} chars; full content stays in token {token})" if len(content) > max_chars else ""
-            tag_str = f" [tags: {tags}]" if tags else ""
-            sim_str = f" [sim {sim:.2f}]" if sim > 0 else ""
-            out.append(f"── {token}{tag_str}{sim_str}\n{preview}{ellipsis}")
-        return "\n\n".join(out)
+    @property
+    def archival(self) -> ArchivalMemory:
+        if self._archival is None:
+            self._archival = ArchivalMemory(self._db_path, self._embed)
+        return self._archival
 
     def search(self, query: str, limit: int = 3, max_chars: int = 900) -> str:
         """Return the most relevant memory snippets for a query.
