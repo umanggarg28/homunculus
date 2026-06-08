@@ -1064,7 +1064,7 @@ def call_llm(
     messages: list[dict],
     tool_schemas: list[dict] | None,
     model: str | None = None,
-    tool_choice: str = "auto",
+    tool_choice: str | dict = "auto",
     reasoning_effort: str = "low",
     provider_constraints: dict | None = None,
 ) -> dict:
@@ -1090,6 +1090,13 @@ def call_llm(
     eats heartbeat deliveries when the model drafts content as
     assistant_reply instead of as notify(text=...). Pi exposes a
     similar per-call knob in packages/ai/src/providers/*.ts.
+
+    May also be passed as the OpenAI-shaped dict
+    `{"type": "function", "function": {"name": "<tool>"}}` to force one
+    specific tool. This is the Pi state-machine primitive — each state
+    in a per-task pipeline pins exactly one tool, so the model can't
+    skip steps. Passed through verbatim; OpenAI/OpenRouter accept both
+    forms natively.
     """
     primary_key = os.environ.get("HOMUNCULUS_API_KEY")
     if not primary_key:
@@ -1328,7 +1335,7 @@ def call_llm_stream(
     messages: list[dict],
     tool_schemas: list[dict] | None,
     model: str | None = None,
-    tool_choice: str = "auto",
+    tool_choice: str | dict = "auto",
     reasoning_effort: str = "low",
     provider_constraints: dict | None = None,
 ):
@@ -2295,9 +2302,15 @@ class Agent:
             # pool). Inject a synthetic system message demanding a tool
             # call and retry. Capped at 2 retries per run to avoid an
             # infinite loop if the model genuinely cannot comply.
+            # A dict tool_choice (forced-named tool) is strictly stricter
+            # than "required" — it pins one specific function. Both shapes
+            # demand a tool call, so both trip the detector.
+            tool_call_demanded = (
+                tool_choice == "required" or isinstance(tool_choice, dict)
+            )
             if (
                 not tool_calls
-                and tool_choice == "required"
+                and tool_call_demanded
                 and required_tool_violations < 2
             ):
                 required_tool_violations += 1
