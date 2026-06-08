@@ -74,7 +74,11 @@ def main() -> int:
     print(f"[refine] starting refinement of {args.skill!r}", flush=True)
     print(f"[refine]   memory dir: {memory_dir.resolve()}", flush=True)
     print(f"[refine]   max turns:  {args.max_turns}", flush=True)
-    print(f"[refine]   model:      {args.model or os.environ.get('HOMUNCULUS_MODEL', 'default')}", flush=True)
+    # Print the model the refiner will actually pick (CLI > env > default).
+    # The general HOMUNCULUS_MODEL env is for execution; refinement reads
+    # HOMUNCULUS_MODEL_REFINEMENT or falls back to DEFAULT_REFINEMENT_MODEL.
+    from skill_refiner import _resolve_refinement_model
+    print(f"[refine]   model:      {_resolve_refinement_model(args.model)}", flush=True)
     print(f"[refine]   context:    {args.context}", flush=True)
     print(flush=True)
 

@@ -971,6 +971,34 @@ def _is_openrouter(url: str) -> bool:
     return "openrouter.ai" in url.lower()
 
 
+def _apply_max_tokens(payload: dict, url: str, model_id: str) -> None:
+    """Set a reasonable max_tokens for billing-aware providers.
+
+    OpenRouter (Anthropic-family models specifically) *reserves credit
+    up to max_tokens* on every request — without an explicit value it
+    defaults to the model's max (~64K for Haiku/Sonnet), reserves the
+    full cost of that output, and 402s ("This request requires more
+    credits, or fewer max_tokens") whenever your balance is below the
+    reservation. Real call output is almost always < 2K tokens so the
+    reservation is wildly over-sized.
+
+    Setting an explicit cap keeps the reservation accurate without
+    constraining real responses (4096 is plenty — we cap actual
+    outputs via the loop budget, not the per-call ceiling).
+
+    Only OpenRouter exhibits this behavior; direct provider routes
+    (Gemini, Groq, Cerebras) don't reserve credit and silently accept
+    short outputs. We apply the cap only for OpenRouter URLs so other
+    providers stay at their own defaults.
+    """
+    if not _is_openrouter(url):
+        return
+    # 4096 is enough for the longest legitimate single-turn output we've
+    # seen (the LeetCode notify message with code block was ~588 tokens;
+    # a verbose reasoning model peaks around 2K). Headroom for outliers.
+    payload.setdefault("max_tokens", 4096)
+
+
 def _apply_provider_constraints(
     payload: dict, url: str, constraints: dict | None,
 ) -> None:
@@ -1096,6 +1124,7 @@ def call_llm(
             payload["parallel_tool_calls"] = False
         _apply_reasoning_effort(payload, model_id, url, reasoning_effort)
         _apply_provider_constraints(payload, url, provider_constraints)
+        _apply_max_tokens(payload, url, model_id)
 
         try:
             response = httpx.post(
@@ -1191,6 +1220,7 @@ def call_llm(
             payload["parallel_tool_calls"] = False
         _apply_reasoning_effort(payload, model_id, url, reasoning_effort)
         _apply_provider_constraints(payload, url, provider_constraints)
+        _apply_max_tokens(payload, url, model_id)
         response = httpx.post(
             url,
             headers={**_HTTP_HEADERS_BASE, "Authorization": f"Bearer {key}"},
@@ -1358,6 +1388,7 @@ def call_llm_stream(
             payload["parallel_tool_calls"] = False
         _apply_reasoning_effort(payload, model_id, url, reasoning_effort)
         _apply_provider_constraints(payload, url, provider_constraints)
+        _apply_max_tokens(payload, url, model_id)
         try:
             response_ctx = httpx.stream(
                 "POST",
