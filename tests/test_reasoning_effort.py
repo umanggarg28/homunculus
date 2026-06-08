@@ -48,3 +48,25 @@ def test_llama_unchanged() -> None:
     payload: dict = {}
     _apply_reasoning_effort(payload, "meta-llama/llama-3.3-70b-instruct:free")
     assert "reasoning" not in payload
+
+
+def test_explicit_medium_effort_for_refinement() -> None:
+    """Skill refinement passes effort='medium' so the model gets room
+    to actually reason through API discovery and verification."""
+    payload: dict = {}
+    _apply_reasoning_effort(payload, "openai/gpt-oss-120b", effort="medium")
+    assert payload["reasoning"] == {"effort": "medium"}
+
+
+def test_explicit_high_effort_passes_through() -> None:
+    payload: dict = {}
+    _apply_reasoning_effort(payload, "openai/gpt-oss-120b", effort="high")
+    assert payload["reasoning"] == {"effort": "high"}
+
+
+def test_explicit_effort_ignored_on_non_gpt_oss() -> None:
+    """Effort param is only meaningful for gpt-oss-*. For other models
+    the helper still no-ops regardless of the requested effort."""
+    payload: dict = {}
+    _apply_reasoning_effort(payload, "gemini-2.5-flash", effort="high")
+    assert "reasoning" not in payload
