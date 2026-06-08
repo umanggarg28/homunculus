@@ -1057,6 +1057,7 @@ def call_llm(
             payload["tools"] = tool_schemas
             payload["tool_choice"] = "auto"
             payload["parallel_tool_calls"] = False
+        _apply_reasoning_effort(payload, model_id)
 
         try:
             response = httpx.post(
@@ -1150,6 +1151,7 @@ def call_llm(
             payload["tools"] = tool_schemas
             payload["tool_choice"] = "auto"
             payload["parallel_tool_calls"] = False
+        _apply_reasoning_effort(payload, model_id)
         response = httpx.post(
             url,
             headers={**_HTTP_HEADERS_BASE, "Authorization": f"Bearer {key}"},
@@ -1178,6 +1180,31 @@ def _url_host(url: str) -> str:
         return url.split("://", 1)[1].split("/", 1)[0]
     except (IndexError, AttributeError):
         return url
+
+
+def _apply_reasoning_effort(payload: dict, model_id: str) -> None:
+    """Set OpenRouter `reasoning.effort` for models that default to high CoT.
+
+    gpt-oss-* on OpenRouter returns chain-of-thought in a separate
+    `reasoning` field by default — at HIGH effort, which consumes all
+    the output token budget before the model produces actual content
+    or a tool_call. The empirical symptom is `finish_reason: "length"`
+    with `content: null`, observed in heartbeat ticks after switching
+    to gpt-oss-120b.
+
+    For an agent loop, the iteration IS the reasoning structure (each
+    tick is a "thought" — recall, read file, call notify, complete).
+    Internal CoT duplicates that work and wastes tokens. Setting
+    effort=low keeps the model competent at procedural judgment while
+    freeing the output budget for the tool_call that actually advances
+    the loop.
+
+    Other reasoning-capable models (Claude with extended thinking,
+    o1, DeepSeek-R1) use their own APIs; this helper only targets
+    the gpt-oss-* family because that's what's biting us.
+    """
+    if "gpt-oss" in model_id:
+        payload["reasoning"] = {"effort": "low"}
 
 
 def _emit_llm_call(model_id: str, url: str, messages: list[dict], usage: dict | None) -> None:
@@ -1278,6 +1305,7 @@ def call_llm_stream(
             payload["tools"] = tool_schemas
             payload["tool_choice"] = "auto"
             payload["parallel_tool_calls"] = False
+        _apply_reasoning_effort(payload, model_id)
         try:
             response_ctx = httpx.stream(
                 "POST",
