@@ -1094,7 +1094,7 @@ def call_llm(
             payload["tools"] = tool_schemas
             payload["tool_choice"] = tool_choice
             payload["parallel_tool_calls"] = False
-        _apply_reasoning_effort(payload, model_id, reasoning_effort)
+        _apply_reasoning_effort(payload, model_id, url, reasoning_effort)
         _apply_provider_constraints(payload, url, provider_constraints)
 
         try:
@@ -1189,7 +1189,7 @@ def call_llm(
             payload["tools"] = tool_schemas
             payload["tool_choice"] = tool_choice
             payload["parallel_tool_calls"] = False
-        _apply_reasoning_effort(payload, model_id, reasoning_effort)
+        _apply_reasoning_effort(payload, model_id, url, reasoning_effort)
         _apply_provider_constraints(payload, url, provider_constraints)
         response = httpx.post(
             url,
@@ -1222,7 +1222,7 @@ def _url_host(url: str) -> str:
 
 
 def _apply_reasoning_effort(
-    payload: dict, model_id: str, effort: str = "low",
+    payload: dict, model_id: str, url: str = "", effort: str = "low",
 ) -> None:
     """Set OpenRouter `reasoning.effort` for models that default to high CoT.
 
@@ -1230,24 +1230,29 @@ def _apply_reasoning_effort(
     `reasoning` field by default — at HIGH effort, which consumes all
     the output token budget before the model produces actual content
     or a tool_call. The empirical symptom is `finish_reason: "length"`
-    with `content: null`, observed in heartbeat ticks after switching
-    to gpt-oss-120b.
+    with `content: null`.
+
+    The `reasoning` request param is an OpenRouter-specific extension
+    (also OpenAI's o1 API). Direct providers (Cerebras, Groq, Gemini)
+    reject the request with HTTP 400 when they see an unknown param —
+    so we gate by URL host. When fallback routing hits one of those
+    providers we silently skip the param.
 
     For execution-mode loops (heartbeat, chat) the iteration IS the
-    reasoning structure — each tick is a "thought." Internal CoT
-    duplicates that work and wastes tokens, so we default to effort=low.
+    reasoning structure — each tick is a "thought" — so effort=low
+    frees the output budget for the actual tool call.
 
-    For design-mode loops (skill refinement) the model genuinely needs
-    multi-step internal reasoning to explore options, debug API
-    contracts, and verify approaches. The caller passes effort="medium"
-    or "high" to give the model room.
-
-    Other reasoning-capable model families (Claude extended thinking,
-    o1, DeepSeek-R1) use their own APIs; this helper only targets the
-    gpt-oss-* family because that's what's biting us.
+    For design-mode loops (skill refinement) the model needs multi-
+    step internal reasoning to explore options, debug API contracts,
+    and verify approaches. The caller passes effort="medium" or "high".
     """
-    if "gpt-oss" in model_id:
-        payload["reasoning"] = {"effort": effort}
+    if "gpt-oss" not in model_id:
+        return
+    # Cerebras/Gemini/Groq direct routes reject unknown params with 400.
+    # Only set the field when we know the provider parses it.
+    if url and not _is_openrouter(url):
+        return
+    payload["reasoning"] = {"effort": effort}
 
 
 def _emit_llm_call(model_id: str, url: str, messages: list[dict], usage: dict | None) -> None:
@@ -1351,7 +1356,7 @@ def call_llm_stream(
             payload["tools"] = tool_schemas
             payload["tool_choice"] = tool_choice
             payload["parallel_tool_calls"] = False
-        _apply_reasoning_effort(payload, model_id, reasoning_effort)
+        _apply_reasoning_effort(payload, model_id, url, reasoning_effort)
         _apply_provider_constraints(payload, url, provider_constraints)
         try:
             response_ctx = httpx.stream(
