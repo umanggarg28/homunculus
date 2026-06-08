@@ -26,7 +26,10 @@ from typing import Annotated, Literal
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from . import _meta, filesystem, memory_tools, notify as notify_mod, sandbox, scheduling, web
+from . import (
+    _meta, filesystem, memory_tools, notify as notify_mod, sandbox,
+    scheduling, skill_refinement as skill_refinement_mod, web,
+)
 
 
 mcp = FastMCP("homunculus-builtin")
@@ -599,6 +602,56 @@ def notify(
 ) -> str:
     """Push a plain-text Telegram message. You CAN send Telegram messages via this tool — never tell the user you can't notify or message them. INTERRUPTS the user — use only for time-sensitive things. Routine summaries belong in files."""
     return notify_mod.notify(text, preview=preview)
+
+
+# ── skill refinement ──────────────────────────────────────────────────
+#
+# These two tools are valid only during a skill-refinement run (see
+# skill_refiner.py). Outside that context they refuse cleanly — they
+# read the Skills registry off tools._state, which the runner wires
+# in for the duration of the refinement Agent call.
+
+
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+def save_refined_skill(
+    skill_name: Annotated[
+        str,
+        Field(description="Skill slug to overwrite, e.g. 'skill_deliver_daily_leetcode'."),
+    ],
+    new_body: Annotated[
+        str,
+        Field(description="Full markdown body of the new procedure. Must be self-contained — the next execution agent reads only this."),
+    ],
+    rationale: Annotated[
+        str,
+        Field(description="One-paragraph: what was broken in the prior body, what changed, what you verified before saving."),
+    ],
+) -> str:
+    """Commit a redesigned skill. Archives the prior version. Only valid
+    inside a refinement run.
+
+    Once this returns success, the canonical `skill_<slug>.md` is
+    replaced and the next execution agent will read the new procedure.
+    Roll back via the registry's revert_to() if the redesign turns out
+    to be worse.
+    """
+    return skill_refinement_mod.save_refined_skill(skill_name, new_body, rationale)
+
+
+@mcp.tool(annotations={"readOnlyHint": False})
+def abandon_refinement(
+    reason: Annotated[
+        str,
+        Field(description="One-paragraph: what approaches you tried and why none of them worked. Be specific so a human (or a future refinement) can use this as a starting point."),
+    ],
+) -> str:
+    """Explicit failure marker for a refinement run. The original skill
+    body stays canonical. The reason is logged for the human to inspect.
+
+    Use this when after thorough exploration you can't find a working
+    replacement procedure. Better than just running out of iterations
+    silently — the reason captures what you learned."""
+    return skill_refinement_mod.abandon_refinement(reason)
 
 
 # ── entrypoint ────────────────────────────────────────────────────────
