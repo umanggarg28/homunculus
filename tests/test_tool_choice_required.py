@@ -21,7 +21,7 @@ def _capture_tool_choice():
     passed and short-circuits the loop with a complete_task to exit cleanly."""
     calls: list[str] = []
 
-    def fake(messages, tool_schemas, model=None, tool_choice="auto", reasoning_effort="low"):
+    def fake(messages, tool_schemas, model=None, tool_choice="auto", reasoning_effort="low", provider_constraints=None):
         calls.append(tool_choice)
         # Return a synthetic complete_task call so the loop exits cleanly
         # on its first iteration. This sidesteps real API I/O.
@@ -91,7 +91,7 @@ def test_refinement_source_uses_required_tool_choice_and_medium_reasoning():
     tool_choices: list[str] = []
     reasoning_efforts: list[str] = []
 
-    def fake(messages, tool_schemas, model=None, tool_choice="auto", reasoning_effort="low"):
+    def fake(messages, tool_schemas, model=None, tool_choice="auto", reasoning_effort="low", provider_constraints=None):
         tool_choices.append(tool_choice)
         reasoning_efforts.append(reasoning_effort)
         return {
@@ -124,7 +124,7 @@ def test_chat_uses_low_reasoning_effort_default():
     agent = core.Agent(memory=None)
     efforts: list[str] = []
 
-    def fake(messages, tool_schemas, model=None, tool_choice="auto", reasoning_effort="low"):
+    def fake(messages, tool_schemas, model=None, tool_choice="auto", reasoning_effort="low", provider_constraints=None):
         efforts.append(reasoning_effort)
         return {
             "role": "assistant",

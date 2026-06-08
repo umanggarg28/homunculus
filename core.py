@@ -967,6 +967,32 @@ def _provider_supports_cache_control(url: str) -> bool:
     return any(host in u for host in _CACHE_CONTROL_PROVIDER_HOSTS)
 
 
+def _is_openrouter(url: str) -> bool:
+    return "openrouter.ai" in url.lower()
+
+
+def _apply_provider_constraints(
+    payload: dict, url: str, constraints: dict | None,
+) -> None:
+    """OpenRouter-specific routing constraints.
+
+    OpenRouter routes the same model id across multiple inference
+    providers (Novita, DeepInfra, DekaLLM, Google, ...). Some honor
+    `tool_choice: "required"` reliably; others let the model bail to
+    text. The `provider.require_parameters: true` constraint tells
+    OpenRouter "only route to providers that actually support all the
+    request params I sent" — which transitively pins us to ones that
+    enforce tool_choice when we set it.
+
+    Only takes effect for OpenRouter URLs. Other providers (Gemini,
+    Groq, Cerebras) terminate at a single provider, so routing
+    constraints are meaningless.
+    """
+    if not constraints or not _is_openrouter(url):
+        return
+    payload["provider"] = dict(constraints)
+
+
 def _maybe_add_cache_control(messages: list[dict], url: str) -> list[dict]:
     """Add an ephemeral cache_control breakpoint to the system message
     when the provider supports it.
@@ -1012,6 +1038,7 @@ def call_llm(
     model: str | None = None,
     tool_choice: str = "auto",
     reasoning_effort: str = "low",
+    provider_constraints: dict | None = None,
 ) -> dict:
     """One round-trip to the LLM chat completions endpoint.
 
@@ -1068,6 +1095,7 @@ def call_llm(
             payload["tool_choice"] = tool_choice
             payload["parallel_tool_calls"] = False
         _apply_reasoning_effort(payload, model_id, reasoning_effort)
+        _apply_provider_constraints(payload, url, provider_constraints)
 
         try:
             response = httpx.post(
@@ -1162,6 +1190,7 @@ def call_llm(
             payload["tool_choice"] = tool_choice
             payload["parallel_tool_calls"] = False
         _apply_reasoning_effort(payload, model_id, reasoning_effort)
+        _apply_provider_constraints(payload, url, provider_constraints)
         response = httpx.post(
             url,
             headers={**_HTTP_HEADERS_BASE, "Authorization": f"Bearer {key}"},
@@ -1266,6 +1295,7 @@ def call_llm_stream(
     model: str | None = None,
     tool_choice: str = "auto",
     reasoning_effort: str = "low",
+    provider_constraints: dict | None = None,
 ):
     """Streaming variant of call_llm.
 
@@ -1322,6 +1352,7 @@ def call_llm_stream(
             payload["tool_choice"] = tool_choice
             payload["parallel_tool_calls"] = False
         _apply_reasoning_effort(payload, model_id, reasoning_effort)
+        _apply_provider_constraints(payload, url, provider_constraints)
         try:
             response_ctx = httpx.stream(
                 "POST",
@@ -2035,6 +2066,20 @@ class Agent:
             tool_choice = "auto"
             reasoning_effort = "low"
 
+        # Provider constraints (OpenRouter only). Required-tool-choice
+        # modes need a provider that actually honors tool_choice on the
+        # wire; OpenRouter round-robins across providers and some
+        # silently ignore it. `require_parameters: true` pins routing
+        # to providers that support every param we sent — which
+        # transitively means they enforce tool_choice when we ask.
+        # Discovered after PR #123 shipped: refinement runs returned
+        # text-only responses on Novita/Google routes even with
+        # tool_choice="required" set in the payload.
+        provider_constraints = (
+            {"require_parameters": True}
+            if tool_choice == "required" else None
+        )
+
         for _turn_idx in range(max_turns):
             # Mid-loop eviction: keep only the two most recent tool results
             # full-fidelity; stub everything older. Without this, per-call
@@ -2157,6 +2202,7 @@ class Agent:
                     self.history, active_schemas, model=self.model,
                     tool_choice=tool_choice,
                     reasoning_effort=reasoning_effort,
+                    provider_constraints=provider_constraints,
                 ):
                     if kind == "content":
                         stream_chunks.append(payload)
@@ -2176,6 +2222,7 @@ class Agent:
                     self.history, active_schemas, model=self.model,
                     tool_choice=tool_choice,
                     reasoning_effort=reasoning_effort,
+                    provider_constraints=provider_constraints,
                 )
 
             # Strip provider-specific extras (reasoning, null fields) that
