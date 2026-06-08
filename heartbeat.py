@@ -745,7 +745,11 @@ def main() -> None:
     memory_dir = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
     # Heartbeat's task is simpler than the bot/REPL — pick a smaller
     # default. Saves ~6x on tokens-per-tick. Override via env if needed.
-    model = os.environ.get("HOMUNCULUS_MODEL_HEARTBEAT", "openai/gpt-oss-20b")
+    # Heartbeat default: openai/gpt-oss-120b (same as the chat primary).
+    # See core.MODEL for why — single-model setup keeps reliability
+    # reasoning consistent across heartbeat and chat. Override via
+    # HOMUNCULUS_MODEL_HEARTBEAT in .env if you want to A/B test.
+    model = os.environ.get("HOMUNCULUS_MODEL_HEARTBEAT", "openai/gpt-oss-120b")
 
     memory = Memory(memory_dir)
     tools.init(memory, autonomous=True)

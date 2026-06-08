@@ -260,12 +260,18 @@ def test_model_fallback_contains_verified_models():
 # ---------------------------------------------------------------------------
 
 def test_empty_api_key_slot_is_skipped(monkeypatch):
-    """A slot with an empty key must never appear in the provider list."""
+    """A slot with an empty key must contribute no (url, '', model) tuples.
+
+    Checking only `url not in urls` was too strict — when two slots
+    share the same URL (e.g. primary AND fallback both on OpenRouter,
+    one paid + one free-tier pool), the URL legitimately appears via
+    the slot that has a key. What matters is no provider tuple goes
+    out with an empty key string.
+    """
     import core
     monkeypatch.setenv("HOMUNCULUS_API_KEY_FALLBACK", "")
-    # _providers() reads env at call time; pass a dummy model to get the list
     slots = core._providers("some-model")
-    urls = [url for url, _key, _model in slots]
-    assert core.API_URL_FALLBACK not in urls, (
-        "Provider slot with empty API key must be skipped"
+    empty_key_entries = [(u, k, m) for u, k, m in slots if not k]
+    assert not empty_key_entries, (
+        f"Provider slots with empty keys must be filtered out, got: {empty_key_entries}"
     )
