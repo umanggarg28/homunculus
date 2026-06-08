@@ -43,11 +43,34 @@ fires. Failures of the refinement run never corrupt the registry.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # avoid import at module-load time
     from memory import Memory
+
+
+# Default model for refinement runs.
+#
+# Heartbeat / chat use openai/gpt-oss-120b for cost — but the live test
+# of skill-refinement against the LeetCode skill showed gpt-oss at
+# medium reasoning cycles through 404'ing mirror URLs for 30 turns
+# instead of trying the GraphQL endpoint we explicitly named in the
+# context. That's a model-capability limit for the rare design-mode
+# task ("discover a working API given a goal"), not an architecture
+# bug.
+#
+# Haiku 4.5 scores Intelligence Index 31 (vs gpt-oss-120b's 33 but with
+# substantially better real-world tool-use reliability per agentic
+# benchmarks) and costs ~$0.05 per 30-turn refinement run at typical
+# prompt sizes. Refinement runs are rare — maybe 1 per skill per
+# month when something breaks — so the cost delta vs gpt-oss-120b
+# is well inside the $5/month budget.
+#
+# Override via HOMUNCULUS_MODEL_REFINEMENT in .env or --model on the
+# CLI for one-off experiments.
+DEFAULT_REFINEMENT_MODEL = "anthropic/claude-haiku-4-5"
 
 
 REFINEMENT_PROMPT_TEMPLATE = """You are in SKILL-REFINEMENT mode.
@@ -142,6 +165,20 @@ def build_refinement_prompt(
     )
 
 
+def _resolve_refinement_model(explicit: str | None) -> str:
+    """Pick the model for a refinement run.
+
+    Priority: explicit CLI/arg → HOMUNCULUS_MODEL_REFINEMENT env →
+    DEFAULT_REFINEMENT_MODEL (Haiku 4.5).
+    """
+    if explicit:
+        return explicit
+    env = os.environ.get("HOMUNCULUS_MODEL_REFINEMENT")
+    if env:
+        return env
+    return DEFAULT_REFINEMENT_MODEL
+
+
 def refine_skill(
     skill_name: str,
     failure_context: str,
@@ -157,6 +194,10 @@ def refine_skill(
       - Provide a useful `failure_context` (which failure pattern, recent
         run results, what's been tried). The prompt is only as good as
         this context.
+
+    Model selection: refinement uses a stronger model than execution by
+    default (Haiku 4.5 vs gpt-oss-120b) — see DEFAULT_REFINEMENT_MODEL.
+    Override via HOMUNCULUS_MODEL_REFINEMENT env or --model on the CLI.
 
     Side effects on success:
       - skills.Skills.save(skill_name, new_body, source="refinement-tick",
@@ -177,6 +218,7 @@ def refine_skill(
 
     skills = Skills(memory.root)
     current_body = skills.load(skill_name) or ""
+    resolved_model = _resolve_refinement_model(model)
 
     system_prompt = build_refinement_prompt(
         skill_name=skill_name,
@@ -201,7 +243,7 @@ def refine_skill(
         # other tool state intact.
         tool_state._skills = skills  # type: ignore[attr-defined]
 
-        agent = Agent(memory=memory, system_prompt=system_prompt, model=model)
+        agent = Agent(memory=memory, system_prompt=system_prompt, model=resolved_model)
         # Single kick: the system prompt IS the task. The user-message
         # slot is just a "begin" — needed because _run_loop is structured
         # around (system + user) → (tool calls)+ pairs.
