@@ -61,38 +61,119 @@ def test_record_failure_also_marks_task_as_handled():
     assert guard.expected_remaining() == ["task-b"]
 
 
-def test_complete_task_blocked_by_criteria_does_NOT_mark_done():
-    """If criteria fail, the agent gets BLOCKED and the task is NOT marked
-    complete. The agent must retry."""
-    guard = TaskGuard({
-        "task-a": [{"type": "notify_called"}],
-    })
-    # No notify() was called yet, so the criteria check fails.
-    blocked = guard.on_tool_call("complete_task", {"task_id": "task-a", "result": "x"})
-    # Hook returns a BLOCKED message
-    assert blocked is not None
-    assert "BLOCKED" in blocked
-    # And the task is STILL in remaining — agent must fix and retry
-    assert guard.expected_remaining() == ["task-a"]
-
-
-def test_complete_task_blocked_then_retry_succeeds():
-    """The full retry pattern: notify, complete_task is blocked, fix the
-    issue, complete_task succeeds, task moves to completed."""
+def test_notify_blocked_when_criteria_fail_pre_send():
+    """Criteria are now enforced at notify() call time, not at
+    complete_task(). A too-short notify is REFUSED — the message never
+    reaches the user as garbage, but also nothing is buffered to lose."""
     guard = TaskGuard({
         "task-a": [{"type": "notify_min_chars", "n": 50}],
     })
-    # First notify is too short.
-    guard.on_tool_call("notify", {"text": "short"})
-    blocked = guard.on_tool_call("complete_task", {"task_id": "task-a", "result": "x"})
-    assert blocked is not None and "BLOCKED" in blocked
-    assert guard.expected_remaining() == ["task-a"]
+    blocked = guard.on_tool_call("notify", {"text": "short"})
+    assert blocked is not None
+    assert "BLOCKED" in blocked
+    assert "notify text too short" in blocked
 
-    # Retry with a longer notify and complete_task again.
-    guard.on_tool_call("notify", {"text": "x" * 60})
+
+def test_notify_passes_when_criteria_satisfied():
+    guard = TaskGuard({
+        "task-a": [{"type": "notify_min_chars", "n": 5}],
+    })
+    out = guard.on_tool_call("notify", {"text": "long enough message"})
+    assert out is None  # not blocked → MCP subprocess sends it for real
+
+
+def test_notify_retry_after_block_succeeds():
+    """The retry pattern: notify is too short → BLOCKED, agent retries
+    with longer text → passes → complete_task closes the lifecycle."""
+    guard = TaskGuard({
+        "task-a": [{"type": "notify_min_chars", "n": 50}],
+    })
+    # First attempt: refused.
+    blocked = guard.on_tool_call("notify", {"text": "short"})
+    assert blocked is not None and "BLOCKED" in blocked
+    # Retry with the right size.
+    out = guard.on_tool_call("notify", {"text": "x" * 60})
+    assert out is None  # delivered
+    # complete_task is now just a lifecycle marker — it passes through.
     result = guard.on_tool_call("complete_task", {"task_id": "task-a", "result": "ok"})
-    assert result is None  # passed through cleanly
+    assert result is None
     assert guard.expected_remaining() == []
+
+
+def test_complete_task_does_not_re_check_criteria():
+    """Criteria are checked at notify() time. complete_task is a pure
+    lifecycle marker now — never blocks, never has to flush anything."""
+    guard = TaskGuard({
+        "task-a": [{"type": "notify_called"}],
+    })
+    # No notify yet, but complete_task should NOT block. The agent has
+    # already received an opportunity (and the silent-drop fallback will
+    # catch this case via expected_remaining + post-tick fallback notify).
+    result = guard.on_tool_call("complete_task", {"task_id": "task-a", "result": "x"})
+    assert result is None
+    assert guard.expected_remaining() == []
+
+
+def test_notify_must_satisfy_all_criteria_in_one_call():
+    """Under the new synchronous-gate design, every notify call has to
+    satisfy every criterion on its own — there's no buffer to combine
+    with previous calls. This is a deliberate tightening: the buffered
+    design failed silently when the agent skipped complete_task, so we
+    trade per-call flexibility for guaranteed delivery."""
+    guard = TaskGuard({
+        "task-a": [
+            {"type": "notify_min_chars", "n": 30},
+            {"type": "notify_has_code"},
+        ],
+    })
+    # Long enough but no code → blocked.
+    blocked1 = guard.on_tool_call("notify", {"text": "x" * 40})
+    assert blocked1 is not None and "no code block" in blocked1
+    # Short with code → blocked on length.
+    blocked2 = guard.on_tool_call("notify", {"text": "```py\nx\n```"})
+    assert blocked2 is not None and "too short" in blocked2
+    # One call with both → delivered.
+    ok = guard.on_tool_call("notify", {"text": "x" * 40 + "\n```py\nprint('hi')\n```"})
+    assert ok is None
+
+
+def test_regression_silent_drop_after_notify_still_delivers():
+    """REGRESSION: 2026-06-07 / 06-08 — user's daily LeetCode failed
+    twice. Agent called notify() with real content, then wrote 'task
+    complete' as prose without calling complete_task(). Under the old
+    buffered design, the notify text was held in TaskGuard memory and
+    DROPPED when the loop ended without complete_task — user got nothing.
+
+    Under the new design, on_tool_call('notify', ...) returns None for
+    a criteria-passing message, which means the MCP subprocess sends
+    it for real immediately. No buffer to lose. The agent forgetting
+    complete_task() is logged as a silent drop, but the delivery
+    already happened.
+    """
+    guard = TaskGuard({
+        "daily-leetcode": [
+            {"type": "notify_called"},
+            {"type": "notify_min_chars", "n": 200},
+            {"type": "notify_has_code"},
+        ],
+    })
+    # Agent calls notify with proper content.
+    leetcode_msg = (
+        "Problem: Best Time to Buy and Sell Stock III\n"
+        "Approach: dynamic programming tracking buy/sell state for "
+        "up to two transactions. " + "x" * 100 + "\n"
+        "```python\ndef maxProfit(prices):\n    return 0\n```"
+    )
+    out = guard.on_tool_call("notify", {"text": leetcode_msg})
+    assert out is None, (
+        "notify with proper content must pass through — the MCP "
+        "subprocess will send it. If this returns a string, the "
+        "delivery is blocked."
+    )
+    # Agent skips complete_task and the loop ends. expected_remaining
+    # still flags the silent drop so the heartbeat can mark partial —
+    # but the user already received the LeetCode message.
+    assert guard.expected_remaining() == ["daily-leetcode"]
 
 
 def test_silent_drop_is_visible_after_loop_returns():

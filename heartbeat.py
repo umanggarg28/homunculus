@@ -179,18 +179,22 @@ class TaskGuard:
 
     def __init__(self, criteria_by_task: dict[str, list[dict[str, Any]]]) -> None:
         self._criteria = criteria_by_task
+        # Notify texts seen so far this tick — kept as a tracker only, NOT
+        # as a delivery buffer. Every notify() call now sends immediately;
+        # this list lets _check() validate criteria pre-send and lets
+        # expected_remaining() report whether the agent ever called notify
+        # at all. Previously the TaskGuard buffered notify and gated on
+        # complete_task succeeding — which silently dropped every delivery
+        # when the agent wrote "task complete" in prose instead of calling
+        # the tool. The structural fix is: criteria are checked SYNCHRONOUSLY
+        # at notify() call time. If they fail, notify is refused with a
+        # retry instruction. The agent never gets to act on a buffered
+        # message that might not deliver.
         self._notify_texts: list[str] = []
-        # When any task has criteria, intercept notify() calls in the hook
-        # itself — block them from reaching the MCP subprocess and hold the
-        # text here, then send directly (bypassing subprocess boundary) once
-        # complete_task passes all criteria.
-        self._buffering = any(v for v in criteria_by_task.values())
-        # Item 4 of the robustness plan — track which due tasks have had
-        # complete_task called successfully. Combined with expected_remaining(),
-        # the heartbeat tick can detect the silent-failure mode (agent loop
-        # ran but no due task was completed) and report a *specific* failure
-        # like "task X never got complete_task" instead of the generic
-        # "agent loop returned without complete_task".
+        # Track which due tasks have had complete_task called successfully.
+        # Combined with expected_remaining(), the heartbeat tick can detect
+        # the silent-failure mode (agent loop ran but no due task was
+        # completed) and report a *specific* failure.
         self._completed_tasks: set[str] = set()
 
     def on_tool_call(self, name: str, arguments: dict) -> str | None:
@@ -200,47 +204,43 @@ class TaskGuard:
         and return that string as the tool result.
         """
         if name == "notify":
-            text = arguments.get("text") or ""
-            self._notify_texts.append(str(text))
-            if self._buffering:
-                # Block the MCP call — we'll send directly from this process
-                # once complete_task passes criteria, bypassing the subprocess.
-                return f"Notification queued ({len(text)} chars) — will be delivered when task completes successfully."
-            return None  # no criteria — let notify go through normally
+            text = str(arguments.get("text") or "")
+            # Check criteria across ALL due tasks. If any task's criteria
+            # would fail with the combined text so far + this proposed
+            # message, refuse the send and tell the agent what's missing.
+            # This is the structural fix for "the buffered message died
+            # when the agent skipped complete_task" — now nothing gets
+            # buffered. Either notify delivers and counts, or it's blocked
+            # and the agent retries before the loop ends.
+            #
+            # Criteria are evaluated against the combined notify texts
+            # because some criteria (notify_min_chars, notify_has_code)
+            # can be satisfied by an earlier notify in the same tick
+            # plus this one — the historical behavior we want to preserve.
+            tentative = self._notify_texts + [text]
+            failures = self._check_against(tentative)
+            if failures:
+                return (
+                    f"BLOCKED: notify() not sent. Criteria failed:\n"
+                    + "\n".join(f"  • {f}" for f in failures)
+                    + "\n\nCall notify(text=...) again with content that "
+                    "satisfies the failed criterion (e.g. add a fenced "
+                    "```code block```, lengthen the message, include the "
+                    "required substring). The retry will be sent if it "
+                    "passes."
+                )
+            # Criteria pass — record the text and let the call through.
+            # The MCP subprocess does the actual Telegram send.
+            self._notify_texts.append(text)
+            return None
 
         if name == "complete_task":
             task_id = arguments.get("task_id", "")
-            criteria = self._criteria.get(task_id, [])
-            if not criteria:
-                self._flush()  # no guard — send any buffered notifies now
-                self._completed_tasks.add(task_id)
-                return None
-
-            failures = self._check(criteria)
-            if not failures:
-                self._flush()  # criteria passed — deliver buffered notifications
-                self._completed_tasks.add(task_id)
-                return None
-
-            # Criteria failed — discard queued notifications so the agent
-            # retries notify() with improved content before the next attempt.
-            self._notify_texts.clear()
-            msg = (
-                f"BLOCKED: complete_task('{task_id}') was REFUSED because "
-                f"{len(failures)} success criterion/criteria failed:\n"
-                + "\n".join(f"  • {f}" for f in failures)
-                + "\n\nWHAT TO DO NEXT (in this order):\n"
-                "  1. Call notify(text=...) AGAIN with the same useful content "
-                "PLUS whatever the failed criterion requires (e.g. a fenced ``` "
-                "code block, longer text, the required substring).\n"
-                "  2. Then call complete_task() again — the buffered notify "
-                "from step 1 will be re-checked against criteria.\n\n"
-                "Do NOT call complete_task() without first redoing notify(). "
-                "Do NOT give up and stop — the next tick will see you didn't "
-                "complete and either retry the whole tick or notify the user "
-                "of a silent drop."
-            )
-            return msg
+            # Criteria were already enforced at notify() time, so
+            # complete_task is just a task-lifecycle marker now — no
+            # gate, no buffering to flush. Just record the completion.
+            self._completed_tasks.add(task_id)
+            return None
 
         # record_failure is also a way to close out a task — track it so the
         # heartbeat tick doesn't double-report a task that the agent already
@@ -296,43 +296,50 @@ class TaskGuard:
                 f"Pick ONE of:\n"
                 f"  ✓ complete_task(task_id='{task_id}', result='<one-line summary>')\n"
                 f"  ✗ record_failure(task_id='{task_id}', reason='<one-line reason>')\n\n"
-                f"If you've already called notify() this turn, complete_task "
-                f"will deliver the buffered message. If success_criteria are "
-                f"unmet, complete_task will be BLOCKED — in that case prefer "
-                f"record_failure with the reason. DO NOT call any other tool."
+                f"Notifications you've already sent this tick have already "
+                f"reached the user — complete_task just closes the lifecycle. "
+                f"If you haven't been able to deliver useful content yet, "
+                f"prefer record_failure with the reason. DO NOT call any "
+                f"other tool."
             ),
         }
 
-    def _flush(self) -> None:
-        """Send all buffered notifications directly (bypasses MCP subprocess).
+    def _check_against(self, texts: list[str]) -> list[str]:
+        """Check all due tasks' criteria against a candidate notify-text list.
 
-        Only sends when _buffering=True, i.e. notify() was intercepted and
-        held back from the MCP subprocess. When _buffering=False the MCP
-        subprocess already delivered the notifications; calling this would
-        double-send, so we just clear the tracking list.
+        Aggregates failures across every task that has criteria. The
+        agent sees a single combined "you need X, Y, Z" message so it
+        can craft one corrected notify call covering all of them rather
+        than trial-and-erroring per criterion.
+
+        Called from on_tool_call pre-send: `texts = self._notify_texts +
+        [proposed_text]`. The candidate text is delivered only when
+        this returns an empty list.
         """
-        if not self._buffering:
-            self._notify_texts.clear()
-            return
-        for text in self._notify_texts:
-            err = _send_to_telegram(text)
-            if err:
-                print(f"[TaskGuard] notify flush failed: {err}", flush=True)
-                events.emit("tool_result", name="notify", result=f"ERROR: buffered notification failed to send: {err}")
-            else:
-                events.emit("tool_result", name="notify", result=f"Notification delivered ({len(text)} chars).")
-        self._notify_texts.clear()
+        failures: list[str] = []
+        for criteria in self._criteria.values():
+            failures.extend(self._check(criteria, texts))
+        return failures
 
-    def _check(self, criteria: list[dict[str, Any]]) -> list[str]:
-        """Return a list of human-readable failure descriptions."""
-        combined = " ".join(self._notify_texts)
+    def _check(
+        self,
+        criteria: list[dict[str, Any]],
+        texts: list[str] | None = None,
+    ) -> list[str]:
+        """Return a list of human-readable failure descriptions for one
+        task's criteria. `texts` defaults to the recorded notify texts
+        (for the silent-drop fallback path); pre-send checking passes
+        an explicit candidate list."""
+        if texts is None:
+            texts = self._notify_texts
+        combined = " ".join(texts)
         failures = []
 
         for c in criteria:
             ctype = c.get("type", "")
 
             if ctype == "notify_called":
-                if not self._notify_texts:
+                if not texts:
                     failures.append("notify() was never called — the user received nothing")
 
             elif ctype == "notify_min_chars":
