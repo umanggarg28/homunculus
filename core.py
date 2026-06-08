@@ -227,9 +227,22 @@ load_dotenv(Path(__file__).parent / ".env")
 # HOMUNCULUS_MODEL in .env.
 API_URL = os.environ.get(
     "HOMUNCULUS_API_URL",
-    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    "https://openrouter.ai/api/v1/chat/completions",
 )
-MODEL = os.environ.get("HOMUNCULUS_MODEL", "gemini-2.5-flash")
+# Primary model: openai/gpt-oss-120b on OpenRouter.
+# Why this over Gemini 2.5 Flash (the previous primary):
+#   - Intelligence index 33 vs Flash's 21 (artificialanalysis.ai, Nov 2026)
+#   - Blended price $0.20/M vs Flash's $0.33/M — cheaper AND smarter
+#   - Strong tool-calling on τ²-Bench, verified working in our fallback
+#     chain for weeks
+#   - 131K context (vs Flash's 1M) is irrelevant for our workload:
+#     measured max ever sent = 31K, p99 = 21K, p50 = 6K. Plenty of headroom.
+# The structural failures we kept patching (re-delivers same task, skips
+# complete_task, ignores ordered skill steps) are long-context instruction-
+# following failures Flash exhibits at our prompt sizes. gpt-oss-120b's
+# higher intelligence index correlates directly with reliability on
+# those classes of task.
+MODEL = os.environ.get("HOMUNCULUS_MODEL", "openai/gpt-oss-120b")
 
 # Fallback provider chain. Each slot is independent — set only the keys
 # you have. On 429 from one provider, we move to the next; a 429'd
@@ -250,12 +263,18 @@ API_URL_FALLBACK = os.environ.get(
 )
 MODEL_FALLBACK = os.environ.get(
     "HOMUNCULUS_MODEL_FALLBACK",
-    # Verified against OpenRouter /api/v1/models June 2026 — all :free, all support tool calling.
-    # kimi-k2.6: 262K ctx, purpose-built for agentic tool use.
-    # qwen3-coder: 1M ctx, strong tool calling.
-    # llama-3.3-70b-instruct: Meta, 131K ctx, verified tools support.
-    # gpt-oss-120b: OpenAI MoE 117B, 131K ctx, verified tools+tool_choice support.
-    "moonshotai/kimi-k2.6:free,qwen/qwen3-coder:free,meta-llama/llama-3.3-70b-instruct:free,openai/gpt-oss-120b:free",
+    # When the primary (paid gpt-oss-120b) is throttled or unreachable,
+    # fall through these in order. All free-tier OpenRouter routes; all
+    # support tool calling.
+    #   moonshotai/kimi-k2.6:free — 262K ctx, purpose-built for agentic tool use
+    #   openai/gpt-oss-120b:free  — free tier of the same model as primary
+    #                               (different rate-limit pool, useful when
+    #                               paid hits a transient 429)
+    #   meta-llama/llama-3.3-70b-instruct:free — 131K ctx, Meta-hosted
+    # qwen/qwen3-coder:free REMOVED 2026-06-08 — OpenRouter routes it to
+    #   a deprecated upstream model (Venice qwen3-coder-480b-a35b-instruct).
+    #   Returns 404 instead of an answer.
+    "moonshotai/kimi-k2.6:free,openai/gpt-oss-120b:free,meta-llama/llama-3.3-70b-instruct:free",
 )
 
 API_URL_FALLBACK_2 = os.environ.get(
@@ -300,6 +319,9 @@ _MODEL_PRICING_CENTS: dict[str, tuple[float, float]] = {
     "anthropic/claude-sonnet-4-6":              (300.0, 1500.0),
     "anthropic/claude-haiku-4-5":               (100.0, 500.0),
     "deepseek/deepseek-v3":                     (14.0,  28.0),
+    # gpt-oss-120b on OpenRouter: $0.20/M blended (per artificialanalysis.ai)
+    # roughly maps to $0.15/M input, $0.50/M output on the paid tier.
+    "openai/gpt-oss-120b":                      (15.0,  50.0),
 }
 
 # Module-level cooldown cache: url|model -> wall-clock expiry timestamp.
