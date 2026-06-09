@@ -444,7 +444,7 @@ def tick(memory: Memory, model: str | None) -> None:
                 yesterday=yesterday_iso,
                 yesterday_path=yesterday_path,
             )
-            response = agent.chat(prompt)
+            response = agent.chat(prompt, source="heartbeat")
             memory.reflection.mark(today)
             print(f"[agent] {response}", flush=True)
             return
@@ -493,7 +493,7 @@ def tick(memory: Memory, model: str | None) -> None:
     # Wall-clock UTC for events.jsonl scan; events log timestamps are UTC.
     started_utc = datetime.now(timezone.utc)
     try:
-        response = agent.chat(prompt)
+        response = agent.chat(prompt, source="heartbeat")
     except Exception as e:
         # If the agent loop crashed AFTER complete_task already ran (e.g.,
         # the final text-generation LLM call failed), don't record a failure —
