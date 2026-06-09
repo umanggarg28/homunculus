@@ -257,3 +257,80 @@ class Skills:
                 yield
             finally:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+# ---- skill loader for the heartbeat state-machine path --------------
+#
+# Parses the YAML frontmatter of a `skill_*.md` file and returns the
+# `states:` declaration (if any) plus the markdown body. The heartbeat
+# tick uses this to drive the agent through a fixed tool sequence
+# instead of relying on the model to recall its own playbook.
+#
+# Why a dedicated helper here rather than re-using memory.py's
+# `_strip_frontmatter`: memory.py only strips and regex-extracts a
+# couple of scalar fields. `states:` is a list-of-dicts that needs a
+# proper YAML parse — string-matching would break on the first nested
+# key.
+#
+# PyYAML 6.0.3 is already a transitive dep of the project; importing
+# yaml directly keeps the loader self-contained.
+
+
+def load_skill_playbook(
+    memory_root: Path,
+    skill_name: str,
+) -> tuple[list[dict] | None, str]:
+    """Return (states, body) for a skill file.
+
+    - states: list of state dicts from the frontmatter's `states:` key,
+      or None if the file has no `states:` declaration. Legacy skills
+      without states continue to work via the free-form agent loop.
+    - body: the markdown after the frontmatter (or the whole file if
+      there is no frontmatter). This is what the heartbeat injects into
+      the per-task prompt so the model has the playbook in context
+      without needing to call recall() first.
+
+    Raises FileNotFoundError if the skill file doesn't exist.
+    """
+    skill_path = memory_root / f"{skill_name}.md"
+    text = skill_path.read_text(encoding="utf-8")
+
+    # No frontmatter: whole file is the body, no states.
+    if not text.startswith("---\n"):
+        return None, text
+
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        # Malformed frontmatter (opening fence with no closing): treat
+        # the whole file as body and surface no states. Caller will
+        # fall back to free-form.
+        return None, text
+
+    frontmatter_text = text[4:end]
+    body = text[end + 5:]
+
+    import yaml
+    try:
+        parsed = yaml.safe_load(frontmatter_text) or {}
+    except yaml.YAMLError:
+        # Malformed YAML — degrade to legacy (no states).
+        return None, body
+
+    if not isinstance(parsed, dict):
+        return None, body
+
+    states = parsed.get("states")
+    if states is None:
+        return None, body
+    if not isinstance(states, list):
+        # Author error: `states:` must be a list. Fall back rather than
+        # crash so a broken skill file doesn't take down the heartbeat.
+        return None, body
+
+    # Validate state shape minimally. Each entry must be a dict with
+    # at least a `tool` key. Invalid entries → degrade to legacy.
+    for s in states:
+        if not isinstance(s, dict) or "tool" not in s:
+            return None, body
+
+    return states, body
