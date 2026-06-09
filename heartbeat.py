@@ -493,7 +493,11 @@ def tick(memory: Memory, model: str | None) -> None:
     # Wall-clock UTC for events.jsonl scan; events log timestamps are UTC.
     started_utc = datetime.now(timezone.utc)
     try:
-        response = agent.chat(prompt, source="heartbeat")
+        response = agent.chat(
+            prompt,
+            source="heartbeat",
+            expected_completions=len(due_tasks),
+        )
     except Exception as e:
         # If the agent loop crashed AFTER complete_task already ran (e.g.,
         # the final text-generation LLM call failed), don't record a failure —

@@ -424,6 +424,21 @@ _UNTRUSTED_CONTENT_TOOLS = frozenset({
 })
 
 
+# Terminal task-lifecycle tools. A successful call to any of these
+# means the agent has discharged its responsibility for one due task,
+# either by delivering it (complete_task), parking it for next tick
+# (continue_task), giving up on it (cancel_task), or recording an
+# infrastructure failure (record_failure). The heartbeat loop uses a
+# count of successful terminal calls to decide when to exit early —
+# without this, tool_choice=required spins the model past its work.
+_TERMINAL_TASK_TOOLS = frozenset({
+    "complete_task",
+    "continue_task",
+    "cancel_task",
+    "record_failure",
+})
+
+
 def _wrap_untrusted_content(name: str, result: str) -> str:
     """Frame an untrusted-content tool result in a delimited envelope.
 
@@ -1868,6 +1883,7 @@ class Agent:
         user_message: str,
         source: str = "web",
         state_sequence: list[dict] | None = None,
+        expected_completions: int | None = None,
     ) -> str:
         """Send a user message; return the agent's final text reply.
 
@@ -1880,10 +1896,17 @@ class Agent:
         first N turns of the loop run pinned states from the list
         instead of the source-default tool_choice. See `_run_loop` for
         the per-state shape.
+
+        `expected_completions` — for heartbeat ticks bundling N due
+        tasks, exit the loop after N successful terminal tool calls
+        (complete_task / cancel_task / continue_task / record_failure).
+        Prevents wasted-turn flailing where tool_choice=required loops
+        the model after its work is done.
         """
         return "".join(self._run_loop(
             user_message, streaming=False, source=source,
             state_sequence=state_sequence,
+            expected_completions=expected_completions,
         ))
 
     def chat_stream(
@@ -1891,6 +1914,7 @@ class Agent:
         user_message: str,
         source: str = "web",
         state_sequence: list[dict] | None = None,
+        expected_completions: int | None = None,
     ):
         """Streaming variant of chat() for the web UI.
 
@@ -1901,6 +1925,7 @@ class Agent:
         yield from self._run_loop(
             user_message, streaming=True, source=source,
             state_sequence=state_sequence,
+            expected_completions=expected_completions,
         )
 
     def _load_agents_md_cached(self) -> str:
@@ -2024,6 +2049,7 @@ class Agent:
         streaming: bool,
         source: str = "web",
         state_sequence: list[dict] | None = None,
+        expected_completions: int | None = None,
     ):
         """Unified agent loop generator shared by chat() and chat_stream().
 
@@ -2181,6 +2207,14 @@ class Agent:
         # most one state from this list; when exhausted the loop reverts
         # to source-default behavior.
         state_idx = 0
+
+        # Successful terminal-tool calls so far. When this reaches
+        # `expected_completions` we exit the loop instead of letting
+        # tool_choice=required keep prodding the model into wasted
+        # turns after its work is done. Was wasting 5+ LLM calls per
+        # successful heartbeat tick (list_tasks → get_current_time →
+        # detector retries → final prose).
+        terminal_completions = 0
 
         for _turn_idx in range(max_turns):
             # Mid-loop eviction: keep only the two most recent tool results
@@ -2643,6 +2677,14 @@ class Agent:
                     "args": args,
                     "success": _outcome_success,
                 })
+                # Terminal-tool accounting: a successful call to any of
+                # these closes the agent's responsibility for one due
+                # task. The post-iteration check uses the counter to
+                # decide if the loop should exit early instead of
+                # letting tool_choice=required prod the model into
+                # wasted turns after delivery.
+                if _outcome_success and name in _TERMINAL_TASK_TOOLS:
+                    terminal_completions += 1
                 # Trim oversized results before they enter history. The full
                 # payload is preserved in the events log; the agent can
                 # re-call the tool with a refined query if it needs more.
@@ -2658,6 +2700,34 @@ class Agent:
                     "tool_call_id": call["id"],
                     "content": content_for_history,
                 })
+
+            # Early exit: the agent has closed out every due task the
+            # caller declared. Without this, tool_choice=required keeps
+            # the loop spinning past delivery — observed in prod 2026-
+            # 06-09: a successful LeetCode notify+complete_task at iter
+            # 4 was followed by 5 more turns of list_tasks /
+            # get_current_time / detector retries before max_turns
+            # finally yielded the fallback string.
+            if (
+                expected_completions is not None
+                and terminal_completions >= expected_completions
+            ):
+                events.emit(
+                    "loop_exit_on_completion",
+                    text=(
+                        f"closed {terminal_completions}/{expected_completions} "
+                        f"due task(s) at iter {_turn_idx + 1}; exiting early"
+                    ),
+                )
+                done_reply = "✓ Done."
+                if self.memory is not None:
+                    self.memory.log_turn("assistant", done_reply)
+                events.emit("assistant_reply", text=events.full_text(done_reply))
+                if not streaming:
+                    yield done_reply
+                else:
+                    yield done_reply
+                return
 
         fallback = "(hit max_turns without a final answer)"
         if not streaming:
