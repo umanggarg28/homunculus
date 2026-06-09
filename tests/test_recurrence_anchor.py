@@ -33,14 +33,22 @@ TaskStore = _real_task_store()
 
 def test_advance_due_snaps_to_anchor_after_drift():
     """A `daily` task whose due_at drifted into the night should snap
-    back to its 7 AM anchor on the next cycle."""
-    drifted_due = "2026-06-07T01:40:00"  # 1:40 AM — drift victim
-    now = datetime.fromisoformat("2026-06-07T01:45:00")  # just past the drifted run
+    back to its 7 AM anchor on the next valid day.
+
+    Updated 2026-06-09: the prior assertion was `parsed.day == 8`
+    (tomorrow). That implemented cycle semantics (next = +1 day from
+    now), which had the perverse side effect of silently skipping the
+    user's wake-time delivery whenever the task fired early. Now we
+    implement anchor semantics (next = next calendar anchor strictly
+    after now). After a drifted 1:40 AM fire, today's 7 AM is still
+    in the future and gets restored — one extra fire that day, then
+    the schedule snaps clean. Better than skipping today entirely."""
+    drifted_due = "2026-06-07T01:40:00"
+    now = datetime.fromisoformat("2026-06-07T01:45:00")
     next_due = TaskStore._advance_due(drifted_due, "daily", now, recur_anchor="07:00:00")
     parsed = datetime.fromisoformat(next_due)
     assert parsed.hour == 7 and parsed.minute == 0 and parsed.second == 0
-    # Tomorrow, not today (today's 7 AM is already past)
-    assert parsed.day == 8
+    assert parsed.day == 7  # today, restoring the anchor — was 8 under cycle semantics
 
 
 def test_advance_due_anchor_skips_already_past_anchor_today():
@@ -50,6 +58,52 @@ def test_advance_due_anchor_skips_already_past_anchor_today():
     parsed = datetime.fromisoformat(next_due)
     assert parsed.day == 8
     assert parsed.hour == 9
+
+
+def test_advance_due_anchor_preserves_today_if_not_yet_reached():
+    """REGRESSION: an early fire (before today's anchor) must NOT skip
+    today's slot. Bug live in prod 2026-06-09: a manual test fire at
+    02:12 IST of a 9 AM daily task scheduled the next run for tomorrow
+    9 AM instead of today 9 AM, silently missing the user-facing
+    delivery for that day. The fix: start `base` at today's anchor,
+    only advance one step if today's anchor is already in the past."""
+    # Fire happened at 02:12 IST on June 9 (before today's 9 AM anchor).
+    now = datetime.fromisoformat("2026-06-09T02:12:06")
+    next_due = TaskStore._advance_due(
+        "2026-06-09T09:00:00",  # was today's anchor
+        "daily",
+        now,
+        recur_anchor="09:00:00",
+    )
+    parsed = datetime.fromisoformat(next_due)
+    assert parsed.day == 9, (
+        f"early fire must preserve today's anchor, got: {parsed.isoformat()}"
+    )
+    assert parsed.hour == 9 and parsed.minute == 0
+
+
+def test_advance_due_anchor_returns_today_when_now_is_right_at_midnight():
+    """Edge: fire at 00:00:01 sharp — today's anchor (e.g., 9 AM) is
+    still ~9 hours in the future, must return today's anchor."""
+    now = datetime.fromisoformat("2026-06-09T00:00:01")
+    next_due = TaskStore._advance_due(
+        "2026-06-08T09:00:00", "daily", now, recur_anchor="09:00:00",
+    )
+    parsed = datetime.fromisoformat(next_due)
+    assert parsed.day == 9 and parsed.hour == 9
+
+
+def test_advance_due_anchor_exact_match_advances_to_next():
+    """Edge: now == today's anchor (down to the second). The contract
+    is `strictly after now`, so we must advance to tomorrow's anchor.
+    This is the normal post-success path — after a 9 AM fire completes
+    at ~09:00:05, we want the next fire tomorrow at 9 AM, not today."""
+    now = datetime.fromisoformat("2026-06-09T09:00:00")
+    next_due = TaskStore._advance_due(
+        "2026-06-09T09:00:00", "daily", now, recur_anchor="09:00:00",
+    )
+    parsed = datetime.fromisoformat(next_due)
+    assert parsed.day == 10 and parsed.hour == 9
 
 
 def test_advance_due_weekly_anchor_steps_by_seven_days():
