@@ -153,6 +153,7 @@ class TaskStore:
         recurrence: str = "none",
         notify: bool = False,
         success_criteria: list | None = None,
+        skill: str | None = None,
     ) -> dict[str, Any]:
         recurrence = recurrence or "none"
         if recurrence not in ALLOWED_RECURRENCE:
@@ -195,6 +196,11 @@ class TaskStore:
                 "consecutive_partials": 0,
                 # Machine-checked before complete_task is accepted.
                 "success_criteria": success_criteria or [],
+                # Optional skill_<name> playbook this task should run
+                # under. When set + the skill has a `states:` frontmatter
+                # block, heartbeat drives the agent through the state
+                # machine instead of the free-form loop.
+                "skill": skill,
             }
             tasks.append(task)
             self._write(tasks)
@@ -442,6 +448,7 @@ class TaskStore:
         recurrence: str | None = None,
         notify: bool | None = None,
         success_criteria: list | None = None,
+        skill: str | None = None,
     ) -> dict[str, Any]:
         """Edit task metadata. None means "don't change this field"."""
         with self._locked():
@@ -464,6 +471,9 @@ class TaskStore:
                 task["notify"] = bool(notify)
             if success_criteria is not None:
                 task["success_criteria"] = success_criteria
+            if skill is not None:
+                # Allow empty string to clear the skill linkage.
+                task["skill"] = skill or None
             task["updated_at"] = now_user_naive().isoformat(timespec="seconds")
             self._write(tasks)
             return task

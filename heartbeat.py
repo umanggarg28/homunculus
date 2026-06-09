@@ -459,29 +459,69 @@ def tick(memory: Memory, model: str | None) -> None:
         flush=True,
     )
 
-    # Stamp `last_fired_at` BEFORE running the agent. This is the dedupe
-    # token: if heartbeat crashes mid-tick, the next tick sees a recent
-    # fire stamp and suppresses the same task. Without this, the same
-    # task would re-fire on every restart until completion.
-    for task in due_tasks:
+    # State-machine selection (PR 3). If any due task is linked to a
+    # skill with a `states:` frontmatter declaration, run JUST that
+    # task this tick under the state-machine path; defer the rest to
+    # the next tick (~10 min). Why exclusive: state_sequence is head-
+    # anchored — it pins turns 0..N-1. If the model happens to handle
+    # a different task first, those pinned turns would fire on the
+    # wrong task and wreck it. Sequential ticks are simpler than
+    # adding cross-task ordering guarantees.
+    from skills import load_skill_playbook
+    memory_root = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
+    state_sequence: list[dict] | None = None
+    skill_body_inject: str | None = None
+    selected_tasks = due_tasks
+    for t in due_tasks:
+        skill_name = t.get("skill")
+        if not skill_name:
+            continue
+        try:
+            states, body = load_skill_playbook(memory_root, skill_name)
+        except FileNotFoundError:
+            print(f"[heartbeat] {t['id']!r} skill {skill_name!r} not found; falling back to free-form", flush=True)
+            continue
+        if states:
+            state_sequence = states
+            skill_body_inject = body.strip()
+            selected_tasks = [t]
+            print(
+                f"[heartbeat] {t['id']!r} → state machine ({len(states)} states) "
+                f"from {skill_name!r}; deferring {len(due_tasks) - 1} other due task(s)",
+                flush=True,
+            )
+            break
+
+    # Stamp `last_fired_at` BEFORE running the agent — only on tasks
+    # we actually attempt this tick. Deferred state-machine tasks must
+    # NOT be marked fired here, otherwise the re-fire suppression
+    # window would skip them on the next tick.
+    for task in selected_tasks:
         try:
             tasks.mark_fired(task["id"])
         except Exception as e:
             print(f"[heartbeat] mark_fired failed for {task['id']}: {e}", flush=True)
 
+    due_tasks_block = _format_due_tasks(selected_tasks)
+    if skill_body_inject:
+        due_tasks_block = (
+            f"{due_tasks_block}\n\n"
+            f"# Playbook for this task (auto-loaded from the linked skill)\n\n"
+            f"{skill_body_inject}"
+        )
     prompt = HEARTBEAT_PROMPT_TEMPLATE.format(
         now_iso=now_iso,
-        due_tasks=_format_due_tasks(due_tasks),
+        due_tasks=due_tasks_block,
     )
     # Snapshot due_at for each task so we can detect if complete_task ran.
-    due_at_before = {t["id"]: t.get("due_at") for t in due_tasks}
+    due_at_before = {t["id"]: t.get("due_at") for t in selected_tasks}
 
     # Install output guard for this tick. The guard intercepts notify() and
     # complete_task() to enforce each task's success_criteria before allowing
     # completion. Always cleared in the finally block.
     guard = TaskGuard({
         t["id"]: t.get("success_criteria") or []
-        for t in due_tasks
+        for t in selected_tasks
     })
     tools.set_pre_execute_hook(guard.on_tool_call)
     # Item 5 (pragmatic slice): install the turn-level hook so the guard
@@ -496,7 +536,8 @@ def tick(memory: Memory, model: str | None) -> None:
         response = agent.chat(
             prompt,
             source="heartbeat",
-            expected_completions=len(due_tasks),
+            state_sequence=state_sequence,
+            expected_completions=len(selected_tasks),
         )
     except Exception as e:
         # If the agent loop crashed AFTER complete_task already ran (e.g.,
@@ -509,7 +550,7 @@ def tick(memory: Memory, model: str | None) -> None:
         # itself is not broken. Don't count it toward consecutive_failures so
         # provider outages during peak hours don't auto-cancel healthy tasks.
         is_provider_exhaustion = "All providers exhausted" in err
-        for task in due_tasks:
+        for task in selected_tasks:
             try:
                 current = tasks.get(task["id"])
                 if current and current.get("due_at") != due_at_before.get(task["id"]):
@@ -576,7 +617,7 @@ def tick(memory: Memory, model: str | None) -> None:
     # ran. When multiple tasks share a tick the attribution is
     # over-counted; in practice most ticks fire one task at a time.
     tick_usage = measure_llm_usage_since(started_utc)
-    for task in due_tasks:
+    for task in selected_tasks:
         try:
             current = tasks.get(task["id"])
             if current is None:
