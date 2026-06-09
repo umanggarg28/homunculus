@@ -640,16 +640,19 @@ class TaskStore:
         step = timedelta(days=1 if recurrence == "daily" else 7)
 
         if recur_anchor and recurrence in ("daily", "weekly"):
-            # Anchor mode: the next fire is exactly one step after `now`'s
-            # calendar day, at the anchored time-of-day. This prevents
-            # double-fires within a single calendar period — if the
-            # current run drifted to a weird hour (1:40 AM), we don't
-            # circle back to 7 AM the SAME day and fire again.
+            # Anchor mode: next fire is the next anchor strictly after
+            # `now`. Starts from today's anchor and only adds `step` if
+            # today's anchor has already passed. The old implementation
+            # unconditionally added one step, which made an early fire
+            # (before today's anchor) silently skip today's slot —
+            # e.g., a 2 AM manual test of a 9 AM daily task would
+            # schedule the next run for TOMORROW 9 AM instead of TODAY
+            # 9 AM, missing the user-facing delivery entirely.
             try:
                 anchor_h, anchor_m, anchor_s = (int(x) for x in recur_anchor.split(":"))
                 base = now.replace(
                     hour=anchor_h, minute=anchor_m, second=anchor_s, microsecond=0,
-                ) + step
+                )
                 while base <= now:
                     base += step
                 return base.isoformat(timespec="seconds")
