@@ -1863,24 +1863,45 @@ class Agent:
             "worth saving, just say so in one line."
         )
 
-    def chat(self, user_message: str, source: str = "web") -> str:
+    def chat(
+        self,
+        user_message: str,
+        source: str = "web",
+        state_sequence: list[dict] | None = None,
+    ) -> str:
         """Send a user message; return the agent's final text reply.
 
         `source` tags which channel the message arrived from
         ("web" / "telegram" / "repl" / "heartbeat") so the unified
         chat log can show provenance. Default is "web" since most
         callers are the web UI.
-        """
-        return "".join(self._run_loop(user_message, streaming=False, source=source))
 
-    def chat_stream(self, user_message: str, source: str = "web"):
+        `state_sequence` — Pi-style state-machine override. When set, the
+        first N turns of the loop run pinned states from the list
+        instead of the source-default tool_choice. See `_run_loop` for
+        the per-state shape.
+        """
+        return "".join(self._run_loop(
+            user_message, streaming=False, source=source,
+            state_sequence=state_sequence,
+        ))
+
+    def chat_stream(
+        self,
+        user_message: str,
+        source: str = "web",
+        state_sequence: list[dict] | None = None,
+    ):
         """Streaming variant of chat() for the web UI.
 
         Yields content strings as they arrive from the LLM. Tool calls
         happen silently — their activity is visible via the /events SSE
         feed. This is a sync generator; FastAPI is happy to consume it.
         """
-        yield from self._run_loop(user_message, streaming=True, source=source)
+        yield from self._run_loop(
+            user_message, streaming=True, source=source,
+            state_sequence=state_sequence,
+        )
 
     def _load_agents_md_cached(self) -> str:
         """Read AGENTS.md, cached by (path, mtime). Returns '' if missing.
@@ -1997,7 +2018,13 @@ class Agent:
 
         return prompt
 
-    def _run_loop(self, user_message: str, streaming: bool, source: str = "web"):
+    def _run_loop(
+        self,
+        user_message: str,
+        streaming: bool,
+        source: str = "web",
+        state_sequence: list[dict] | None = None,
+    ):
         """Unified agent loop generator shared by chat() and chat_stream().
 
         Structural improvements over the prior dual-path design:
@@ -2011,6 +2038,22 @@ class Agent:
           - No auto memory injection: the agent calls recall(query)
             explicitly instead of receiving fuzzy keyword matches it
             didn't ask for. Eliminates the main confabulation vector.
+
+        `state_sequence` — optional Pi-style state machine. When set,
+        the first N turns are governed by the list (N = len). Each entry
+        is a dict:
+          - {"tool": "<name>", "args": {...}}  → deterministic. Skip the
+            LLM call entirely; synthesize the assistant_msg locally and
+            run the dispatch path. Used for known-args context loads
+            (e.g., read_file of a fixed path).
+          - {"tool": "<name>"}                 → model-driven. Override
+            tool_choice to the dict form `{"type":"function",
+            "function":{"name":<name>}}` for this turn only. The model
+            picks the args. The existing required-tool-call detector
+            handles the no-tool-call retry case.
+        After the list is exhausted, the loop continues free-form using
+        the source-default tool_choice (Pi pattern — pin only the
+        bottleneck steps; the model handles the tail).
 
         Yields:
           streaming=True  → content chunks in real-time as LLM produces
@@ -2134,6 +2177,11 @@ class Agent:
         # so a genuinely-stuck model doesn't infinite-loop.
         required_tool_violations = 0
 
+        # State-machine cursor. Each iteration of the loop consumes at
+        # most one state from this list; when exhausted the loop reverts
+        # to source-default behavior.
+        state_idx = 0
+
         for _turn_idx in range(max_turns):
             # Mid-loop eviction: keep only the two most recent tool results
             # full-fidelity; stub everything older. Without this, per-call
@@ -2240,7 +2288,64 @@ class Agent:
                     result="injected wrap-up reminder",
                 )
 
-            if streaming:
+            # State-machine per-turn override. Two shapes:
+            #  - {"tool", "args"} → deterministic: synthesize the
+            #    assistant tool_call locally and skip the LLM round-trip.
+            #    The synthesized message flows through the normal
+            #    dispatch path so it gets full guard/cache/world-state
+            #    treatment exactly as if the model had emitted it.
+            #  - {"tool"}         → model-driven: pin tool_choice to the
+            #    dict form for this turn only; reset next iteration.
+            # Either way, advance state_idx so the next turn moves on.
+            turn_tool_choice = tool_choice
+            synthesized_assistant_msg: dict | None = None
+            if state_sequence is not None and state_idx < len(state_sequence):
+                state = state_sequence[state_idx]
+                state_tool = state.get("tool")
+                state_args = state.get("args")
+                if state_tool is None:
+                    raise RuntimeError(
+                        f"state_sequence[{state_idx}] missing required 'tool' field"
+                    )
+                if state_args is not None:
+                    synthesized_assistant_msg = {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{
+                            "id": f"state-{state_idx}",
+                            "type": "function",
+                            "function": {
+                                "name": state_tool,
+                                "arguments": json.dumps(state_args),
+                            },
+                        }],
+                    }
+                    events.emit(
+                        "state_machine_step",
+                        text=(
+                            f"state {state_idx + 1}/{len(state_sequence)}: "
+                            f"deterministic {state_tool}"
+                        ),
+                    )
+                else:
+                    turn_tool_choice = {
+                        "type": "function",
+                        "function": {"name": state_tool},
+                    }
+                    events.emit(
+                        "state_machine_step",
+                        text=(
+                            f"state {state_idx + 1}/{len(state_sequence)}: "
+                            f"forcing tool {state_tool}"
+                        ),
+                    )
+                state_idx += 1
+
+            if synthesized_assistant_msg is not None:
+                # Deterministic state: bypass the LLM entirely. The dispatch
+                # path below treats this exactly as a normal model reply.
+                assistant_msg = synthesized_assistant_msg
+            elif streaming:
                 # Buffer the full stream before yielding — lets the output
                 # guard check the complete reply and self-correct if needed
                 # before anything reaches the client.
@@ -2254,7 +2359,7 @@ class Agent:
                 )
                 for kind, payload in call_llm_stream(
                     self.history, active_schemas, model=self.model,
-                    tool_choice=tool_choice,
+                    tool_choice=turn_tool_choice,
                     reasoning_effort=reasoning_effort,
                     provider_constraints=provider_constraints,
                 ):
@@ -2274,7 +2379,7 @@ class Agent:
                 )
                 assistant_msg = call_llm(
                     self.history, active_schemas, model=self.model,
-                    tool_choice=tool_choice,
+                    tool_choice=turn_tool_choice,
                     reasoning_effort=reasoning_effort,
                     provider_constraints=provider_constraints,
                 )
@@ -2304,9 +2409,10 @@ class Agent:
             # infinite loop if the model genuinely cannot comply.
             # A dict tool_choice (forced-named tool) is strictly stricter
             # than "required" — it pins one specific function. Both shapes
-            # demand a tool call, so both trip the detector.
+            # demand a tool call, so both trip the detector. Use the
+            # per-turn override so state-machine forced tools count too.
             tool_call_demanded = (
-                tool_choice == "required" or isinstance(tool_choice, dict)
+                turn_tool_choice == "required" or isinstance(turn_tool_choice, dict)
             )
             if (
                 not tool_calls
