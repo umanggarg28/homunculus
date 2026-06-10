@@ -1,8 +1,11 @@
-"""Web tools: web_search, web_fetch. Cached on disk."""
+"""Web tools: web_search, web_fetch, web_post. Cached on disk."""
 
 from __future__ import annotations
 
+import ipaddress
 import os
+import socket
+from urllib.parse import urlparse
 
 import httpx
 
@@ -12,6 +15,62 @@ from ._helpers import (
     cache_get,
     cache_set,
 )
+
+# How many redirect hops web_fetch follows manually. Each hop's target
+# is re-validated by _url_block_reason — httpx's built-in
+# follow_redirects would skip validation on hops 2..N.
+_MAX_REDIRECTS = 5
+
+
+def _url_block_reason(url: str) -> str | None:
+    """Why this URL must not be requested autonomously, or None if OK.
+
+    SSRF guard. An autonomous agent that reads untrusted web content can
+    be prompt-injected into requesting its own infrastructure: the web
+    API on localhost, docker-internal services, or cloud metadata
+    endpoints (169.254.169.254). Two checks:
+
+      1. Scheme must be http/https — no file://, ftp://, gopher://.
+      2. EVERY address the host resolves to must be globally routable.
+         `ip.is_global` rejects loopback, RFC-1918 private ranges,
+         link-local, carrier-grade NAT, and reserved blocks in one
+         predicate, for both v4 and v6.
+
+    Known limit: resolve-then-connect is not atomic, so a malicious DNS
+    server flipping records between our check and httpx's connect (DNS
+    rebinding) can slip through. Acceptable for a single-user personal
+    agent; revisit if the threat model changes.
+
+    HOMUNCULUS_ALLOW_PRIVATE_URLS=1 disables the guard for local dev.
+    """
+    if os.environ.get("HOMUNCULUS_ALLOW_PRIVATE_URLS") == "1":
+        return None
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return f"ERROR: unparseable URL: {url!r}"
+    if parsed.scheme not in ("http", "https"):
+        return (
+            f"ERROR: scheme {parsed.scheme!r} is not allowed — web tools "
+            f"only request http/https URLs"
+        )
+    host = parsed.hostname
+    if not host:
+        return f"ERROR: URL has no host: {url!r}"
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or 80, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as e:
+        return f"ERROR: could not resolve host {host!r}: {e}"
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if not ip.is_global:
+            return (
+                f"ERROR: host {host!r} resolves to non-public address {ip} — "
+                f"requests to private/internal/loopback addresses are "
+                f"blocked for safety. If you meant a public website, "
+                f"check the URL."
+            )
+    return None
 
 
 def web_search(query: str) -> str:
@@ -78,12 +137,28 @@ def web_fetch(url: str) -> str:
         return f"[cache hit]\n{cached}"
 
     try:
-        response = httpx.get(
-            url,
-            timeout=30.0,
-            follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (Homunculus AI assistant)"},
-        )
+        # Manual redirect loop: each hop's target goes through the SSRF
+        # guard. A public URL 302ing to http://localhost/... is the
+        # classic bypass of validate-once-then-follow.
+        for _hop in range(_MAX_REDIRECTS + 1):
+            if (reason := _url_block_reason(url)) is not None:
+                return reason
+            response = httpx.get(
+                url,
+                timeout=30.0,
+                follow_redirects=False,
+                headers={"User-Agent": "Mozilla/5.0 (Homunculus AI assistant)"},
+            )
+            if response.is_redirect:
+                location = response.headers.get("location")
+                if not location:
+                    break
+                # Join handles relative Location headers per RFC 9110.
+                url = str(httpx.URL(url).join(location))
+                continue
+            break
+        else:
+            return f"ERROR: more than {_MAX_REDIRECTS} redirects fetching {url}"
     except httpx.HTTPError as e:
         return f"ERROR: fetch failed: {e}"
     if response.status_code in {401, 403, 429}:
@@ -147,18 +222,23 @@ def web_post(
     Response handling mirrors web_fetch: HTML stripped to text, length
     capped at config.loop.read_file_max_chars.
     """
+    if (reason := _url_block_reason(url)) is not None:
+        return reason
     request_headers = {
         "User-Agent": "Mozilla/5.0 (Homunculus AI assistant)",
         **(headers or {}),
     }
     try:
+        # No redirect following on POST: a redirect target would dodge
+        # the SSRF guard, and the legitimate use cases (GraphQL, REST
+        # APIs) respond directly.
         if raw_body is not None:
             response = httpx.post(
                 url,
                 content=raw_body.encode("utf-8"),
                 headers=request_headers,
                 timeout=30.0,
-                follow_redirects=True,
+                follow_redirects=False,
             )
         else:
             response = httpx.post(
@@ -166,7 +246,7 @@ def web_post(
                 json=(json_body if json_body is not None else {}),
                 headers=request_headers,
                 timeout=30.0,
-                follow_redirects=True,
+                follow_redirects=False,
             )
     except httpx.HTTPError as e:
         return f"ERROR: POST failed: {e}"
