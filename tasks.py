@@ -546,6 +546,39 @@ class TaskStore:
         if len(runs) > cap:
             del runs[: len(runs) - cap]
 
+    # How many delivery keys a task remembers. 200 daily items ≈ 6+
+    # months of history — enough to cover any realistic content list
+    # (Top Interview 150 fits with room to spare) without unbounded
+    # growth of tasks.json.
+    DELIVERED_KEYS_CAP = 200
+
+    def record_delivery(self, task_id: str, key: str) -> dict[str, Any]:
+        """Append a delivery key to the task's ledger.
+
+        The ledger (`task["delivered"]`, a list of {key, ts}) is the
+        harness-owned record of WHAT a recurring delivery task has
+        already sent. It replaces the LLM-maintained tracker file,
+        which degraded within weeks (format drift, missed updates →
+        repeated deliveries). Keys are normalized to lowercase;
+        duplicates are ignored so re-recording is idempotent.
+        """
+        key = (key or "").strip().lower()
+        if not key:
+            return self.get(task_id) or {}
+        with self._locked():
+            tasks = self.all()
+            task = self._find(tasks, task_id)
+            delivered = task.setdefault("delivered", [])
+            if all(d.get("key") != key for d in delivered):
+                delivered.append({
+                    "key": key,
+                    "ts": now_user_naive().isoformat(timespec="seconds"),
+                })
+                if len(delivered) > self.DELIVERED_KEYS_CAP:
+                    del delivered[: len(delivered) - self.DELIVERED_KEYS_CAP]
+                self._write(tasks)
+            return task
+
     def attribute_usage_to_last_run(
         self,
         task_id: str,

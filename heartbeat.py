@@ -153,10 +153,25 @@ class TaskGuard:
 
     {"type": "notify_matches", "pattern": "..."}
         At least one notify() text matches the given regex.
+
+    {"type": "notify_unique", "pattern": "..."}
+        The notify text must contain a delivery key (regex group 1, or
+        the whole match) that is NOT in the task's `delivered` ledger.
+        Blocks re-sending content the user already received — checked
+        deterministically at send time, not entrusted to the model's
+        bookkeeping. The heartbeat records the key into the ledger via
+        TaskStore.record_delivery once the notify has gone out.
     """
 
-    def __init__(self, criteria_by_task: dict[str, list[dict[str, Any]]]) -> None:
+    def __init__(
+        self,
+        criteria_by_task: dict[str, list[dict[str, Any]]],
+        delivered_by_task: dict[str, set[str]] | None = None,
+    ) -> None:
         self._criteria = criteria_by_task
+        # Lowercased delivery keys each task has already sent (from the
+        # task's `delivered` ledger). Consulted by notify_unique.
+        self._delivered = delivered_by_task or {}
         # Notify texts seen so far this tick — kept as a tracker only, NOT
         # as a delivery buffer. Every notify() call now sends immediately;
         # this list lets _check() validate criteria pre-send and lets
@@ -251,7 +266,21 @@ class TaskGuard:
         """Failure descriptions for ONE task's criteria, checked against
         the notify texts actually sent this tick. Empty list = satisfied.
         Tasks with no criteria always pass (there is nothing to check)."""
-        return self._check(self._criteria.get(task_id) or [])
+        return self._check(self._criteria.get(task_id) or [], task_id=task_id)
+
+    def delivery_key(self, task_id: str) -> str | None:
+        """The delivery key contained in this tick's SENT notify texts,
+        per the task's notify_unique criterion. None when the task has
+        no notify_unique criterion or nothing matched. Sent texts are
+        ground truth for what reached the user — this is what the
+        heartbeat records into the task's `delivered` ledger."""
+        combined = " ".join(self._notify_texts)
+        for c in self._criteria.get(task_id) or []:
+            if c.get("type") == "notify_unique" and c.get("pattern"):
+                m = re.search(c["pattern"], combined, re.IGNORECASE)
+                if m:
+                    return (m.group(1) if m.groups() else m.group(0)).strip().lower()
+        return None
 
     def expected_remaining(self) -> list[str]:
         """Task IDs that were due at the start of this tick but have not yet
@@ -317,19 +346,21 @@ class TaskGuard:
         this returns an empty list.
         """
         failures: list[str] = []
-        for criteria in self._criteria.values():
-            failures.extend(self._check(criteria, texts))
+        for task_id, criteria in self._criteria.items():
+            failures.extend(self._check(criteria, texts, task_id=task_id))
         return failures
 
     def _check(
         self,
         criteria: list[dict[str, Any]],
         texts: list[str] | None = None,
+        task_id: str = "",
     ) -> list[str]:
         """Return a list of human-readable failure descriptions for one
         task's criteria. `texts` defaults to the recorded notify texts
         (for the silent-drop fallback path); pre-send checking passes
-        an explicit candidate list."""
+        an explicit candidate list. `task_id` keys the delivered-ledger
+        lookup for notify_unique."""
         if texts is None:
             texts = self._notify_texts
         combined = " ".join(texts)
@@ -371,6 +402,24 @@ class TaskGuard:
                     failures.append(
                         f"notify text does not match required pattern: {pattern!r}"
                     )
+
+            elif ctype == "notify_unique":
+                pattern = c.get("pattern", "")
+                if pattern:
+                    m = re.search(pattern, combined, re.IGNORECASE)
+                    if not m:
+                        failures.append(
+                            f"notify text contains no delivery key matching "
+                            f"{pattern!r} — include the canonical link/identifier"
+                        )
+                    else:
+                        key = (m.group(1) if m.groups() else m.group(0)).strip().lower()
+                        if key in self._delivered.get(task_id, set()):
+                            failures.append(
+                                f"{key!r} was already delivered on a previous "
+                                f"run — send the NEXT undelivered item instead "
+                                f"(the task block lists already_delivered keys)"
+                            )
 
             else:
                 # Unknown criterion type — skip rather than hard-fail so
@@ -544,10 +593,13 @@ def tick(memory: Memory, model: str | None) -> None:
     # Install output guard for this tick. The guard intercepts notify() and
     # complete_task() to enforce each task's success_criteria before allowing
     # completion. Always cleared in the finally block.
-    guard = TaskGuard({
-        t["id"]: t.get("success_criteria") or []
-        for t in selected_tasks
-    })
+    guard = TaskGuard(
+        {t["id"]: t.get("success_criteria") or [] for t in selected_tasks},
+        delivered_by_task={
+            t["id"]: {d.get("key", "") for d in (t.get("delivered") or [])}
+            for t in selected_tasks
+        },
+    )
     tools.set_pre_execute_hook(guard.on_tool_call)
     # Item 5 (pragmatic slice): install the turn-level hook so the guard
     # can inject a forced completion message at iter MAX_TURNS-1 when any
@@ -569,6 +621,9 @@ def tick(memory: Memory, model: str | None) -> None:
         # the final text-generation LLM call failed), don't record a failure —
         # the task was delivered; we'd only be inflating consecutive_failures
         # on a task that will correctly fire again tomorrow.
+        # Notifies sent before the crash DID reach the user — record their
+        # delivery keys so the retry doesn't re-send the same content.
+        _record_delivery_keys(tasks, guard, selected_tasks)
         duration = (datetime.now() - started).total_seconds()
         err = f"{type(e).__name__}: {e}"
         # Provider exhaustion is a transient infrastructure failure — the task
@@ -638,6 +693,10 @@ def tick(memory: Memory, model: str | None) -> None:
     # from "agent never touched the task" (silent fall-through — the bug
     # this whole layer exists to catch).
     silently_dropped = set(guard.expected_remaining())
+    # Sent notifies are ground truth for what reached the user — record
+    # delivery keys regardless of how the lifecycle ended, so no future
+    # run can re-send the same content.
+    _record_delivery_keys(tasks, guard, selected_tasks)
     # Measure once for the whole tick — attribute to each task that
     # ran. When multiple tasks share a tick the attribution is
     # over-counted; in practice most ticks fire one task at a time.
@@ -671,6 +730,26 @@ def tick(memory: Memory, model: str | None) -> None:
             )
         except Exception as inner:
             print(f"[heartbeat] post-tick check failed for {task['id']}: {inner}", flush=True)
+
+
+def _record_delivery_keys(
+    tasks: TaskStore,
+    guard: TaskGuard,
+    selected_tasks: list[dict[str, Any]],
+) -> None:
+    """Persist this tick's delivery keys into each task's ledger.
+
+    Best-effort and idempotent — called on both the success and the
+    crash path of a tick, because a notify that went out before a
+    later exception still reached the user.
+    """
+    for task in selected_tasks:
+        try:
+            key = guard.delivery_key(task["id"])
+            if key:
+                tasks.record_delivery(task["id"], key)
+        except Exception as e:
+            print(f"[heartbeat] record_delivery failed for {task['id']}: {e}", flush=True)
 
 
 def _settle_silent_drop(
@@ -816,6 +895,17 @@ def _format_due_tasks(tasks: list[dict]) -> str:
         criteria = task.get("success_criteria") or []
         if criteria:
             block += f"\n  success_criteria: {_json.dumps(criteria)}"
+        delivered = [d.get("key", "") for d in (task.get("delivered") or [])]
+        if delivered:
+            # The harness-owned ledger of what this task already sent.
+            # Listed so the agent picks the next item WITHOUT having to
+            # maintain its own tracker file; notify_unique enforces it
+            # mechanically even if the agent ignores the list.
+            recent = delivered[-40:]
+            block += (
+                "\n  already_delivered (never send these again): "
+                + ", ".join(recent)
+            )
         partials = int(task.get("consecutive_partials", 0))
         if partials > 0:
             block += f"\n  RESUMING — consecutive_partials: {partials}"
