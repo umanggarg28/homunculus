@@ -1179,8 +1179,11 @@ def call_llm(
                     )
                     if retry_resp.status_code == 200:
                         rj = retry_resp.json()
-                        _emit_llm_call(model_id, url, messages, rj.get("usage"))
-                        return rj["choices"][0]["message"]
+                        msg = _extract_assistant_message(rj)
+                        if msg is not None:
+                            _emit_llm_call(model_id, url, messages, rj.get("usage"))
+                            return msg
+                        last_err = f"malformed 200 response: {retry_resp.text[:200]}"
                     # Retry also failed — fall through to cool + continue
                     response = retry_resp
                     retry_after = _parse_retry_after(retry_resp)
@@ -1206,9 +1209,25 @@ def call_llm(
         if response.status_code >= 400:
             raise RuntimeError(f"API error {response.status_code}: {response.text}")
         # Emit which model actually answered, so the live feed shows it.
-        rj = response.json()
+        try:
+            rj = response.json()
+        except (ValueError, json.JSONDecodeError):
+            last_err = f"non-JSON 200 response: {response.text[:200]}"
+            _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
+            print(f"[call_llm] {model_id} returned non-JSON 200 → cooling, trying next", flush=True)
+            continue
+        msg = _extract_assistant_message(rj)
+        if msg is None:
+            last_err = f"malformed 200 response (missing choices/message): {response.text[:200]}"
+            _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
+            print(f"[call_llm] {model_id} 200 with no choices → cooling, trying next", flush=True)
+            try:
+                events.emit("provider_cooled", name=model_id, host=_url_host(url), result="200/no-choices")
+            except Exception:
+                pass
+            continue
         _emit_llm_call(model_id, url, messages, rj.get("usage"))
-        return rj["choices"][0]["message"]
+        return msg
 
     # All providers in this attempt 429'd or errored. Honor a short sleep
     # then retry the chain once — usually one provider's cooldown will
@@ -1258,11 +1277,44 @@ def call_llm(
             continue
         if response.status_code >= 400:
             raise RuntimeError(f"API error {response.status_code}: {response.text}")
-        rj = response.json()
+        try:
+            rj = response.json()
+        except (ValueError, json.JSONDecodeError):
+            last_err = f"non-JSON 200 response: {response.text[:200]}"
+            _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
+            continue
+        msg = _extract_assistant_message(rj)
+        if msg is None:
+            last_err = f"malformed 200 response (missing choices/message): {response.text[:200]}"
+            _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
+            continue
         _emit_llm_call(model_id, url, messages, rj.get("usage"))
-        return rj["choices"][0]["message"]
+        return msg
 
     raise RuntimeError(f"All providers exhausted: {last_err}")
+
+
+def _extract_assistant_message(rj: dict) -> dict | None:
+    """Pull the assistant message out of an OpenAI-shape response.
+
+    Returns None if the response is malformed (missing `choices`,
+    empty list, missing `message`). Callers should treat None as a
+    transient provider error and try the next provider — observed
+    live 2026-06-10: a provider returned 200 with no `choices` key
+    and crashed the heartbeat tick mid-state-machine with a KeyError.
+    """
+    if not isinstance(rj, dict):
+        return None
+    choices = rj.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    first = choices[0]
+    if not isinstance(first, dict):
+        return None
+    msg = first.get("message")
+    if not isinstance(msg, dict):
+        return None
+    return msg
 
 
 def _url_host(url: str) -> str:
