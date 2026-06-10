@@ -68,6 +68,10 @@ instead of starting over.
 Success criteria: some tasks list `success_criteria` — machine-checked rules
 on your notify() text. If they fail, notify() returns a BLOCKED message
 explaining what's missing; fix the content and call notify() again.
+complete_task() is refused with an ERROR until the criteria pass — if you
+genuinely cannot deliver, call record_failure() instead of trying to close
+the task. Tasks may list `already_delivered` keys: NEVER send any of those
+again; pick the next undelivered item.
 
 Scheduling: default next tick is in ~60 minutes (or sooner if another task
 is due). Call `schedule_next_tick("YYYY-MM-DDTHH:MM:SS")` to wake at a
@@ -95,7 +99,11 @@ For each such task:
      - read_file the current skill memory.
      - Identify what went wrong from the `result` field of the failing run.
      - Update the skill with a corrected step or a "Watch out:" note.
-     - Call remember() with the SAME name to overwrite — no new memory, same name.
+     - Write the FULL updated body with write_file("memory/skill_<slug>.md", ...).
+       remember() cannot overwrite an existing skill — it returns an ERROR
+       (skills are versioned procedural memory; paraphrasing destroys them).
+       Keep everything you didn't change verbatim, especially code, queries
+       and URLs.
   c) If the last_runs show only success AND no skill exists yet → write a new one.
   d) If the last_runs show only success AND a skill exists → no action needed.
 
