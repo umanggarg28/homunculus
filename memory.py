@@ -829,6 +829,33 @@ class Memory:
         filename = f"{type}_{slug}.md"
         path = self.root / filename
 
+        # Skill-corruption guard. Discovered live 2026-06-10: the agent
+        # has been periodically calling `remember(type="skill", name="...")`
+        # on its own playbooks, overwriting the canonical body with a
+        # paraphrased summary. Each pass loses detail (links → "step 1",
+        # GraphQL queries → "use the API", structured code → "(rest
+        # omitted)"). Over weeks the skill decays into uselessness — and
+        # the heartbeat tick that depended on it silently breaks.
+        #
+        # Updates to existing skills must go through Skills().save()
+        # (skills.py) which versions the prior body to .skill_history/
+        # so it can be rolled back. Raw remember() is the destructive
+        # path; we forbid it for existing skill files.
+        if type == "skill" and path.exists():
+            return (
+                f"ERROR: skill '{filename[:-3]}' already exists and cannot be "
+                "overwritten via remember(). Skills are versioned procedural "
+                "memory — paraphrasing one via remember() destroys the "
+                "canonical body. To intentionally update a skill, either "
+                "(a) edit the file directly with write_file() so the change "
+                "is explicit and visible, or (b) call save_refined_skill() "
+                "during a refinement run which versions the prior body to "
+                ".skill_history/ before writing. If you wanted to LEARN "
+                "from this run (without changing the playbook), call "
+                "remember() with a different type like 'project' or "
+                "'feedback' instead."
+            )
+
         # Normalize related: drop empty/None, strip .md suffix if the LLM
         # included it, drop any self-reference.
         rel_clean: list[str] = []
