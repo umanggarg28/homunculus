@@ -345,3 +345,51 @@ def test_required_tool_violation_retry_re_runs_same_state(stubbed_tools):
         f"detector retry must re-run the same state, not advance. "
         f"got: {seen_tool_choices[1]!r}"
     )
+
+
+# ---- preload state-machine tools into active set ---------------------
+
+
+def test_state_sequence_tools_preloaded_into_active_set(monkeypatch):
+    """Bug 2026-06-10: state machine forced tool_choice=web_post, but
+    web_post wasn't in the agent's active tool set, so the provider
+    rejected the request with 400 'Requested tool_choice `web_post`
+    was not defined in the request'. Fix: pre-load every state's tool
+    into the agent's active set at loop start."""
+    # Set up a tools module with ALWAYS_LOADED that does NOT include
+    # web_post — simulating the real environment.
+    monkeypatch.setattr(tools_module, "ALWAYS_LOADED",
+                        frozenset({"read_file", "notify", "complete_task"}),
+                        raising=False)
+    monkeypatch.setattr(tools_module, "tool_names",
+                        lambda: {"read_file", "notify", "complete_task", "web_post"},
+                        raising=False)
+
+    # Construct an Agent fresh so it picks up the ALWAYS_LOADED set.
+    agent = core.Agent(memory=None)
+    assert agent._active_tool_names is not None
+    assert "web_post" not in agent._active_tool_names, (
+        "fixture setup: web_post must NOT start in active set"
+    )
+
+    # Now drive the loop with a state sequence that forces web_post.
+    # We don't care about the LLM behavior — just that web_post gets
+    # added to the active set before any LLM call.
+    captured: list = []
+
+    def fake(messages, tool_schemas, model=None, tool_choice="auto",
+             reasoning_effort="low", provider_constraints=None):
+        captured.append(set(agent._active_tool_names or set()))
+        return _exit_via_complete_task()
+
+    with patch.object(core, "call_llm", side_effect=fake):
+        list(agent._run_loop(
+            "tick", streaming=False, source="heartbeat",
+            state_sequence=[{"tool": "web_post"}],
+        ))
+
+    assert captured, "expected an LLM call"
+    assert "web_post" in captured[0], (
+        f"state-machine tool web_post must be in active set before the LLM "
+        f"call so its schema is in payload['tools']. got: {captured[0]}"
+    )
