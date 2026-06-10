@@ -2506,6 +2506,16 @@ class Agent:
                 and required_tool_violations < 2
             ):
                 required_tool_violations += 1
+                # When a state-machine turn fired the violation, roll
+                # back state_idx so the next iteration re-runs the
+                # SAME state (the forced tool we wanted). Without this
+                # rollback, the retry would advance to the next state
+                # — observed live 2026-06-10: state 2 forced web_post,
+                # model returned prose, detector retried but state 3
+                # fired instead of state 2 again, breaking the
+                # sequence's dependency chain.
+                if state_sequence is not None and state_idx > 0:
+                    state_idx -= 1
                 events.emit(
                     "required_tool_violation",
                     text=(
