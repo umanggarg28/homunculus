@@ -301,3 +301,47 @@ def test_synthesized_assistant_msg_arguments_are_json_string(stubbed_tools):
                     assert parsed == {"path": "a.md", "nested": {"k": 1}}
                     found = True
     assert found, "expected synthesized read_file call in replayed history"
+
+
+# ---- detector retry rolls state_idx back so retry re-runs same state ----
+
+
+def test_required_tool_violation_retry_re_runs_same_state(stubbed_tools):
+    """Bug 2026-06-10: state 2 forced web_post, model returned prose,
+    detector retried — but state_idx had already advanced, so the
+    retry fired state 3 (next forced tool) instead of re-running
+    state 2's forced tool. Broke dependency chains in skill playbooks.
+    Fix: on detector retry, roll state_idx back by 1."""
+    agent = core.Agent(memory=None)
+    seen_tool_choices: list = []
+    call_count = {"n": 0}
+
+    def fake(messages, tool_schemas, model=None, tool_choice="auto",
+             reasoning_effort="low", provider_constraints=None):
+        seen_tool_choices.append(tool_choice)
+        call_count["n"] += 1
+        # Turn 1: pretend the model returned prose (no tool call).
+        # The detector should retry the SAME state.
+        if call_count["n"] == 1:
+            return {"role": "assistant", "content": "let me think...", "tool_calls": None}
+        # Turn 2+: comply by calling complete_task to exit cleanly.
+        return _exit_via_complete_task()
+
+    states = [
+        {"tool": "web_post"},  # state we want to retry
+        {"tool": "notify"},    # state that MUST NOT fire as the retry
+    ]
+    with patch.object(core, "call_llm", side_effect=fake):
+        list(agent._run_loop(
+            "tick", streaming=False, source="heartbeat",
+            state_sequence=states,
+        ))
+
+    # First call: forced web_post (the state we want).
+    assert seen_tool_choices[0] == {"type": "function", "function": {"name": "web_post"}}
+    # Second call (the retry): MUST also be forced web_post (re-running
+    # state 0), NOT forced notify (state 1). This is the fix.
+    assert seen_tool_choices[1] == {"type": "function", "function": {"name": "web_post"}}, (
+        f"detector retry must re-run the same state, not advance. "
+        f"got: {seen_tool_choices[1]!r}"
+    )
