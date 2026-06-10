@@ -2260,6 +2260,20 @@ class Agent:
         # to source-default behavior.
         state_idx = 0
 
+        # Pre-load every tool referenced by the state sequence into the
+        # active set. Otherwise the first forced tool that isn't in
+        # ALWAYS_LOADED (e.g. web_post for the LeetCode skill) hits a
+        # provider 400: "Requested tool_choice `<name>` was not
+        # defined in the request" — the schema for the forced tool
+        # must be present in the payload's `tools` array for the
+        # provider to accept the tool_choice pin. Observed live
+        # 2026-06-10 on the first real state-machine tick.
+        if state_sequence is not None and self._active_tool_names is not None:
+            for s in state_sequence:
+                t = s.get("tool")
+                if t and hasattr(tools, "tool_names") and t in tools.tool_names():
+                    self._active_tool_names.add(t)
+
         # Successful terminal-tool calls so far. When this reaches
         # `expected_completions` we exit the loop instead of letting
         # tool_choice=required keep prodding the model into wasted
