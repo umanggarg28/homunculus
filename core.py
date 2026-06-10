@@ -2514,6 +2514,54 @@ class Agent:
             tool_call_demanded = (
                 turn_tool_choice == "required" or isinstance(turn_tool_choice, dict)
             )
+            # Wrong-forced-tool detector. When tool_choice is a dict
+            # ({"type":"function","function":{"name":"X"}}) we're
+            # asking the provider to constrain the model to a SPECIFIC
+            # tool. Some providers honor this (Anthropic, OpenAI
+            # direct); others (gpt-oss-120b on DeepInfra confirmed via
+            # isolation test 2026-06-10) pass tool_choice through but
+            # don't actually constrain — the model is free to call any
+            # tool from the catalogue. Catch the mismatch and retry
+            # with the same correction shape as the no-tool-call path.
+            forced_tool_name: str | None = None
+            if isinstance(turn_tool_choice, dict):
+                forced_tool_name = (
+                    turn_tool_choice.get("function", {}).get("name")
+                )
+            if (
+                tool_calls
+                and forced_tool_name is not None
+                and required_tool_violations < 2
+            ):
+                actual_name = tool_calls[0].get("function", {}).get("name")
+                if actual_name != forced_tool_name:
+                    required_tool_violations += 1
+                    if state_sequence is not None and state_idx > 0:
+                        state_idx -= 1
+                    events.emit(
+                        "wrong_forced_tool",
+                        text=(
+                            f"forced tool was {forced_tool_name!r} but "
+                            f"model called {actual_name!r} (retry "
+                            f"{required_tool_violations}/2)"
+                        ),
+                        result=(
+                            tool_calls[0].get("function", {}).get("arguments", "")[:200]
+                        ),
+                    )
+                    self._journal_append({
+                        "role": "user",
+                        "content": (
+                            f"Your last reply called the tool '{actual_name}' "
+                            f"but the harness required '{forced_tool_name}' "
+                            f"for this turn. Call '{forced_tool_name}' "
+                            f"specifically — that's the only tool that will "
+                            f"make progress on the current step. The previous "
+                            f"call's result was not used."
+                        ),
+                    })
+                    continue  # re-enter the loop, force another LLM call
+
             if (
                 not tool_calls
                 and tool_call_demanded

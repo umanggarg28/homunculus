@@ -178,10 +178,27 @@ def test_post_state_turns_revert_to_source_default(stubbed_tools):
     bottleneck steps only, free the tail."""
     agent = core.Agent(memory=None)
     captured: list = []
+    call_count = {"n": 0}
 
     def fake(messages, tool_schemas, model=None, tool_choice="auto",
              reasoning_effort="low", provider_constraints=None):
         captured.append(tool_choice)
+        call_count["n"] += 1
+        # Turn 1: comply with the forced web_post. (Returning a
+        # different tool here would trip the new wrong-forced-tool
+        # detector and roll state back — defeating this test's intent
+        # of verifying the post-state revert, not the violation path.)
+        if call_count["n"] == 1:
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "web_post",
+                                 "arguments": '{"url":"x","json_body":{}}'},
+                }],
+            }
         return _exit_via_complete_task()
 
     with patch.object(core, "call_llm", side_effect=fake):
@@ -210,10 +227,33 @@ def test_mixed_static_and_model_driven_states_run_in_order(stubbed_tools):
     tools where the model fills args."""
     agent = core.Agent(memory=None)
     seen_tool_choices: list = []
+    call_count = {"n": 0}
 
     def fake(messages, tool_schemas, model=None, tool_choice="auto",
              reasoning_effort="low", provider_constraints=None):
         seen_tool_choices.append(tool_choice)
+        call_count["n"] += 1
+        # Comply with each forced tool: turn 1 = web_post, turn 2 =
+        # notify. The new wrong-forced-tool detector rolls state back
+        # on mismatch, so returning complete_task here would loop.
+        if call_count["n"] == 1:
+            return {
+                "role": "assistant", "content": "",
+                "tool_calls": [{
+                    "id": "c1", "type": "function",
+                    "function": {"name": "web_post",
+                                 "arguments": '{"url":"x","json_body":{}}'},
+                }],
+            }
+        if call_count["n"] == 2:
+            return {
+                "role": "assistant", "content": "",
+                "tool_calls": [{
+                    "id": "c2", "type": "function",
+                    "function": {"name": "notify",
+                                 "arguments": '{"text":"x"}'},
+                }],
+            }
         return _exit_via_complete_task()
 
     states = [
@@ -392,4 +432,92 @@ def test_state_sequence_tools_preloaded_into_active_set(monkeypatch):
     assert "web_post" in captured[0], (
         f"state-machine tool web_post must be in active set before the LLM "
         f"call so its schema is in payload['tools']. got: {captured[0]}"
+    )
+
+
+# ---- detector catches wrong forced tool ------------------------------
+
+
+def test_wrong_forced_tool_triggers_retry(stubbed_tools):
+    """gpt-oss-120b on DeepInfra (confirmed via isolation test 2026-06-10)
+    does NOT enforce dict tool_choice — pass-through, not constraint.
+    When the state machine forces 'write_file' but the model calls
+    'web_post' instead, the harness must catch the mismatch and retry
+    with a correction message, NOT advance the state machine."""
+    agent = core.Agent(memory=None)
+    captured_choices: list = []
+    call_count = {"n": 0}
+
+    def fake(messages, tool_schemas, model=None, tool_choice="auto",
+             reasoning_effort="low", provider_constraints=None):
+        captured_choices.append(tool_choice)
+        call_count["n"] += 1
+        # Turn 1: model "ignores" the force, calls a different tool
+        # (notify when we forced write_file). Detector should retry.
+        if call_count["n"] == 1:
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "wrong",
+                    "type": "function",
+                    "function": {"name": "notify",
+                                 "arguments": '{"text":"x"}'},
+                }],
+            }
+        # Turn 2: model complies on retry. Use complete_task so the
+        # loop has a clean exit signal.
+        return _exit_via_complete_task()
+
+    with patch.object(core, "call_llm", side_effect=fake):
+        list(agent._run_loop(
+            "tick", streaming=False, source="heartbeat",
+            state_sequence=[{"tool": "write_file"}],
+        ))
+
+    # First two calls must both have forced write_file (state didn't
+    # advance because the detector caught the mismatch).
+    assert captured_choices[0] == {"type": "function", "function": {"name": "write_file"}}
+    assert captured_choices[1] == {"type": "function", "function": {"name": "write_file"}}, (
+        f"wrong-tool detector must roll state back; second call should still "
+        f"force write_file. got: {captured_choices[1]!r}"
+    )
+
+
+def test_correct_forced_tool_does_NOT_retry(stubbed_tools):
+    """Sanity check the inverse — when the model DOES call the forced
+    tool, the detector must not fire a spurious retry."""
+    agent = core.Agent(memory=None)
+    call_count = {"n": 0}
+
+    def fake(messages, tool_schemas, model=None, tool_choice="auto",
+             reasoning_effort="low", provider_constraints=None):
+        call_count["n"] += 1
+        # Comply on first turn: call notify (the forced tool).
+        if call_count["n"] == 1:
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "right",
+                    "type": "function",
+                    "function": {"name": "notify",
+                                 "arguments": '{"text":"hi"}'},
+                }],
+            }
+        return _exit_via_complete_task()
+
+    with patch.object(core, "call_llm", side_effect=fake):
+        list(agent._run_loop(
+            "tick", streaming=False, source="heartbeat",
+            state_sequence=[{"tool": "notify"}],
+            expected_completions=1,
+        ))
+
+    # Two LLM calls expected: forced notify (state 1), then free-form
+    # complete_task (which trips expected_completions exit). NO extra
+    # retry round-trip for wrong-tool.
+    assert call_count["n"] == 2, (
+        f"correct forced-tool call should not retry; expected 2 LLM "
+        f"calls (notify + free-form complete_task), got {call_count['n']}"
     )
