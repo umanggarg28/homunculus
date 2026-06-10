@@ -100,18 +100,22 @@ def test_notify_retry_after_block_succeeds():
     assert guard.expected_remaining() == []
 
 
-def test_complete_task_does_not_re_check_criteria():
-    """Criteria are checked at notify() time. complete_task is a pure
-    lifecycle marker now — never blocks, never has to flush anything."""
+def test_complete_task_re_checks_criteria():
+    """CONTRACT CHANGE (was: complete_task never blocks). The pure-marker
+    design assumed the silent-drop fallback would catch an undelivered
+    close — but a model-called complete_task CLOSES the task, so the
+    fallback never sees it. Observed live 2026-06-11: the agent closed
+    the LeetCode task with 'could not fetch problem ...; task marked
+    complete' and the user received nothing, recorded as success.
+    complete_task now re-checks the task's criteria and refuses to close
+    an undelivered task. See test_harness_task_closure.py for the full
+    matrix."""
     guard = TaskGuard({
         "task-a": [{"type": "notify_called"}],
     })
-    # No notify yet, but complete_task should NOT block. The agent has
-    # already received an opportunity (and the silent-drop fallback will
-    # catch this case via expected_remaining + post-tick fallback notify).
     result = guard.on_tool_call("complete_task", {"task_id": "task-a", "result": "x"})
-    assert result is None
-    assert guard.expected_remaining() == []
+    assert result is not None and result.startswith("ERROR")
+    assert guard.expected_remaining() == ["task-a"]
 
 
 def test_notify_must_satisfy_all_criteria_in_one_call():

@@ -30,7 +30,7 @@ import events
 import tools
 from core import Agent, measure_llm_usage_since
 from memory import Memory
-from tasks import TaskStore
+from tasks import TaskStore, clear_scratchpad
 from tools.notify import _send_to_telegram
 
 
@@ -52,8 +52,11 @@ Close every due task with exactly one of:
   ✓ complete_task(task_id, result)        — delivered cleanly
   ↻ continue_task(task_id, reason,        — partial progress; resume next tick
                   scratchpad_update=...)
-  ✗ record_failure(task_id, reason)       — couldn't do it (provider, scrape block,
-                                            missing data); next tick will retry
+  ✗ record_failure(task_id, reason)       — couldn't do it (broken source, missing
+                                            data); a recurring task resumes at its
+                                            NEXT scheduled occurrence — for transient
+                                            provider throttling use continue_task
+                                            instead (retries in ~10 min)
   ✗ cancel_task(task_id, reason)          — give up entirely (task is wrong/done/obsolete)
 
 Continuation pattern: if you're partway through and hitting the iteration
@@ -211,22 +214,44 @@ class TaskGuard:
 
         if name == "complete_task":
             task_id = arguments.get("task_id", "")
-            # Criteria were already enforced at notify() time, so
-            # complete_task is just a task-lifecycle marker now — no
-            # gate, no buffering to flush. Just record the completion.
+            # Gate completion on the task's own criteria. notify()-time
+            # checking (above) covers the "bad content" case, but nothing
+            # stopped the model from calling complete_task WITHOUT ever
+            # calling notify — observed live 2026-06-11: "could not fetch
+            # problem ...; task marked complete" closed the task with the
+            # user receiving nothing. The result string must start with
+            # "ERROR" — core.py's terminal-tool accounting treats any
+            # other prefix as a successful close and exits the loop.
+            failures = self.criteria_failures(task_id)
+            if failures:
+                return (
+                    "ERROR: complete_task blocked — this task's delivery "
+                    "criteria are not satisfied:\n"
+                    + "\n".join(f"  • {f}" for f in failures)
+                    + "\n\nDeliver the content with notify(text=...) first, "
+                    "then call complete_task again. If delivery is impossible "
+                    "right now, call record_failure(task_id, reason) instead. "
+                    "Do NOT mark this task complete without delivering."
+                )
             self._completed_tasks.add(task_id)
             return None
 
-        # record_failure is also a way to close out a task — track it so the
-        # heartbeat tick doesn't double-report a task that the agent already
-        # marked as failed.
-        if name == "record_failure":
+        # The other lifecycle tools also close out a task — track them so
+        # the post-tick check doesn't treat an explicit close as a silent
+        # drop (which would double-record a partial on the same run).
+        if name in ("record_failure", "cancel_task", "continue_task"):
             task_id = arguments.get("task_id", "")
             if task_id:
                 self._completed_tasks.add(task_id)
             return None
 
         return None  # all other tools pass through unmodified
+
+    def criteria_failures(self, task_id: str) -> list[str]:
+        """Failure descriptions for ONE task's criteria, checked against
+        the notify texts actually sent this tick. Empty list = satisfied.
+        Tasks with no criteria always pass (there is nothing to check)."""
+        return self._check(self._criteria.get(task_id) or [])
 
     def expected_remaining(self) -> list[str]:
         """Task IDs that were due at the start of this tick but have not yet
@@ -634,91 +659,144 @@ def tick(memory: Memory, model: str | None) -> None:
             #                     (which the TaskGuard tracked). The reason is
             #                     already in the task's last_runs; don't double-log.
             if task["id"] not in silently_dropped:
-                # Agent called record_failure — respect its decision.
+                # Agent explicitly closed the task (record_failure /
+                # cancel_task / continue_task) — respect its decision.
                 continue
-            print(
-                f"[heartbeat] {task['id']} silently dropped — agent did not call "
-                f"complete_task OR record_failure. Recording soft failure to clear "
-                f"executing flag.",
-                flush=True,
-            )
-            # Silent drop → mark partial (the work was in progress,
-            # the agent just didn't call any termination tool). The
-            # next tick fires the same task ~10 min later, and the
-            # scratchpad (if the skill wrote to one) survives.
-            updated = tasks.mark_partial(
-                task["id"],
-                "silent drop — agent didn't call complete_task / "
-                "continue_task / cancel_task",
+            _settle_silent_drop(
+                tasks,
+                task,
+                guard,
                 duration_s=(datetime.now() - started).total_seconds(),
                 usage=measure_llm_usage_since(started_utc),
             )
-            events.emit(
-                "task_partial",
-                name=task["id"],
-                text="silent drop (no termination tool called)",
-                result=(
-                    f"consecutive_partials={updated.get('consecutive_partials', '?')}"
-                    f" · retry in ~10 min"
-                ),
-            )
-            # T1.2: skill auto-refinement. Append a Watch-out note to the
-            # related skill_*.md so next-run's agent has the lesson available
-            # without us having to manually update the skill. Best-effort.
-            try:
-                from tools._skill_refiner import update_skill_on_failure
-                updated_path = update_skill_on_failure(
-                    task["id"],
-                    "silent drop on a heartbeat run — agent reached the end of "
-                    "the loop without calling complete_task or record_failure. "
-                    "Either provider was degraded or the loop ran out of "
-                    "context before the final tool call. Make sure you call "
-                    "complete_task or record_failure even with partial data.",
-                    memory_dir=os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"),
-                )
-                if updated_path:
-                    print(
-                        f"[heartbeat] auto-refined skill {updated_path}",
-                        flush=True,
-                    )
-            except Exception as refine_err:
-                print(
-                    f"[heartbeat] skill auto-refine failed for {task['id']}: "
-                    f"{refine_err}",
-                    flush=True,
-                )
-            # Autonomous fallback notify — only when mark_partial
-            # ESCALATED to a real failure (consecutive_failures > 0
-            # after the call). Plain partials are routine continuation
-            # state, not user-actionable, so notifying on each would
-            # spam the user every 10 min. Refresh `updated` from disk
-            # because mark_partial mutated it.
-            if task.get("notify"):
-                refreshed = tasks.get(task["id"]) or {}
-                escalated = int(refreshed.get("consecutive_failures", 0)) > 0
-                if not escalated:
-                    print(
-                        f"[heartbeat] {task['id']} partial — suppressing user "
-                        f"notification (will only fire on escalation)",
-                        flush=True,
-                    )
-                else:
-                    try:
-                        title = task.get("title") or task["id"]
-                        _send_to_telegram(
-                            f"⚠️ I tried '{title}' multiple times today and "
-                            f"couldn't get it through (provider limits or "
-                            f"task is broken). Pausing automatic retries; "
-                            f"check Traces if you want to know why."
-                        )
-                    except Exception as notify_err:
-                        print(
-                            f"[heartbeat] fallback-notify failed for {task['id']}: "
-                            f"{notify_err}",
-                            flush=True,
-                        )
         except Exception as inner:
             print(f"[heartbeat] post-tick check failed for {task['id']}: {inner}", flush=True)
+
+
+def _settle_silent_drop(
+    tasks: TaskStore,
+    task: dict[str, Any],
+    guard: TaskGuard,
+    duration_s: float,
+    usage: dict[str, Any],
+) -> None:
+    """Close out a due task the agent finished without an explicit
+    lifecycle call (no complete_task / record_failure / cancel_task /
+    continue_task).
+
+    Two shapes, decided by the machine-checked criteria:
+
+    - Delivery DID happen: every criterion passed on notify texts that
+      actually went out, only the bookkeeping call is missing. The
+      harness completes the task itself. Re-firing in this state is
+      what used to send the user the same content twice — notify() is
+      not buffered, so the message was already delivered.
+    - No valid delivery: record a partial so the next tick retries from
+      the scratchpad (plus skill auto-refinement and the escalation
+      notify, unchanged).
+
+    Pattern: the harness owns deterministic lifecycle transitions; the
+    model only does the content work (Pi's guard layer, Claude Code's
+    hooks). A task with no criteria can't prove delivery, so it always
+    takes the partial path.
+    """
+    task_id = task["id"]
+    criteria = task.get("success_criteria") or []
+    if criteria and not guard.criteria_failures(task_id):
+        tasks.complete(
+            task_id,
+            "auto-completed by harness: delivery criteria satisfied "
+            "(agent omitted complete_task)",
+        )
+        clear_scratchpad(tasks.root, task_id)
+        tasks.attribute_usage_to_last_run(task_id, usage)
+        print(
+            f"[heartbeat] {task_id} auto-completed — criteria satisfied, "
+            f"agent omitted complete_task",
+            flush=True,
+        )
+        events.emit(
+            "task_complete",
+            name=task_id,
+            text="harness auto-complete: criteria satisfied; agent omitted complete_task",
+        )
+        return
+
+    print(
+        f"[heartbeat] {task_id} silently dropped — agent did not call "
+        f"complete_task OR record_failure. Recording soft failure to clear "
+        f"executing flag.",
+        flush=True,
+    )
+    # Silent drop → mark partial (the work was in progress, the agent
+    # just didn't call any termination tool). The next tick fires the
+    # same task ~10 min later, and the scratchpad (if the skill wrote
+    # to one) survives.
+    updated = tasks.mark_partial(
+        task_id,
+        "silent drop — agent didn't call complete_task / "
+        "continue_task / cancel_task",
+        duration_s=duration_s,
+        usage=usage,
+    )
+    events.emit(
+        "task_partial",
+        name=task_id,
+        text="silent drop (no termination tool called)",
+        result=(
+            f"consecutive_partials={updated.get('consecutive_partials', '?')}"
+            f" · retry in ~10 min"
+        ),
+    )
+    # T1.2: skill auto-refinement. Append a Watch-out note to the
+    # related skill_*.md so next-run's agent has the lesson available
+    # without us having to manually update the skill. Best-effort.
+    try:
+        from tools._skill_refiner import update_skill_on_failure
+        updated_path = update_skill_on_failure(
+            task_id,
+            "silent drop on a heartbeat run — agent reached the end of "
+            "the loop without calling complete_task or record_failure. "
+            "Either provider was degraded or the loop ran out of "
+            "context before the final tool call. Make sure you call "
+            "complete_task or record_failure even with partial data.",
+            memory_dir=os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"),
+        )
+        if updated_path:
+            print(f"[heartbeat] auto-refined skill {updated_path}", flush=True)
+    except Exception as refine_err:
+        print(
+            f"[heartbeat] skill auto-refine failed for {task_id}: {refine_err}",
+            flush=True,
+        )
+    # Autonomous fallback notify — only when mark_partial ESCALATED to
+    # a real failure (consecutive_failures > 0 after the call). Plain
+    # partials are routine continuation state, not user-actionable, so
+    # notifying on each would spam the user every 10 min. Refresh from
+    # disk because mark_partial mutated the task.
+    if task.get("notify"):
+        refreshed = tasks.get(task_id) or {}
+        escalated = int(refreshed.get("consecutive_failures", 0)) > 0
+        if not escalated:
+            print(
+                f"[heartbeat] {task_id} partial — suppressing user "
+                f"notification (will only fire on escalation)",
+                flush=True,
+            )
+            return
+        try:
+            title = task.get("title") or task_id
+            _send_to_telegram(
+                f"⚠️ I tried '{title}' multiple times today and "
+                f"couldn't get it through (provider limits or "
+                f"task is broken). Pausing automatic retries; "
+                f"check Traces if you want to know why."
+            )
+        except Exception as notify_err:
+            print(
+                f"[heartbeat] fallback-notify failed for {task_id}: {notify_err}",
+                flush=True,
+            )
 
 
 def _format_due_tasks(tasks: list[dict]) -> str:
