@@ -38,7 +38,11 @@ COPY pyproject.toml ./
 RUN uv sync --no-install-project
 
 # Copy the source code into the image.
-COPY core.py memory.py tasks.py heartbeat.py events.py agent_controls.py user_tz.py config.py messages.py homunculus.yaml AGENTS.md ./
+# All top-level modules. A glob instead of an explicit list — the list
+# kept silently going stale as modules were added (archival.py, skills.py,
+# transcript.py, ... were missing), which broke fresh builds while stale
+# layer caches masked the problem on incremental ones.
+COPY *.py homunculus.yaml AGENTS.md ./
 COPY tools/ ./tools/
 COPY transports/ ./transports/
 COPY scripts/ ./scripts/
