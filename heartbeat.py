@@ -533,38 +533,8 @@ def tick(memory: Memory, model: str | None) -> None:
         flush=True,
     )
 
-    # State-machine selection (PR 3). If any due task is linked to a
-    # skill with a `states:` frontmatter declaration, run JUST that
-    # task this tick under the state-machine path; defer the rest to
-    # the next tick (~10 min). Why exclusive: state_sequence is head-
-    # anchored — it pins turns 0..N-1. If the model happens to handle
-    # a different task first, those pinned turns would fire on the
-    # wrong task and wreck it. Sequential ticks are simpler than
-    # adding cross-task ordering guarantees.
-    from skills import load_skill_playbook
     memory_root = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
-    state_sequence: list[dict] | None = None
-    skill_body_inject: str | None = None
-    selected_tasks = due_tasks
-    for t in due_tasks:
-        skill_name = t.get("skill")
-        if not skill_name:
-            continue
-        try:
-            states, body = load_skill_playbook(memory_root, skill_name)
-        except FileNotFoundError:
-            print(f"[heartbeat] {t['id']!r} skill {skill_name!r} not found; falling back to free-form", flush=True)
-            continue
-        if states:
-            state_sequence = states
-            skill_body_inject = body.strip()
-            selected_tasks = [t]
-            print(
-                f"[heartbeat] {t['id']!r} → state machine ({len(states)} states) "
-                f"from {skill_name!r}; deferring {len(due_tasks) - 1} other due task(s)",
-                flush=True,
-            )
-            break
+    state_sequence, selected_tasks, playbooks = _plan_tick(due_tasks, memory_root)
 
     # Stamp `last_fired_at` BEFORE running the agent — only on tasks
     # we actually attempt this tick. Deferred state-machine tasks must
@@ -577,12 +547,8 @@ def tick(memory: Memory, model: str | None) -> None:
             print(f"[heartbeat] mark_fired failed for {task['id']}: {e}", flush=True)
 
     due_tasks_block = _format_due_tasks(selected_tasks)
-    if skill_body_inject:
-        due_tasks_block = (
-            f"{due_tasks_block}\n\n"
-            f"# Playbook for this task (auto-loaded from the linked skill)\n\n"
-            f"{skill_body_inject}"
-        )
+    if playbooks:
+        due_tasks_block += "\n\n" + "\n\n".join(playbooks)
     prompt = HEARTBEAT_PROMPT_TEMPLATE.format(
         now_iso=now_iso,
         due_tasks=due_tasks_block,
@@ -730,6 +696,57 @@ def tick(memory: Memory, model: str | None) -> None:
             )
         except Exception as inner:
             print(f"[heartbeat] post-tick check failed for {task['id']}: {inner}", flush=True)
+
+
+def _plan_tick(
+    due_tasks: list[dict[str, Any]],
+    memory_root: Path,
+) -> tuple[list[dict] | None, list[dict[str, Any]], list[str]]:
+    """Decide what this tick runs and which playbooks reach the prompt.
+
+    Returns (state_sequence, selected_tasks, playbook_blocks).
+
+    A task linked to a skill with a `states:` frontmatter declaration
+    runs EXCLUSIVELY this tick — state_sequence pins turns 0..N-1, so
+    if the model handled a different task first the pinned turns would
+    fire on the wrong task. Other due tasks defer to the next tick.
+
+    Stateless skills contribute their playbook body to the prompt.
+    Previously the body was injected ONLY for state-machine skills —
+    a task linked to an ordinary skill ran with no playbook at all,
+    so the model improvised from web_search instead of following its
+    own instructions (observed live 2026-06-11: delivered an algomap.io
+    link for a task whose playbook says LeetCode GraphQL only).
+    """
+    from skills import load_skill_playbook
+
+    playbooks: list[str] = []
+    for t in due_tasks:
+        skill_name = t.get("skill")
+        if not skill_name:
+            continue
+        try:
+            states, body = load_skill_playbook(memory_root, skill_name)
+        except FileNotFoundError:
+            print(
+                f"[heartbeat] {t['id']!r} skill {skill_name!r} not found; "
+                f"falling back to free-form",
+                flush=True,
+            )
+            continue
+        block = (
+            f"# Playbook for task '{t['id']}' "
+            f"(auto-loaded from {skill_name})\n\n{body.strip()}"
+        )
+        if states:
+            print(
+                f"[heartbeat] {t['id']!r} → state machine ({len(states)} states) "
+                f"from {skill_name!r}; deferring {len(due_tasks) - 1} other due task(s)",
+                flush=True,
+            )
+            return states, [t], [block]
+        playbooks.append(block)
+    return None, due_tasks, playbooks
 
 
 def _record_delivery_keys(
