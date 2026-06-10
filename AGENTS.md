@@ -55,9 +55,10 @@ below — the system prompt warns the model that these are off-limits.
 - archival_memory_insert, archival_memory_search
 - notify
 - create_task, list_tasks, cancel_task, complete_task, record_failure,
-  schedule_task, schedule_next_tick, run_task
+  continue_task, task_scratchpad, schedule_task, schedule_next_tick,
+  run_task
 - get_current_time
-- web_fetch, web_search
+- web_fetch, web_search, web_post
 - python (sandboxed)
 - get_world_state, update_world_state
 - rate_skill
