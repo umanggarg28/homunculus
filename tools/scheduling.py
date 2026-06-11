@@ -37,10 +37,16 @@ def schedule_next_tick(iso_datetime: str) -> str:
             f"ERROR: '{iso_datetime}' is not a valid ISO 8601 datetime. "
             f"Format: YYYY-MM-DDTHH:MM:SS (e.g. 2026-05-18T08:00:00)."
         )
-    # Normalize tz-aware → naive local before comparing to datetime.now().
+    # Normalize everything to USER-naive wall clock — the frame the
+    # heartbeat's _compute_sleep compares in and the frame the agent's
+    # prompts quote. The old datetime.now() was container-naive (UTC in
+    # Docker), so a valid "wake me at 13:00 IST" was either rejected as
+    # past or silently discarded by _compute_sleep later.
+    from user_tz import get_user_tz
     if target.tzinfo is not None:
-        target = target.astimezone().replace(tzinfo=None)
-    now = datetime.now()
+        tz = get_user_tz()
+        target = (target.astimezone(tz) if tz else target.astimezone()).replace(tzinfo=None)
+    now = now_user_naive()
     if target <= now:
         return f"ERROR: target time {target} is in the past (now: {now})."
     if target > now + timedelta(hours=24):

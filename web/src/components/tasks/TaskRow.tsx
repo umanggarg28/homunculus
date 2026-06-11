@@ -202,6 +202,20 @@ function buildSubtitle(task: Task, dueMs: number | null, nowMs: number, isOverdu
   const parts: string[] = [];
   if (task.recurrence !== "none") parts.push(task.recurrence);
 
+  // A finished one-shot has no next fire — "next in 219h" on a DONE row
+  // was the stale due_at counting toward nothing. Show when it closed.
+  if (task.status !== "active") {
+    const closedIso = task.completed_at || task.updated_at;
+    if (closedIso) {
+      const closed = new Date(closedIso);
+      parts.push(
+        `${task.status === "cancelled" ? "cancelled" : "done"} ` +
+        closed.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }),
+      );
+    }
+    return parts.join(" · ");
+  }
+
   if (dueMs !== null) {
     const diff = Math.abs(dueMs - nowMs);
     const s = Math.floor(diff / 1000);

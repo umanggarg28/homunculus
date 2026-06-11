@@ -115,16 +115,19 @@ export function LandingPage() {
   useEffect(() => {
     let cancelled = false;
     async function loadTelemetry() {
-      const [stats, tasks, memories, replay] = await Promise.allSettled([
+      const [stats, tasks, memories, chat] = await Promise.allSettled([
         api.statsToday(),
         api.tasksList("all"),
         api.memoryList(),
-        api.agentReplay(1),
+        api.chatHistory(),
       ]);
       if (cancelled) return;
-      const loaded = [stats, tasks, memories, replay].filter((r) => r.status === "fulfilled").length;
-      const lastDirective = replay.status === "fulfilled"
-        ? replay.value[0]?.user?.trim() || replay.value[0]?.assistant?.trim() || null
+      const loaded = [stats, tasks, memories, chat].filter((r) => r.status === "fulfilled").length;
+      // "Last directive" = the last thing the USER told the agent. The
+      // old source (agent replay, latest turn) was usually a heartbeat
+      // tick, so the card showed the harness's internal prompt.
+      const lastDirective = chat.status === "fulfilled"
+        ? [...chat.value].reverse().find((m) => m.role === "user")?.content?.trim() || null
         : null;
       setTelemetry({
         events: stats.status === "fulfilled" ? stats.value.events : null,
@@ -439,7 +442,12 @@ function fmtMetric(value: number | null): string {
 }
 
 function compactDirective(value: string): string {
-  return value.replace(/\s+/g, " ").slice(0, 96);
+  const flat = value.replace(/\s+/g, " ").trim();
+  if (flat.length <= 96) return flat;
+  // Truncate at a word boundary — mid-word cuts ("the current time is 2026-")
+  // read like rendering glitches.
+  const cut = flat.slice(0, 96);
+  return cut.slice(0, Math.max(40, cut.lastIndexOf(" "))) + " …";
 }
 
 function TelemetryCell({ label, value, hint, onPick }: { label: string; value: string; hint: string; onPick: () => void }) {
