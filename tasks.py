@@ -653,11 +653,24 @@ class TaskStore:
 
     @staticmethod
     def _normalize_datetime(value: str | None) -> str | None:
+        """Normalize an ISO datetime to the store's canonical form:
+        NAIVE wall-clock in the USER's timezone.
+
+        tz-aware inputs convert to the user's zone before dropping
+        tzinfo. The old code used astimezone() with no argument —
+        CONTAINER-local, i.e. UTC in Docker — so an agent that
+        correctly wrote "12:00+05:30" got stored as 06:30 and the
+        reminder fired five and a half hours early (live 2026-06-11).
+        """
         if value is None:
             return None
         target = datetime.fromisoformat(value)
         if target.tzinfo is not None:
-            target = target.astimezone().replace(tzinfo=None)
+            from user_tz import get_user_tz
+            tz = get_user_tz()
+            target = (
+                target.astimezone(tz) if tz else target.astimezone()
+            ).replace(tzinfo=None)
         return target.isoformat(timespec="seconds")
 
     @staticmethod
