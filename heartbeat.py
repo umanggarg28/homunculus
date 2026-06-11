@@ -600,10 +600,16 @@ def tick(memory: Memory, model: str | None) -> None:
         _record_delivery_keys(tasks, guard, selected_tasks)
         duration = (datetime.now() - started).total_seconds()
         err = f"{type(e).__name__}: {e}"
-        # Provider exhaustion is a transient infrastructure failure — the task
-        # itself is not broken. Don't count it toward consecutive_failures so
-        # provider outages during peak hours don't auto-cancel healthy tasks.
-        is_provider_exhaustion = "All providers exhausted" in err
+        # Infrastructure failures (provider exhaustion, provider API
+        # errors, network blips) are transient — the task itself is not
+        # broken. Mark partial → retry in ~10 min, don't count toward
+        # consecutive_failures, and crucially don't advance due_at a
+        # whole recurrence step. Observed live 2026-06-11: a provider
+        # 404 at 09:00 was recorded as a REAL failure, which advanced
+        # the daily task to tomorrow and silently skipped the day's
+        # delivery. Only non-infra exceptions (actual task/code bugs)
+        # take the record_failure path now.
+        is_provider_exhaustion = _is_infra_error(err)
         for task in selected_tasks:
             try:
                 current = tasks.get(task["id"])
@@ -1015,6 +1021,29 @@ def main() -> None:
         memory.next_tick.set(wake_at)
         _interruptible_sleep(sleep_seconds)
         memory.next_tick.pop()  # consumed — clear so stale value doesn't persist after waking
+
+
+def _is_infra_error(err: str) -> bool:
+    """True when an agent-loop exception string describes infrastructure
+    (LLM provider / network) trouble rather than a broken task.
+
+    Infra errors mark the task PARTIAL (retry ~10 min, scratchpad
+    survives); everything else records a real failure (advances a
+    recurring task to its next occurrence and counts toward
+    auto-cancel). The strings come from core.call_llm's raise sites
+    and httpx exception names.
+    """
+    return any(
+        marker in err
+        for marker in (
+            "All providers exhausted",   # call_llm chain fully cooled
+            "API error",                 # call_llm non-2xx raise
+            "ConnectError",
+            "ConnectTimeout",
+            "ReadTimeout",
+            "RemoteProtocolError",
+        )
+    )
 
 
 def _is_transient_network_error(exc: BaseException) -> bool:
