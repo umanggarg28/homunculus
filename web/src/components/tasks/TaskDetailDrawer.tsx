@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import type { Task } from "@/lib/types";
-import { parseServerIso } from "@/lib/api";
+import { parseTaskWallClock } from "@/lib/api";
 
 interface Props { task: Task | null; onClose: () => void; }
 
@@ -155,7 +155,7 @@ export function TaskDetailDrawer({ task, onClose }: Props) {
 }
 
 function fmtDateTime(iso: string): string {
-  const ms = parseServerIso(iso);
+  const ms = parseTaskWallClock(iso);
   if (!Number.isFinite(ms)) return iso;
   const d = new Date(ms);
   return d.toLocaleString("en-US", {

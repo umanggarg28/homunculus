@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, parseServerIso } from "@/lib/api";
+import { api, parseTaskWallClock } from "@/lib/api";
 import type { Task } from "@/lib/types";
 import { RunNowPanel } from "./RunNowPanel";
 
@@ -52,7 +52,7 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
   };
 
   const isActive = task.status === "active";
-  const due = task.due_at ? parseServerIso(task.due_at) : null;
+  const due = task.due_at ? parseTaskWallClock(task.due_at) : null;
   const isOverdue = due !== null && due <= now && isActive;
   const lastRunFailed = task.last_runs?.length > 0 && task.last_runs[task.last_runs.length - 1]?.status === "failure";
 
@@ -223,7 +223,7 @@ function RunSparkline({ runs }: { runs: import("@/lib/types").TaskRun[] }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
       {last.map((r, i) => {
-        const d = new Date(parseServerIso(r.ts));
+        const d = new Date(parseTaskWallClock(r.ts));
         const tipText = [
           d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }),
           r.status,

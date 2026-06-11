@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, parseServerIso } from "@/lib/api";
+import { api, parseTaskWallClock } from "@/lib/api";
 
 interface Upcoming {
   next_tick: string | null;
@@ -91,7 +91,8 @@ export function UpcomingPanel() {
 }
 
 function parseIsoLocal(iso: string): number {
-  return parseServerIso(iso);
+  // Task due_at is naive USER wall clock — see parseTaskWallClock.
+  return parseTaskWallClock(iso);
 }
 
 function formatCountdown(ms: number): string {
