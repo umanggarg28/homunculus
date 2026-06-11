@@ -13,6 +13,24 @@ export function parseServerIso(iso: string): number {
   return new Date(hasZone ? iso : iso + "Z").getTime();
 }
 
+/**
+ * Parse a TASK timestamp (due_at, last_runs[].ts, last_fired_at).
+ *
+ * The task store writes these as NAIVE wall-clock strings in the USER's
+ * timezone (tasks.py now_user_naive) — and the user's timezone is
+ * autodetected from this very browser, so the browser's local zone IS
+ * the correct frame. JS already parses zoneless ISO strings as local
+ * time, which is exactly what we want here.
+ *
+ * Do NOT use parseServerIso for task fields: appending "Z" reads them
+ * as UTC and shifts every countdown by the UTC offset (observed live:
+ * "due in 7h" for a task due in 1.5h, IST = +5:30).
+ */
+export function parseTaskWallClock(iso: string): number {
+  if (!iso) return NaN;
+  return new Date(iso).getTime();
+}
+
 import type {
   AgentControls,
   AgentBudgetStats,
