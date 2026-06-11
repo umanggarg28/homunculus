@@ -1,11 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useEventStream } from "@/hooks/useEventStream";
 import type { FeedEvent } from "@/lib/types";
 
 /**
- * Swimlane timeline — horizontal time axis, 4 lanes (USER / LLM / TOOL / REPLY).
- * Service filter isolates web (chat) from heartbeat (autonomous) activity.
- * Blocks are thin horizontal bars; click for a detail panel.
+ * Activity grid — horizontal time axis, 4 lanes (USER / LLM / TOOL /
+ * REPLY), each lane a row of density cells (one per time bucket).
+ *
+ * Why cells, not duration bars: events here are seconds long. On a 24h
+ * window an 8s bar is 0.009% wide — the old Gantt render drew the lanes
+ * empty exactly when the user zoomed out to "what happened today?".
+ * Density cells are zoom-invariant: a bucket with activity is visible
+ * at every window size, brightness encodes how much, red encodes
+ * errors. (It also reads more dot-matrix-CRT than bars ever did.)
+ *
+ * Click a cell to open the bucket inspector listing its events; click
+ * an event to expand the full record. Service filter isolates web
+ * (chat) from heartbeat (autonomous) activity.
  */
 
 type LaneKey = "USER" | "LLM" | "TOOL" | "REPLY";
@@ -23,6 +33,10 @@ const WINDOWS = [
   { label: "1H",  ms: 60 * 60 * 1000 },
   { label: "24H", ms: 24 * 60 * 60 * 1000 },
 ];
+
+/** Buckets across the window. 72 keeps cells chunky enough to click
+ * (≈13px at 960px wide) while resolving 20-minute structure on 24H. */
+const BUCKETS = 72;
 
 type ServiceFilter = "all" | "web" | "heartbeat";
 
@@ -79,7 +93,7 @@ function buildBlocks(events: FeedEvent[], windowStart: number, now: number, serv
     const lane = laneFor(e);
     if (!lane) continue;
     const t = new Date(e.ts).getTime();
-    if (t < windowStart - 60_000) continue;
+    if (t < windowStart) continue;
 
     // Collapse tool_call + tool_result pairs into one block
     if (e.event === "tool_result") {
@@ -115,16 +129,39 @@ function buildTicks(start: number, end: number, windowMs: number) {
   return ticks;
 }
 
+/** One lane-row of the grid: per-bucket event lists + max count. */
+interface LaneBuckets {
+  lane: LaneKey;
+  cells: Block[][];          // BUCKETS entries
+  max: number;               // busiest cell in THIS lane (for scaling)
+}
+
+function bucketize(blocks: Block[], windowStart: number, windowMs: number): LaneBuckets[] {
+  const perLane = new Map<LaneKey, Block[][]>(
+    LANES.map((l) => [l.key, Array.from({ length: BUCKETS }, () => [] as Block[])]),
+  );
+  const bucketMs = windowMs / BUCKETS;
+  for (const b of blocks) {
+    const idx = Math.min(BUCKETS - 1, Math.max(0, Math.floor((b.startMs - windowStart) / bucketMs)));
+    perLane.get(b.lane)!![idx].push(b);
+  }
+  return LANES.map((l) => {
+    const cells = perLane.get(l.key)!;
+    return { lane: l.key, cells, max: Math.max(1, ...cells.map((c) => c.length)) };
+  });
+}
+
+interface Selection { lane: LaneKey; bucket: number }
+
 export function TracesTimeline() {
   const { events, connected } = useEventStream(500);
   const [windowMs, setWindowMs]     = useState(WINDOWS[1].ms); // default 15M
   const [now, setNow]               = useState(() => Date.now());
-  const [selected, setSelected]     = useState<Block | null>(null);
+  const [selected, setSelected]     = useState<Selection | null>(null);
   const [paused, setPaused]         = useState(false);
-  const [service, setService]       = useState<ServiceFilter>("all"); // default: all services
+  const [service, setService]       = useState<ServiceFilter>("all");
   const [hiddenLanes, setHiddenLanes] = useState<Set<LaneKey>>(new Set());
   const [autoWidened, setAutoWidened] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
 
   const toggleLane = (key: LaneKey) => {
     setHiddenLanes((prev) => {
@@ -136,30 +173,24 @@ export function TracesTimeline() {
 
   // Auto-widen the window on first render IF the default (15M) contains no
   // real activity. Picks the smallest WINDOWS option that actually has
-  // events with a lane. Skipped once the user touches WINDOW manually
-  // (autoWidened gate), so we never fight a deliberate selection.
+  // events with a lane. Skipped once the user touches WINDOW manually.
   useEffect(() => {
     if (autoWidened || events.length === 0) return;
     const nowMs = Date.now();
     const hasLane = (e: FeedEvent) => laneFor(e) !== null;
-    const inWindow = (e: FeedEvent, ms: number) => {
-      const t = new Date(e.ts).getTime();
-      return t >= nowMs - ms;
-    };
-    // If the current window already shows activity, don't touch it.
+    const inWindow = (e: FeedEvent, ms: number) => new Date(e.ts).getTime() >= nowMs - ms;
     if (events.some((e) => hasLane(e) && inWindow(e, windowMs))) {
       setAutoWidened(true);
       return;
     }
     for (const w of WINDOWS) {
-      if (w.ms <= windowMs) continue; // only widen
+      if (w.ms <= windowMs) continue;
       if (events.some((e) => hasLane(e) && inWindow(e, w.ms))) {
         setWindowMs(w.ms);
         setAutoWidened(true);
         return;
       }
     }
-    // No window contains real activity — give up gracefully on the widest.
     setAutoWidened(true);
   }, [events, windowMs, autoWidened]);
 
@@ -174,38 +205,46 @@ export function TracesTimeline() {
     () => buildBlocks(events, windowStart, now, service),
     [events, windowStart, now, service],
   );
-  const blocks = hiddenLanes.size === 0
-    ? allBlocks
-    : allBlocks.filter((b) => !hiddenLanes.has(b.lane));
+  const laneBuckets = useMemo(
+    () => bucketize(allBlocks, windowStart, windowMs),
+    [allBlocks, windowStart, windowMs],
+  );
   const ticks = useMemo(() => buildTicks(windowStart, now, windowMs), [windowStart, now, windowMs]);
 
   const laneH  = 48;
-  const barH   = 10;
   const rulerH = 26;
   const totalH = rulerH + LANES.length * laneH;
+  const bucketMs = windowMs / BUCKETS;
 
   const xPct = (ts: number) => {
     const p = ((ts - windowStart) / windowMs) * 100;
     return Math.min(100, Math.max(0, p));
   };
 
-  // Count blocks per lane for the header (use allBlocks so counts don't change when lane is hidden)
   const counts = useMemo(() => {
     const c: Record<LaneKey, number> = { USER: 0, LLM: 0, TOOL: 0, REPLY: 0 };
-    for (const b of allBlocks) if (b.startMs >= windowStart) c[b.lane]++;
+    for (const b of allBlocks) c[b.lane]++;
     return c;
-  }, [allBlocks, windowStart]);
+  }, [allBlocks]);
+
   const traceSummary = useMemo(() => {
-    const visibleBlocks = allBlocks.filter((b) => b.startMs >= windowStart);
-    const errors = visibleBlocks.filter((b) => b.isError).length;
-    const tools = visibleBlocks.filter((b) => b.lane === "TOOL").length;
-    const models = visibleBlocks.filter((b) => b.lane === "LLM").length;
-    const latest = visibleBlocks[visibleBlocks.length - 1];
+    const errors = allBlocks.filter((b) => b.isError).length;
+    const tools = allBlocks.filter((b) => b.lane === "TOOL").length;
+    const models = allBlocks.filter((b) => b.lane === "LLM").length;
+    const latest = allBlocks[allBlocks.length - 1];
     const latestLabel = latest
       ? `${latest.label}${latest.event.name ? ` · ${latest.event.name}` : ""}`
       : "no lane events";
-    return { total: visibleBlocks.length, errors, tools, models, latestLabel };
-  }, [allBlocks, windowStart]);
+    return { total: allBlocks.length, errors, tools, models, latestLabel };
+  }, [allBlocks]);
+
+  const selectedBlocks = useMemo(() => {
+    if (!selected) return null;
+    const laneRow = laneBuckets.find((l) => l.lane === selected.lane);
+    return laneRow ? laneRow.cells[selected.bucket] : null;
+  }, [selected, laneBuckets]);
+
+  const anyActivity = allBlocks.length > 0;
 
   return (
     <div className="traces-timeline">
@@ -218,7 +257,7 @@ export function TracesTimeline() {
           {WINDOWS.map((w) => {
             const active = w.ms === windowMs;
             return (
-              <button key={w.label} onClick={() => { setWindowMs(w.ms); setAutoWidened(true); }} className="brut-meta" style={{
+              <button key={w.label} onClick={() => { setWindowMs(w.ms); setAutoWidened(true); setSelected(null); }} className="brut-meta" style={{
                 padding: "4px 9px",
                 border: `1px solid ${active ? "var(--color-accent)" : "var(--color-border)"}`,
                 background: active ? "var(--color-accent)" : "transparent",
@@ -236,14 +275,13 @@ export function TracesTimeline() {
           }}>{paused ? "▶ RESUME" : "⏸ PAUSE"}</button>
         </div>
 
-        {/* Right: service filter + live + lane counts */}
+        {/* Right: service filter + lane toggles + live */}
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          {/* Service filter */}
           <div style={{ display: "flex", gap: 0, border: "1px solid var(--color-border)" }}>
             {(["web", "heartbeat", "all"] as ServiceFilter[]).map((s) => {
               const active = service === s;
               return (
-                <button key={s} onClick={() => setService(s)} style={{
+                <button key={s} onClick={() => { setService(s); setSelected(null); }} style={{
                   padding: "3px 8px",
                   border: "none",
                   borderRight: s !== "all" ? "1px solid var(--color-border)" : "none",
@@ -259,7 +297,6 @@ export function TracesTimeline() {
             })}
           </div>
 
-          {/* Lane counts — click to toggle lane visibility */}
           <div className="brut-meta" style={{ display: "flex", gap: 6, color: "var(--color-text-muted)" }}>
             {LANES.map((l) => {
               const hidden = hiddenLanes.has(l.key);
@@ -271,13 +308,12 @@ export function TracesTimeline() {
                   color: hidden ? "var(--color-text-faint)" : l.color,
                   opacity: hidden ? 0.4 : 1,
                 }}>
-                  {l.key} <span style={{ color: hidden ? "var(--color-text-faint)" : "var(--color-text-faint)" }}>{counts[l.key].toString().padStart(2, "0")}</span>
+                  {l.key} <span style={{ color: "var(--color-text-faint)" }}>{counts[l.key].toString().padStart(2, "0")}</span>
                 </button>
               );
             })}
           </div>
 
-          {/* Live indicator */}
           <span style={{
             color: connected ? "var(--color-accent)" : "var(--color-warning)",
             fontSize: 10, letterSpacing: "0.16em",
@@ -303,10 +339,10 @@ export function TracesTimeline() {
 
       <div
         className="traces-chart-grid"
-        style={{ gridTemplateColumns: selected ? "minmax(0, 1fr) 340px" : "minmax(0, 1fr)" }}
+        style={{ gridTemplateColumns: selectedBlocks ? "minmax(0, 1fr) 340px" : "minmax(0, 1fr)" }}
       >
-        {/* Chart */}
-        <div ref={containerRef} className="instrument-panel hm-panel-scan hm-panel-primary hm-traces-frame" style={{
+        {/* Activity grid */}
+        <div className="instrument-panel hm-panel-scan hm-panel-primary hm-traces-frame" style={{
           background: "var(--color-surface-1)",
           position: "relative", height: totalH, overflow: "hidden",
         }}>
@@ -334,22 +370,61 @@ export function TracesTimeline() {
             )})}
           </div>
 
-          {/* Lane backgrounds + labels */}
-          {LANES.map((lane, i) => (
-            <div key={lane.key} style={{
-              position: "absolute", left: 0, right: 0,
-              top: rulerH + i * laneH, height: laneH,
-              borderBottom: i < LANES.length - 1 ? "1px dashed rgba(255,255,255,0.04)" : "none",
-            }}>
-              <div style={{
-                position: "absolute", left: 10, top: 7,
-                fontSize: 8, letterSpacing: "0.22em",
-                color: lane.color, fontFamily: "var(--font-mono)",
-                fontWeight: 700, textTransform: "uppercase", opacity: 0.4,
-                pointerEvents: "none",
-              }}>── {lane.label}</div>
-            </div>
-          ))}
+          {/* Lane rows */}
+          {laneBuckets.map((row, laneIdx) => {
+            const laneMeta = LANES[laneIdx];
+            const hidden = hiddenLanes.has(row.lane);
+            return (
+              <div key={row.lane} style={{
+                position: "absolute", left: 0, right: 0,
+                top: rulerH + laneIdx * laneH, height: laneH,
+                borderBottom: laneIdx < LANES.length - 1 ? "1px dashed rgba(255,255,255,0.04)" : "none",
+              }}>
+                <div style={{
+                  position: "absolute", left: 10, top: 7,
+                  fontSize: 8, letterSpacing: "0.22em",
+                  color: laneMeta.color, fontFamily: "var(--font-mono)",
+                  fontWeight: 700, textTransform: "uppercase", opacity: 0.4,
+                  pointerEvents: "none", zIndex: 2,
+                }}>── {laneMeta.label}</div>
+
+                {!hidden && row.cells.map((cell, i) => {
+                  if (cell.length === 0) return null;
+                  const hasError = cell.some((b) => b.isError);
+                  const color = hasError ? "var(--color-danger)" : laneMeta.color;
+                  // sqrt scale: one event is clearly visible, the
+                  // busiest cell saturates instead of flattening the rest.
+                  const intensity = Math.sqrt(cell.length / row.max);
+                  const fillPct = Math.round(22 + 68 * intensity);
+                  const isSel = selected?.lane === row.lane && selected.bucket === i;
+                  const t0 = windowStart + i * bucketMs;
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => setSelected(isSel ? null : { lane: row.lane, bucket: i })}
+                      title={`${cell.length} event${cell.length > 1 ? "s" : ""}${hasError ? " · errors" : ""} · ${new Date(t0).toLocaleTimeString()}`}
+                      style={{
+                        position: "absolute",
+                        left: `${(i / BUCKETS) * 100}%`,
+                        width: `${100 / BUCKETS}%`,
+                        top: 14, bottom: 8,
+                        padding: 0,
+                        cursor: "pointer",
+                        border: isSel ? `1px solid ${color}` : "1px solid transparent",
+                        background: `color-mix(in srgb, ${color} ${fillPct}%, transparent)`,
+                        boxShadow: isSel
+                          ? `0 0 10px ${color}`
+                          : hasError
+                            ? `0 0 6px color-mix(in srgb, ${color} 55%, transparent)`
+                            : "none",
+                        borderRadius: 1,
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            );
+          })}
 
           {/* Now line */}
           <div style={{
@@ -359,36 +434,7 @@ export function TracesTimeline() {
             pointerEvents: "none",
           }} />
 
-          {/* Blocks */}
-          {blocks.map((b, i) => {
-            const laneIdx = LANES.findIndex((l) => l.key === b.lane);
-            const top = rulerH + laneIdx * laneH + (laneH - barH) / 2;
-            const left = xPct(b.startMs);
-            const widthPct = (b.durationMs / windowMs) * 100;
-            const isSelected = selected?.event === b.event;
-            const color = b.isError ? "var(--color-danger)" : LANES[laneIdx].color;
-
-            return (
-              <button key={i} onClick={() => setSelected(isSelected ? null : b)} style={{
-                position: "absolute",
-                left: `${left}%`,
-                width: `max(${widthPct}%, 5px)`,
-                top, height: barH,
-                background: isSelected ? color : `color-mix(in srgb, ${color} 30%, transparent)`,
-                border: `1px solid ${color}`,
-                boxShadow: isSelected ? `0 0 8px ${color}` : "none",
-                borderRadius: 2,
-                padding: 0,
-                cursor: "pointer",
-                overflow: "hidden",
-              }}
-              title={`${b.label}${b.event.name ? ` · ${b.event.name}` : ""} · ${b.durationMs < 1000 ? `${b.durationMs}ms` : `${(b.durationMs/1000).toFixed(1)}s`} · ${new Date(b.startMs).toLocaleTimeString()}`}
-              />
-            );
-          })}
-
-          {/* Empty state */}
-          {blocks.length === 0 && (
+          {!anyActivity && (
             <EmptyState
               events={events}
               windowStart={windowStart}
@@ -401,8 +447,16 @@ export function TracesTimeline() {
           )}
         </div>
 
-        {/* Detail panel */}
-        {selected && <DetailPanel block={selected} onClose={() => setSelected(null)} />}
+        {/* Bucket inspector */}
+        {selectedBlocks && selected && (
+          <BucketPanel
+            blocks={selectedBlocks}
+            lane={selected.lane}
+            from={windowStart + selected.bucket * bucketMs}
+            to={windowStart + (selected.bucket + 1) * bucketMs}
+            onClose={() => setSelected(null)}
+          />
+        )}
       </div>
     </div>
   );
@@ -494,12 +548,14 @@ function ActionBtn({ onClick, children }: { onClick: () => void; children: React
   );
 }
 
-function DetailPanel({ block, onClose }: { block: Block; onClose: () => void }) {
-  const e = block.event;
-  const dur = block.durationMs < 1000 ? `${block.durationMs}ms` : `${(block.durationMs/1000).toFixed(1)}s`;
-  const laneColor = block.isError
-    ? "var(--color-danger)"
-    : LANES.find((lane) => lane.key === block.lane)?.color ?? "var(--color-accent)";
+/** Bucket inspector — the events inside one clicked cell. One line per
+ * event; click a line to expand the full record (args/result/text). */
+function BucketPanel({ blocks, lane, from, to, onClose }: {
+  blocks: Block[]; lane: LaneKey; from: number; to: number; onClose: () => void;
+}) {
+  const [openIdx, setOpenIdx] = useState<number | null>(blocks.length === 1 ? 0 : null);
+  const laneColor = LANES.find((l) => l.key === lane)?.color ?? "var(--color-accent)";
+  const fmt = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 
   return (
     <div className="instrument-panel hm-panel-scan hm-panel-secondary hm-traces-frame" style={{
@@ -507,24 +563,13 @@ function DetailPanel({ block, onClose }: { block: Block; onClose: () => void }) 
       fontFamily: "var(--font-mono)", padding: 16,
       maxHeight: "calc(100vh - 200px)", overflowY: "auto",
     }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, marginBottom: 12 }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 9, letterSpacing: "0.20em", color: "var(--color-text-faint)" }}>
-            ── selected span
+            ── bucket · {fmt(from)}–{fmt(to)}
           </div>
-          <div
-            className="truncate"
-            style={{
-              marginTop: 4,
-              fontSize: 15,
-              lineHeight: 1.2,
-              color: laneColor,
-              textTransform: "uppercase",
-              letterSpacing: "0.06em",
-            }}
-            title={block.label}
-          >
-            {block.label}
+          <div style={{ marginTop: 4, fontSize: 15, lineHeight: 1.2, color: laneColor, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            {lane} · {blocks.length} event{blocks.length > 1 ? "s" : ""}
           </div>
         </div>
         <button onClick={onClose} style={{
@@ -534,19 +579,45 @@ function DetailPanel({ block, onClose }: { block: Block; onClose: () => void }) 
         }}>[✕]</button>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", rowGap: 5, columnGap: 10, marginBottom: 14 }}>
-        <KV k="event"    v={e.event} />
-        <KV k="service"  v={e.service ?? "—"} />
-        <KV k="time"     v={new Date(block.startMs).toLocaleTimeString()} />
-        <KV k="duration" v={dur} />
-        {e.name  && <KV k="name"  v={e.name} />}
-        {e.model && <KV k="model" v={e.model} />}
-        {e.host  && <KV k="host"  v={e.host} />}
-      </div>
-
-      {e.text   && <TextBlock label="TEXT"   text={e.text} />}
-      {e.args   && <TextBlock label="ARGS"   text={e.args} />}
-      {e.result && <TextBlock label="RESULT" text={e.result} />}
+      {blocks.map((b, i) => {
+        const open = openIdx === i;
+        const color = b.isError ? "var(--color-danger)" : laneColor;
+        const dur = b.durationMs < 1000 ? `${b.durationMs}ms` : `${(b.durationMs / 1000).toFixed(1)}s`;
+        const e = b.event;
+        return (
+          <div key={i} style={{ borderTop: "1px solid var(--color-border)" }}>
+            <button
+              onClick={() => setOpenIdx(open ? null : i)}
+              style={{
+                display: "flex", width: "100%", gap: 8, alignItems: "baseline",
+                background: open ? "rgba(255,255,255,0.03)" : "transparent",
+                border: "none", padding: "7px 2px", cursor: "pointer",
+                fontFamily: "var(--font-mono)", textAlign: "left",
+              }}
+            >
+              <span style={{ fontSize: 10, color: "var(--color-text-faint)", flexShrink: 0 }}>{fmt(b.startMs)}</span>
+              <span className="truncate" style={{ fontSize: 11, color, textTransform: "uppercase", letterSpacing: "0.05em", minWidth: 0 }}>
+                {b.isError ? "✖ " : ""}{b.label}
+              </span>
+              <span style={{ fontSize: 9, color: "var(--color-text-faint)", marginLeft: "auto", flexShrink: 0 }}>{dur} {open ? "▾" : "▸"}</span>
+            </button>
+            {open && (
+              <div style={{ padding: "2px 2px 10px" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", rowGap: 5, columnGap: 10, marginBottom: 10 }}>
+                  <KV k="event"    v={e.event} />
+                  <KV k="service"  v={e.service ?? "—"} />
+                  {e.name  && <KV k="name"  v={e.name} />}
+                  {e.model && <KV k="model" v={e.model} />}
+                  {e.host  && <KV k="host"  v={e.host} />}
+                </div>
+                {e.text   && <TextBlock label="TEXT"   text={e.text} />}
+                {e.args   && <TextBlock label="ARGS"   text={e.args} />}
+                {e.result && <TextBlock label="RESULT" text={e.result} />}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
