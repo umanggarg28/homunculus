@@ -1359,6 +1359,14 @@ def chat_history() -> JSONResponse:
     return JSONResponse(_visible_chat_history(memory.load_session()))
 
 
+# Sources whose messages are agent-internal machinery, never chat turns:
+#   heartbeat  — tick prompts and mid-run model text from autonomous runs
+#   refinement — skill-refinement sessions
+#   harness    — corrections the loop injects (detector retries, budget
+#                nudges); they're role=user but the user never typed them
+_NON_CHAT_SOURCES = frozenset({"heartbeat", "refinement", "harness"})
+
+
 def _visible_chat_history(history: list[dict]) -> list[dict]:
     """Filter persisted agent history down to visible complete chat turns.
 
@@ -1373,6 +1381,12 @@ def _visible_chat_history(history: list[dict]) -> list[dict]:
         content = msg.get("content")
         if not isinstance(content, str) or not content.strip():
             continue
+        # Agent-internal traffic (heartbeat tick prompts, harness
+        # corrections, refinement runs) shares the transcript with chat
+        # but is not part of the user's conversation. It used to render
+        # as fake YOU/AI bubbles — the "traces leaking into chat" bug.
+        if msg.get("source") in _NON_CHAT_SOURCES:
+            continue
         # Skip heartbeat notifications — they live in LLM context for
         # follow-up questions but shouldn't appear as chat bubbles.
         if content.startswith("[notification I sent you at"):
@@ -1385,6 +1399,7 @@ def _visible_chat_history(history: list[dict]) -> list[dict]:
                 "content": content,
                 "source": msg.get("source", "web"),
                 "ts": msg.get("ts"),
+                "_raw_idx": idx,
             }
             if tx_id is not None:
                 pending_user["_source_tx_id"] = tx_id
@@ -1406,10 +1421,26 @@ def _visible_chat_history(history: list[dict]) -> list[dict]:
                 "content": content,
                 "source": msg.get("source", "web"),
                 "ts": msg.get("ts"),
+                "_raw_idx": idx,
             }
             if tx_id is not None:
                 entry["_source_tx_id"] = tx_id
-            messages.append(entry)
+            # Transcript rewrite pair: _journal_append wrote the raw
+            # reply, _journal_replace_last_content appended the guard-
+            # rewritten form right after it. The records are adjacent
+            # and the LATER one is the final form. (Also collapses the
+            # legacy duplicates the unconditional rewrite left on disk.)
+            prev = messages[-1] if messages else None
+            if (
+                prev is not None
+                and prev.get("role") == "assistant"
+                and prev.get("_raw_idx") == idx - 1
+            ):
+                messages[-1] = entry
+            else:
+                messages.append(entry)
+    for entry in messages:
+        entry.pop("_raw_idx", None)
     return messages
 
 
