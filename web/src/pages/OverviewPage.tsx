@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { formatCents } from "@/lib/format";
 import { useEventStream } from "@/hooks/useEventStream";
 import { api, parseServerIso } from "@/lib/api";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -445,8 +446,8 @@ function LedgerCell({ label, value }: { label: string; value: string }) {
 }
 
 function formatCost(costCents: number, tokens: number): string {
-  if (costCents > 0) return costCents >= 100 ? `$${(costCents / 100).toFixed(2)}` : `¢${costCents.toFixed(1)}`;
-  if (tokens > 0) return "$0";
+  if (costCents > 0) return formatCents(costCents);
+  if (tokens > 0) return formatCents(0);
   return "idle";
 }
 

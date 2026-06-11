@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { formatCents } from "@/lib/format";
 import type { StatusMap } from "@/lib/types";
 import { Tooltip } from "@/components/ui/Tooltip";
 
@@ -112,7 +113,7 @@ export function SidebarTelemetry() {
           <div className="flex justify-between mb-1">
             <span>budget</span>
             <span style={{ color: "var(--color-text-muted)" }}>
-              ¢{spent.toFixed(1)} / ¢{budget.toFixed(0)}
+              {formatCents(spent)} / {formatCents(budget)}
             </span>
           </div>
           <div style={{ height: 2, background: "var(--color-border)", overflow: "hidden" }}>

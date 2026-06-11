@@ -1016,7 +1016,12 @@ def main() -> None:
             sleep_seconds = 60.0
         else:
             sleep_seconds = _compute_sleep(memory, default_interval)
-        wake_at = (datetime.now() + timedelta(seconds=sleep_seconds)).isoformat(timespec="seconds")
+        # USER-naive, not container-naive: this string is read back by
+        # _compute_sleep (user-naive comparison), served by
+        # /api/agent/upcoming, and parsed by the browser as local time.
+        # The old datetime.now() wrote UTC wall clock on Docker, which
+        # the sidebar read as IST — 5.5h in the past, clamped to "0s".
+        wake_at = (_now_user_naive() + timedelta(seconds=sleep_seconds)).isoformat(timespec="seconds")
         print(f"[heartbeat] sleeping {sleep_seconds:.0f}s, next tick ~{wake_at}", flush=True)
         memory.next_tick.set(wake_at)
         _interruptible_sleep(sleep_seconds)
