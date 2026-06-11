@@ -266,15 +266,17 @@ MODEL_FALLBACK = os.environ.get(
     # When the primary (paid gpt-oss-120b) is throttled or unreachable,
     # fall through these in order. All free-tier OpenRouter routes; all
     # support tool calling.
-    #   moonshotai/kimi-k2.6:free — 262K ctx, purpose-built for agentic tool use
     #   openai/gpt-oss-120b:free  — free tier of the same model as primary
     #                               (different rate-limit pool, useful when
     #                               paid hits a transient 429)
     #   meta-llama/llama-3.3-70b-instruct:free — 131K ctx, Meta-hosted
+    # moonshotai/kimi-k2.6:free REMOVED 2026-06-11 — slug went paid-only,
+    #   returns 404 ("unavailable for free"); verified against
+    #   openrouter.ai/api/v1/models the same day.
     # qwen/qwen3-coder:free REMOVED 2026-06-08 — OpenRouter routes it to
     #   a deprecated upstream model (Venice qwen3-coder-480b-a35b-instruct).
     #   Returns 404 instead of an answer.
-    "moonshotai/kimi-k2.6:free,openai/gpt-oss-120b:free,meta-llama/llama-3.3-70b-instruct:free",
+    "openai/gpt-oss-120b:free,meta-llama/llama-3.3-70b-instruct:free",
 )
 
 API_URL_FALLBACK_2 = os.environ.get(
@@ -935,12 +937,15 @@ def _is_transient_provider_error(response: httpx.Response) -> bool:
     except Exception:
         pass
     if response.status_code in {404, 502, 503, 504}:
-        body = response.text.lower()
-        return (
-            "no endpoints found" in body
-            or "no endpoint" in body
-            or response.status_code in {502, 503, 504}
-        )
+        # ANY 404 from a chat-completions endpoint is a this-provider
+        # problem — model slug removed, free tier paywalled, route
+        # deprecated. Raising can't fix it; the next provider in the
+        # chain is independent. Observed live 2026-06-11: OpenRouter's
+        # kimi free slug went paid, its 404 body ("This model is
+        # unavailable for free...") didn't match the old "no endpoints"
+        # substring check, and the raise killed the 9 AM delivery with
+        # two healthy fallback providers unused.
+        return True
     if response.status_code == 400:
         # Model capability failures — not a bug in our request, but the
         # model on this slot can't output valid tool JSON. Try next.
