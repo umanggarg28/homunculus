@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 export function PageShell({ children }: { children: ReactNode }) {
   return (
     <div
-      className="page-shell min-h-[calc(100vh-48px)] px-10 pt-6 pb-16"
+      className="page-shell hm-page-enter min-h-[calc(100vh-48px)] px-10 pt-6 pb-16"
       style={{ background: "var(--color-bg)", fontFamily: "var(--font-mono)" }}
     >
       <style>{`

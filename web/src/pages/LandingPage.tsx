@@ -83,6 +83,7 @@ export function LandingPage() {
     lastDirective: null,
     status: "loading",
   });
+  const [transmissions, setTransmissions] = useState<{ ts: number; text: string }[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -115,12 +116,14 @@ export function LandingPage() {
   useEffect(() => {
     let cancelled = false;
     async function loadTelemetry() {
-      const [stats, tasks, memories, chat] = await Promise.allSettled([
+      const [stats, tasks, memories, chat, sent] = await Promise.allSettled([
         api.statsToday(),
         api.tasksList("all"),
         api.memoryList(),
         api.chatHistory(),
+        api.notificationsRecent(6),
       ]);
+      if (!cancelled && sent.status === "fulfilled") setTransmissions([...sent.value].reverse());
       if (cancelled) return;
       const loaded = [stats, tasks, memories, chat].filter((r) => r.status === "fulfilled").length;
       // "Last directive" = the last thing the USER told the agent. The
@@ -431,9 +434,38 @@ export function LandingPage() {
             </div>
           </div>
         </div>
+
+        {transmissions.length > 0 && (
+          <div className="landing-panel instrument-panel hm-panel-scan hm-panel-secondary mt-4">
+            <div className="landing-panel-head brut-meta" style={{ color: "var(--color-text-muted)" }}>
+              ── transmissions · what reached your phone
+            </div>
+            <div style={{ fontFamily: "var(--font-mono)" }}>
+              {transmissions.map((n, i) => (
+                <div
+                  key={`${n.ts}-${i}`}
+                  className="px-4 py-2 flex gap-10 items-baseline"
+                  style={{ borderTop: i > 0 ? "1px solid var(--color-border)" : "none" }}
+                >
+                  <span className="brut-label" style={{ color: "var(--color-text-faint)", flexShrink: 0, width: 96 }}>
+                    {new Date(n.ts * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}
+                  </span>
+                  <span className="brut-body truncate" style={{ color: "var(--color-text-dim)", minWidth: 0 }} title={n.text}>
+                    {firstLine(n.text)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
+}
+
+function firstLine(text: string): string {
+  const line = text.split("\n").find((l) => l.trim()) ?? "";
+  return line.length > 140 ? line.slice(0, 140) + "…" : line;
 }
 
 function fmtMetric(value: number | null): string {

@@ -208,7 +208,36 @@
   .atmo-poweron,
   .atmo-pip,
   .atmo-breath,
+  .hm-page-enter,
+  .hm-fresh-flash,
+  .hm-countdown-glow,
   .hm-skeleton::after { animation: none !important; }
   .reveal { transition: none !important; opacity: 1 !important; transform: none !important; }
   /* index.css crt-roll also respects this if you add the same guard there */
+}
+
+/* ---------- motion: page entry, fresh events, hero countdown ---------- */
+/* Page entry: a short rise-and-settle. Long enough to read as a CRT
+   frame landing, short enough to never gate interaction. */
+.hm-page-enter { animation: hm-page-enter 240ms ease-out both; }
+@keyframes hm-page-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Fresh trace rows flash phosphor on arrival, then decay — the visual
+   of a new line burning onto the tube. Applied only to rows whose
+   event is seconds old, so the initial page load doesn't strobe. */
+.hm-fresh-flash { animation: hm-fresh-flash 900ms ease-out 1; }
+@keyframes hm-fresh-flash {
+  0%   { background: color-mix(in srgb, var(--color-accent) 20%, transparent); }
+  100% { background: transparent; }
+}
+
+/* Hero countdown breathes — alive, not alarming. Brightness only, no
+   movement, so tabular digits stay perfectly registered. */
+.hm-countdown-glow { animation: hm-countdown-glow 2.4s ease-in-out infinite; }
+@keyframes hm-countdown-glow {
+  0%, 100% { filter: brightness(1); }
+  50%      { filter: brightness(1.16); }
 }

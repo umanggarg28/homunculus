@@ -744,7 +744,7 @@ function UpcomingHero({
         return (
           <>
             <div
-              className="brut-display"
+              className="brut-display hm-countdown-glow"
               style={{
                 fontSize: "clamp(54px, 8vw, 104px)",
                 lineHeight: 0.85,
