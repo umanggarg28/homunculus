@@ -1826,6 +1826,11 @@ class Agent:
         rewritten message. The pre-edit record stays on disk."""
         if not self.history:
             return
+        if self.history[-1].get("content") == new_content:
+            # No-op rewrite — the output guard passed the reply through
+            # untouched (the common case). Appending a second identical
+            # record made every final chat reply render twice in the UI.
+            return
         self.history[-1]["content"] = new_content
         if self._transcript is not None and self._message_ids:
             try:
@@ -2326,6 +2331,9 @@ class Agent:
                         result="hook ignored",
                     )
                 if injected is not None:
+                    # Harness-injected, not typed by the user — tag it so
+                    # the chat-history endpoint can exclude it from the UI.
+                    injected.setdefault("source", "harness")
                     self._journal_append(injected)
                     events.emit(
                         "self_correction",
@@ -2377,6 +2385,7 @@ class Agent:
             if _turn_idx == max_turns - 2:
                 self._journal_append({
                     "role": "user",
+                    "source": "harness",
                     "content": (
                         "Heads-up from the harness: you have 2 iterations left "
                         f"of a {max_turns}-step budget. If a task is still "
@@ -2556,6 +2565,7 @@ class Agent:
                     )
                     self._journal_append({
                         "role": "user",
+                        "source": "harness",
                         "content": (
                             f"Your last reply called the tool '{actual_name}' "
                             f"but the harness required '{forced_tool_name}' "
@@ -2594,6 +2604,7 @@ class Agent:
                 )
                 self._journal_append({
                     "role": "user",
+                    "source": "harness",
                     "content": (
                         "Your last reply did not include a tool call. In this "
                         "mode every turn must end in exactly one tool call — "
@@ -2643,6 +2654,7 @@ class Agent:
                         # model can actually call the tool this time.
                         self._journal_append({
                             "role": "user",
+                            "source": "harness",
                             "content": self._ACTION_CLAIM_CORRECTION_PROMPT,
                         })
                         continue  # next iteration picks up the correction
