@@ -39,9 +39,9 @@ def python_exec(code: str, timeout: int = 30) -> str:
         return f"ERROR: code execution timed out after {timeout}s"
     except FileNotFoundError:
         return (
-            "ERROR: docker CLI not found. The python tool needs "
-            "/var/run/docker.sock mounted and the docker CLI in the image. "
-            "Check docker-compose.yml and Dockerfile."
+            "ERROR: docker CLI not found. The python tool needs the docker "
+            "CLI in the image and DOCKER_HOST pointed at the docker-proxy "
+            "service. Check docker-compose.yml and Dockerfile."
         )
 
     parts: list[str] = []
