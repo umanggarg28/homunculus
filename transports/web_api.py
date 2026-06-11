@@ -1835,6 +1835,14 @@ if SPA_DIST_DIR.exists():
 
     @app.get("/{full_path:path}")
     def spa_catchall(full_path: str):
-        """Serve the SPA index for any non-API path so client-side
-        routing works on hard refresh."""
+        """Serve real root-level files (manifest.json, sw.js, icons) when
+        they exist in the build; otherwise the SPA index so client-side
+        routing works on hard refresh. Without the file check, the PWA
+        manifest and service worker came back as index.html — a syntax
+        error in the manifest and an unsupported-MIME service worker on
+        every page load."""
+        if full_path and "/" not in full_path:
+            candidate = SPA_DIST_DIR / full_path
+            if candidate.is_file():
+                return FileResponse(candidate)
         return FileResponse(SPA_DIST_DIR / "index.html")
