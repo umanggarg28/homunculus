@@ -29,6 +29,7 @@ services:
     environment:
       # Identifies which service emitted each event in the live feed.
       HOMUNCULUS_SERVICE: repl
+      DOCKER_HOST: tcp://docker-proxy:2375
       # /app contains the agent package; cwd is /app/workspace for data
       # paths. PYTHONPATH lets `python -m transports.repl` find the
       # package without changing the working_dir convention.
@@ -39,10 +40,7 @@ services:
       # agent creates are visible in your editor on the host. The agent
       # can only read/write files INSIDE this directory by default.
       - ./workspace:/app/workspace
-      # Docker socket → python_exec spawns sandbox containers via host's
-      # docker daemon. Only our code uses this; the LLM only sees
-      # stdout/stderr of the code it runs.
-      - /var/run/docker.sock:/var/run/docker.sock
+
     command: ["uv", "run", "--project", "/app", "python", "-m", "transports.repl"]
 
   heartbeat:
@@ -51,11 +49,11 @@ services:
     env_file: .env
     environment:
       HOMUNCULUS_SERVICE: heartbeat
+      DOCKER_HOST: tcp://docker-proxy:2375
       PYTHONPATH: /app
     working_dir: /app/workspace
     volumes:
       - ./workspace:/app/workspace  # Same workspace mount → shared memory
-      - /var/run/docker.sock:/var/run/docker.sock  # for python_exec sandbox
     # Override the default CMD to launch the daemon instead of the REPL.
     command: ["uv", "run", "--project", "/app", "python", "/app/heartbeat.py"]
     # Auto-restart if the daemon crashes (but not if we explicitly stop it).
@@ -69,6 +67,7 @@ services:
     env_file: .env
     environment:
       HOMUNCULUS_SERVICE: telegram
+      DOCKER_HOST: tcp://docker-proxy:2375
       PYTHONPATH: /app
     working_dir: /app/workspace
     volumes:
@@ -84,15 +83,37 @@ services:
     env_file: .env              # chat endpoint needs the LLM API key
     environment:
       HOMUNCULUS_SERVICE: web
+      DOCKER_HOST: tcp://docker-proxy:2375
       PYTHONPATH: /app
     working_dir: /app/workspace  # so _events.jsonl resolves to workspace/_events.jsonl
     volumes:
       - ./workspace:/app/workspace  # read the shared events file + memory
-      - /var/run/docker.sock:/var/run/docker.sock  # chat may call python_exec
     # Bind to 8765 on the host. Open http://localhost:8765 in a browser
     # for the full web UI. (8000 is a popular dev port and tends to
     # collide — 8765 avoids common defaults.)
     ports:
       - "127.0.0.1:8765:8765"
     command: ["uv", "run", "--project", "/app", "uvicorn", "transports.web_api:app", "--host", "0.0.0.0", "--port", "8765", "--app-dir", "/app"]
+    restart: unless-stopped
+
+  # Docker API gatekeeper. python_exec spawns sandbox containers through
+  # THIS, not a raw socket mount. The raw socket is host-root-equivalent;
+  # if an app container were ever compromised, it could start privileged
+  # containers, mount the host fs, or exec into siblings. The proxy
+  # (HAProxy under the hood) exposes only the endpoints `docker run`
+  # needs — create/start/wait/attach/delete + image resolution — and
+  # denies exec, volumes, networks, swarm, and system endpoints.
+  # It is the ONLY service that sees the socket, read-only, and it
+  # publishes no host ports (reachable only on the compose network).
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    environment:
+      CONTAINERS: 1     # list/inspect/create/wait/attach under /containers
+      IMAGES: 1         # GET image metadata (docker run resolves the tag)
+      POST: 1           # allow write methods on the enabled sections
+      ALLOW_START: 1    # POST /containers/{id}/start
+      # Everything else stays 0: EXEC, VOLUMES, NETWORKS, SERVICES,
+      # SWARM, SYSTEM, BUILD, COMMIT, ALLOW_RESTARTS, ALLOW_STOP.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
