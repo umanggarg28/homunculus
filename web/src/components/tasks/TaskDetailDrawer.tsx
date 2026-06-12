@@ -1,7 +1,9 @@
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
+import { Link } from "react-router-dom";
 import type { Task } from "@/lib/types";
 import { parseTaskWallClock } from "@/lib/api";
+import { formatCents } from "@/lib/format";
 
 interface Props { task: Task | null; onClose: () => void; }
 
@@ -131,10 +133,24 @@ export function TaskDetailDrawer({ task, onClose }: Props) {
                       ● {r.status}
                     </span>
                     <span style={{ color: "var(--color-text-faint)", fontVariantNumeric: "tabular-nums", display: "flex", gap: 8 }}>
+                      {r.cost_cents != null && r.cost_cents > 0 && (
+                        <span title={costTitle(r)}>{formatCents(r.cost_cents)}</span>
+                      )}
                       {r.duration_s != null && (
                         <span>{r.duration_s}s</span>
                       )}
                       <span>{fmtDateTime(r.ts)}</span>
+                      {/* The traces stream keeps at most 24h — older
+                          runs would deep-link to an empty grid. */}
+                      {withinTracesWindow(r.ts) && (
+                        <Link
+                          to={`/traces?at=${parseTaskWallClock(r.ts)}`}
+                          style={{ color: "var(--color-accent)" }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          [trace]
+                        </Link>
+                      )}
                     </span>
                   </div>
                   <div
@@ -152,6 +168,19 @@ export function TaskDetailDrawer({ task, onClose }: Props) {
     </>,
     document.body,
   );
+}
+
+function withinTracesWindow(iso: string): boolean {
+  const ms = parseTaskWallClock(iso);
+  return Number.isFinite(ms) && Date.now() - ms < 24 * 60 * 60 * 1000;
+}
+
+function costTitle(r: { input_tokens?: number; output_tokens?: number; calls?: number }): string {
+  const parts: string[] = [];
+  if (r.input_tokens != null) parts.push(`${r.input_tokens.toLocaleString()} in`);
+  if (r.output_tokens != null) parts.push(`${r.output_tokens.toLocaleString()} out`);
+  if (r.calls != null) parts.push(`${r.calls} call${r.calls === 1 ? "" : "s"}`);
+  return parts.join(" · ");
 }
 
 function fmtDateTime(iso: string): string {

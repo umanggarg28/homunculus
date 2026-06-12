@@ -14,6 +14,7 @@ file. UI presentation is fully decoupled from the API layer.
 import asyncio
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -1727,6 +1728,11 @@ def _format_sse_data(data: str) -> str:
 
 # --- Filesystem helpers --------------------------------------------------
 
+# Same pattern the frontend renderer resolves (MemoryContent.tsx) —
+# keep the two in sync or the graph and the inline links will disagree.
+_WIKILINK_RE = re.compile(r"\[\[([a-z0-9][a-z0-9\-_]*)\]\]", re.IGNORECASE)
+
+
 def _list_memory_entries() -> list[dict]:
     if not MEMORY_DIR.exists():
         return []
@@ -1737,12 +1743,18 @@ def _list_memory_entries() -> list[dict]:
             continue
         meta = _parse_frontmatter(path)
         source = provenance.get(path.name, {})
+        try:
+            body = path.read_text(encoding="utf-8")
+            links = sorted({m.group(1).lower() for m in _WIKILINK_RE.finditer(body)})
+        except OSError:
+            links = []
         entries.append({
             "filename": path.name,
             "name": meta.get("name", path.stem),
             "description": meta.get("description", ""),
             "type": meta.get("type", "unknown"),
             "mtime": path.stat().st_mtime,
+            "links": links,
             "source_service": source.get("service"),
             "source_event": source.get("event"),
             "source_action": source.get("action"),

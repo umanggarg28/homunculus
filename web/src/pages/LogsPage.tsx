@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
 import { BrutalistEmpty } from "@/components/ui/BrutalistEmpty";
 import { LogList } from "@/components/logs/LogList";
+import { LogsHeatmap } from "@/components/logs/LogsHeatmap";
 import { LogsHero } from "@/components/ui/HeroBand";
 import type { LogFile } from "@/lib/types";
 
@@ -28,7 +29,12 @@ export function LogsPage() {
               body={<>every conversation gets archived here as a daily markdown file once you close the session. start a chat — the first transcript appears at <code style={{ color: "var(--color-text)" }}>workspace/logs/{new Date().toISOString().slice(0, 10)}.md</code>.</>}
             />
           )
-        : <LogList logs={logs} />}
+        : (
+            <>
+              <LogsHeatmap logs={logs} />
+              <LogList logs={logs} />
+            </>
+          )}
     </PageShell>
   );
 }
