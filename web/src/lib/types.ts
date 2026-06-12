@@ -119,6 +119,19 @@ export interface AgentControls {
   prefer_free_models: boolean;
   allowed_tools: string[];
   blocked_tools: string[];
+  /** Kill switch — heartbeat refuses all ticks while true. */
+  paused: boolean;
+}
+
+export interface ContainmentStatus {
+  docker_proxy: boolean;
+  ssrf_guard: boolean;
+  daily_budget_cents: number;
+  max_steps: number;
+  paused: boolean;
+  mode: "plan" | "build";
+  delivery_gate: boolean;
+  blocked_recent: number;
 }
 
 export interface AgentReplayTool {

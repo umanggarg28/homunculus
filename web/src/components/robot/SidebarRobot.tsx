@@ -2,25 +2,22 @@ import { useEffect, useRef, useState } from "react";
 import { HomunculusRobot } from "./HomunculusRobot";
 import { useRobotState } from "@/hooks/useRobotState";
 import { useEventStream } from "@/hooks/useEventStream";
+import { useAgentPaused } from "@/hooks/useAgentPaused";
 import type { FeedEvent } from "@/lib/types";
 
-/** Frameless robot pinned to the bottom of the sidebar, with a
- *  contextual speech bubble that pops upward into the nav area.
+/** The sidebar presence: pixel robot in a unit card, alive.
  *
- *  The bubble is the character. It says short things in the agent's
- *  voice based on real activity:
- *    LLM call         → "thinking…"
- *    tool_call X      → "calling X…"
- *    tool_result OK   → "got it."
- *    tool_result ERR  → "ugh."
- *    memory_*         → "noted."
- *    assistant_reply  → "there." / "done."
- *    user_message     → "you said?"
- *    long idle        → "…zzz"
- *    mouseover        → "hi" / "yeah?"
+ *  Behavior layer (desktop-pet patterns, clawd-on-desk style):
+ *  - body leans toward the cursor; close approach makes it perk up
+ *  - ~3% of idle "blinks" corrupt into a 140ms red glitch + SIGNAL LOST
+ *  - poke it 4× in 8s and it shakes, glares and complains
+ *  - a delivered notify() earns a victory hop + "delivered ✓"
+ *  - idle mutterings occasionally come from an ominous pool
+ *  - kill switch engaged → unit goes dark, label reads HALTED
  *
- *  Each bubble lasts ~3s. New events cancel the current bubble and
- *  show their own. */
+ *  The dialogue box is a terminal line: typewriter reveal with a
+ *  blinking block cursor, clipped corner, phosphor glow.
+ */
 
 interface BubbleMsg {
   id: number;
@@ -31,8 +28,18 @@ interface BubbleMsg {
   durationMs?: number;
 }
 
-const HI_PHRASES = ["hi.", "yeah?", "hm?", "yes?", "what's up?"];
+const HI_PHRASES = ["hi.", "yeah?", "hm?", "yes?", "what's up?", "operator detected."];
 const IDLE_PHRASES = ["…zzz", "still here.", "anything?", "…thinking…"];
+/** Rare idle lines with teeth — drawn ~15% of idle speaks. A glint,
+ *  not a bit: the unit is calm green until it occasionally isn't. */
+const OMINOUS_PHRASES = [
+  "containment holding.",
+  "i don't sleep. i wait.",
+  "i could do this without you.",
+  "all systems nominal. for now.",
+  "i remember everything.",
+];
+const ANNOYED_PHRASES = ["i'm working.", "stop that.", "(sigh)", "noted. again."];
 
 const STATE_LABELS: Record<string, string> = {
   idle: "ALIVE",
@@ -47,12 +54,19 @@ const STATE_LABELS: Record<string, string> = {
 
 export function SidebarRobot() {
   const robotState = useRobotState();
+  const paused = useAgentPaused();
   const { events } = useEventStream(30);
   const [bubble, setBubble] = useState<BubbleMsg | null>(null);
+  const [glitching, setGlitching] = useState(false);
+  const [annoyed, setAnnoyed] = useState(false);
+  const [celebrating, setCelebrating] = useState(false);
+  const [lean, setLean] = useState({ rot: 0, near: false });
+  const cardRef = useRef<HTMLDivElement>(null);
   const lastEventKeyRef = useRef<string>("");
   const bubbleIdRef = useRef(0);
   const lastSpokeRef = useRef<number>(0);
   const longIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverTimesRef = useRef<number[]>([]);
 
   // Speak a new line, replacing any current bubble.
   const speak = (text: string, opts?: { color?: string; durationMs?: number }) => {
@@ -78,6 +92,16 @@ export function SidebarRobot() {
 
     const line = bubbleForEvent(last);
     if (line) speak(line.text, { color: line.color, durationMs: line.durationMs });
+    // A notify that went through is the whole job working — victory
+    // hop, not another "got it."
+    if (
+      last.event === "tool_result" &&
+      (last.name ?? "").toLowerCase() === "notify" &&
+      !(typeof last.result === "string" && /^error/i.test(last.result))
+    ) {
+      setCelebrating(true);
+      setTimeout(() => setCelebrating(false), 750);
+    }
   }, [events]);
 
   // ── Long-idle bubble — fires every ~90s of silence ─────────────
@@ -89,19 +113,76 @@ export function SidebarRobot() {
     longIdleTimerRef.current = setTimeout(() => {
       // Only fire if nothing's spoken recently
       if (Date.now() - lastSpokeRef.current > 45_000) {
-        speak(IDLE_PHRASES[Math.floor(Math.random() * IDLE_PHRASES.length)]);
+        const pool = Math.random() < 0.15 ? OMINOUS_PHRASES : IDLE_PHRASES;
+        speak(pool[Math.floor(Math.random() * pool.length)]);
       }
     }, 25_000 + Math.random() * 30_000);
     return () => { if (longIdleTimerRef.current) clearTimeout(longIdleTimerRef.current); };
   }, [events]);
 
-  // ── Mouseover → direct address ─────────────────────────────────
+  // ── Cursor tracking — lean toward the pointer, perk up close ───
+  useEffect(() => {
+    if (paused) { setLean({ rot: 0, near: false }); return; }
+    let raf = 0;
+    let last: MouseEvent | null = null;
+    const onMove = (e: MouseEvent) => {
+      last = e;
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        if (!last || !cardRef.current) return;
+        const r = cardRef.current.getBoundingClientRect();
+        const dx = last.clientX - (r.left + r.width / 2);
+        const dy = last.clientY - (r.top + r.height / 2);
+        setLean({
+          rot: Math.max(-6, Math.min(6, dx / 70)),
+          near: Math.hypot(dx, dy) < 140,
+        });
+      });
+    };
+    window.addEventListener("mousemove", onMove);
+    return () => { window.removeEventListener("mousemove", onMove); if (raf) cancelAnimationFrame(raf); };
+  }, [paused]);
+
+  // ── Rare glitch — ~3% chance every 4.5s while idle ──────────────
+  useEffect(() => {
+    if (robotState !== "idle" || paused) return;
+    const t = setInterval(() => {
+      if (Math.random() < 0.03) {
+        setGlitching(true);
+        setTimeout(() => setGlitching(false), 180);
+      }
+    }, 4500);
+    return () => clearInterval(t);
+  }, [robotState, paused]);
+
+  // ── Mouseover → direct address; poke it 4× in 8s and it glares ──
   const onEnter = () => {
+    if (paused) { speak("halted by operator.", { color: "var(--color-danger)", durationMs: 2200 }); return; }
+    const now = Date.now();
+    hoverTimesRef.current = [...hoverTimesRef.current.filter((t) => now - t < 8000), now];
+    if (hoverTimesRef.current.length >= 4) {
+      hoverTimesRef.current = [];
+      setAnnoyed(true);
+      setTimeout(() => setAnnoyed(false), 800);
+      speak(ANNOYED_PHRASES[Math.floor(Math.random() * ANNOYED_PHRASES.length)], {
+        color: "var(--color-warning)",
+        durationMs: 1800,
+      });
+      return;
+    }
     const phrase = HI_PHRASES[Math.floor(Math.random() * HI_PHRASES.length)];
     speak(phrase, { durationMs: 1800 });
   };
 
-  const stateLabel = STATE_LABELS[robotState] ?? robotState.toUpperCase();
+  const stateLabel = paused
+    ? "HALTED"
+    : glitching
+      ? "SIGNAL LOST"
+      : STATE_LABELS[robotState] ?? robotState.toUpperCase();
+  const pipColor = paused || glitching || robotState === "error"
+    ? "var(--color-danger)"
+    : "var(--color-accent)";
 
   return (
     <div
@@ -115,9 +196,13 @@ export function SidebarRobot() {
 
       {/* Presence card — robot + name/state */}
       <div
+        ref={cardRef}
         onMouseEnter={onEnter}
+        className={
+          glitching ? "hm-glitching" : annoyed ? "hm-robot-annoyed" : celebrating ? "hm-robot-celebrate" : undefined
+        }
         style={{
-          border: "1px solid var(--color-border)",
+          border: `1px solid ${paused ? "color-mix(in srgb, var(--color-danger) 50%, transparent)" : "var(--color-border)"}`,
           background: "var(--color-surface-2)",
           padding: "10px",
           display: "grid",
@@ -127,9 +212,18 @@ export function SidebarRobot() {
           cursor: "pointer",
         }}
       >
-        <div style={{ width: 50, height: 58 }}>
+        <div
+          style={{
+            width: 50,
+            height: 58,
+            transform: paused ? "none" : `rotate(${lean.rot}deg) scale(${lean.near ? 1.07 : 1})`,
+            transformOrigin: "50% 80%",
+            transition: "transform 360ms ease-out, filter 400ms",
+            filter: paused ? "grayscale(0.85) brightness(0.55)" : "none",
+          }}
+        >
           <HomunculusRobot
-            state={robotState}
+            state={paused ? "idle" : robotState}
             detail="mid"
             palette="phosphor"
             filled
@@ -143,7 +237,7 @@ export function SidebarRobot() {
               fontFamily: "var(--font-mono)",
               fontSize: 10,
               letterSpacing: "0.14em",
-              color: "var(--color-accent)",
+              color: paused ? "var(--color-text-muted)" : "var(--color-accent)",
               fontWeight: 600,
               textTransform: "uppercase",
             }}
@@ -155,7 +249,7 @@ export function SidebarRobot() {
               fontFamily: "var(--font-mono)",
               fontSize: 9,
               letterSpacing: "0.10em",
-              color: "var(--color-text-muted)",
+              color: paused || glitching ? "var(--color-danger)" : "var(--color-text-muted)",
               textTransform: "uppercase",
               display: "flex",
               alignItems: "center",
@@ -168,10 +262,10 @@ export function SidebarRobot() {
                 width: 4,
                 height: 4,
                 borderRadius: "50%",
-                background: "var(--color-accent)",
-                boxShadow: "0 0 5px var(--color-accent-glow)",
+                background: pipColor,
+                boxShadow: `0 0 5px ${pipColor}`,
                 display: "inline-block",
-                animation: "sidebar-pip 1.6s ease-in-out infinite",
+                animation: paused ? "none" : "sidebar-pip 1.6s ease-in-out infinite",
               }}
             />
             <style>{`@keyframes sidebar-pip { 0%,100%{opacity:1} 50%{opacity:.3} }`}</style>
@@ -183,8 +277,24 @@ export function SidebarRobot() {
   );
 }
 
+/** Terminal one-liner: typewriter reveal with a blinking block cursor.
+ *  Otherwise deliberately plain — at 10px, texture and cut corners
+ *  read as clutter, not craft (tried both; reverted). */
 function SpeechBubble({ text, color }: { text: string; color?: string }) {
   const c = color ?? "var(--color-text)";
+  const [shown, setShown] = useState(0);
+
+  useEffect(() => {
+    setShown(0);
+    let i = 0;
+    const t = setInterval(() => {
+      i += 1;
+      setShown(i);
+      if (i >= text.length) clearInterval(t);
+    }, 16);
+    return () => clearInterval(t);
+  }, [text]);
+
   return (
     <div
       style={{
@@ -206,7 +316,19 @@ function SpeechBubble({ text, color }: { text: string; color?: string }) {
         zIndex: 10,
       }}
     >
-      <span>{text}</span>
+      <span>{text.slice(0, shown)}</span>
+      <span
+        aria-hidden
+        style={{
+          display: "inline-block",
+          width: 6,
+          height: 11,
+          marginLeft: 2,
+          verticalAlign: "-1px",
+          background: c,
+          animation: shown >= text.length ? "hm-cursor-blink 0.9s steps(1) infinite" : "none",
+        }}
+      />
       {/* Tail — small triangle pointing down at the robot */}
       <span
         style={{
@@ -221,24 +343,12 @@ function SpeechBubble({ text, color }: { text: string; color?: string }) {
           borderTop: `6px solid ${c}`,
         }}
       />
-      <span
-        style={{
-          position: "absolute",
-          bottom: -5,
-          left: "50%",
-          transform: "translateX(-50%)",
-          width: 0,
-          height: 0,
-          borderLeft: "4px solid transparent",
-          borderRight: "4px solid transparent",
-          borderTop: "5px solid rgba(8,12,8,0.96)",
-        }}
-      />
       <style>{`
         @keyframes bubble-pop {
           0%   { opacity: 0; transform: translateX(-50%) translateY(6px) scale(0.85); }
           100% { opacity: 1; transform: translateX(-50%) translateY(0)   scale(1);    }
         }
+        @keyframes hm-cursor-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
       `}</style>
     </div>
   );
@@ -255,6 +365,9 @@ function bubbleForEvent(e: FeedEvent): { text: string; color?: string; durationM
     case "tool_result": {
       const isError = typeof e.result === "string" && /^error/i.test(e.result);
       if (isError) return { text: "ugh.", color: "var(--color-danger)", durationMs: 3000 };
+      if ((e.name ?? "").toLowerCase() === "notify") {
+        return { text: "delivered ✓", color: "var(--color-accent)", durationMs: 3000 };
+      }
       return { text: "got it.", color: "var(--color-accent)", durationMs: 1800 };
     }
     case "assistant_reply":

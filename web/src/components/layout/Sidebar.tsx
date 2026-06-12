@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { InstallBadge } from "./InstallBadge";
+import { KillSwitch } from "./KillSwitch";
 import { ModeToggle } from "./ModeToggle";
 import { ProviderInline } from "./ProviderInline";
 import { SidebarBrand } from "./SidebarBrand";
@@ -241,6 +242,7 @@ export function Sidebar() {
       <div className="px-3 pb-2 pt-2 flex flex-col gap-1" style={{ borderTop: "1px solid var(--color-border)" }}>
         <SoundToggle />
         <ModeToggle />
+        <KillSwitch />
         <ProviderInline />
         <InstallBadge />
       </div>

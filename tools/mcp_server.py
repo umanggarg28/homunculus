@@ -109,7 +109,11 @@ def remember(
     body: Annotated[str, Field(description="Full content of the memory.")],
     related: Annotated[
         list[str] | None,
-        Field(description="Optional. Related memory slugs (filenames without .md)."),
+        Field(description=(
+            "Related memory slugs (filenames without .md). Set this whenever "
+            "the fact connects to something you already know — links become "
+            "[[wikilinks]] that recall and the memory graph follow."
+        )),
     ] = None,
 ) -> str:
     """Save a durable fact to long-term memory (persists across sessions). Not for ephemeral state."""

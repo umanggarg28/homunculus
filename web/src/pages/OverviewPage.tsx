@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCents } from "@/lib/format";
+import { ContainmentPanel } from "@/components/overview/ContainmentPanel";
 import { TransmissionsFeed } from "@/components/overview/TransmissionsFeed";
 import { useEventStream } from "@/hooks/useEventStream";
 import { api, parseServerIso } from "@/lib/api";
@@ -353,6 +354,7 @@ export function OverviewPage() {
         </div>
 
         <RunInspector events={events} />
+      <ContainmentPanel />
       <TransmissionsFeed />
     </PageShell>
   );

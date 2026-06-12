@@ -244,3 +244,71 @@
   0%, 100% { filter: brightness(0.88); }
   50%      { filter: brightness(1.55) drop-shadow(0 0 14px var(--color-accent-glow)); }
 }
+
+/* ---------- danger chrome: kill switch, halt state, autonomy ---------- */
+/* Hazard stripes for armed/destructive controls. Background-only so
+   text stays legible on top. */
+.hm-hazard {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--color-danger) 22%, transparent) 0 8px,
+    transparent 8px 16px
+  ) !important;
+}
+
+/* Engaged kill switch breathes red — unmissable in peripheral vision,
+   slow enough not to read as an active alarm. */
+@keyframes hm-halt-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50%      { box-shadow: 0 0 12px 0 color-mix(in srgb, var(--color-danger) 55%, transparent); }
+}
+
+/* While the heartbeat is executing autonomously (no human in the
+   loop), the viewport wears a hairline red frame. State-driven and
+   honest: it appears only while heartbeat-service events are seconds
+   old, then fades. */
+.hm-autonomous-frame {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 90;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 55%, transparent);
+  box-shadow: inset 0 0 22px color-mix(in srgb, var(--color-danger) 18%, transparent);
+  animation: hm-autonomous-breathe 2.2s ease-in-out infinite;
+}
+@keyframes hm-autonomous-breathe {
+  0%, 100% { opacity: 0.45; }
+  50%      { opacity: 1; }
+}
+
+/* Robot glitch jitter — 140ms of corruption. */
+@keyframes hm-glitch-jitter {
+  0%   { transform: translate(0, 0) skewX(0); filter: none; }
+  20%  { transform: translate(-2px, 1px) skewX(6deg); filter: invert(0.9) drop-shadow(0 0 6px var(--color-danger)); }
+  45%  { transform: translate(2px, -1px) skewX(-4deg); filter: drop-shadow(0 0 8px var(--color-danger)); }
+  70%  { transform: translate(-1px, 0) skewX(2deg); filter: invert(0.9); }
+  100% { transform: translate(0, 0) skewX(0); filter: none; }
+}
+.hm-glitching { animation: hm-glitch-jitter 140ms steps(2, end) 1; }
+
+/* Annoyed robot shake. */
+@keyframes hm-robot-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-2px); }
+  75% { transform: translateX(2px); }
+}
+.hm-robot-annoyed { animation: hm-robot-shake 240ms ease-in-out 3; }
+
+/* Victory hop on a real delivery. */
+@keyframes hm-robot-hop {
+  0%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-5px); }
+  55% { transform: translateY(0); }
+  72% { transform: translateY(-2px); }
+}
+.hm-robot-celebrate { animation: hm-robot-hop 700ms ease-out 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hm-autonomous-frame { animation: none; opacity: 0.6; }
+  .hm-glitching, .hm-robot-annoyed, .hm-robot-celebrate { animation: none; }
+}

@@ -36,6 +36,7 @@ import type {
   AgentBudgetStats,
   AgentReplayTurn,
   Chapter,
+  ContainmentStatus,
   MemoryEntry,
   LogFile,
   PersistedChatMessage,
@@ -142,6 +143,8 @@ export const api = {
   skillsList: () => jsonGet<Skill[]>("/skills"),
 
   agentControls: () => jsonGet<AgentControls>("/agent/controls"),
+
+  containment: () => jsonGet<ContainmentStatus>("/containment"),
 
   agentControlsUpdate: (body: Partial<AgentControls>) =>
     fetch(`${API_BASE}/agent/controls`, {

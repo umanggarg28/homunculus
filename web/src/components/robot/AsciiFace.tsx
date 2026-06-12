@@ -24,11 +24,15 @@ interface Props {
   showLabel?: boolean;
   /** Called when the user mouses over the face. */
   onMouseEnter?: () => void;
+  /** Temporary face override (e.g. annoyed, celebration). */
+  overrideFace?: [string, string] | null;
+  /** Follow the cursor with a lean + eye shift. Default true. */
+  track?: boolean;
 }
 
 /** Two-frame face animation per state. The renderer alternates
  *  between [0] and [1] every ~450ms to give micro-life. */
-const FACES: Record<RobotState, [string, string]> = {
+export const FACES: Record<RobotState, [string, string]> = {
   boot:       ["(•_•)", "(◉_◉)"],
   idle:       ["(◉_◉)", "(-_-)"],
   listening:  ["(◉‿◉)", "(◕‿◕)"],
@@ -41,6 +45,14 @@ const FACES: Record<RobotState, [string, string]> = {
 
 /** Sleep face — fully closed eyes. Used when idle > 60s. */
 const SLEEP_FACE: [string, string] = ["(˘_˘)", "(_ _)"];
+
+/** Annoyed face — repeated poking gets this. */
+export const ANNOYED_FACE: [string, string] = ["(¬_¬)", "(¬_¬ )"];
+
+/** Corrupted frames for the rare glitch. ~3% of idle blinks the face
+ *  drops its mask for 140ms — long enough to catch, short enough to
+ *  doubt. The one place the danger aesthetic touches the robot. */
+const GLITCH_FACES = ["(▓_▓)", "[0_#]", "(■_■)", "{×_0}"];
 
 const STATE_LABEL: Record<RobotState, string> = {
   boot: "BOOTING",
@@ -72,19 +84,32 @@ export function AsciiFace({
   fontSize = 28,
   showLabel = true,
   onMouseEnter,
+  overrideFace = null,
+  track = true,
 }: Props) {
   const [frame, setFrame] = useState(0);
   const [asleep, setAsleep] = useState(false);
+  const [glitch, setGlitch] = useState<string | null>(null);
+  const [lean, setLean] = useState({ rot: 0, eyeX: 0, near: false });
+  const [glance, setGlance] = useState(0); // idle micro-glance, px
   const lastBlinkRef = useRef<number>(performance.now());
+  const faceRef = useRef<HTMLDivElement>(null);
 
   // Two-frame swap loop — blinks for `idle`, faster swap for others.
+  // ~3% of idle blinks corrupt into a glitch frame instead.
   useEffect(() => {
     let raf = 0;
     const tick = (now: number) => {
       const since = now - lastBlinkRef.current;
       const blinkGap = state === "idle" ? 4500 : 450;
       const blinkDur = state === "idle" ? 150 : 380;
-      if (since > blinkGap) setFrame(1);
+      if (since > blinkGap && frame === 0) {
+        if (state === "idle" && !asleep && Math.random() < 0.03) {
+          setGlitch(GLITCH_FACES[Math.floor(Math.random() * GLITCH_FACES.length)]);
+          setTimeout(() => setGlitch(null), 140);
+        }
+        setFrame(1);
+      }
       if (since > blinkGap + blinkDur) {
         setFrame(0);
         lastBlinkRef.current = now;
@@ -93,7 +118,7 @@ export function AsciiFace({
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [state]);
+  }, [state, frame, asleep]);
 
   // After 60s of `idle` the face goes to sleep — eyes closed +
   // drifting z's. Any state change wakes it instantly.
@@ -106,9 +131,62 @@ export function AsciiFace({
     return () => clearTimeout(t);
   }, [state]);
 
-  const faceFrames = asleep ? SLEEP_FACE : FACES[state];
-  const face = faceFrames[frame];
-  const color = asleep ? "var(--color-text-muted)" : STATE_COLOR[state];
+  // Cursor tracking — body leans and eyes shift toward the pointer
+  // (clawd-on-desk's follow-the-cursor pattern, in CSS transforms).
+  // rAF-throttled; asleep faces don't track (they're asleep).
+  useEffect(() => {
+    if (!track || asleep) {
+      setLean({ rot: 0, eyeX: 0, near: false });
+      return;
+    }
+    let raf = 0;
+    let last: MouseEvent | null = null;
+    const onMove = (e: MouseEvent) => {
+      last = e;
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        if (!last || !faceRef.current) return;
+        const r = faceRef.current.getBoundingClientRect();
+        const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        const dx = last.clientX - cx, dy = last.clientY - cy;
+        const dist = Math.hypot(dx, dy);
+        setLean({
+          rot: Math.max(-7, Math.min(7, dx / 60)),
+          eyeX: Math.max(-2.5, Math.min(2.5, dx / 80)),
+          near: dist < 130,
+        });
+      });
+    };
+    window.addEventListener("mousemove", onMove);
+    return () => { window.removeEventListener("mousemove", onMove); if (raf) cancelAnimationFrame(raf); };
+  }, [track, asleep]);
+
+  // Idle repertoire — every 7–16s, a small self-directed motion
+  // (glance left/right) so stillness never reads as frozen.
+  useEffect(() => {
+    if (state !== "idle" || asleep) { setGlance(0); return; }
+    let alive = true;
+    let t: ReturnType<typeof setTimeout>;
+    const loop = () => {
+      t = setTimeout(() => {
+        if (!alive) return;
+        setGlance((Math.random() < 0.5 ? -1 : 1) * 3);
+        setTimeout(() => alive && setGlance(0), 900);
+        loop();
+      }, 7000 + Math.random() * 9000);
+    };
+    loop();
+    return () => { alive = false; clearTimeout(t); };
+  }, [state, asleep]);
+
+  const faceFrames = overrideFace ?? (asleep ? SLEEP_FACE : FACES[state]);
+  const face = glitch ?? faceFrames[frame];
+  const perked = lean.near && state === "idle" && !asleep && !overrideFace && !glitch;
+  const shownFace = perked && face === FACES.idle[frame] ? FACES.listening[frame] : face;
+  const color = glitch
+    ? "var(--color-danger)"
+    : asleep ? "var(--color-text-muted)" : STATE_COLOR[state];
 
   return (
     <div
@@ -127,6 +205,7 @@ export function AsciiFace({
 
       {/* The face itself + sleep z's */}
       <div
+        ref={faceRef}
         onMouseEnter={onMouseEnter}
         style={{
           position: "relative",
@@ -134,16 +213,19 @@ export function AsciiFace({
           fontSize,
           fontWeight: 700,
           color,
-          textShadow: `0 0 14px ${color}`,
+          textShadow: glitch ? `0 0 10px ${color}, 2px 0 0 ${color}` : `0 0 14px ${color}`,
           letterSpacing: "0.04em",
           lineHeight: 1,
           padding: "4px 8px",
-          transition: "color 220ms, text-shadow 220ms",
+          transform: glitch
+            ? `translate(${Math.random() < 0.5 ? -2 : 2}px, 1px) skewX(4deg)`
+            : `rotate(${lean.rot}deg) translateX(${lean.eyeX + glance}px) scale(${perked ? 1.08 : 1})`,
+          transition: glitch ? "none" : "color 220ms, text-shadow 220ms, transform 360ms ease-out",
           cursor: onMouseEnter ? "pointer" : "default",
           userSelect: "none",
         }}
       >
-        {face}
+        {shownFace}
         {asleep && <SleepZs fontSize={fontSize} />}
       </div>
 
@@ -162,7 +244,7 @@ export function AsciiFace({
             textTransform: "uppercase",
           }}
         >
-          ── {asleep ? "ASLEEP" : STATE_LABEL[state]}
+          ── {glitch ? "SIGNAL LOST" : asleep ? "ASLEEP" : STATE_LABEL[state]}
         </div>
       )}
     </div>

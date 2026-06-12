@@ -13,9 +13,9 @@ const LINES: { text: string; delay: number }[] = [
   { text: "[OK] event stream attached",   delay: 220 },
   { text: "[OK] memory mounted · ~/.claude/projects/…", delay: 400 },
   { text: "[OK] tool registry · 11 mounted", delay: 580 },
-  { text: "[OK] robot online · cream phosphor build", delay: 760 },
-  { text: "[OK] sse ▸ /events",            delay: 940 },
-  { text: "[OK] ready · awaiting prompt", delay: 1180 },
+  { text: "[OK] containment verified · socket proxied · egress public-only", delay: 760 },
+  { text: "[OK] kill switch armed · operator authority confirmed", delay: 940 },
+  { text: "[OK] autonomous unit online · awaiting directive", delay: 1180 },
 ];
 
 const FINAL_DELAY = 1500;
