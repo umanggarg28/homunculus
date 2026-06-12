@@ -10,6 +10,8 @@ export interface MemoryEntry {
   description: string;
   type: MemoryType | string;
   mtime: number;
+  /** Outbound [[wikilink]] slugs parsed from the entry body. */
+  links?: string[];
 }
 
 export interface LogFile {
@@ -53,6 +55,11 @@ export interface TaskRun {
   status: "success" | "failure";
   result: string;
   duration_s?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cached_tokens?: number;
+  calls?: number;
+  cost_cents?: number;
 }
 
 export interface Task {

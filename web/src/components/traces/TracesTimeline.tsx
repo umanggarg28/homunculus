@@ -153,15 +153,29 @@ function bucketize(blocks: Block[], windowStart: number, windowMs: number): Lane
 
 interface Selection { lane: LaneKey; bucket: number }
 
-export function TracesTimeline() {
+interface TimelineProps {
+  /** Epoch ms to center attention on (e.g. a task run deep link).
+   *  Picks the smallest window containing it and draws a marker. */
+  focusTs?: number;
+}
+
+export function TracesTimeline({ focusTs }: TimelineProps = {}) {
   const { events, connected } = useEventStream(500);
-  const [windowMs, setWindowMs]     = useState(WINDOWS[1].ms); // default 15M
+  const [windowMs, setWindowMs]     = useState(() => {
+    if (focusTs && Number.isFinite(focusTs)) {
+      const age = Date.now() - focusTs;
+      const fit = WINDOWS.find((w) => w.ms > age * 1.1);
+      return (fit ?? WINDOWS[WINDOWS.length - 1]).ms;
+    }
+    return WINDOWS[1].ms; // default 15M
+  });
   const [now, setNow]               = useState(() => Date.now());
   const [selected, setSelected]     = useState<Selection | null>(null);
   const [paused, setPaused]         = useState(false);
   const [service, setService]       = useState<ServiceFilter>("all");
   const [hiddenLanes, setHiddenLanes] = useState<Set<LaneKey>>(new Set());
-  const [autoWidened, setAutoWidened] = useState(false);
+  // Deep links already chose their window — auto-widen would fight it.
+  const [autoWidened, setAutoWidened] = useState(() => Boolean(focusTs));
 
   const toggleLane = (key: LaneKey) => {
     setHiddenLanes((prev) => {
@@ -425,6 +439,22 @@ export function TracesTimeline() {
               </div>
             );
           })}
+
+          {/* Focus marker — the moment a deep link asked about (amber
+              dashed, vs the solid accent now-line). */}
+          {focusTs != null && focusTs >= windowStart && focusTs <= now && (
+            <div style={{
+              position: "absolute", left: `${xPct(focusTs)}%`, top: rulerH, bottom: 0,
+              borderLeft: "1px dashed var(--color-warning)",
+              pointerEvents: "none",
+            }}>
+              <span style={{
+                position: "absolute", top: 2, left: 4,
+                fontSize: 8, letterSpacing: "0.18em", fontFamily: "var(--font-mono)",
+                color: "var(--color-warning)", textTransform: "uppercase",
+              }}>run</span>
+            </div>
+          )}
 
           {/* Now line */}
           <div style={{

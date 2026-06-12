@@ -2,6 +2,14 @@ import { lazy, Suspense, useEffect } from "react";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 import { AuthGate } from "@/components/auth/AuthGate";
 import { DashboardShell } from "@/components/layout/DashboardShell";
+import { useStatusFavicon } from "@/hooks/useStatusFavicon";
+
+/** Favicon mirrors agent state so a background tab still reads
+ *  idle/working/error at a glance. Null render — effect only. */
+function StatusFavicon() {
+  useStatusFavicon();
+  return null;
+}
 
 /** Reset scroll on every route change. React Router preserves scroll
  *  position across navigation; for a multi-page app where each route is
@@ -66,6 +74,7 @@ export default function App() {
       <BrowserRouter>
         <ScrollToTop />
         <UserTimezoneSync />
+        <StatusFavicon />
         <DashboardShell>
           <Suspense fallback={<RouteFallback />}>
             <Routes>

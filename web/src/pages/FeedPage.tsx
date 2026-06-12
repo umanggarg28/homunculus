@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useEventStream } from "@/hooks/useEventStream";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
@@ -13,6 +14,11 @@ import { FeedStream } from "@/components/feed/FeedStream";
 export function FeedPage() {
   const { events } = useEventStream(160);
   const [now, setNow] = useState(() => Date.now());
+  // ?at=<epoch ms> — deep link from a task run row; the timeline picks
+  // a window containing that moment and marks it.
+  const [searchParams] = useSearchParams();
+  const atParam = Number(searchParams.get("at"));
+  const focusTs = Number.isFinite(atParam) && atParam > 0 ? atParam : undefined;
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -39,7 +45,7 @@ export function FeedPage() {
         }
       />
 
-      <TracesTimeline />
+      <TracesTimeline focusTs={focusTs} />
 
       {/* Counts are owned by FeedStream's filter bar so they reflect the
           current toggle state (sys on/off, event-type chips, search) —
