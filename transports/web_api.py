@@ -1502,8 +1502,6 @@ _CHAT_RATE_WINDOW = 60  # seconds
 _MODEL_HINTS = [
     "gemini-2.5-flash",
     "gemini-2.5-pro",
-    "moonshotai/kimi-k2.6:free",
-    "qwen/qwen3-coder:free",
     "meta-llama/llama-3.3-70b-instruct:free",
     "openai/gpt-oss-120b:free",
     "anthropic/claude-sonnet-4-6",
