@@ -100,7 +100,9 @@ def notify(text: str, preview: bool = False) -> str:
     err = _send_to_telegram(text)
     if err:
         return err
-    _queue_for_telegram_history(text)
+    # _send_to_telegram already queued the text for chat-history
+    # bridging — queueing here too wrote every notification twice
+    # (visible as doubled rows in the transmissions feed).
     return f"Notification delivered ({len(text)} chars)."
 
 

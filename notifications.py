@@ -113,7 +113,19 @@ class NotificationQueue:
                         out.append(entry)
         except OSError:
             return []
-        return out[-max(1, limit):]
+        # Collapse the double-writes a notify() bug left in older logs
+        # (same text queued twice within the same second).
+        deduped: list[dict] = []
+        for e in out:
+            prev = deduped[-1] if deduped else None
+            if (
+                prev is not None
+                and prev.get("text") == e.get("text")
+                and abs(float(e.get("ts", 0)) - float(prev.get("ts", 0))) < 2.0
+            ):
+                continue
+            deduped.append(e)
+        return deduped[-max(1, limit):]
 
     def drain(self) -> list[dict]:
         """Return entries newer than the pointer; advance pointer atomically.
