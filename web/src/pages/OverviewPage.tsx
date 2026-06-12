@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCents } from "@/lib/format";
+import { TransmissionsFeed } from "@/components/overview/TransmissionsFeed";
 import { useEventStream } from "@/hooks/useEventStream";
 import { api, parseServerIso } from "@/lib/api";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -352,6 +353,7 @@ export function OverviewPage() {
         </div>
 
         <RunInspector events={events} />
+      <TransmissionsFeed />
     </PageShell>
   );
 }
