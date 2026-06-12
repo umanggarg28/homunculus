@@ -8,34 +8,14 @@ refinement on Haiku tried `python(code=...urlopen POST...)` and hit
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.conftest import load_real_tool_submodule
 
-# conftest stubs `tools` as a flat module to keep MCP deps optional.
-# Load tools/_helpers.py and tools/web.py as real submodules under the
-# canonical names so `from ._helpers import ...` resolves correctly.
-def _load_real_tool_submodule(name: str):
-    src = Path(__file__).parent.parent / "tools" / f"{name}.py"
-    full = f"tools.{name}"
-    if full in sys.modules:
-        return sys.modules[full]
-    spec = importlib.util.spec_from_file_location(full, src)
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    if "tools" in sys.modules and not hasattr(sys.modules["tools"], "__path__"):
-        sys.modules["tools"].__path__ = [str(src.parent)]  # type: ignore[attr-defined]
-    sys.modules[full] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-_load_real_tool_submodule("_helpers")  # web.py imports from ._helpers
-_web = _load_real_tool_submodule("web")
+load_real_tool_submodule("_helpers")  # web.py imports from ._helpers
+_web = load_real_tool_submodule("web")
 web_post = _web.web_post
 
 
