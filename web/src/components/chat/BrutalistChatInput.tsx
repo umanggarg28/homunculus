@@ -69,7 +69,10 @@ export function BrutalistChatInput({ sending, onSend, onCancel }: Props) {
         .brut-input:focus,
         .brut-input:focus-visible { outline: none !important; box-shadow: none !important; }
       `}</style>
-      <div className="brut-chat-input-inner max-w-[860px] mx-auto px-10">
+      {/* 720px — MUST match BrutalistChatLog's column in ChatPage. At
+          860px the input rendered wider than the conversation and the
+          whole page read as drifted right. */}
+      <div className="brut-chat-input-inner max-w-[720px] mx-auto px-10">
         <div
           className="flex items-start gap-2"
           style={{

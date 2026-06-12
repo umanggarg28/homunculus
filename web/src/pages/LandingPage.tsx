@@ -83,6 +83,13 @@ export function LandingPage() {
     lastDirective: null,
     status: "loading",
   });
+  const [transmissions, setTransmissions] = useState<{ ts: number; text: string }[]>([]);
+  const [hero, setHero] = useState<{ nextTickMs: number | null; hbAgeS: number | null }>({ nextTickMs: null, hbAgeS: null });
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -115,12 +122,25 @@ export function LandingPage() {
   useEffect(() => {
     let cancelled = false;
     async function loadTelemetry() {
-      const [stats, tasks, memories, chat] = await Promise.allSettled([
+      const [stats, tasks, memories, chat, sent, upcoming, status] = await Promise.allSettled([
         api.statsToday(),
         api.tasksList("all"),
         api.memoryList(),
         api.chatHistory(),
+        api.notificationsRecent(6),
+        api.agentUpcoming(),
+        api.status(),
       ]);
+      if (!cancelled && sent.status === "fulfilled") setTransmissions([...sent.value].reverse());
+      if (!cancelled) {
+        setHero({
+          // next_tick is naive USER wall clock — browser-local parse is correct.
+          nextTickMs: upcoming.status === "fulfilled" && upcoming.value.next_tick
+            ? new Date(upcoming.value.next_tick).getTime()
+            : null,
+          hbAgeS: status.status === "fulfilled" ? status.value.heartbeat?.age_s ?? null : null,
+        });
+      }
       if (cancelled) return;
       const loaded = [stats, tasks, memories, chat].filter((r) => r.status === "fulfilled").length;
       // "Last directive" = the last thing the USER told the agent. The
@@ -371,8 +391,21 @@ export function LandingPage() {
         <div className="mt-4 mb-2 brut-body" style={{ color: "var(--color-text)", fontStyle: "italic" }}>
           <span style={{ color: "var(--color-accent)" }}>›</span> {tagline}
         </div>
-        <div className="mb-10 brut-meta" style={{ color: "var(--color-text-muted)" }}>
+        <div className="mb-4 brut-meta" style={{ color: "var(--color-text-muted)" }}>
           ── personal agent · runtime 0.1.0 · phosphor build ──
+        </div>
+
+        {/* Live vitals strip — the hero's pulse. Without it the landing
+            was a static poster; the robot's defining property (it acts
+            while you're away) was invisible until you opened Overview. */}
+        <div
+          className="mb-10 flex flex-wrap items-baseline gap-x-6 gap-y-1"
+          style={{ fontFamily: "var(--font-mono)" }}
+        >
+          <HeroVital label="state" value={hero.hbAgeS !== null && hero.hbAgeS < 120 ? "ACTING" : "IDLE"} accent={hero.hbAgeS !== null && hero.hbAgeS < 120} />
+          <HeroVital label="next fire" value={hero.nextTickMs ? formatHeroCountdown(hero.nextTickMs - nowTick) : "——"} accent={false} />
+          <HeroVital label="last tx" value={transmissions[0] ? formatAgo(nowTick / 1000 - transmissions[0].ts) : "——"} accent={false} />
+          <span className="landing-status-dot" style={{ alignSelf: "center" }} />
         </div>
 
         <div className="landing-desk">
@@ -431,9 +464,80 @@ export function LandingPage() {
             </div>
           </div>
         </div>
+
+          {transmissions.length > 0 && (
+            <div className="landing-panel instrument-panel hm-panel-scan hm-panel-secondary" style={{ gridColumn: "1 / -1" }}>
+              <div className="landing-panel-head brut-meta" style={{ display: "flex", justifyContent: "space-between", color: "var(--color-text-muted)" }}>
+                <span>── transmissions · what reached your phone</span>
+                <span style={{ color: "var(--color-text-faint)" }}>{transmissions.length} recent</span>
+              </div>
+              <div style={{ fontFamily: "var(--font-mono)" }}>
+                {transmissions.map((n, i) => {
+                  const warn = n.text.trimStart().startsWith("⚠");
+                  return (
+                    <div
+                      key={`${n.ts}-${i}`}
+                      className="hm-interactive-row px-4 py-2 flex gap-5 items-baseline"
+                      style={{ borderTop: i > 0 ? "1px solid var(--color-border)" : "none" }}
+                    >
+                      <span style={{ color: warn ? "var(--color-amber)" : "var(--color-accent)", flexShrink: 0, fontSize: 11 }}>
+                        {warn ? "⚠" : "✓"}
+                      </span>
+                      <span className="brut-label" style={{ color: "var(--color-text-faint)", flexShrink: 0, whiteSpace: "nowrap", width: 110 }}>
+                        {new Date(n.ts * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).replace(",", " ·")}
+                      </span>
+                      <span className="brut-body truncate" style={{ color: "var(--color-text-dim)", minWidth: 0, flex: 1 }} title={n.text}>
+                        {firstLine(n.text)}
+                      </span>
+                      <span className="brut-label" style={{ color: "var(--color-text-faint)", flexShrink: 0, whiteSpace: "nowrap" }}>
+                        {formatAgo(Date.now() / 1000 - n.ts)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
       </div>
     </div>
   );
+}
+
+function HeroVital({ label, value, accent }: { label: string; value: string; accent: boolean }) {
+  return (
+    <span className="brut-meta" style={{ color: "var(--color-text-faint)" }}>
+      {label}{" "}
+      <span style={{
+        color: accent ? "var(--color-accent)" : "var(--color-text-dim)",
+        fontVariantNumeric: "tabular-nums",
+        textShadow: accent ? "0 0 8px var(--color-accent-glow)" : "none",
+      }}>{value}</span>
+    </span>
+  );
+}
+
+function formatHeroCountdown(ms: number): string {
+  if (ms <= 0) return "due";
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`
+    : `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+function formatAgo(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+function firstLine(text: string): string {
+  const line = text.split("\n").find((l) => l.trim()) ?? "";
+  return line.length > 140 ? line.slice(0, 140) + "…" : line;
 }
 
 function fmtMetric(value: number | null): string {

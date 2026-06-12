@@ -82,6 +82,7 @@ export const api = {
   config: () => jsonGet<WebConfig>("/config"),
   status: () => jsonGet<StatusMap>("/status"),
   chatHistory: () => jsonGet<PersistedChatMessage[]>("/chat/history"),
+  notificationsRecent: (limit = 8) => jsonGet<{ ts: number; text: string }[]>(`/notifications?limit=${limit}`),
   memoryList: () => jsonGet<MemoryEntry[]>("/memory"),
   memoryEntry: (filename: string) =>
     fetch(`${API_BASE}/memory/${encodeURIComponent(filename)}/raw`, {

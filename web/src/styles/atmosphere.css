@@ -208,7 +208,39 @@
   .atmo-poweron,
   .atmo-pip,
   .atmo-breath,
+  .hm-page-enter,
+  .hm-fresh-flash,
+  .hm-countdown-glow,
   .hm-skeleton::after { animation: none !important; }
   .reveal { transition: none !important; opacity: 1 !important; transform: none !important; }
   /* index.css crt-roll also respects this if you add the same guard there */
+}
+
+/* ---------- motion: page entry, fresh events, hero countdown ---------- */
+/* Page entry: a short phosphor fade-in. OPACITY ONLY — never animate
+   transform here: a filled transform animation keeps the element a
+   containing block for fixed descendants forever, which re-anchored
+   the chat input's fixed left:220px to PageShell instead of the
+   viewport and drifted the whole input bar 220px right. */
+.hm-page-enter { animation: hm-page-enter 240ms ease-out both; }
+@keyframes hm-page-enter {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Fresh trace rows flash phosphor on arrival, then decay — the visual
+   of a new line burning onto the tube. Applied only to rows whose
+   event is seconds old, so the initial page load doesn't strobe. */
+.hm-fresh-flash { animation: hm-fresh-flash 900ms ease-out 1; }
+@keyframes hm-fresh-flash {
+  0%   { background: color-mix(in srgb, var(--color-accent) 20%, transparent); }
+  100% { background: transparent; }
+}
+
+/* Hero countdown breathes — alive, not alarming. Brightness only, no
+   movement, so tabular digits stay perfectly registered. */
+.hm-countdown-glow { animation: hm-countdown-glow 2.6s ease-in-out infinite; }
+@keyframes hm-countdown-glow {
+  0%, 100% { filter: brightness(0.88); }
+  50%      { filter: brightness(1.55) drop-shadow(0 0 14px var(--color-accent-glow)); }
 }

@@ -92,6 +92,41 @@ class NotificationQueue:
         with self.log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+    def recent(self, limit: int = 12) -> list[dict]:
+        """Read-only tail of the log, newest LAST. Never touches the
+        drain pointer — this feeds display surfaces (the dashboard's
+        transmissions panel), not chat-context consumption."""
+        if not self.log_path.exists():
+            return []
+        out: list[dict] = []
+        try:
+            with self.log_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(entry, dict) and entry.get("text"):
+                        out.append(entry)
+        except OSError:
+            return []
+        # Collapse the double-writes a notify() bug left in older logs
+        # (same text queued twice within the same second).
+        deduped: list[dict] = []
+        for e in out:
+            prev = deduped[-1] if deduped else None
+            if (
+                prev is not None
+                and prev.get("text") == e.get("text")
+                and abs(float(e.get("ts", 0)) - float(prev.get("ts", 0))) < 2.0
+            ):
+                continue
+            deduped.append(e)
+        return deduped[-max(1, limit):]
+
     def drain(self) -> list[dict]:
         """Return entries newer than the pointer; advance pointer atomically.
 

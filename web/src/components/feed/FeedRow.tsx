@@ -46,6 +46,9 @@ const COMPACT_LEN_BY_KIND: Record<string, number> = {
  */
 export function FeedRow({ event: e }: Props) {
   const [expanded, setExpanded] = useState(false);
+  // Captured once at mount: rows whose event is seconds old get the
+  // phosphor arrival flash; rows hydrated from history don't strobe.
+  const [fresh] = useState(() => Date.now() - new Date(e.ts).getTime() < 4000);
 
   const isErr = (e.event === "tool_result" && typeof e.result === "string" && e.result.startsWith("ERROR"))
     || e.event === "output_guard";
@@ -78,7 +81,7 @@ export function FeedRow({ event: e }: Props) {
         // hm-interactive-row gives the row a subtle hover bloom (left
         // accent bar + faint phosphor wash). Only enable when the row
         // is clickable — otherwise hover affordance lies about behavior.
-        `feed-row grid py-1.5 px-4${isTruncatable ? " hm-interactive-row" : ""}`
+        `feed-row grid py-1.5 px-4${isTruncatable ? " hm-interactive-row" : ""}${fresh ? " hm-fresh-flash" : ""}`
       }
       onClick={isTruncatable ? () => setExpanded((v) => !v) : undefined}
       style={{

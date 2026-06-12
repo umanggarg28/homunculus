@@ -1326,6 +1326,15 @@ def log_entry_raw(rel: str) -> PlainTextResponse:
 
 # --- API: chat ------------------------------------------------------------
 
+@app.get("/api/notifications", dependencies=[Depends(require_web_auth)])
+def notifications_recent(limit: int = 8) -> JSONResponse:
+    """Most recent notify() deliveries, newest last. Read-only — does
+    NOT advance the chat drain pointer, so it never steals context from
+    the telegram/web bridges. Powers the landing transmissions feed."""
+    mem = _chat_memory or Memory(MEMORY_DIR)
+    return JSONResponse(mem.notifications.recent(max(1, min(50, limit))))
+
+
 @app.get("/api/chat/history", dependencies=[Depends(require_web_auth)])
 def chat_history() -> JSONResponse:
     """Return complete persisted user/assistant chat turns for UI hydration.
