@@ -22,7 +22,7 @@ interface Props {
 }
 
 const W = 720;
-const H = 300;
+const H = 320;
 const PAD = 36;
 
 interface Node {
@@ -43,7 +43,10 @@ function seededRandom(seed: number): () => number {
   };
 }
 
-function layout(entries: MemoryEntry[]): { nodes: Node[]; edges: [number, number][] } {
+/** Height reserved at the bottom for the unlinked shelf. */
+const SHELF_H = 64;
+
+function layout(entries: MemoryEntry[]): { nodes: Node[]; edges: [number, number][]; shelfCount: number } {
   const byName = new Map(entries.map((e, i) => [e.name.toLowerCase(), i]));
   const edgeSet = new Set<string>();
   const edges: [number, number][] = [];
@@ -63,6 +66,12 @@ function layout(entries: MemoryEntry[]): { nodes: Node[]; edges: [number, number
   const degree = new Array(entries.length).fill(0);
   for (const [a, b] of edges) { degree[a] += 1; degree[b] += 1; }
 
+  // Only the connected component earns force layout — random scatter
+  // for degree-0 stars read as noise, not constellation. Unlinked
+  // entries get a deliberate evenly-spaced shelf along the bottom.
+  const linked = entries.map((_, i) => i).filter((i) => degree[i] > 0);
+  const isolated = entries.map((_, i) => i).filter((i) => degree[i] === 0);
+
   let seed = entries.length * 7919;
   for (const e of entries) for (let k = 0; k < e.name.length; k++) seed = (seed * 31 + e.name.charCodeAt(k)) | 0;
   const rand = seededRandom(seed);
@@ -70,14 +79,16 @@ function layout(entries: MemoryEntry[]): { nodes: Node[]; edges: [number, number
   const xs = entries.map(() => (rand() - 0.5) * W * 0.8);
   const ys = entries.map(() => (rand() - 0.5) * H * 0.8);
 
-  // Plain Fruchterman-Reingold-ish iteration: pairwise repulsion,
-  // spring per edge, weak pull to center. O(n²·iters) — trivial here.
+  // Plain Fruchterman-Reingold-ish iteration over linked nodes only:
+  // pairwise repulsion, spring per edge, weak pull to center.
   for (let iter = 0; iter < 260; iter++) {
     const t = 1 - iter / 260;
     const fx = new Array(entries.length).fill(0);
     const fy = new Array(entries.length).fill(0);
-    for (let i = 0; i < entries.length; i++) {
-      for (let j = i + 1; j < entries.length; j++) {
+    for (let a = 0; a < linked.length; a++) {
+      const i = linked[a];
+      for (let b = a + 1; b < linked.length; b++) {
+        const j = linked[b];
         let dx = xs[i] - xs[j], dy = ys[i] - ys[j];
         const d2 = Math.max(dx * dx + dy * dy, 1);
         const d = Math.sqrt(d2);
@@ -97,31 +108,63 @@ function layout(entries: MemoryEntry[]): { nodes: Node[]; edges: [number, number
       fx[a] += dx * pull * d * 0.1; fy[a] += dy * pull * d * 0.1;
       fx[b] -= dx * pull * d * 0.1; fy[b] -= dy * pull * d * 0.1;
     }
-    for (let i = 0; i < entries.length; i++) {
+    for (const i of linked) {
       xs[i] += Math.max(-8, Math.min(8, fx[i])) * t;
       ys[i] += Math.max(-8, Math.min(8, fy[i])) * t;
     }
   }
 
-  // Normalize into the viewbox.
-  const minX = Math.min(...xs), maxX = Math.max(...xs);
-  const minY = Math.min(...ys), maxY = Math.max(...ys);
-  const sx = (W - PAD * 2) / Math.max(maxX - minX, 1);
-  const sy = (H - PAD * 2) / Math.max(maxY - minY, 1);
-  const nodes = entries.map((entry, i) => ({
-    entry,
-    x: PAD + (xs[i] - minX) * sx,
-    y: PAD + (ys[i] - minY) * sy,
-    degree: degree[i],
-  }));
-  return { nodes, edges };
+  // Normalize the linked cluster into the field above the shelf.
+  const fieldBottom = isolated.length > 0 ? H - SHELF_H : H;
+  const nodes: Node[] = new Array(entries.length);
+  if (linked.length > 0) {
+    const lx = linked.map((i) => xs[i]), ly = linked.map((i) => ys[i]);
+    const minX = Math.min(...lx), maxX = Math.max(...lx);
+    const minY = Math.min(...ly), maxY = Math.max(...ly);
+    const spanX = Math.max(maxX - minX, 1);
+    const spanY = Math.max(maxY - minY, 1);
+    // Uniform scale, capped: per-axis fitting stretched a small
+    // cluster into gangly full-width lines. Fit the field, never
+    // inflate past 1.3×, and center what's left.
+    const s = Math.min(
+      (W - PAD * 2) / spanX,
+      (fieldBottom - PAD * 2 - 14) / spanY,
+      1.3,
+    );
+    const ox = (W - spanX * s) / 2;
+    const oy = (fieldBottom - spanY * s) / 2;
+    for (const i of linked) {
+      nodes[i] = {
+        entry: entries[i],
+        x: ox + (xs[i] - minX) * s,
+        y: oy + (ys[i] - minY) * s,
+        degree: degree[i],
+      };
+    }
+  }
+  // Shelf: sorted by name so position is stable. Fixed 32px pitch
+  // starting flush with the shelf label — full-width spreading just
+  // recreated the random-scatter problem as a strip.
+  const shelf = [...isolated].sort((a, b) => entries[a].name.localeCompare(entries[b].name));
+  const pitch = 32;
+  const perRow = Math.max(1, Math.floor((W - PAD * 2) / pitch));
+  shelf.forEach((i, k) => {
+    nodes[i] = {
+      entry: entries[i],
+      // 22px under the divider, 26px clear of the panel edge.
+      x: PAD + 4 + (k % perRow) * pitch,
+      y: H - SHELF_H + 22 + Math.floor(k / perRow) * 16,
+      degree: 0,
+    };
+  });
+  return { nodes, edges, shelfCount: isolated.length };
 }
 
 export function MemoryConstellation({ entries }: Props) {
   const navigate = useNavigate();
   const [hover, setHover] = useState<number | null>(null);
 
-  const { nodes, edges } = useMemo(() => layout(entries), [entries]);
+  const { nodes, edges, shelfCount } = useMemo(() => layout(entries), [entries]);
 
   // A sky with no lines is just scattered dots — skip until the agent
   // has actually cross-linked something.
@@ -139,7 +182,7 @@ export function MemoryConstellation({ entries }: Props) {
   const hoverNode = hover !== null ? nodes[hover] : null;
 
   return (
-    <div className="instrument-panel hm-panel-scan hm-panel-secondary mt-6">
+    <div className="instrument-panel hm-panel-scan hm-panel-secondary mt-6 mb-10">
       <div
         className="brut-meta px-4 py-3 flex justify-between"
         style={{ color: "var(--color-text-muted)", borderBottom: "1px solid var(--color-border)" }}
@@ -155,6 +198,24 @@ export function MemoryConstellation({ entries }: Props) {
           style={{ width: "100%", height: "auto", display: "block" }}
           onMouseLeave={() => setHover(null)}
         >
+          {shelfCount > 0 && (
+            <g>
+              <line
+                x1={PAD} y1={H - SHELF_H} x2={W - PAD} y2={H - SHELF_H}
+                stroke="var(--color-border)" strokeDasharray="2 4"
+              />
+              <text
+                x={PAD} y={H - SHELF_H - 6}
+                style={{
+                  fontFamily: "var(--font-mono)", fontSize: 8,
+                  letterSpacing: "0.22em", fill: "var(--color-text-faint)",
+                  textTransform: "uppercase",
+                }}
+              >
+                ── not yet linked · {shelfCount}
+              </text>
+            </g>
+          )}
           {edges.map(([a, b], i) => {
             const lit = hover !== null && (a === hover || b === hover);
             return (
