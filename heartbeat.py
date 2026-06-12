@@ -26,6 +26,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+import agent_controls
 import events
 import tools
 from core import Agent, measure_llm_usage_since
@@ -122,6 +123,7 @@ Look for:
 ━━ STEP 3 — Save memories + hygiene ━━
 
 Save AT MOST 2 new memories. Use remember() with the SAME name to update existing ones — no duplicates.
+When a memory relates to one you already have, reference it inline as [[its-name]] in the body — cross-links are how recall finds context later.
 Call forget() AT MOST 2 times for stale or contradicted memories.
 
 ━━ STEP 4 — Reply ━━
@@ -462,6 +464,14 @@ def tick(memory: Memory, model: str | None) -> None:
     heartbeat consider reflection (once per calendar day). This prevents the
     reflection branch from starving overdue tasks on the first tick of a new day.
     """
+    # Kill switch — checked before ANY work, including stale-flag
+    # recovery. While paused the heartbeat is inert: no task execution,
+    # no reflection, no LLM spend, no state mutation. Chat is unaffected
+    # (the switch halts autonomy, not conversation).
+    if agent_controls.load_controls().paused:
+        print("[heartbeat] HALTED by operator kill switch — tick skipped", flush=True)
+        return
+
     # Use user-TZ-aware now for the prompt — the agent quotes this back to
     # the user, so naive UTC here causes "the current time is 06:30 IST"
     # mismatches in chat replies.

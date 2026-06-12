@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { forwardRef, useEffect, useState, type ButtonHTMLAttributes } from "react";
 import { api } from "@/lib/api";
 import { Tooltip } from "@/components/ui/Tooltip";
 
@@ -47,20 +47,27 @@ export function ModeToggle() {
   );
 }
 
-function ToggleBtn({
-  children, active, onClick,
-}: { children: React.ReactNode; active: boolean; onClick: () => void }) {
+/** forwardRef + prop spread are load-bearing: Tooltip clones its child
+ *  with a ref and hover handlers. A plain function component drops the
+ *  ref (React warning) and swallowing rest-props ate the tooltip's
+ *  mouse events entirely. */
+const ToggleBtn = forwardRef<
+  HTMLButtonElement,
+  { active: boolean } & ButtonHTMLAttributes<HTMLButtonElement>
+>(function ToggleBtn({ children, active, style, ...rest }, ref) {
   return (
     <button
-      onClick={onClick}
+      ref={ref}
+      {...rest}
       className="flex-1 h-6 text-[10px] uppercase tracking-[0.16em] transition-colors"
       style={{
         background: active ? "var(--color-accent)" : "transparent",
         color: active ? "var(--color-bg)" : "var(--color-text-muted)",
         border: "none",
+        ...style,
       }}
     >
       {children}
     </button>
   );
-}
+});

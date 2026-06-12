@@ -5,6 +5,7 @@ import { AlertBanner } from "./AlertBanner";
 import { CommandPalette } from "./CommandPalette";
 import { BootSequence } from "./BootSequence";
 import { Atmosphere } from "./Atmosphere";
+import { AutonomousFrame } from "./AutonomousFrame";
 
 /** App shell: fixed sidebar on the left, scrolling content on the right. */
 export function DashboardShell({ children }: { children: ReactNode }) {
@@ -24,6 +25,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
       `}</style>
       <Atmosphere />
       <BootSequence />
+      <AutonomousFrame />
       <Sidebar />
       <main className="dashboard-main">
         <AlertBanner />

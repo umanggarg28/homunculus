@@ -27,6 +27,10 @@ class AgentControls:
     prefer_free_models: bool = True
     allowed_tools: list[str] = field(default_factory=list)
     blocked_tools: list[str] = field(default_factory=list)
+    # Kill switch. While True the heartbeat refuses to run any tick —
+    # no task execution, no reflection, no LLM spend. Chat stays up:
+    # the switch halts autonomous action, not human conversation.
+    paused: bool = False
 
     def normalized(self) -> "AgentControls":
         max_steps = min(50, max(1, int(self.max_steps or DEFAULT_MAX_STEPS)))
@@ -38,10 +42,25 @@ class AgentControls:
             prefer_free_models=bool(self.prefer_free_models),
             allowed_tools=allowed,
             blocked_tools=blocked,
+            paused=bool(self.paused),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self.normalized())
+
+
+_FIELDS = ("max_steps", "dry_run", "prefer_free_models", "allowed_tools", "blocked_tools", "paused")
+
+
+def _from_dict(data: dict[str, Any]) -> AgentControls:
+    return AgentControls(
+        max_steps=data.get("max_steps", DEFAULT_MAX_STEPS),
+        dry_run=data.get("dry_run", False),
+        prefer_free_models=data.get("prefer_free_models", True),
+        allowed_tools=data.get("allowed_tools") or [],
+        blocked_tools=data.get("blocked_tools") or [],
+        paused=data.get("paused", False),
+    ).normalized()
 
 
 def controls_path() -> Path:
@@ -58,28 +77,16 @@ def load_controls(path: Path | None = None) -> AgentControls:
         return AgentControls().normalized()
     if not isinstance(data, dict):
         return AgentControls().normalized()
-    return AgentControls(
-        max_steps=data.get("max_steps", DEFAULT_MAX_STEPS),
-        dry_run=data.get("dry_run", False),
-        prefer_free_models=data.get("prefer_free_models", True),
-        allowed_tools=data.get("allowed_tools") or [],
-        blocked_tools=data.get("blocked_tools") or [],
-    ).normalized()
+    return _from_dict(data)
 
 
 def save_controls(updates: dict[str, Any], path: Path | None = None) -> AgentControls:
     current = load_controls(path)
     data = current.to_dict()
-    for key in ("max_steps", "dry_run", "prefer_free_models", "allowed_tools", "blocked_tools"):
+    for key in _FIELDS:
         if key in updates:
             data[key] = updates[key]
-    next_controls = AgentControls(
-        max_steps=data.get("max_steps", DEFAULT_MAX_STEPS),
-        dry_run=data.get("dry_run", False),
-        prefer_free_models=data.get("prefer_free_models", True),
-        allowed_tools=data.get("allowed_tools") or [],
-        blocked_tools=data.get("blocked_tools") or [],
-    ).normalized()
+    next_controls = _from_dict(data)
     path = path or controls_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(next_controls.to_dict(), indent=2) + "\n", encoding="utf-8")
