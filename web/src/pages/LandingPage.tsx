@@ -472,29 +472,55 @@ export function LandingPage() {
                 <span style={{ color: "var(--color-text-faint)" }}>{transmissions.length} recent</span>
               </div>
               <div style={{ fontFamily: "var(--font-mono)" }}>
-                {transmissions.map((n, i) => {
-                  const warn = n.text.trimStart().startsWith("⚠");
-                  return (
-                    <div
-                      key={`${n.ts}-${i}`}
-                      className="hm-interactive-row px-4 py-2 flex gap-5 items-baseline"
-                      style={{ borderTop: i > 0 ? "1px solid var(--color-border)" : "none" }}
-                    >
-                      <span style={{ color: warn ? "var(--color-amber)" : "var(--color-accent)", flexShrink: 0, fontSize: 11 }}>
-                        {warn ? "⚠" : "✓"}
-                      </span>
-                      <span className="brut-label" style={{ color: "var(--color-text-faint)", flexShrink: 0, whiteSpace: "nowrap", width: 110 }}>
-                        {new Date(n.ts * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).replace(",", " ·")}
-                      </span>
-                      <span className="brut-body truncate" style={{ color: "var(--color-text-dim)", minWidth: 0, flex: 1 }} title={n.text}>
-                        {firstLine(n.text)}
-                      </span>
-                      <span className="brut-label" style={{ color: "var(--color-text-faint)", flexShrink: 0, whiteSpace: "nowrap" }}>
-                        {formatAgo(Date.now() / 1000 - n.ts)}
-                      </span>
+                {groupByDay(transmissions).map((group) => (
+                  <div key={group.label}>
+                    <div className="brut-label px-4 pt-3 pb-1" style={{ color: "var(--color-text-faint)", letterSpacing: "0.22em" }}>
+                      ─ {group.label}
                     </div>
-                  );
-                })}
+                    {group.items.map((n, i) => {
+                      const kind = kindOf(n.text);
+                      const newest = n === transmissions[0];
+                      return (
+                        <div
+                          key={`${n.ts}-${i}`}
+                          className="hm-interactive-row px-4 py-2 flex gap-4 items-baseline"
+                          style={{ borderTop: "1px solid var(--color-border)" }}
+                        >
+                          <span
+                            className="brut-label"
+                            style={{
+                              color: kind.color,
+                              border: `1px solid color-mix(in srgb, ${kind.color} 45%, transparent)`,
+                              padding: "1px 7px",
+                              flexShrink: 0,
+                              width: 86,
+                              textAlign: "center",
+                              letterSpacing: "0.14em",
+                            }}
+                          >
+                            {kind.label}
+                          </span>
+                          <span
+                            className="brut-body truncate"
+                            style={{
+                              color: newest ? "var(--color-accent)" : "var(--color-text)",
+                              textShadow: newest ? "0 0 10px var(--color-accent-glow)" : "none",
+                              minWidth: 0,
+                              flex: 1,
+                            }}
+                            title={n.text}
+                          >
+                            {firstLine(n.text)}
+                          </span>
+                          <span className="brut-label" style={{ color: "var(--color-text-faint)", flexShrink: 0, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
+                            {new Date(n.ts * 1000).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })}
+                            <span style={{ opacity: 0.55 }}> · {formatAgo(Date.now() / 1000 - n.ts)}</span>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -533,6 +559,38 @@ function formatAgo(seconds: number): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
+}
+
+/** Classify a notification by its content so the feed gets scannable
+ * color instead of six identical dim rows. Content-derived, not
+ * task-derived — the queue doesn't know which task sent it. */
+function kindOf(text: string): { label: string; color: string } {
+  const t = text.trimStart();
+  if (t.startsWith("⚠")) return { label: "alert", color: "var(--color-danger)" };
+  if (/leetcode\.com\/problems\//i.test(t)) return { label: "leetcode", color: "var(--color-warning)" };
+  if (/^reminder|remember to|is scheduled|is now due/i.test(t)) return { label: "reminder", color: "var(--color-indigo)" };
+  if (/brief|digest|standup/i.test(t)) return { label: "brief", color: "var(--color-accent)" };
+  return { label: "tx", color: "var(--color-accent)" };
+}
+
+function groupByDay(items: { ts: number; text: string }[]): { label: string; items: { ts: number; text: string }[] }[] {
+  const dayLabel = (ts: number): string => {
+    const d = new Date(ts * 1000);
+    const today = new Date();
+    const yesterday = new Date(today.getTime() - 86_400_000);
+    const same = (a: Date, b: Date) => a.toDateString() === b.toDateString();
+    if (same(d, today)) return "today";
+    if (same(d, yesterday)) return "yesterday";
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toLowerCase();
+  };
+  const groups: { label: string; items: { ts: number; text: string }[] }[] = [];
+  for (const n of items) {
+    const label = dayLabel(n.ts);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(n);
+    else groups.push({ label, items: [n] });
+  }
+  return groups;
 }
 
 function firstLine(text: string): string {
