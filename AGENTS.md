@@ -59,6 +59,7 @@ below — the system prompt warns the model that these are off-limits.
   run_task
 - get_current_time
 - web_fetch, web_search, web_post
+- watch_url (snapshot + diff for "tell me when it changes" watchers)
 - python (sandboxed)
 - get_world_state, update_world_state
 - rate_skill

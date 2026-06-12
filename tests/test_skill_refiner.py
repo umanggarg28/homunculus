@@ -13,10 +13,6 @@ Tests cover:
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-import types
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -24,30 +20,14 @@ import pytest
 from memory import Memory
 from skills import Skills
 
+# tools/_state.py and tools/skill_refinement.py need to be loadable as
+# real modules and address each other. Load _state first under the
+# canonical name (`tools._state`) so that `tools.skill_refinement`
+# finds it via `from . import _state`.
+from tests.conftest import load_real_tool_submodule
 
-# conftest stubs the top-level `tools` as a flat module to keep MCP
-# deps optional. tools/_state.py and tools/skill_refinement.py both
-# need to be loadable as real modules and address each other. Load
-# _state first under the canonical name (`tools._state`) so that
-# `tools.skill_refinement` finds it via `from . import _state`.
-def _load_real_tool_submodule(name: str):
-    src = Path(__file__).parent.parent / "tools" / f"{name}.py"
-    full = f"tools.{name}"
-    if full in sys.modules:
-        return sys.modules[full]
-    spec = importlib.util.spec_from_file_location(full, src)
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    # Pretend `tools` is a real package so relative imports resolve.
-    if "tools" in sys.modules and not hasattr(sys.modules["tools"], "__path__"):
-        sys.modules["tools"].__path__ = [str(src.parent)]  # type: ignore[attr-defined]
-    sys.modules[full] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-tool_state = _load_real_tool_submodule("_state")
-refine_tools = _load_real_tool_submodule("skill_refinement")
+tool_state = load_real_tool_submodule("_state")
+refine_tools = load_real_tool_submodule("skill_refinement")
 
 
 from skill_refiner import (

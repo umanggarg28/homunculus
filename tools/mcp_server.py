@@ -28,7 +28,7 @@ from pydantic import Field
 
 from . import (
     _meta, filesystem, memory_tools, notify as notify_mod, sandbox,
-    scheduling, skill_refinement as skill_refinement_mod, web,
+    scheduling, skill_refinement as skill_refinement_mod, watch, web,
 )
 
 
@@ -427,6 +427,22 @@ def web_post(
     Treat this as a side-effecting call: only use when you actually
     want the call to happen on the remote end."""
     return web.web_post(url, json_body=json_body, headers=headers, raw_body=raw_body)
+
+
+@mcp.tool(annotations={"readOnlyHint": False})
+def watch_url(
+    name: Annotated[str, Field(description="Stable slug identifying this watch (e.g. 'gh-stars-homunculus'). Reuse the EXACT same name on every run — the diff is against the previous call with this name.")],
+    url: Annotated[str, Field(description="URL to watch.")],
+) -> str:
+    """Fetch a URL and diff it against the snapshot saved by the previous
+    call with the same name. Returns FIRST SNAPSHOT, NO CHANGE, or
+    CHANGED plus a unified diff of what's new.
+
+    Use this for every recurring "tell me when something changes" task —
+    never fetch twice and compare yourself. NO CHANGE means do not
+    notify. On CHANGED, read the diff and judge whether it's meaningful
+    (ignore timestamp/counter churn) before notifying."""
+    return watch.watch_url(name, url)
 
 
 # ── sandbox ───────────────────────────────────────────────────────────
