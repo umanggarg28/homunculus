@@ -38,6 +38,9 @@ def _repo(name, stars=0, forks=0, issues=0):
 def gh_env(tmp_path, monkeypatch):
     """Isolated snapshot dir + a stubbable GitHub API."""
     monkeypatch.setattr(_helpers, "CACHE_DIR", tmp_path)
+    # Identity comes from config; keep tests deterministic regardless of
+    # the host/CI environment.
+    monkeypatch.delenv("HOMUNCULUS_GITHUB_USER", raising=False)
 
     def set_api(profile, repos):
         def fake_get_json(url: str):
@@ -106,7 +109,56 @@ def test_api_error_passes_through_and_is_not_snapshotted(gh_env, tmp_path, monke
     assert not (tmp_path / "watch" / "gh-profile-u.json").exists()
 
 
-@pytest.mark.parametrize("bad", ["", "-leading", "has space", "a" * 40, "in--valid"])
+@pytest.mark.parametrize("bad", ["-leading", "has space", "a" * 40, "in--valid"])
 def test_invalid_usernames_rejected(gh_env, bad):
     out = _gh.github_profile(bad)
     assert out.startswith("ERROR: invalid GitHub username")
+
+
+def test_no_user_and_no_config_asks_instead_of_guessing(gh_env, monkeypatch):
+    # Empty arg + nothing configured/learned: refuse and tell the agent
+    # to ask the operator and remember — never guess.
+    import sys, types
+    fake_state = types.ModuleType("tools._state")
+    fake_state.get_memory = lambda: None
+    monkeypatch.setitem(sys.modules, "tools._state", fake_state)
+    out = _gh.github_profile()
+    assert out.startswith("ERROR: I don't know the operator's GitHub handle")
+    assert "ASK the user" in out
+    assert "update_world_state" in out
+
+
+def test_learned_handle_in_world_state_is_used(gh_env, monkeypatch):
+    import sys, types
+    monkeypatch.delenv("HOMUNCULUS_GITHUB_USER", raising=False)
+    fake_mem = type("M", (), {
+        "world_state": type("W", (), {"read": lambda self: {"github_user": "umanggarg28"}})()
+    })()
+    fake_state = types.ModuleType("tools._state")
+    fake_state.get_memory = lambda: fake_mem
+    monkeypatch.setitem(sys.modules, "tools._state", fake_state)
+    assert _gh.default_user() == "umanggarg28"
+
+
+# ---- handle must be configured, never guessed --------------------------
+
+
+def test_defaults_to_configured_handle_when_user_omitted(gh_env, monkeypatch):
+    monkeypatch.setenv("HOMUNCULUS_GITHUB_USER", "umanggarg28")
+    captured = {}
+    gh_env(_profile(followers=1), [_repo("x", stars=1)])
+    # Wrap snapshot_or_diff to capture which user was resolved.
+    orig = _gh.snapshot_or_diff
+    monkeypatch.setattr(_gh, "snapshot_or_diff", lambda user, summary: captured.setdefault("user", user) or orig(user, summary))
+    _gh.github_profile()  # no argument
+    assert captured["user"] == "umanggarg28"
+
+
+def test_explicit_user_still_allowed_for_other_people(gh_env, monkeypatch):
+    monkeypatch.setenv("HOMUNCULUS_GITHUB_USER", "umanggarg28")
+    captured = {}
+    gh_env(_profile(), [_repo("x")])
+    orig = _gh.snapshot_or_diff
+    monkeypatch.setattr(_gh, "snapshot_or_diff", lambda user, summary: captured.setdefault("user", user) or orig(user, summary))
+    _gh.github_profile("torvalds")
+    assert captured["user"] == "torvalds"
