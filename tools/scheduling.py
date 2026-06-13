@@ -133,6 +133,26 @@ def cancel_task(task_id: str, reason: str = "") -> str:
     return f"Cancelled task {task_id}"
 
 
+def record_failure(task_id: str, reason: str = "") -> str:
+    """Log a failed attempt at a task (genuinely couldn't deliver).
+
+    The heartbeat prompt, AGENTS.md and the TaskGuard all instruct the
+    agent to call this — but it was never registered as a tool, so every
+    failure attempt errored with 'tool does not exist'. This wraps the
+    store method the post-tick code already uses (TaskStore.record_failure):
+    logs the run, advances a recurring task's due_at, and auto-cancels
+    after the consecutive-failure limit.
+    """
+    store = _task_store()
+    if not (store.get(task_id)):
+        return f"ERROR: no task '{task_id}' to record a failure against."
+    task = store.record_failure(task_id, reason or "agent reported failure")
+    clear_scratchpad(store.root, task_id)
+    if task.get("status") == "cancelled":
+        return f"Recorded failure for {task_id}; auto-cancelled after repeated failures."
+    return f"Recorded failure for {task_id}: {reason[:160]}"
+
+
 def continue_task(
     task_id: str,
     reason: str = "",
