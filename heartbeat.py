@@ -74,6 +74,15 @@ genuinely cannot deliver, call record_failure() instead of trying to close
 the task. Tasks may list `already_delivered` keys: NEVER send any of those
 again; pick the next undelivered item.
 
+An EMPTY or no-content delivery is NOT a clean completion. If the core
+deliverable is missing — no items found, the source returned nothing, a
+fetch failed — call record_failure(task_id, reason), NOT complete_task
+with a "nothing found today" message. A recorded failure triggers skill
+refinement next reflection tick (the skill that produced nothing gets
+fixed); a fake "nothing found" success hides the gap and the skill stays
+broken forever. Only complete_task when you actually delivered the thing
+the task is for.
+
 Scheduling: default next tick is in ~60 minutes (or sooner if another task
 is due). Call `schedule_next_tick("YYYY-MM-DDTHH:MM:SS")` to wake at a
 specific time (must be future, within 24h).
