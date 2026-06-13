@@ -38,6 +38,7 @@ import type {
   Chapter,
   ContainmentStatus,
   MemoryEntry,
+  Proposal,
   LogFile,
   PersistedChatMessage,
   Skill,
@@ -145,6 +146,28 @@ export const api = {
   agentControls: () => jsonGet<AgentControls>("/agent/controls"),
 
   containment: () => jsonGet<ContainmentStatus>("/containment"),
+
+  proposals: (status: "pending" | "approved" | "rejected" | "all" = "pending") =>
+    jsonGet<Proposal[]>(`/proposals?status=${status}`),
+
+  proposalApprove: (id: string) =>
+    fetch(`${API_BASE}/proposals/${encodeURIComponent(id)}/approve`, {
+      method: "POST",
+      headers: authHeaders(),
+    }).then(async (r) => {
+      if (!r.ok) throw new Error((await r.text()) || `Approve failed: ${r.status}`);
+      return r.json() as Promise<{ ok: boolean; skill: string; version: number }>;
+    }),
+
+  proposalReject: (id: string, reason: string = "") =>
+    fetch(`${API_BASE}/proposals/${encodeURIComponent(id)}/reject`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ reason }),
+    }).then(async (r) => {
+      if (!r.ok) throw new Error(`Reject failed: ${r.status}`);
+      return r.json() as Promise<{ ok: boolean; id: string; status: string }>;
+    }),
 
   agentControlsUpdate: (body: Partial<AgentControls>) =>
     fetch(`${API_BASE}/agent/controls`, {
