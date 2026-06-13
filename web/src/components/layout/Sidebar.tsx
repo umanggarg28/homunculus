@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
+import { PROPOSALS_CHANGED_EVENT } from "@/components/overview/SkillProposals";
 import { InstallBadge } from "./InstallBadge";
 import { KillSwitch } from "./KillSwitch";
 import { ModeToggle } from "./ModeToggle";
@@ -55,7 +56,14 @@ export function Sidebar() {
         .catch(() => undefined);
     load();
     const t = setInterval(load, 30_000);
-    return () => { cancelled = true; clearInterval(t); };
+    // Approve/reject in the panel fires this — clear the badge instantly
+    // instead of waiting up to 30s for the next poll.
+    window.addEventListener(PROPOSALS_CHANGED_EVENT, load);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+      window.removeEventListener(PROPOSALS_CHANGED_EVENT, load);
+    };
   }, []);
 
   useEffect(() => {
