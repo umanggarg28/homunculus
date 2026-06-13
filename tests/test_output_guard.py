@@ -246,3 +246,20 @@ def test_tool_result_success_is_not_failure():
     assert tool_result_indicates_failure('{"ok": true, "id": "prop-0001"}') is False
     assert tool_result_indicates_failure("Saved skill v2.") is False
     assert tool_result_indicates_failure(None) is False
+
+
+# ---- citation-artifact stripping (gpt-oss 【n†source】 leaks) ------------
+
+from core import _strip_citation_artifacts  # noqa: E402
+
+
+def test_strips_citation_markers():
+    assert _strip_citation_artifacts("as reported by DataRoot Labs 【2†URL】.") == "as reported by DataRoot Labs."
+    assert _strip_citation_artifacts("foo 【1†https://x.com】 bar 【3†source】") == "foo bar"
+
+
+def test_leaves_normal_text_untouched():
+    assert _strip_citation_artifacts("no markers here") == "no markers here"
+    # CJK brackets without the † separator are not citation artifacts.
+    assert _strip_citation_artifacts("see 【note】 here") == "see 【note】 here"
+    assert _strip_citation_artifacts("") == ""

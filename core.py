@@ -39,6 +39,17 @@ _GUARD_MEMORY_FILENAME_RE = re.compile(
     r"\b(?:user|feedback|project|reference|skill)_[a-z0-9_]+\.md\b"
 )
 _GUARD_INTERNAL_PATHS = ("workspace/memory/", "memory/logs/", "memory/_")
+
+# gpt-oss / OpenAI-style inline citation markers (【1†URL】, 【2†source】)
+# leak into replies verbatim instead of rendering as links. The †
+# separator makes this precise — it won't touch ordinary CJK brackets.
+_CITATION_ARTIFACT_RE = re.compile(r"\s*【[^】]*†[^】]*】")
+
+
+def _strip_citation_artifacts(content: str) -> str:
+    if not content or "†" not in content:
+        return content
+    return _CITATION_ARTIFACT_RE.sub("", content)
 _GUARD_ERROR_PREFIXES = ("ERROR:", "ERROR running ")
 _GUARD_CONFABULATION_TERMS = ("example.com", "example domain")
 
@@ -2097,7 +2108,16 @@ class Agent:
             tz = ZoneInfo("UTC")
         now = datetime.now(tz=tz)
         date_line = now.strftime("Current date/time: %A, %Y-%m-%d %H:%M %Z")
-        prompt += f"\n\n{date_line}"
+        # Anchor the model to the real year: gpt-oss defaults web-search
+        # queries to its training years (saw "2024 2025" queries in 2026).
+        prompt += (
+            f"\n\n{date_line}"
+            f"\nThe current year is {now.year}. When you search the web for "
+            f"recent/latest information, use {now.year} (or 'latest') — never "
+            f"default to earlier years from your training data. Do not emit "
+            f"citation markers like 【1†source】; cite as plain markdown links "
+            f"or just name the source."
+        )
 
         if self.memory is not None:
             state = self.memory.world_state.read()
@@ -2525,7 +2545,7 @@ class Agent:
             # the API rejects when replayed as part of the next request.
             cleaned: dict[str, Any] = {"role": "assistant"}
             if assistant_msg.get("content"):
-                cleaned["content"] = assistant_msg["content"]
+                cleaned["content"] = _strip_citation_artifacts(assistant_msg["content"])
             if assistant_msg.get("tool_calls"):
                 cleaned["tool_calls"] = assistant_msg["tool_calls"]
             if "content" not in cleaned and "tool_calls" not in cleaned:
