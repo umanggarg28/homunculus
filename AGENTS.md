@@ -62,6 +62,7 @@ below — the system prompt warns the model that these are off-limits.
 - watch_url (snapshot + diff for "tell me when it changes" watchers)
 - github_profile (weekly profile-health snapshot, diffed week-over-week)
 - rss_feed (surface new RSS/Atom entries since last run)
+- quiz_pick, quiz_grade (spaced-repetition coach; harness picks what's due)
 - python (sandboxed)
 - get_world_state, update_world_state
 - rate_skill
