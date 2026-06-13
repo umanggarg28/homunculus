@@ -46,8 +46,10 @@ you — you just read the diff and report what actually moved.
 
 ## Steps
 
-1. **Call `github_profile(user="{GH_USER}")`.** It returns a diff
-   against last week PLUS the current snapshot. Possible results:
+1. **Call `github_profile()` with NO arguments.** It uses the operator's
+   configured handle — never type a username, never guess one from a
+   name. It returns a diff against last week PLUS the current snapshot.
+   Possible results:
    - `FIRST SNAPSHOT` — first run, no baseline. Report the current
      totals (stars, followers, public repos) as a starting point.
    - `NO CHANGE` — nothing moved. Send a one-line "quiet week on GitHub"
@@ -77,8 +79,13 @@ Totals: <S> stars · <F> followers · <R> public repos
 - `notify_contains` "GitHub"
 
 ## Watch outs
-- If github_profile returns BLOCKED (rate limit) or ERROR, do NOT
-  invent numbers — record_failure and stop. The API allows 60/hr
+- If github_profile returns an ERROR saying the handle is unknown, do
+  NOT guess a username. In a chat, ask the operator for their GitHub
+  handle and save it with update_world_state(github_user='<handle>');
+  on a scheduled run with no one to ask, record_failure noting the
+  handle is unconfigured.
+- If github_profile returns BLOCKED (rate limit) or another ERROR, do
+  NOT invent numbers — record_failure and stop. The API allows 60/hr
   unauthenticated; a single retry is fine, looping is not.
 - Don't celebrate noise. 0→0 stars is not "growth"; say it's quiet.
 - One message. This is the Monday counterpart to the Sunday digest,
@@ -106,11 +113,12 @@ def _ensure_skill_file() -> None:
     memory_dir = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", str(REPO / "workspace" / "memory")))
     memory_dir.mkdir(parents=True, exist_ok=True)
     target = memory_dir / "skill_github_health.md"
-    if target.exists():
-        print(f"[bootstrap_github_health] skill file exists — leaving alone: {target}")
+    if target.exists() and target.read_text(encoding="utf-8") == SKILL_BODY:
+        print(f"[bootstrap_github_health] skill file already current: {target}")
         return
+    action = "updated" if target.exists() else "wrote"
     target.write_text(SKILL_BODY, encoding="utf-8")
-    print(f"[bootstrap_github_health] wrote skill file: {target}")
+    print(f"[bootstrap_github_health] {action} skill file: {target}")
 
 
 def main() -> int:

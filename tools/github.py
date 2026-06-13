@@ -14,6 +14,7 @@ spends 2). No token, no secrets, public data only.
 from __future__ import annotations
 
 import json
+import os
 import re
 
 import httpx
@@ -101,8 +102,39 @@ def _build_summary(user: str) -> str | None:
     return "\n".join(lines)
 
 
-def github_profile(user: str) -> str:
-    user = (user or "").strip()
+def default_user() -> str:
+    """The operator's own GitHub handle — configured or learned, never
+    inferred. The weak model guessed it from the user's first name
+    ('umang' is a different real account), so the handle is identity that
+    must come from a source of truth:
+
+      1. .env HOMUNCULUS_GITHUB_USER (deploy-time config), else
+      2. world_state['github_user'] (learned in chat and remembered).
+
+    No hardcoded fallback: an unconfigured deployment returns "" so the
+    caller asks the operator rather than watching a stranger."""
+    env = os.environ.get("HOMUNCULUS_GITHUB_USER", "").strip()
+    if env:
+        return env
+    try:
+        from . import _state
+        mem = _state.get_memory()
+        if mem is not None:
+            return str(mem.world_state.read().get("github_user", "")).strip()
+    except Exception:
+        pass
+    return ""
+
+
+def github_profile(user: str = "") -> str:
+    user = (user or "").strip() or default_user()
+    if not user:
+        return (
+            "ERROR: I don't know the operator's GitHub handle and must not "
+            "guess it. ASK the user for their GitHub username, then save it "
+            "with update_world_state(github_user='<handle>') so it's "
+            "remembered. After saving, call github_profile() again."
+        )
     if not _USER_RE.match(user):
         return "ERROR: invalid GitHub username."
     summary = _build_summary(user)

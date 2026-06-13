@@ -448,13 +448,15 @@ def watch_url(
 
 @mcp.tool(annotations={"readOnlyHint": True})
 def github_profile(
-    user: Annotated[str, Field(description="Public GitHub username, e.g. 'umanggarg28'.")],
+    user: Annotated[str, Field(description="Leave EMPTY for the operator's own profile (the configured handle) — this is the normal case. Only set it to look up a DIFFERENT person by their exact handle. NEVER guess the operator's username from their name.")] = "",
 ) -> str:
     """Profile-health snapshot for a public GitHub user: followers,
     public repo count, total stars/forks/open-issues, and the top repos
     by stars — diffed against the previous call so you can report
     week-over-week change ('+3 stars on homunculus'). The current
-    numbers are appended after the diff. Unauthenticated public API."""
+    numbers are appended after the diff. Unauthenticated public API.
+
+    Call with NO argument for the operator's own profile."""
     return github.github_profile(user)
 
 
