@@ -433,7 +433,7 @@ def web_post(
 @mcp.tool(annotations={"readOnlyHint": False})
 def watch_url(
     name: Annotated[str, Field(description="Stable slug identifying this watch (e.g. 'gh-stars-homunculus'). Reuse the EXACT same name on every run — the diff is against the previous call with this name.")],
-    url: Annotated[str, Field(description="URL to watch.")],
+    url: Annotated[str, Field(description="URL to watch. Use a URL the user gave you or one you verified via web_search — never invent or guess a URL.")],
 ) -> str:
     """Fetch a URL and diff it against the snapshot saved by the previous
     call with the same name. Returns FIRST SNAPSHOT, NO CHANGE, or
@@ -463,7 +463,7 @@ def github_profile(
 @mcp.tool(annotations={"readOnlyHint": True})
 def rss_feed(
     name: Annotated[str, Field(description="Stable slug for this feed (e.g. 'tldr-newsletter'). Reuse it every run — new entries are detected by diffing against the previous call with this name.")],
-    url: Annotated[str, Field(description="RSS or Atom feed URL.")],
+    url: Annotated[str, Field(description="RSS or Atom feed URL. Use a feed URL the user gave you or one you verified via web_search — never guess a feed address.")],
 ) -> str:
     """Fetch an RSS/Atom feed and report which entries are NEW since the
     last run (diffed against the previous call with the same name).
