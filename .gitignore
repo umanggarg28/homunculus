@@ -25,3 +25,5 @@ cache/
 *.obsidian-workspace
 
 # Note: uv.lock IS committed — it pins exact dep versions for reproducible builds.
+.playwright-mcp/
+.DS_Store
