@@ -123,6 +123,22 @@ export interface AgentControls {
   paused: boolean;
 }
 
+/** A skill the agent authored, awaiting operator review before it can
+ *  go live. Created via propose_skill; resolved via the proposals API. */
+export interface Proposal {
+  id: string;
+  kind: "new_skill" | "skill_edit";
+  skill_name: string;
+  body: string;
+  rationale: string;
+  source: string;
+  task_spec: Record<string, unknown> | null;
+  status: "pending" | "approved" | "rejected";
+  created_at: string;
+  resolved_at: string | null;
+  resolution_note: string;
+}
+
 export interface ContainmentStatus {
   docker_proxy: boolean;
   ssrf_guard: boolean;
