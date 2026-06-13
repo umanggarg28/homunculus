@@ -157,3 +157,29 @@ def test_create_one_shot_task_no_anchor(tmp_path):
         notify=True,
     )
     assert task.get("recur_anchor") is None
+
+
+def test_schedule_recomputes_anchor_to_new_time(tmp_path):
+    """Rescheduling a recurring task to a new time-of-day must update
+    recur_anchor — otherwise _advance_due snaps later cycles back to the
+    OLD time (the morning-brief 10:00→09:00 reversion bug)."""
+    store = TaskStore(tmp_path)
+    task = store.create(
+        title="Morning brief", description="...",
+        due_at="2026-06-08T09:00:00", recurrence="daily", notify=True,
+    )
+    assert task["recur_anchor"] == "09:00:00"
+
+    rescheduled = store.schedule(task["id"], "2026-06-09T10:00:00", "daily")
+    assert rescheduled["status"] == "active"
+    assert rescheduled["recur_anchor"] == "10:00:00"
+
+
+def test_schedule_to_none_recurrence_clears_anchor(tmp_path):
+    store = TaskStore(tmp_path)
+    task = store.create(
+        title="Daily thing", description="...",
+        due_at="2026-06-08T09:00:00", recurrence="daily", notify=True,
+    )
+    rescheduled = store.schedule(task["id"], "2026-06-09T10:00:00", "none")
+    assert rescheduled.get("recur_anchor") is None

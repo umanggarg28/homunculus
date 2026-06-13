@@ -167,13 +167,7 @@ class TaskStore:
             # partial-recovery shifts (mark_partial → due_at advances by
             # +10min) don't permanently drift a "daily at 7 AM" task to
             # firing at 1:40 AM after a few weeks of retries.
-            recur_anchor = None
-            if recurrence in ("daily", "weekly") and normalized_due:
-                try:
-                    parsed = datetime.fromisoformat(normalized_due)
-                    recur_anchor = parsed.strftime("%H:%M:%S")
-                except ValueError:
-                    pass
+            recur_anchor = self._compute_recur_anchor(normalized_due, recurrence)
             task = {
                 "id": self._unique_id(title, tasks),
                 "title": title.strip(),
@@ -622,12 +616,32 @@ class TaskStore:
                 if recurrence not in ALLOWED_RECURRENCE:
                     raise ValueError(f"recurrence must be one of {sorted(ALLOWED_RECURRENCE)}")
                 task["recurrence"] = recurrence
-            task["due_at"] = self._normalize_datetime(due_at)
+            normalized_due = self._normalize_datetime(due_at)
+            task["due_at"] = normalized_due
+            # Recompute the recurrence anchor from the NEW due time.
+            # Without this, rescheduling a recurring task to a new
+            # time-of-day kept the stale anchor, and _advance_due snapped
+            # every later cycle back to the old time (observed restoring
+            # morning-brief to 10:00 — it would have reverted to 09:00).
+            task["recur_anchor"] = self._compute_recur_anchor(normalized_due, task.get("recurrence", "none"))
             task["status"] = "active"
             task["updated_at"] = now_user_naive().isoformat(timespec="seconds")
             task["last_fired_at"] = None  # rescheduled tasks fire fresh
             self._write(tasks)
             return task
+
+    @staticmethod
+    def _compute_recur_anchor(normalized_due: str | None, recurrence: str) -> str | None:
+        """The HH:MM:SS that _advance_due snaps each recurring cycle to,
+        or None for non-recurring / undated tasks. Pinning the
+        time-of-day at (re)schedule time keeps partial-recovery shifts
+        from drifting a 'daily at 10 AM' task to odd hours."""
+        if recurrence in ("daily", "weekly") and normalized_due:
+            try:
+                return datetime.fromisoformat(normalized_due).strftime("%H:%M:%S")
+            except ValueError:
+                pass
+        return None
 
     def _write(self, tasks: list[dict[str, Any]]) -> None:
         tmp = self.path.with_suffix(".json.tmp")
