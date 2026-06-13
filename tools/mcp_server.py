@@ -27,9 +27,9 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from . import (
-    _meta, coach, filesystem, github, memory_tools, notify as notify_mod,
-    report, rss, sandbox, scheduling, skill_refinement as skill_refinement_mod,
-    watch, web,
+    _meta, authoring, coach, filesystem, github, memory_tools,
+    notify as notify_mod, report, rss, sandbox, scheduling,
+    skill_refinement as skill_refinement_mod, watch, web,
 )
 
 
@@ -492,6 +492,39 @@ def quiz_grade(
     longer interval, wrong → ask again tomorrow). Call this after the
     user answers the question you sent with quiz_pick."""
     return coach.quiz_grade(outcome)
+
+
+# ── self-authoring (propose skills for human review) ──────────────────
+
+
+@mcp.tool(annotations={"readOnlyHint": False})
+def propose_skill(
+    name: Annotated[str, Field(description="Skill name, skill_<slug> (e.g. 'skill_summarize_hn').")],
+    body: Annotated[str, Field(description="The FULL skill markdown: '---' frontmatter (name, description, type: skill, optional states:) then the playbook body.")],
+    rationale: Annotated[str, Field(description="Why this skill / edit — what failure it fixes or what job it enables.")] = "",
+    kind: Annotated[
+        Literal["new_skill", "skill_edit"] | None,
+        Field(description="Omit to auto-detect: edit if the skill exists, else new."),
+    ] = None,
+    task: Annotated[
+        dict | None,
+        Field(description="For a NEW skill that should run on a schedule: {title, recurrence: none|daily|weekly, due_at, success_criteria:[...]}. The task is created only when the proposal is approved."),
+    ] = None,
+) -> str:
+    """Propose a new skill, or an edit to an existing one, for HUMAN
+    REVIEW. Does NOT change anything live — it files a pending proposal
+    the operator approves or rejects in the dashboard. Use this to learn
+    a recurring job from a request, or to fix a skill that keeps failing.
+    Validation errors come straight back so you can correct and re-propose."""
+    return authoring.propose_skill(name, body, rationale, kind, task)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def list_proposals(
+    status: Annotated[str, Field(description="pending | approved | rejected | all")] = "pending",
+) -> str:
+    """List skill proposals and their review status."""
+    return authoring.list_proposals(status)
 
 
 # ── sandbox ───────────────────────────────────────────────────────────
