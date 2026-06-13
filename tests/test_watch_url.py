@@ -51,7 +51,7 @@ def test_first_run_saves_snapshot_and_reports_nothing_to_compare(watch_env, tmp_
     assert "no change to report" in out.lower()
     saved = json.loads(_snapshot_file(tmp_path, "my-watch").read_text())
     assert saved["text"] == "line one\nline two"
-    assert saved["url"] == "https://example.com/page"
+    assert saved["source"] == "https://example.com/page"
 
 
 def test_identical_content_reports_no_change(watch_env):
@@ -97,10 +97,13 @@ def test_huge_diff_is_truncated(watch_env):
 
 
 def test_different_url_same_name_is_flagged(watch_env):
-    watch_env("content")
+    # Different source only shows up alongside a change — identical text
+    # short-circuits to NO CHANGE before the note. Vary content too.
+    watch_env("content a")
     _watch.watch_url("w", "https://example.com/a")
+    watch_env("content b")
     out = _watch.watch_url("w", "https://example.com/b")
-    assert "different URL" in out
+    assert "different source" in out
 
 
 # ---- failure handling ---------------------------------------------------

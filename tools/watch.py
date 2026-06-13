@@ -1,15 +1,19 @@
-"""watch_url — deterministic change detection for recurring watchers.
+"""Change detection — the harness-owned half of every "tell me when it
+changes" watcher.
 
-The watcher pattern ("tell me only when something changed") is the
-backbone of every useful recurring delivery this agent runs. The LLM is
-the wrong place to do the comparison: a weak model re-reading two page
-dumps will hallucinate differences or miss real ones. So the harness
-owns the mechanics — fetch, snapshot, line diff — and the model only
-judges whether a reported change is *meaningful*.
+The watcher pattern ("act only when something changed") is the backbone
+of this agent's useful recurring deliveries. The comparison is the wrong
+job for a weak LLM: re-reading two snapshots, it hallucinates
+differences or misses real ones. So the harness owns the mechanics —
+snapshot, line diff — and the model only judges whether a reported
+change is *meaningful*.
 
-Snapshots live under CACHE_DIR/watch/<name>.json (one file per watch,
-no TTL — a snapshot is state, not a cache entry) and persist across
-ticks, restarts, and rebuilds.
+`snapshot_diff(name, text, source)` is the reusable core: any tool that
+can produce a stable text representation of "current state" gets
+diff-against-last-run for free (watch_url feeds it raw page text;
+github_profile feeds it a clean metrics summary). Snapshots live under
+CACHE_DIR/watch/<name>.json (one file per watch, no TTL — a snapshot is
+state, not a cache entry) and persist across ticks, restarts, rebuilds.
 """
 
 from __future__ import annotations
@@ -40,11 +44,11 @@ def _snapshot_path(name: str):
     return _helpers.CACHE_DIR / "watch" / f"{name}.json"
 
 
-def _save_snapshot(name: str, url: str, text: str) -> None:
+def _save_snapshot(name: str, source: str, text: str) -> None:
     path = _snapshot_path(name)
     path.parent.mkdir(parents=True, exist_ok=True)
     body = {
-        "url": url,
+        "source": source,
         "taken_at": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
         "text": text,
     }
@@ -64,7 +68,16 @@ def _load_snapshot(name: str) -> dict | None:
     return data if isinstance(data.get("text"), str) else None
 
 
-def watch_url(name: str, url: str) -> str:
+def snapshot_diff(name: str, text: str, source: str = "") -> str:
+    """Diff `text` against the last snapshot stored under `name`.
+
+    Returns FIRST SNAPSHOT (no baseline yet), NO CHANGE, or CHANGED +
+    a capped unified diff. Advances the snapshot on first-run and on
+    change. `source` is recorded for provenance and surfaced when it
+    differs between runs (e.g. the watched URL moved). Callers must not
+    pass an error string as `text` — that would poison the baseline;
+    web-fetching callers check for ERROR:/BLOCKED: before calling.
+    """
     name = (name or "").strip().lower()
     if not _NAME_RE.match(name):
         return (
@@ -73,34 +86,27 @@ def watch_url(name: str, url: str) -> str:
             "exact same name on every run of the same watch."
         )
 
-    text = web_fetch(url)
-    if text.startswith(_CACHE_HIT_PREFIX):
-        text = text[len(_CACHE_HIT_PREFIX):]
-    if text.startswith(("ERROR:", "BLOCKED:")):
-        # Never snapshot a failure — a transient 500 must not become the
-        # baseline that makes the next healthy fetch look like a change.
-        return text
-
     previous = _load_snapshot(name)
     if previous is None:
-        _save_snapshot(name, url, text)
+        _save_snapshot(name, source, text)
         return (
             f"FIRST SNAPSHOT for '{name}' saved "
-            f"({len(text.splitlines())} lines from {url}). Nothing to "
-            "compare against yet — there is no change to report this run."
+            f"({len(text.splitlines())} lines). Nothing to compare "
+            "against yet — there is no change to report this run."
         )
 
     old_lines = previous["text"].splitlines()
     new_lines = text.splitlines()
     taken_at = previous.get("taken_at", "an earlier run")
-    url_note = (
+    prev_source = previous.get("source", "")
+    source_note = (
         ""
-        if previous.get("url") == url
-        else f" NOTE: snapshot was taken from a different URL ({previous.get('url')})."
+        if not source or prev_source == source
+        else f" NOTE: snapshot was taken from a different source ({prev_source})."
     )
 
     if old_lines == new_lines:
-        return f"NO CHANGE: '{name}' matches the snapshot from {taken_at}.{url_note}"
+        return f"NO CHANGE: '{name}' matches the snapshot from {taken_at}.{source_note}"
 
     diff = list(
         difflib.unified_diff(
@@ -116,12 +122,23 @@ def watch_url(name: str, url: str) -> str:
     removed = sum(1 for l in diff if l.startswith("-") and not l.startswith("---"))
     if len(diff) > _MAX_DIFF_LINES:
         diff = diff[:_MAX_DIFF_LINES] + [
-            f"[...diff truncated at {_MAX_DIFF_LINES} lines — page changed substantially]"
+            f"[...diff truncated at {_MAX_DIFF_LINES} lines — content changed substantially]"
         ]
-    _save_snapshot(name, url, text)
+    _save_snapshot(name, source, text)
     return (
-        f"CHANGED since {taken_at}: +{added}/-{removed} lines (snapshot updated).{url_note}\n"
+        f"CHANGED since {taken_at}: +{added}/-{removed} lines (snapshot updated).{source_note}\n"
         "Judge whether this change is MEANINGFUL before notifying — "
-        "timestamps, view counters and ads churn on every fetch.\n\n"
+        "timestamps, counters and ads churn on every fetch.\n\n"
         + "\n".join(diff)
     )
+
+
+def watch_url(name: str, url: str) -> str:
+    text = web_fetch(url)
+    if text.startswith(_CACHE_HIT_PREFIX):
+        text = text[len(_CACHE_HIT_PREFIX):]
+    if text.startswith(("ERROR:", "BLOCKED:")):
+        # Never snapshot a failure — a transient 500 must not become the
+        # baseline that makes the next healthy fetch look like a change.
+        return text
+    return snapshot_diff(name, text, source=url)
