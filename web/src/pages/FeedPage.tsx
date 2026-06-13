@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
 import { TracesTimeline } from "@/components/traces/TracesTimeline";
 import { FeedStream } from "@/components/feed/FeedStream";
+import { markTracesSeen } from "@/components/layout/AlertBanner";
 
 /** Traces — the agent's activity stream rendered as a Gantt-style
  *  timeline. Horizontal time axis, 5 swimlanes (USER / LLM / TOOL /
@@ -24,6 +25,10 @@ export function FeedPage() {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  // Opening Traces acknowledges the "check traces" alerts — they clear
+  // from the top banner. Re-mark on each visit so newer errors reappear.
+  useEffect(() => { markTracesSeen(); }, []);
 
   const SYSTEM_EVENTS_SET = new Set(["service_ping","provider_cooled","context_compacted","budget_blocked","agent_controls_updated"]);
   const lastEvent = [...events].reverse().find((e) => !SYSTEM_EVENTS_SET.has(e.event));

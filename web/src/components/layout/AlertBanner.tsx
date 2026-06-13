@@ -7,6 +7,21 @@ interface Alert {
   text: string;
 }
 
+// "check traces" alerts (tool errors, stuck loops) are acknowledged by
+// actually opening Traces. We record when that last happened and hide
+// those event-based alerts older than it. Live conditions (budget over,
+// task still failing) are NOT cleared this way — that would hide a
+// still-true state.
+const TRACES_SEEN_KEY = "hm.tracesSeenAt";
+export const TRACES_SEEN_EVENT = "hm:traces-seen";
+
+/** Call when the Traces page is opened — clears the "check traces" alerts. */
+export function markTracesSeen(): void {
+  const t = Date.now();
+  localStorage.setItem(TRACES_SEEN_KEY, String(t));
+  window.dispatchEvent(new CustomEvent(TRACES_SEEN_EVENT, { detail: t }));
+}
+
 
 /** Contextual alert strip — surfaces hard failures (recent tool
  *  errors, missing API keys, failed task runs, stuck loops, budget overrun)
@@ -16,6 +31,16 @@ export function AlertBanner() {
   const [tasksFailed, setTasksFailed] = useState(0);
   const [budgetCents, setBudgetCents] = useState(0);
   const [spentCents, setSpentCents] = useState(0);
+  const [tracesSeenAt, setTracesSeenAt] = useState(
+    () => Number(localStorage.getItem(TRACES_SEEN_KEY)) || 0,
+  );
+
+  useEffect(() => {
+    const onSeen = (e: Event) =>
+      setTracesSeenAt((e as CustomEvent).detail ?? Date.now());
+    window.addEventListener(TRACES_SEEN_EVENT, onSeen);
+    return () => window.removeEventListener(TRACES_SEEN_EVENT, onSeen);
+  }, []);
 
   useEffect(() => {
     api.tasksList("all").then((tasks) => {
@@ -42,6 +67,9 @@ export function AlertBanner() {
   const alerts = useMemo<Alert[]>(() => {
     const out: Alert[] = [];
     const cutoff5m = Date.now() - 5 * 60 * 1000;
+    // "check traces" alerts clear once Traces has been opened: only show
+    // events newer than both the 5-min window and the last Traces visit.
+    const ackCutoff = Math.max(cutoff5m, tracesSeenAt);
 
     // Recent tool failures
     const recentErr = events.filter(
@@ -49,7 +77,7 @@ export function AlertBanner() {
         e.event === "tool_result" &&
         typeof e.result === "string" &&
         e.result.startsWith("ERROR") &&
-        new Date(e.ts).getTime() >= cutoff5m,
+        new Date(e.ts).getTime() > ackCutoff,
     );
     if (recentErr.length > 0) {
       out.push({
@@ -64,7 +92,7 @@ export function AlertBanner() {
         e.event === "output_guard" &&
         typeof e.text === "string" &&
         e.text.startsWith("stuck loop") &&
-        new Date(e.ts).getTime() >= cutoff5m,
+        new Date(e.ts).getTime() > ackCutoff,
     );
     if (recentLoops.length > 0) {
       const last = recentLoops[recentLoops.length - 1];
@@ -95,12 +123,12 @@ export function AlertBanner() {
     }
 
     return out;
-  }, [events, tasksFailed, budgetCents, spentCents]);
+  }, [events, tasksFailed, budgetCents, spentCents, tracesSeenAt]);
 
   if (alerts.length === 0) return null;
 
   return (
-    <div style={{ fontFamily: "var(--font-mono)" }}>
+    <div style={{ position: "sticky", top: 0, zIndex: 70, fontFamily: "var(--font-mono)" }}>
       {alerts.map((a, i) => (
         <div
           key={i}
