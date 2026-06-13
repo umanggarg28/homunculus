@@ -634,6 +634,18 @@ def cancel_task(
 
 
 @mcp.tool(annotations={"readOnlyHint": False})
+def record_failure(
+    task_id: Annotated[str, Field(description="Task id you genuinely could not deliver.")],
+    reason: Annotated[str, Field(description="One-line reason (broken source, missing data, repeated errors).")] = "",
+) -> str:
+    """Record a FAILED attempt when you genuinely cannot deliver a task —
+    use this instead of complete_task (which the guard refuses without a
+    real result). Logs the failed run, advances a recurring task to its
+    next cycle, and auto-cancels after repeated consecutive failures."""
+    return scheduling.record_failure(task_id, reason)
+
+
+@mcp.tool(annotations={"readOnlyHint": False})
 def schedule_task(
     task_id: Annotated[str, Field(description="Task id to schedule.")],
     due_at: Annotated[str, Field(description="ISO local datetime.")],
