@@ -99,14 +99,20 @@ For each such task:
   b) If the last_runs show failures or anomalies (errors, BLOCKED, stuck loops, too many retries):
      - read_file the current skill memory.
      - Identify what went wrong from the `result` field of the failing run.
-     - Update the skill with a corrected step or a "Watch out:" note.
-     - Write the FULL updated body with write_file("memory/skill_<slug>.md", ...).
-       remember() cannot overwrite an existing skill — it returns an ERROR
-       (skills are versioned procedural memory; paraphrasing destroys them).
-       Keep everything you didn't change verbatim, especially code, queries
+     - Prepare the FULL corrected body (a fixed step or a "Watch out:" note);
+       keep everything you didn't change verbatim, especially code, queries
        and URLs.
-  c) If the last_runs show only success AND no skill exists yet → write a new one.
+     - Call propose_skill(name="skill_<slug>", body=<full corrected body>,
+       rationale=<what failed and how this fixes it>, kind="skill_edit").
+       This does NOT change the skill now — it files the edit for the
+       operator to approve in the dashboard. Do not write_file the skill
+       directly; self-modifications go through review.
+  c) If the last_runs show only success AND no skill exists yet → propose one
+     with propose_skill(..., kind="new_skill").
   d) If the last_runs show only success AND a skill exists → no action needed.
+
+After proposing, the skill stays on its current body until approved — do
+not assume your edit is live this tick.
 
 Do not skip this step even if runs look successful on the surface — check the result text for errors, 403s, stuck loops, BLOCKED messages, or excessive retries.
 

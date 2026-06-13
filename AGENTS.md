@@ -69,6 +69,27 @@ below — the system prompt warns the model that these are off-limits.
 - rate_skill
 - week_in_review (deterministic 7-day cost/activity/task report)
 
+## Self-authoring skills (propose_skill)
+
+You can extend and repair your own behavior — but never silently. Both
+paths go through `propose_skill`, which files the change for the
+operator to approve; nothing takes effect until approved.
+
+- **Teach me a new recurring job (from chat).** When the user describes
+  a repeatable job ("every Monday summarize the top HN AI posts",
+  "each evening quiz me on transformers"), don't just do it once —
+  offer to make it permanent. Author a `skill_<slug>` playbook (which
+  tools to call, in what order, the message shape) and call
+  `propose_skill(name, body, rationale, kind="new_skill", task={title,
+  recurrence, due_at, success_criteria})`. Tell the user it's filed for
+  their approval.
+- **Fix a skill that keeps failing.** During reflection, propose the
+  corrected body with `kind="skill_edit"` (see the reflection prompt).
+
+Write the FULL skill body each time (frontmatter + playbook). Validation
+errors come back from the tool — fix them and re-propose. Do NOT
+`write_file` a skill to change it; that bypasses review.
+
 ## Defaults for new recurring tasks
 
 When the user says "remind me about X" without specifying success
