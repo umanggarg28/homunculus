@@ -183,3 +183,29 @@ def test_schedule_to_none_recurrence_clears_anchor(tmp_path):
     )
     rescheduled = store.schedule(task["id"], "2026-06-09T10:00:00", "none")
     assert rescheduled.get("recur_anchor") is None
+
+
+def test_advance_due_weekly_anchor_preserves_weekday_when_now_before_anchor():
+    """Regression: a weekly task whose anchor time is later than `now`
+    must advance to the same weekday a week out, NOT to today.
+
+    Reproduces the live failure: a Saturday-night weekly (anchor 23:23)
+    that records a failure at 00:23 Sunday. The old logic snapped to
+    Sunday 23:23 (~1 day out, wrong weekday); correct is the following
+    Saturday."""
+    due = "2026-06-13T23:23:00"          # Saturday (weekday 5)
+    now = datetime.fromisoformat("2026-06-14T00:23:00")  # Sunday 00:23
+    next_due = TaskStore._advance_due(due, "weekly", now, recur_anchor="23:23:00")
+    parsed = datetime.fromisoformat(next_due)
+    assert parsed.weekday() == 5          # still Saturday
+    assert parsed.day == 20               # next Saturday, ~7 days from due
+    assert (parsed - datetime.fromisoformat(due)).days == 7
+
+
+def test_advance_due_weekly_anchor_same_weekday_after_anchor_steps_a_week():
+    """Now is the due weekday, after the anchor time → next week same day."""
+    due = "2026-06-14T09:00:00"           # Sunday
+    now = datetime.fromisoformat("2026-06-14T10:00:00")  # Sunday, after 09:00
+    next_due = TaskStore._advance_due(due, "weekly", now, recur_anchor="09:00:00")
+    parsed = datetime.fromisoformat(next_due)
+    assert parsed.day == 21 and parsed.weekday() == 6 and parsed.hour == 9
