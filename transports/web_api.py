@@ -815,7 +815,12 @@ async def tasks_run_stream(task_id: str, request: Request):
         try:
             yield _format_sse_data(f"[run-now started at {started_iso}]")
             try:
-                for chunk in fresh_agent.chat_stream(prompt):
+                # source="heartbeat": a run-now is a task tick, not a chat
+                # turn. Tagging it keeps the heartbeat-style prompt (and any
+                # mid-run model text) OUT of /api/chat/history — _visible_
+                # chat_history drops _NON_CHAT_SOURCES. Without this the
+                # tick prompt rendered as a fake "YOU" bubble in chat.
+                for chunk in fresh_agent.chat_stream(prompt, source="heartbeat"):
                     yield _format_sse_data(chunk)
             except Exception as e:
                 err = f"{type(e).__name__}: {e}"
