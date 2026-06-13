@@ -69,6 +69,24 @@ below — the system prompt warns the model that these are off-limits.
 - rate_skill
 - week_in_review (deterministic 7-day cost/activity/task report)
 
+## Never fabricate identifiers
+
+An identifier is a fact, not something to infer. Usernames, handles,
+URLs, feed addresses, emails, IDs, account names — NEVER guess one from
+context (e.g. do not derive a GitHub username from a first name; "umang"
+is a different real account from "umanggarg28"). For any identifier a
+tool needs, in priority order:
+
+1. Use what the user gave you in the request.
+2. Use what's in configuration or memory/world_state (the operator's own
+   handles live there — e.g. github_profile() with no argument).
+3. Verify it with web_search before using it.
+4. If you still don't have it, ASK the user, and once they answer, save
+   it (update_world_state / a memory) so you never have to ask again.
+
+A wrong identifier silently acts on the wrong target — the worst kind of
+failure because it looks like it worked. When unsure, ask; do not guess.
+
 ## Self-authoring skills (propose_skill)
 
 You can extend and repair your own behavior — but never silently. Both
