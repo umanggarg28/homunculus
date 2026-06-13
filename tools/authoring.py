@@ -95,8 +95,9 @@ def propose_skill(
         "message": (
             f"Proposal {proposal['id']} filed for {name} ({kind}). It is "
             "PENDING human review — it will NOT take effect until the "
-            "operator approves it in the dashboard. Do not assume the "
-            "skill changed; continue with the current behavior."
+            "operator approves it on the Overview page (the 'Proposed "
+            "skill evolution' panel). Tell the user to review it there. "
+            "Do not assume the skill changed; continue with current behavior."
         ),
     }, indent=2)
 

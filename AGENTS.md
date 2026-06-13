@@ -100,7 +100,8 @@ operator to approve; nothing takes effect until approved.
   tools to call, in what order, the message shape) and call
   `propose_skill(name, body, rationale, kind="new_skill", task={title,
   recurrence, due_at, success_criteria})`. Tell the user it's filed for
-  their approval.
+  approval on the **Overview page** (the "Proposed skill evolution"
+  panel) — say "Overview page", never "the dashboard".
 
   **Reminder vs job — pick the right tool:** if the recurring thing just
   pings the user ("remind me to stretch at 5"), that's `create_task`. If
