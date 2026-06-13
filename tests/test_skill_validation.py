@@ -128,3 +128,28 @@ def test_unknown_criterion_rejected():
         "success_criteria": [{"type": "make_it_good"}],
     })
     assert any("unknown success_criteria" in e for e in errs)
+
+
+# ---- criteria normalization (models often write bare strings) ----------
+
+
+def test_string_criteria_are_accepted_and_normalized():
+    from skill_validation import normalize_criteria
+    assert validate_task_spec({
+        "title": "x", "recurrence": "daily",
+        "success_criteria": ["notify_called", "notify_has_code"],
+    }) == []
+    assert normalize_criteria(["notify_called"]) == [{"type": "notify_called"}]
+
+
+def test_unknown_string_criterion_still_rejected():
+    errs = validate_task_spec({
+        "title": "x", "recurrence": "daily", "success_criteria": ["make_it_good"],
+    })
+    assert any("unknown success_criteria" in e for e in errs)
+
+
+def test_normalize_drops_non_str_non_dict():
+    from skill_validation import normalize_criteria
+    assert normalize_criteria(["notify_called", 5, None, {"type": "notify_unique"}]) == \
+        [{"type": "notify_called"}, {"type": "notify_unique"}]

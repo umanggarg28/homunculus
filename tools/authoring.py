@@ -22,7 +22,7 @@ import os
 from pathlib import Path
 
 from proposals import KIND_NEW_SKILL, KIND_SKILL_EDIT, _store
-from skill_validation import validate_skill_body, validate_task_spec
+from skill_validation import normalize_criteria, validate_skill_body, validate_task_spec
 
 
 def _skills():
@@ -72,13 +72,19 @@ def propose_skill(
     if errors:
         return json.dumps({"ok": False, "errors": errors}, indent=2)
 
+    # Store criteria as dicts so the approval path and TaskGuard never
+    # see a bare string the model may have written.
+    stored_task = None
+    if kind == KIND_NEW_SKILL and task is not None:
+        stored_task = {**task, "success_criteria": normalize_criteria(task.get("success_criteria", []))}
+
     proposal = _store().create(
         kind=kind,
         skill_name=name,
         body=body,
         rationale=rationale,
         source="agent",
-        task_spec=task if kind == KIND_NEW_SKILL else None,
+        task_spec=stored_task,
         validation=result.as_dict(),
     )
     return json.dumps({

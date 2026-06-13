@@ -152,6 +152,23 @@ _KNOWN_CRITERIA = {
 }
 
 
+def normalize_criteria(criteria: list) -> list[dict]:
+    """Coerce success_criteria to the list-of-dicts shape TaskGuard reads.
+
+    Models routinely write a bare list of type names
+    (["notify_called", "notify_contains"]); accept that and lift each
+    string to {"type": <name>}. Dicts pass through untouched. Stored
+    criteria are always dicts so TaskGuard's c.get('type') never hits a
+    string."""
+    out: list[dict] = []
+    for c in criteria or []:
+        if isinstance(c, str):
+            out.append({"type": c})
+        elif isinstance(c, dict):
+            out.append(c)
+    return out
+
+
 def validate_task_spec(task_spec: dict) -> list[str]:
     """Validate a bundled task spec (chat-authored 'teach it a job').
     Returns a list of errors (empty = ok)."""
@@ -169,10 +186,10 @@ def validate_task_spec(task_spec: dict) -> list[str]:
     if criteria and not isinstance(criteria, list):
         errors.append("'success_criteria' must be a list")
     else:
-        for c in criteria:
-            if not isinstance(c, dict) or c.get("type") not in _KNOWN_CRITERIA:
+        for c in normalize_criteria(criteria):
+            if c.get("type") not in _KNOWN_CRITERIA:
                 errors.append(
-                    f"unknown success_criteria entry {c!r}; allowed types: "
+                    f"unknown success_criteria type {c.get('type')!r}; allowed: "
                     f"{sorted(_KNOWN_CRITERIA)}"
                 )
     return errors

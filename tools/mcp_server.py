@@ -508,7 +508,7 @@ def propose_skill(
     ] = None,
     task: Annotated[
         dict | None,
-        Field(description="For a NEW skill that should run on a schedule: {title, recurrence: none|daily|weekly, due_at, success_criteria:[...]}. The task is created only when the proposal is approved."),
+        Field(description='For a NEW skill that runs on a schedule, put the schedule HERE (never in the skill frontmatter). Shape: {"title": "...", "recurrence": "daily"|"weekly"|"none", "due_at": "YYYY-MM-DDTHH:MM:SS" (local; required only for none), "success_criteria": [{"type": "notify_called"}, {"type": "notify_contains", "text": "..."}]}. success_criteria MUST be a list of {"type": ...} objects (types: notify_called, notify_min_chars {n}, notify_contains {text}, notify_matches {pattern}, notify_has_code, notify_unique {pattern}).'),
     ] = None,
 ) -> str:
     """Propose a new skill, or an edit to an existing one, for HUMAN
