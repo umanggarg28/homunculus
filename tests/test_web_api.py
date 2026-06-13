@@ -47,6 +47,7 @@ def web_api(tmp_path, monkeypatch):
     # Point modules to tmp dirs via env vars BEFORE import.
     monkeypatch.setenv("HOMUNCULUS_MEMORY_DIR", str(tmp_path / "memory"))
     monkeypatch.setenv("HOMUNCULUS_TASKS_DIR", str(tmp_path / "tasks"))
+    monkeypatch.setenv("HOMUNCULUS_PROPOSALS_FILE", str(tmp_path / "proposals.json"))
     monkeypatch.setenv("HOMUNCULUS_EVENTS_PATH", str(tmp_path / "events.jsonl"))
     monkeypatch.setenv("HOMUNCULUS_WEB_AUTH_TOKEN", "")
     monkeypatch.setenv("HOMUNCULUS_WEB_DIST", str(tmp_path / "dist"))
@@ -400,3 +401,94 @@ def test_auth_accepts_query_token(web_api, monkeypatch):
     c = TestClient(web_api.app)
     resp = c.get("/api/status?token=correct-token")
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# /api/proposals — agent self-authoring, human-gated approval
+# ---------------------------------------------------------------------------
+
+_VALID_NEW_SKILL = """---
+name: skill_demo_job
+description: A demo job.
+type: skill
+states:
+  - tool: notify
+---
+
+# Demo job — playbook
+
+1. Compose a short, useful message for the operator about the demo job.
+2. Call notify with that message so it is delivered to the user.
+3. Keep it under a few lines; this is a glance, not a report.
+"""
+
+
+def _file_proposal(web_api, **over):
+    """Create a pending proposal directly in the store the API reads."""
+    import os
+    from proposals import ProposalStore
+    store = ProposalStore(os.environ["HOMUNCULUS_PROPOSALS_FILE"])
+    kwargs = dict(
+        kind="new_skill", skill_name="skill_demo_job", body=_VALID_NEW_SKILL,
+        rationale="demo",
+    )
+    kwargs.update(over)
+    return store.create(**kwargs)
+
+
+def test_proposals_list_empty(client):
+    assert client.get("/api/proposals").json() == []
+
+
+def test_approve_new_skill_writes_versioned_skill(client, web_api):
+    web_api.tools.SCHEMAS = [{"function": {"name": "notify"}}]
+    p = _file_proposal(web_api)
+    resp = client.post(f"/api/proposals/{p['id']}/approve")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] and body["skill"] == "skill_demo_job" and body["version"] == 1
+    # Skill file actually landed in the registry.
+    assert (web_api.MEMORY_DIR / "skill_demo_job.md").exists()
+    # And it's gone from pending.
+    assert client.get("/api/proposals?status=pending").json() == []
+    assert len(client.get("/api/proposals?status=approved").json()) == 1
+
+
+def test_approve_new_skill_with_task_creates_task(client, web_api):
+    web_api.tools.SCHEMAS = [{"function": {"name": "notify"}}]
+    p = _file_proposal(web_api, task_spec={
+        "title": "Demo job", "recurrence": "daily",
+        "success_criteria": [{"type": "notify_called"}],
+    })
+    resp = client.post(f"/api/proposals/{p['id']}/approve")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["task"]["skill"] == "skill_demo_job"
+    tasks = client.get("/api/tasks?status=active").json()
+    assert any(t["skill"] == "skill_demo_job" for t in tasks)
+
+
+def test_approve_revalidates_against_live_tools(client, web_api):
+    # notify is NOT in the catalogue now → the states: tool check fails.
+    web_api.tools.SCHEMAS = [{"function": {"name": "web_fetch"}}]
+    p = _file_proposal(web_api)
+    resp = client.post(f"/api/proposals/{p['id']}/approve")
+    assert resp.status_code == 422
+    assert "don't exist" in resp.text
+
+
+def test_reject_marks_rejected(client, web_api):
+    p = _file_proposal(web_api)
+    resp = client.post(f"/api/proposals/{p['id']}/reject", json={"reason": "not useful"})
+    assert resp.status_code == 200
+    assert client.get("/api/proposals?status=rejected").json()[0]["resolution_note"] == "not useful"
+
+
+def test_approve_missing_proposal_404(client):
+    assert client.post("/api/proposals/prop-9999/approve").status_code == 404
+
+
+def test_double_approve_conflict(client, web_api):
+    web_api.tools.SCHEMAS = [{"function": {"name": "notify"}}]
+    p = _file_proposal(web_api)
+    assert client.post(f"/api/proposals/{p['id']}/approve").status_code == 200
+    assert client.post(f"/api/proposals/{p['id']}/approve").status_code == 409

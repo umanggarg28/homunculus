@@ -585,6 +585,102 @@ def _task_store() -> TaskStore:
     return TaskStore(TASKS_DIR)
 
 
+# --- API: skill proposals (agent self-authoring, human-gated) -------------
+#
+# The agent files skill proposals via propose_skill; they never touch the
+# live registry until approved here. Approval re-validates with the FULL
+# tool catalogue (the propose-time check runs without it) and only then
+# commits via Skills.save (versioned, reversible) + creates any bundled
+# task. This is the human half of the containment gate on the agent's
+# own behavior.
+
+def _proposal_store():
+    from proposals import ProposalStore
+    return ProposalStore(Path(os.environ.get("HOMUNCULUS_PROPOSALS_FILE", "./proposals.json")))
+
+
+def _known_tool_names() -> set[str]:
+    names: set[str] = set()
+    for s in getattr(tools, "SCHEMAS", []) or []:
+        fn = s.get("function") if isinstance(s, dict) else None
+        name = (fn or {}).get("name") if fn else (s.get("name") if isinstance(s, dict) else None)
+        if name:
+            names.add(name)
+    return names
+
+
+@app.get("/api/proposals", dependencies=[Depends(require_web_auth)])
+def proposals_list(status: str = "pending") -> JSONResponse:
+    """List skill proposals. status = pending | approved | rejected | all."""
+    return JSONResponse(_proposal_store().list(status))
+
+
+@app.post("/api/proposals/{proposal_id}/approve", dependencies=[Depends(require_web_auth)])
+def proposals_approve(proposal_id: str) -> JSONResponse:
+    """Approve a pending proposal: re-validate against the live tool
+    catalogue, commit the skill (versioned), and create any bundled task."""
+    from skills import Skills
+    from skill_validation import validate_skill_body
+
+    store = _proposal_store()
+    p = store.get(proposal_id)
+    if p is None:
+        raise HTTPException(404, f"proposal {proposal_id} not found")
+    if p.get("status") != "pending":
+        raise HTTPException(409, f"proposal is already {p.get('status')}")
+
+    # Authoritative re-validation: tools must exist NOW, at apply time.
+    result = validate_skill_body(
+        p["body"],
+        expected_name=p["skill_name"],
+        known_tools=_known_tool_names(),
+    )
+    if not result.ok:
+        raise HTTPException(422, "proposal no longer valid: " + "; ".join(result.errors))
+
+    skills = Skills(MEMORY_DIR)
+    version = skills.save(
+        p["skill_name"], p["body"],
+        source="proposal-approved",
+        rationale=p.get("rationale", "")[:500],
+    )
+
+    created_task = None
+    spec = p.get("task_spec")
+    if p["kind"] == "new_skill" and spec:
+        try:
+            created_task = _task_store().create(
+                title=spec["title"],
+                description=spec.get("description", f"Runs {p['skill_name']} — see the skill playbook."),
+                due_at=spec.get("due_at"),
+                recurrence=spec.get("recurrence", "none"),
+                notify=spec.get("notify", True),
+                success_criteria=spec.get("success_criteria"),
+                skill=p["skill_name"],
+            )
+        except (ValueError, KeyError) as e:
+            raise HTTPException(400, f"skill saved (v{version}) but task creation failed: {e}")
+
+    store.mark_approved(proposal_id, note=f"applied as v{version}")
+    return JSONResponse({
+        "ok": True, "skill": p["skill_name"], "version": version,
+        "task": created_task,
+    })
+
+
+@app.post("/api/proposals/{proposal_id}/reject", dependencies=[Depends(require_web_auth)])
+async def proposals_reject(proposal_id: str, request: Request) -> JSONResponse:
+    """Reject a pending proposal. Body: {reason}."""
+    body = await request.json() if await request.body() else {}
+    try:
+        p = _proposal_store().mark_rejected(proposal_id, note=(body or {}).get("reason", ""))
+    except KeyError:
+        raise HTTPException(404, f"proposal {proposal_id} not found")
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return JSONResponse({"ok": True, "id": p["id"], "status": "rejected"})
+
+
 @app.get("/api/tasks", dependencies=[Depends(require_web_auth)])
 def tasks_list(status: str = "all") -> JSONResponse:
     """List tasks. status = active | completed | cancelled | all."""

@@ -63,6 +63,7 @@ below — the system prompt warns the model that these are off-limits.
 - github_profile (weekly profile-health snapshot, diffed week-over-week)
 - rss_feed (surface new RSS/Atom entries since last run)
 - quiz_pick, quiz_grade (spaced-repetition coach; harness picks what's due)
+- propose_skill, list_proposals (author/refine your own skills — filed for human approval, never applied directly)
 - python (sandboxed)
 - get_world_state, update_world_state
 - rate_skill
