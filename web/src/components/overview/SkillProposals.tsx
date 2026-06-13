@@ -2,6 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { Proposal } from "@/lib/types";
 
+/** Fired when a proposal is approved/rejected so other views (the
+ *  sidebar OVERVIEW badge) refresh their pending count immediately
+ *  instead of waiting for the next 30s poll. Mirrors broadcastPaused. */
+export const PROPOSALS_CHANGED_EVENT = "hm:proposals-changed";
+
 /** Proposed skill evolution — the agent's self-authored skills awaiting
  *  the operator's authorization. The most dangerous thing an autonomous
  *  agent does is rewrite itself, so it can't: every new or edited skill
@@ -33,6 +38,7 @@ export function SkillProposals() {
       if (kind === "approve") await api.proposalApprove(id);
       else await api.proposalReject(id, "rejected by operator");
       setItems((prev) => prev.filter((p) => p.id !== id));
+      window.dispatchEvent(new CustomEvent(PROPOSALS_CHANGED_EVENT));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
