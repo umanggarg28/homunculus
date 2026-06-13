@@ -578,7 +578,9 @@ def create_task(
     ] = "none",
     notify: Annotated[bool, Field(description="Whether the due task is expected to notify the user.")] = False,
 ) -> str:
-    """Create a new task (reminder, recurring job, or one-shot). You CAN create reminders and schedule things for the user via this tool — never tell the user you can't set reminders or schedule tasks. Use recurrence='none' (default) for one-shot reminders ('remind me at 8pm'), 'daily' / 'weekly' for recurring. Set notify=True for anything the user phrased as a reminder. IMPORTANT: Before calling this, list_tasks(status='all') is automatically deduped — same title overwrites, so just call create_task directly."""
+    """Create a SIMPLE reminder/notification task. You CAN schedule things — never tell the user you can't. Use recurrence='none' (default) for one-shot reminders ('remind me at 8pm'), 'daily'/'weekly' for recurring pings. Set notify=True for reminders. Dedup is automatic (same title overwrites).
+
+    USE THIS ONLY for reminders that just notify. If the recurring job requires DOING WORK every time — fetching/searching, summarizing, delivering content, calling tools in a sequence (e.g. 'every Monday summarize HN', 'daily LeetCode problem') — do NOT use create_task. Use propose_skill(kind='new_skill', task={...}) instead: it authors a playbook (which tools, what order, message shape) so the job runs reliably. A recurring work-job created here with no skill has no procedure and fails when it fires."""
     return scheduling.create_task(title, description, due_at, recurrence, notify)
 
 

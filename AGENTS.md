@@ -101,6 +101,15 @@ operator to approve; nothing takes effect until approved.
   `propose_skill(name, body, rationale, kind="new_skill", task={title,
   recurrence, due_at, success_criteria})`. Tell the user it's filed for
   their approval.
+
+  **Reminder vs job — pick the right tool:** if the recurring thing just
+  pings the user ("remind me to stretch at 5"), that's `create_task`. If
+  it requires DOING WORK each time — fetching, searching, summarizing,
+  delivering content, a sequence of tool calls — it needs a playbook, so
+  it's `propose_skill`, NOT `create_task`. A work-job made with bare
+  `create_task` has no procedure and fails when it fires (observed: a
+  "summarize HN weekly" task created bare ran, did a stray web_search,
+  and dropped without notifying).
 - **Fix a skill that keeps failing.** During reflection, propose the
   corrected body with `kind="skill_edit"` (see the reflection prompt).
 
