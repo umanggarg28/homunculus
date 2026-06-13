@@ -39,17 +39,33 @@ export function AutonomousFrame() {
           top: 0,
           left: "50%",
           transform: "translateX(-50%)",
-          background: "var(--color-bg)",
-          border: "1px solid color-mix(in srgb, var(--color-danger) 55%, transparent)",
+          display: "flex",
+          alignItems: "center",
+          gap: 7,
+          background: "color-mix(in srgb, var(--color-danger) 12%, var(--color-bg))",
+          border: "1px solid color-mix(in srgb, var(--color-danger) 70%, transparent)",
           borderTop: "none",
-          padding: "2px 10px",
+          padding: "3px 12px",
           fontFamily: "var(--font-mono)",
           fontSize: 9,
           letterSpacing: "0.22em",
           color: "var(--color-danger)",
+          textShadow: "0 0 8px color-mix(in srgb, var(--color-danger) 70%, transparent)",
+          boxShadow: "0 0 16px color-mix(in srgb, var(--color-danger) 45%, transparent)",
           textTransform: "uppercase",
         }}
       >
+        <span
+          aria-hidden
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            background: "var(--color-danger)",
+            boxShadow: "0 0 8px var(--color-danger)",
+            animation: "atmo-pip 1.1s ease-in-out infinite",
+          }}
+        />
         autonomous action in progress
       </span>
     </div>
