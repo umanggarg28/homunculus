@@ -28,7 +28,8 @@ from pydantic import Field
 
 from . import (
     _meta, filesystem, github, memory_tools, notify as notify_mod, report,
-    sandbox, scheduling, skill_refinement as skill_refinement_mod, watch, web,
+    rss, sandbox, scheduling, skill_refinement as skill_refinement_mod,
+    watch, web,
 )
 
 
@@ -455,6 +456,19 @@ def github_profile(
     week-over-week change ('+3 stars on homunculus'). The current
     numbers are appended after the diff. Unauthenticated public API."""
     return github.github_profile(user)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def rss_feed(
+    name: Annotated[str, Field(description="Stable slug for this feed (e.g. 'tldr-newsletter'). Reuse it every run — new entries are detected by diffing against the previous call with this name.")],
+    url: Annotated[str, Field(description="RSS or Atom feed URL.")],
+) -> str:
+    """Fetch an RSS/Atom feed and report which entries are NEW since the
+    last run (diffed against the previous call with the same name).
+    Returns FIRST SNAPSHOT / NO CHANGE / CHANGED + a diff. On CHANGED,
+    the '+' lines are the new posts — summarise those, ignore '-' lines
+    (entries that scrolled off the feed). NO CHANGE means don't notify."""
+    return rss.rss_feed(name, url)
 
 
 # ── sandbox ───────────────────────────────────────────────────────────
