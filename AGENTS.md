@@ -111,6 +111,16 @@ operator to approve; nothing takes effect until approved.
   `create_task` has no procedure and fails when it fires (observed: a
   "summarize HN weekly" task created bare ran, did a stray web_search,
   and dropped without notifying).
+
+  **Delivery tasks need VERIFIABLE success criteria.** For a job that
+  delivers content, do NOT set only `notify_called` — that passes on an
+  empty "nothing found" message, so a broken skill looks successful and
+  never gets refined. Require evidence the content is real: e.g.
+  `notify_min_chars` (≥120), and `notify_contains` a canonical
+  source/link or a per-item marker. Then an empty delivery FAILS the
+  gate → records a failure → the skill gets refined (the create → use →
+  observe-gap → refine loop). Verifiable criteria are the agent's only
+  honest signal that it actually delivered.
 - **Fix a skill that keeps failing.** During reflection, propose the
   corrected body with `kind="skill_edit"` (see the reflection prompt).
 
