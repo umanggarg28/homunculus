@@ -27,8 +27,8 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from . import (
-    _meta, filesystem, github, memory_tools, notify as notify_mod, report,
-    rss, sandbox, scheduling, skill_refinement as skill_refinement_mod,
+    _meta, coach, filesystem, github, memory_tools, notify as notify_mod,
+    report, rss, sandbox, scheduling, skill_refinement as skill_refinement_mod,
     watch, web,
 )
 
@@ -469,6 +469,29 @@ def rss_feed(
     the '+' lines are the new posts — summarise those, ignore '-' lines
     (entries that scrolled off the feed). NO CHANGE means don't notify."""
     return rss.rss_feed(name, url)
+
+
+@mcp.tool(annotations={"readOnlyHint": False})
+def quiz_pick() -> str:
+    """Pick the concept most due for spaced-repetition review and mark it
+    pending. Returns the topic to quiz; compose ONE question on it, send
+    via notify, then grade the user's reply next turn with quiz_grade.
+    If a question is already pending, re-ask that same topic. Scheduling
+    is handled for you — do not choose topics yourself."""
+    return coach.quiz_pick()
+
+
+@mcp.tool(annotations={"readOnlyHint": False})
+def quiz_grade(
+    outcome: Annotated[
+        Literal["correct", "partial", "wrong"],
+        Field(description="How the user's answer scored against the concept."),
+    ],
+) -> str:
+    """Grade the pending quiz question and reschedule the topic (correct →
+    longer interval, wrong → ask again tomorrow). Call this after the
+    user answers the question you sent with quiz_pick."""
+    return coach.quiz_grade(outcome)
 
 
 # ── sandbox ───────────────────────────────────────────────────────────
