@@ -181,3 +181,68 @@ def test_unrelated_domain_passes():
 ])
 def test_clean_reply_passes(text):
     assert _guard(text) == text
+
+
+# ---------------------------------------------------------------------------
+# Rule — confabulated success (claims an action worked while every tool failed)
+# ---------------------------------------------------------------------------
+
+from core import tool_result_indicates_failure  # noqa: E402
+
+
+def _guard_with_outcomes(reply, tool_outcomes, tool_names_used=None):
+    agent = Agent.__new__(Agent)
+    agent.memory = None
+    agent.model = "test"
+    agent.history = []
+    clean, violations = agent._output_guard(
+        reply, tool_names_used or {o["name"] for o in tool_outcomes}, tool_outcomes
+    )
+    return clean, violations
+
+
+def test_success_claim_blocked_when_all_tools_failed():
+    # The live bug: propose_skill returned {"ok": false}, agent claimed success.
+    reply = "I've filed a permanent skill proposal that runs every Monday."
+    outcomes = [{"name": "propose_skill", "args": {}, "success": False}]
+    clean, violations = _guard_with_outcomes(reply, outcomes)
+    assert clean is None
+    assert "success_claim_all_tools_failed" in violations
+
+
+def test_success_claim_passes_when_a_tool_succeeded():
+    # Conservative: if any tool succeeded, the claim may be about that.
+    reply = "I've filed the proposal for review."
+    outcomes = [
+        {"name": "propose_skill", "args": {}, "success": False},
+        {"name": "propose_skill", "args": {}, "success": True},
+    ]
+    clean, violations = _guard_with_outcomes(reply, outcomes)
+    assert "success_claim_all_tools_failed" not in violations
+
+
+def test_no_claim_phrase_does_not_fire():
+    reply = "The proposal could not be filed — validation rejected the criteria."
+    outcomes = [{"name": "propose_skill", "args": {}, "success": False}]
+    clean, violations = _guard_with_outcomes(reply, outcomes)
+    assert "success_claim_all_tools_failed" not in violations
+    assert clean == reply
+
+
+# ---- structured-failure recognition ------------------------------------
+
+
+def test_tool_result_failure_recognises_ok_false_json():
+    assert tool_result_indicates_failure('{\n  "ok": false,\n  "errors": ["x"]\n}') is True
+    assert tool_result_indicates_failure('{"ok":false}') is True
+
+
+def test_tool_result_failure_recognises_prefixes():
+    assert tool_result_indicates_failure("ERROR: nope") is True
+    assert tool_result_indicates_failure("BLOCKED: HTTP 403") is True
+
+
+def test_tool_result_success_is_not_failure():
+    assert tool_result_indicates_failure('{"ok": true, "id": "prop-0001"}') is False
+    assert tool_result_indicates_failure("Saved skill v2.") is False
+    assert tool_result_indicates_failure(None) is False
