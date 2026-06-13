@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
+import { api } from "@/lib/api";
 import { InstallBadge } from "./InstallBadge";
 import { KillSwitch } from "./KillSwitch";
 import { ModeToggle } from "./ModeToggle";
@@ -42,6 +43,20 @@ NAV_GROUPS.forEach(g => g.items.forEach(i => { if (i.kbd) KBD_MAP[i.kbd.toLowerC
 
 export function Sidebar() {
   const navigate = useNavigate();
+
+  // Pending skill proposals → a badge on OVERVIEW so a self-authored
+  // skill awaiting approval is discoverable, not buried on the page.
+  const [pendingProposals, setPendingProposals] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      api.proposals("pending")
+        .then((ps) => { if (!cancelled) setPendingProposals(ps.length); })
+        .catch(() => undefined);
+    load();
+    const t = setInterval(load, 30_000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, []);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -209,6 +224,23 @@ export function Sidebar() {
                       </span>
                       <span className="nav-label-full" style={{ flex: 1 }}>{item.label}</span>
                       <span className="nav-label-short" style={{ flex: 1 }}>{item.short}</span>
+                      {item.to === "/overview" && pendingProposals > 0 && (
+                        <span
+                          title={`${pendingProposals} skill proposal${pendingProposals > 1 ? "s" : ""} awaiting approval`}
+                          style={{
+                            fontSize: 9,
+                            lineHeight: 1,
+                            padding: "2px 5px",
+                            borderRadius: 2,
+                            color: "var(--color-bg)",
+                            background: "var(--color-warning)",
+                            boxShadow: "0 0 8px color-mix(in srgb, var(--color-warning) 60%, transparent)",
+                            fontVariantNumeric: "tabular-nums",
+                          }}
+                        >
+                          {pendingProposals}
+                        </span>
+                      )}
                       {item.kbd && (
                         <span
                           className="kbd"
