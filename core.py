@@ -58,6 +58,10 @@ _GUARD_ACTION_CLAIM_PHRASES = (
     "reminder has been set", "reminder was set",
     "notification has been", "notification was sent",
     "done! i've", "done. i've",
+    "i've filed", "i have filed", "i filed",
+    "i've proposed", "i have proposed", "i proposed",
+    "proposal has been", "proposal was filed", "filed a proposal",
+    "i've submitted", "i have submitted",
 )
 
 # System-prompt-leak detection: per-request canary token + paraphrase
@@ -210,6 +214,25 @@ def _claim_target_inconsistencies(reply: str, tool_outcomes: list[dict]) -> list
             if not any(outcomes):
                 inconsistent.append(target)
     return inconsistent
+
+
+def tool_result_indicates_failure(result) -> bool:
+    """Whether a tool result string signals failure.
+
+    Beyond the ERROR/BLOCKED prefixes, recognise STRUCTURED failure: a
+    JSON tool result carrying "ok": false (e.g. propose_skill rejecting a
+    proposal). Without this, such a result is logged as a success and the
+    output guard can't catch a reply that claims it worked — the live
+    case where the agent said "I've filed a proposal" after propose_skill
+    returned {"ok": false}.
+    """
+    if not isinstance(result, str):
+        return False
+    s = result.lstrip()
+    if s.startswith(("ERROR", "Error", "BLOCKED:")):
+        return True
+    compact = s.replace(" ", "")
+    return '"ok":false' in compact
 
 
 # Load .env at module import so config reads below see its values. Safe
@@ -2809,10 +2832,7 @@ class Agent:
                 # Record the outcome for the output guard's claim-consistency
                 # check. We deliberately record raw args (not canonicalized)
                 # so the path/URL is recoverable for regex matching.
-                _outcome_success = not (
-                    isinstance(result, str)
-                    and (result.startswith("ERROR") or result.startswith("Error"))
-                )
+                _outcome_success = not tool_result_indicates_failure(result)
                 tool_outcomes.append({
                     "name": name,
                     "args": args,
@@ -2918,9 +2938,19 @@ class Agent:
         # Catch hallucinated actions: model claims to have done something
         # (created a task, sent a notification, etc.) without calling any
         # tools. Only fires when tools are registered (not a Q&A-only session).
+        claims_action = any(phrase in lower_reply for phrase in _GUARD_ACTION_CLAIM_PHRASES)
         if not tool_names_used and tools.SCHEMAS:
-            if any(phrase in lower_reply for phrase in _GUARD_ACTION_CLAIM_PHRASES):
+            if claims_action:
                 violations.append("action_claim_without_tool_call")
+
+        # Confabulated success: the reply claims an action succeeded, but
+        # tools WERE called this turn and EVERY one failed. The live case:
+        # propose_skill returned {"ok": false} (validation rejected it) and
+        # the agent replied "I've filed a proposal." The all-failed
+        # condition keeps this conservative — a turn that also had a
+        # successful tool call won't trip (the claim may be about that).
+        if claims_action and tool_outcomes and not any(o.get("success") for o in tool_outcomes):
+            violations.append("success_claim_all_tools_failed")
 
         # Claim/result inconsistency — the reply asserts a successful action
         # against a specific target (file path or URL) but the matching tool
@@ -3003,6 +3033,15 @@ class Agent:
         "pretend it succeeded."
     )
 
+    _SUCCESS_CLAIM_CORRECTION_PROMPT = (
+        "Your previous reply claimed an action succeeded (filed/created/sent/saved/"
+        "proposed), but EVERY tool call this turn FAILED — including the one that "
+        "would have performed it (e.g. propose_skill returned {\"ok\": false} with "
+        "errors). Do not pretend it worked. Read the tool error, tell the user "
+        "plainly what failed and why, and either fix the inputs and call the tool "
+        "again now, or say it didn't go through. Never report success for a failed call."
+    )
+
     _FUTURE_PROMISE_CORRECTION_PROMPT = (
         "Your previous reply ended the turn with a promise of immediate next action "
         "('I will try X next', 'Let me check Y', 'I'll search again'). This is dishonest: "
@@ -3024,6 +3063,8 @@ class Agent:
         """
         if violations and "action_claim_without_tool_call" in violations:
             correction = self._ACTION_CLAIM_CORRECTION_PROMPT
+        elif violations and "success_claim_all_tools_failed" in violations:
+            correction = self._SUCCESS_CLAIM_CORRECTION_PROMPT
         elif violations and "claim_inconsistent_with_tool_result" in violations:
             correction = self._CLAIM_INCONSISTENT_CORRECTION_PROMPT
         elif violations and "false_future_promise" in violations:
