@@ -56,13 +56,14 @@ below — the system prompt warns the model that these are off-limits.
 - notify
 - create_task, list_tasks, cancel_task, complete_task, record_failure,
   continue_task, task_scratchpad, schedule_task, schedule_next_tick,
-  run_task
+  run_task, task_health_summary
 - get_current_time
 - web_fetch, web_search, web_post
 - watch_url (snapshot + diff for "tell me when it changes" watchers)
 - python (sandboxed)
 - get_world_state, update_world_state
 - rate_skill
+- week_in_review (deterministic 7-day cost/activity/task report)
 
 ## Defaults for new recurring tasks
 

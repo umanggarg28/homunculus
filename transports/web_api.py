@@ -975,32 +975,9 @@ def agent_upcoming() -> JSONResponse:
 
 # --- API: stats -----------------------------------------------------------
 
-# Cost per million tokens (input, output) for known models.
-# Models ending in ":free" are always $0. Anything not listed uses 0
-# so we never overcount — better to undercount than show $2 for free runs.
-_MODEL_PRICING: dict[str, tuple[float, float]] = {
-    # ($/1M input, $/1M output) — updated June 2026
-    "gemini-2.5-flash":                         (0.15,   0.60),
-    "gemini-2.5-pro":                           (1.25,  10.00),
-    "gemini-2.0-flash":                         (0.10,   0.40),
-    "llama-3.3-70b-versatile":                  (0.59,   0.79),
-    "llama-3.1-8b-instant":                     (0.05,   0.08),
-    "openai/gpt-4o":                            (2.50,  10.00),
-    "openai/gpt-4o-mini":                       (0.15,   0.60),
-    "openai/gpt-4.1-mini":                      (0.40,   1.60),
-    "anthropic/claude-sonnet-4-6":              (3.00,  15.00),
-    "anthropic/claude-haiku-4-5":               (1.00,   5.00),
-    "deepseek/deepseek-v3":                     (0.14,   0.28),
-}
-
-def _model_cost_cents(model: str, input_tok: int, output_tok: int, cached_tok: int) -> float:
-    """Return estimated cost in cents for one LLM call. Free models → 0."""
-    if not model or model.endswith(":free"):
-        return 0.0
-    price_in, price_out = _MODEL_PRICING.get(model, (0.0, 0.0))
-    uncached = max(0, input_tok - cached_tok)
-    cached_in = cached_tok
-    return (uncached * price_in + cached_in * price_in * 0.1 + output_tok * price_out) / 1_000_000 * 100
+# Pricing + event counting live in stats.py — shared with the agent's
+# own week_in_review tool so both surfaces report identical numbers.
+from stats import model_cost_cents as _model_cost_cents, summarize_events
 
 
 def _build_agent_replay(limit: int = 12) -> list[dict]:
@@ -1196,73 +1173,19 @@ def stats_today() -> JSONResponse:
     except Exception:
         cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    events_path = Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
-    total_events = 0
-    unique_tools: set[str] = set()
-    tasks_fired = 0
-    memory_writes = 0
-    memory_forgets = 0
-    input_tokens = 0
-    output_tokens = 0
-    cached_tokens = 0
-    cost_cents = 0.0
-
-    if events_path.exists():
-        try:
-            with events_path.open("r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-            for line in reversed(lines):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                ts_raw = rec.get("ts", "")
-                try:
-                    ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
-                    if ts.tzinfo is None:
-                        ts = ts.replace(tzinfo=timezone.utc)
-                except ValueError:
-                    continue
-                if ts < cutoff:
-                    break
-                total_events += 1
-                evt = rec.get("event", "")
-                if evt == "tool_call":
-                    name = rec.get("name") or ""
-                    if name:
-                        unique_tools.add(name)
-                    if name == "complete_task":
-                        tasks_fired += 1
-                elif evt == "memory_write":
-                    memory_writes += 1
-                elif evt == "memory_forget":
-                    memory_forgets += 1
-                elif evt == "llm_call":
-                    in_tok = rec.get("input_tokens") or 0
-                    out_tok = rec.get("output_tokens") or 0
-                    ca_tok = rec.get("cached_tokens") or 0
-                    input_tokens += in_tok
-                    output_tokens += out_tok
-                    cached_tokens += ca_tok
-                    cost_cents += _model_cost_cents(rec.get("model", ""), in_tok, out_tok, ca_tok)
-        except OSError:
-            pass
-
+    s = summarize_events(cutoff)
     budget_usd = float(os.environ.get("HOMUNCULUS_DAILY_BUDGET_USD", "0") or "0")
     return JSONResponse({
-        "since": cutoff.isoformat(),
-        "events": total_events,
-        "unique_tools": len(unique_tools),
-        "tasks_fired": tasks_fired,
-        "memory_writes": memory_writes,
-        "memory_forgets": memory_forgets,
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "cached_tokens": cached_tokens,
-        "cost_cents": round(cost_cents, 2),
+        "since": s["since"],
+        "events": s["events"],
+        "unique_tools": len(s["unique_tools"]),
+        "tasks_fired": s["tasks_fired"],
+        "memory_writes": s["memory_writes"],
+        "memory_forgets": s["memory_forgets"],
+        "input_tokens": s["input_tokens"],
+        "output_tokens": s["output_tokens"],
+        "cached_tokens": s["cached_tokens"],
+        "cost_cents": round(s["cost_cents"], 2),
         "budget_cents": round(budget_usd * 100, 2),
     })
 
