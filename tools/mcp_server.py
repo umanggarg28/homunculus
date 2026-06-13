@@ -27,7 +27,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from . import (
-    _meta, filesystem, memory_tools, notify as notify_mod, sandbox,
+    _meta, filesystem, memory_tools, notify as notify_mod, report, sandbox,
     scheduling, skill_refinement as skill_refinement_mod, watch, web,
 )
 
@@ -517,6 +517,16 @@ def task_health_summary() -> str:
     yourself — the latter consistently misreports old failures as
     current state."""
     return scheduling.task_health_summary()
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def week_in_review() -> str:
+    """Deterministic 7-day self-report: cost vs budget (per day),
+    LLM/token usage, notifications sent, task outcomes, guard blocks,
+    memory churn. This JSON is the ONLY source of truth for the weekly
+    report — format it into a readable message; never recount from raw
+    logs or events."""
+    return report.week_in_review()
 
 
 @mcp.tool(annotations={"readOnlyHint": False})
