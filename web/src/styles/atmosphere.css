@@ -272,13 +272,26 @@
   inset: 0;
   pointer-events: none;
   z-index: 90;
-  border: 1px solid color-mix(in srgb, var(--color-danger) 55%, transparent);
-  box-shadow: inset 0 0 22px color-mix(in srgb, var(--color-danger) 18%, transparent);
-  animation: hm-autonomous-breathe 2.2s ease-in-out infinite;
+  border: 1.5px solid color-mix(in srgb, var(--color-danger) 78%, transparent);
+  /* Layered glow: deep red vignette pulling inward + a tight inner rim +
+     an outer bloom on the border — a reactor breathing, not a hairline. */
+  animation: hm-autonomous-breathe 2.4s ease-in-out infinite;
 }
 @keyframes hm-autonomous-breathe {
-  0%, 100% { opacity: 0.45; }
-  50%      { opacity: 1; }
+  0%, 100% {
+    border-color: color-mix(in srgb, var(--color-danger) 55%, transparent);
+    box-shadow:
+      inset 0 0 45px color-mix(in srgb, var(--color-danger) 15%, transparent),
+      inset 0 0 9px  color-mix(in srgb, var(--color-danger) 24%, transparent),
+      0 0 9px        color-mix(in srgb, var(--color-danger) 28%, transparent);
+  }
+  50% {
+    border-color: color-mix(in srgb, var(--color-danger) 92%, transparent);
+    box-shadow:
+      inset 0 0 90px color-mix(in srgb, var(--color-danger) 32%, transparent),
+      inset 0 0 18px color-mix(in srgb, var(--color-danger) 46%, transparent),
+      0 0 26px       color-mix(in srgb, var(--color-danger) 60%, transparent);
+  }
 }
 
 /* Robot glitch jitter — 140ms of corruption. */
@@ -309,6 +322,13 @@
 .hm-robot-celebrate { animation: hm-robot-hop 700ms ease-out 1; }
 
 @media (prefers-reduced-motion: reduce) {
-  .hm-autonomous-frame { animation: none; opacity: 0.6; }
+  /* No pulse, but keep a static red glow (the glow now lives in the
+     keyframes, so animation:none alone would leave a bare border). */
+  .hm-autonomous-frame {
+    animation: none;
+    box-shadow:
+      inset 0 0 60px color-mix(in srgb, var(--color-danger) 22%, transparent),
+      0 0 14px color-mix(in srgb, var(--color-danger) 40%, transparent);
+  }
   .hm-glitching, .hm-robot-annoyed, .hm-robot-celebrate { animation: none; }
 }
