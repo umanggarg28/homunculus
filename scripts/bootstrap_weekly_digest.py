@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -115,6 +116,50 @@ If everything is quiet:
 """
 
 
+def _next_sunday_9am_user_naive() -> str:
+    """Next Sunday 09:00 as naive user-local wall clock (TaskStore's
+    frame). now_user_naive avoids the macOS 'IST' ZoneInfo trap."""
+    from user_tz import now_user_naive
+    now_local = now_user_naive()
+    # Monday=0 .. Sunday=6. Days until next Sunday.
+    days_ahead = (6 - now_local.weekday()) % 7
+    target = (now_local + timedelta(days=days_ahead)).replace(
+        hour=9, minute=0, second=0, microsecond=0
+    )
+    if target <= now_local:
+        target += timedelta(days=7)
+    return target.isoformat(timespec="seconds")
+
+
+def _ensure_task() -> None:
+    from tasks import TaskStore
+
+    store = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", str(REPO / "workspace" / "tasks"))))
+    existing = next((t for t in store.all() if t["id"] == "weekly-nudge"), None)
+    if existing is not None and existing.get("status") == "active":
+        print(f"[bootstrap_weekly_digest] weekly-nudge task active — due {existing.get('due_at')}.")
+        return
+    due_at = _next_sunday_9am_user_naive()
+    task = store.create(
+        title="Weekly nudge",
+        description=(
+            "The weekly digest — see skill_weekly_nudge.md. ONE Sunday "
+            "message: a deterministic system self-report (week_in_review) "
+            "plus forward-looking nudges (idle tasks, decaying skills)."
+        ),
+        due_at=due_at,
+        recurrence="weekly",
+        notify=True,
+        success_criteria=[
+            {"type": "notify_called"},
+            {"type": "notify_min_chars", "n": 60},
+            {"type": "notify_contains", "text": "Weekly check-in"},
+        ],
+        skill="skill_weekly_nudge",
+    )
+    print(f"[bootstrap_weekly_digest] created task '{task['id']}' — due {task['due_at']} (next Sun 09:00 user-local).")
+
+
 def main() -> int:
     from skills import Skills
 
@@ -124,16 +169,16 @@ def main() -> int:
     current = skills.load("skill_weekly_nudge")
     if current is not None and current.strip() == CONSOLIDATED_BODY.strip():
         print("[bootstrap_weekly_digest] skill already at consolidated body — no change.")
-        return 0
+    else:
+        version = skills.save(
+            "skill_weekly_nudge",
+            CONSOLIDATED_BODY,
+            source="user-edit",
+            rationale="Consolidate the weekly self-report (week_in_review) into the Sunday digest; drop the hand-read-tasks.json failure tally.",
+        )
+        print(f"[bootstrap_weekly_digest] saved skill_weekly_nudge v{version} (prior archived).")
 
-    version = skills.save(
-        "skill_weekly_nudge",
-        CONSOLIDATED_BODY,
-        source="user-edit",
-        rationale="Consolidate the weekly self-report (week_in_review) into the Sunday digest; drop the hand-read-tasks.json failure tally.",
-    )
-    print(f"[bootstrap_weekly_digest] saved skill_weekly_nudge v{version} (prior archived).")
-    print("  The existing Sunday 'weekly-nudge' task now runs the consolidated digest.")
+    _ensure_task()
     return 0
 
 
