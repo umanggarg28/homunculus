@@ -25,15 +25,18 @@ import tools  # noqa: E402
 from core import Agent  # noqa: E402
 from heartbeat import (  # noqa: E402
     REFLECTION_PROMPT_TEMPLATE,
+    _format_recent_deliveries,
     _today_str,
     _yesterday_iso_and_path,
 )
 from memory import Memory  # noqa: E402
+from tasks import TaskStore  # noqa: E402
 
 
 def main() -> None:
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     memory_dir = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
+    tasks_dir = Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks"))
     model = os.environ.get("HOMUNCULUS_MODEL_HEARTBEAT", "openai/gpt-oss-120b")
 
     memory = Memory(memory_dir)
@@ -46,6 +49,7 @@ def main() -> None:
         today=today,
         yesterday=yesterday_iso,
         yesterday_path=yesterday_path,
+        recent_deliveries=_format_recent_deliveries(TaskStore(tasks_dir)),
     )
     print(
         f"[reflection] today={today} reviewing={yesterday_iso} model={agent.model}",

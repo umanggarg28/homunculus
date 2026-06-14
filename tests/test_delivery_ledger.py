@@ -79,6 +79,46 @@ def test_record_delivery_ignores_empty_key_and_caps(tmp_path):
     assert delivered[0]["key"] == "item-5"               # oldest dropped first
 
 
+def test_format_recent_deliveries_digest():
+    """The reflection digest hands the model each skill-backed task's most
+    recent run — success deliveries with their text, failures with the
+    result — and skips tasks with no skill / no runs / no captured text."""
+    from heartbeat import _format_recent_deliveries
+
+    class _FakeStore:
+        def __init__(self, tasks):
+            self._tasks = tasks
+
+        def list(self, status):  # noqa: ARG002 - mirrors TaskStore.list
+            return self._tasks
+
+    out = _format_recent_deliveries(_FakeStore([
+        {"id": "hn", "skill": "skill_hn",
+         "last_runs": [{"status": "success",
+                        "delivered_text": "HN Summary\n- item https://x"}]},
+        {"id": "lc", "skill": "skill_lc",
+         "last_runs": [{"status": "failure", "result": "BLOCKED: no link"}]},
+        {"id": "noskill", "last_runs": [{"status": "success", "delivered_text": "x"}]},
+        {"id": "noruns", "skill": "skill_z", "last_runs": []},
+        {"id": "uncaptured", "skill": "skill_o", "last_runs": [{"status": "success"}]},
+    ]))
+    assert "task: hn" in out and "HN Summary" in out
+    assert "task: lc" in out and "BLOCKED: no link" in out
+    assert "noskill" not in out      # no skill → skipped
+    assert "noruns" not in out       # no runs → skipped
+    assert "uncaptured" not in out   # success but no delivered_text → skipped
+
+
+def test_format_recent_deliveries_empty():
+    from heartbeat import _format_recent_deliveries
+
+    class _Empty:
+        def list(self, status):  # noqa: ARG002
+            return []
+
+    assert "no recent" in _format_recent_deliveries(_Empty()).lower()
+
+
 def test_combined_notify_text_captures_sent_text():
     """The accessor returns what notify() actually sent — the reflection
     retrofits this as delivered_text for its quality self-critique."""
