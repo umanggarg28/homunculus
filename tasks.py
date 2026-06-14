@@ -603,6 +603,32 @@ class TaskStore:
                 run["cost_cents"] = round(float(usage["cost_cents"]), 4)
             self._write(tasks)
 
+    # How much of a delivery we keep for the reflection's quality
+    # self-critique. Enough to judge structure (links, headers, per-item
+    # shape) without bloating tasks.json.
+    DELIVERED_TEXT_CAP = 1500
+
+    def attribute_delivered_text_to_last_run(self, task_id: str, text: str) -> None:
+        """Retrofit the actual notify() text the user received onto the most
+        recent run. The daily reflection reads this to self-critique delivery
+        QUALITY (fabricated links, thin content) — not just pass/fail, which
+        the success_criteria already cover. Mirrors
+        attribute_usage_to_last_run: idempotent, no-op if empty or no runs."""
+        text = (text or "").strip()
+        if not text:
+            return
+        with self._locked():
+            tasks = self.all()
+            try:
+                task = self._find(tasks, task_id)
+            except KeyError:
+                return
+            runs = task.get("last_runs") or []
+            if not runs:
+                return
+            runs[-1]["delivered_text"] = text[: self.DELIVERED_TEXT_CAP]
+            self._write(tasks)
+
     def schedule(
         self,
         task_id: str,

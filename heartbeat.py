@@ -101,7 +101,8 @@ You have two jobs: (1) refine skills based on real task outcomes, (2) save new m
 
 ━━ STEP 1 — Skill refinement (MANDATORY, do this first) ━━
 
-read_file("tasks/tasks.json") and find every task that has `last_runs` entries from {yesterday}.
+read_file("tasks/tasks.json") and find every task with recent `last_runs`
+entries (from {yesterday} or {today}).
 
 For each such task:
   a) Look in your memory index for a matching skill (name like `skill_<slug-of-title>`).
@@ -118,12 +119,30 @@ For each such task:
        directly; self-modifications go through review.
   c) If the last_runs show only success AND no skill exists yet → propose one
      with propose_skill(..., kind="new_skill").
-  d) If the last_runs show only success AND a skill exists → no action needed.
+  d) If the last_runs show success AND a skill exists → SELF-CRITIQUE THE
+     DELIVERY QUALITY. A run can pass its success_criteria and still be poor.
+     Read the run's `delivered_text` (the exact message the user received).
+     Judge it honestly against what the skill is FOR, and flag:
+       - fabricated or placeholder identifiers — made-up/truncated IDs,
+         example.com, `item?id=1`, links that clearly aren't real;
+       - thin, empty, repetitive, or off-topic content;
+       - anything a human reader would call low-quality or wrong even though
+         it technically passed the criteria.
+     If the delivery is genuinely good, no action. If NOT: read_file the
+     skill, find the ROOT cause (e.g. a brittle data source the model has to
+     guess from), and propose_skill(kind="skill_edit") with the FULL
+     corrected body — fix the procedure (prefer a reliable structured source
+     over scraping/guessing) AND, where it helps, add a stricter
+     success_criterion so the same gap FAILS the gate next time. You may
+     web_search to find a better source. Do NOT fabricate the fix — base it
+     on what you actually verify.
 
 After proposing, the skill stays on its current body until approved — do
 not assume your edit is live this tick.
 
-Do not skip this step even if runs look successful on the surface — check the result text for errors, 403s, stuck loops, BLOCKED messages, or excessive retries.
+Do not skip this step even if runs look successful on the surface — check
+both the `result` text AND `delivered_text` for errors, BLOCKED messages,
+excessive retries, AND quality problems like fabricated links.
 
 ━━ STEP 2 — Learn from yesterday's log ━━
 
@@ -306,6 +325,13 @@ class TaskGuard:
                 if m:
                     return (m.group(1) if m.groups() else m.group(0)).strip().lower()
         return None
+
+    def combined_notify_text(self) -> str:
+        """The full text the agent sent via notify() this run — what actually
+        reached the user. The heartbeat retrofits this onto the run record
+        (delivered_text) so the daily reflection can self-critique delivery
+        QUALITY, not just pass/fail. Empty if nothing was sent."""
+        return "\n\n".join(t for t in self._notify_texts if t)
 
     def expected_remaining(self) -> list[str]:
         """Task IDs that were due at the start of this tick but have not yet
@@ -712,9 +738,14 @@ def tick(memory: Memory, model: str | None) -> None:
             if current is None:
                 continue
             if current.get("due_at") != due_at_before.get(task["id"]):
-                # complete_task ran, due_at advanced. Retrofit usage
-                # onto the success run that the tool layer appended.
+                # complete_task ran, due_at advanced. Retrofit usage and
+                # the delivered text onto the success run the tool layer
+                # appended (the latter feeds the reflection's quality
+                # self-critique).
                 tasks.attribute_usage_to_last_run(task["id"], tick_usage)
+                tasks.attribute_delivered_text_to_last_run(
+                    task["id"], guard.combined_notify_text()
+                )
                 continue
             # Distinguish the failure shape so we can act on it differently:
             #   - silent drop  → agent never called complete_task or record_failure.

@@ -79,6 +79,18 @@ def test_record_delivery_ignores_empty_key_and_caps(tmp_path):
     assert delivered[0]["key"] == "item-5"               # oldest dropped first
 
 
+def test_combined_notify_text_captures_sent_text():
+    """The accessor returns what notify() actually sent — the reflection
+    retrofits this as delivered_text for its quality self-critique."""
+    guard = TaskGuard({"t1": [{"type": "notify_called"}]})
+    assert guard.combined_notify_text() == ""
+    guard.on_tool_call("notify", {"text": "Hacker News AI Summary - item one"})
+    guard.on_tool_call("notify", {"text": "second line"})
+    combined = guard.combined_notify_text()
+    assert "Hacker News AI Summary - item one" in combined
+    assert "second line" in combined
+
+
 # ---- notify_unique criterion ----------------------------------------------
 
 def test_notify_unique_blocks_already_delivered_key():
