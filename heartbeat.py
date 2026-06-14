@@ -99,50 +99,41 @@ REFLECTION_PROMPT_TEMPLATE = """It's a daily REFLECTION tick. Current date: {tod
 
 You have two jobs: (1) refine skills based on real task outcomes, (2) save new memories from yesterday's log.
 
-━━ STEP 1 — Skill refinement (MANDATORY, do this first) ━━
+━━ STEP 1 — Skill review (MANDATORY, do this first) ━━
 
-read_file("tasks/tasks.json") and find every task with recent `last_runs`
-entries (from {yesterday} or {today}).
+Here are your most recent skill-backed deliveries — already extracted for
+you. Do NOT read tasks.json; everything you need to judge is right here:
 
-For each such task:
-  a) Look in your memory index for a matching skill (name like `skill_<slug-of-title>`).
-  b) If the last_runs show failures or anomalies (errors, BLOCKED, stuck loops, too many retries):
-     - read_file the current skill memory.
-     - Identify what went wrong from the `result` field of the failing run.
-     - Prepare the FULL corrected body (a fixed step or a "Watch out:" note);
-       keep everything you didn't change verbatim, especially code, queries
-       and URLs.
-     - Call propose_skill(name="skill_<slug>", body=<full corrected body>,
-       rationale=<what failed and how this fixes it>, kind="skill_edit").
-       This does NOT change the skill now — it files the edit for the
-       operator to approve in the dashboard. Do not write_file the skill
-       directly; self-modifications go through review.
-  c) If the last_runs show only success AND no skill exists yet → propose one
-     with propose_skill(..., kind="new_skill").
-  d) If the last_runs show success AND a skill exists → SELF-CRITIQUE THE
-     DELIVERY QUALITY. A run can pass its success_criteria and still be poor.
-     Read the run's `delivered_text` (the exact message the user received).
-     Judge it honestly against what the skill is FOR, and flag:
+{recent_deliveries}
+
+Before proposing anything, call list_proposals(status="pending") and skip
+any skill that already has a pending proposal — never file a duplicate.
+
+For EACH delivery above:
+  a) `last run: failure` → read_file the skill, identify what broke from the
+     result, and propose_skill(name=<skill>, body=<FULL corrected body>,
+     rationale=<what failed + the fix>, kind="skill_edit"). Keep everything
+     you didn't change verbatim (code, queries, URLs).
+  b) `last run: success` → SELF-CRITIQUE the delivered_text. A run can pass
+     its success_criteria and still be poor. Judge it honestly against what
+     the skill is FOR, and flag:
        - fabricated or placeholder identifiers — made-up/truncated IDs,
          example.com, `item?id=1`, links that clearly aren't real;
        - thin, empty, repetitive, or off-topic content;
        - anything a human reader would call low-quality or wrong even though
-         it technically passed the criteria.
-     If the delivery is genuinely good, no action. If NOT: read_file the
+         it technically passed.
+     If the delivery is genuinely good → no action. If NOT → read_file the
      skill, find the ROOT cause (e.g. a brittle data source the model has to
      guess from), and propose_skill(kind="skill_edit") with the FULL
-     corrected body — fix the procedure (prefer a reliable structured source
-     over scraping/guessing) AND, where it helps, add a stricter
-     success_criterion so the same gap FAILS the gate next time. You may
-     web_search to find a better source. Do NOT fabricate the fix — base it
-     on what you actually verify.
+     corrected body: fix the procedure (prefer a reliable structured data
+     source over scraping/guessing — you MAY web_search to find one) AND,
+     where it helps, add a stricter success_criterion so the same gap FAILS
+     the gate next time. Do NOT fabricate the fix — base it on what you
+     actually verify.
 
-After proposing, the skill stays on its current body until approved — do
-not assume your edit is live this tick.
-
-Do not skip this step even if runs look successful on the surface — check
-both the `result` text AND `delivered_text` for errors, BLOCKED messages,
-excessive retries, AND quality problems like fabricated links.
+propose_skill files the edit for the operator to approve — it does NOT
+change the skill now, and you must NOT write_file a skill directly. After
+proposing, the skill stays on its current body until approved.
 
 ━━ STEP 2 — Learn from yesterday's log ━━
 
@@ -576,6 +567,7 @@ def tick(memory: Memory, model: str | None) -> None:
                 today=today,
                 yesterday=yesterday_iso,
                 yesterday_path=yesterday_path,
+                recent_deliveries=_format_recent_deliveries(tasks),
             )
             response = agent.chat(prompt, source="heartbeat")
             memory.reflection.mark(today)
@@ -1028,6 +1020,46 @@ def _format_due_tasks(tasks: list[dict], forced: bool = False) -> str:
             block += f"\n  scratchpad (from prior run):\n    " + preview.replace("\n", "\n    ")
         lines.append(block)
     return "\n".join(lines)
+
+
+def _format_recent_deliveries(tasks: TaskStore, text_cap: int = 1200) -> str:
+    """Pre-extract each skill-backed task's most recent run for the daily
+    reflection's self-critique.
+
+    The harness owns the mechanical extraction; the model owns only the
+    judgment. A clean-room test (2026-06-15) showed the weak model thrashes
+    when told to navigate tasks.json itself — it burned its whole turn
+    budget re-reading the file and never reached the critique. Handing it
+    the delivered text directly (the same pattern as _format_due_tasks /
+    week_in_review) turns the critique into a 2-3 turn judgment task.
+    """
+    blocks: list[str] = []
+    for task in tasks.list("all"):
+        skill = task.get("skill")
+        runs = task.get("last_runs") or []
+        if not skill or not runs:
+            continue
+        last = runs[-1]
+        status = last.get("status", "?")
+        header = (
+            f"### task: {task.get('id')}  (skill: {skill})\n"
+            f"last run: {status}"
+        )
+        if status == "success":
+            delivered = (last.get("delivered_text") or "").strip()
+            if not delivered:
+                # Older runs predate delivered_text capture — nothing to
+                # critique, and the result summary alone isn't the content.
+                continue
+            if len(delivered) > text_cap:
+                delivered = delivered[:text_cap] + " …[truncated]"
+            body = "delivered_text (what the user received):\n  " + delivered.replace("\n", "\n  ")
+        else:
+            body = "result: " + (last.get("result") or "")[:400]
+        blocks.append(header + "\n" + body)
+    if not blocks:
+        return "(no recent skill-backed deliveries captured yet)"
+    return "\n\n".join(blocks)
 
 
 def main() -> None:
