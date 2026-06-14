@@ -265,6 +265,50 @@ def test_per_tool_confab_not_fired_when_that_tool_succeeded():
     assert "success_claim_tool_failed" not in violations
 
 
+# ---- artifact-claim verification (against the store, not phrasing) ------
+
+
+def test_unverified_artifact_fabricated_id_blocked(tmp_path, monkeypatch):
+    """The live confabulation: agent invented 'prop-0005' and told the user
+    to approve it on the Overview page with ZERO tool calls. A fabricated ID
+    can't survive a check against the store."""
+    monkeypatch.setenv("HOMUNCULUS_PROPOSALS_FILE", str(tmp_path / "proposals.json"))
+    reply = "Skill-edit proposal (ID prop-0005) filed. Approve it on the Overview page."
+    clean, violations = _guard_with_outcomes(reply, [])  # no tools, like the live case
+    assert clean is None
+    assert "unverified_artifact_claim" in violations
+
+
+def test_unverified_artifact_real_id_passes(tmp_path, monkeypatch):
+    import json as _j
+    pf = tmp_path / "proposals.json"
+    pf.write_text(_j.dumps([{"id": "prop-0042", "status": "pending"}]), encoding="utf-8")
+    monkeypatch.setenv("HOMUNCULUS_PROPOSALS_FILE", str(pf))
+    reply = "Filed prop-0042 — approve it on the Overview page."
+    clean, violations = _guard_with_outcomes(
+        reply, [{"name": "propose_skill", "args": {}, "success": True}]
+    )
+    assert "unverified_artifact_claim" not in violations
+
+
+def test_unverified_artifact_filed_phrase_without_tool_blocked(tmp_path, monkeypatch):
+    """No ID, but asserts a completed filing while propose_skill never ran."""
+    monkeypatch.setenv("HOMUNCULUS_PROPOSALS_FILE", str(tmp_path / "proposals.json"))
+    reply = "Done — I filed the proposal for approval; it awaits your approval."
+    clean, violations = _guard_with_outcomes(reply, [])
+    assert clean is None
+    assert "unverified_artifact_claim" in violations
+
+
+def test_unverified_artifact_filed_phrase_with_success_passes(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOMUNCULUS_PROPOSALS_FILE", str(tmp_path / "proposals.json"))
+    reply = "I filed the proposal for approval on the Overview page."
+    clean, violations = _guard_with_outcomes(
+        reply, [{"name": "propose_skill", "args": {}, "success": True}]
+    )
+    assert "unverified_artifact_claim" not in violations
+
+
 # ---- structured-failure recognition ------------------------------------
 
 

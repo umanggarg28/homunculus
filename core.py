@@ -110,6 +110,38 @@ _GUARD_FAILURE_ACK_TERMS = (
     "didn't go through", "did not go through", "went wrong", "n't work",
 )
 
+# Artifact-claim verification — the robust replacement for phrase-matching.
+# A reply that points the user at a concrete artifact it supposedly created
+# (a prop-NNNN skill proposal) is verified against REALITY (the proposal
+# store), not against a hand-maintained phrase list. The agent invented
+# "prop-0005" and told the user to "approve it on the Overview page" with
+# zero tool calls — every phrase-list guard missed it, but a fabricated ID
+# cannot survive a check against the store.
+_GUARD_PROPOSAL_ID_RE = re.compile(r"\bprop-\d{3,}\b", re.IGNORECASE)
+
+# Completion claims that assert a proposal WAS filed (not explanatory "you
+# can approve proposals on the Overview page"). If one of these appears and
+# propose_skill did not succeed this turn, the filing is fabricated.
+_GUARD_PROPOSAL_FILED_PHRASES = (
+    "filed for approval", "awaits your approval", "awaiting your approval",
+    "filed a proposal", "filed the proposal", "submitted the proposal",
+    "proposal has been filed", "proposal has been submitted",
+    "i've filed the proposal", "i have filed the proposal",
+    "is now submitted as", "edit is now submitted",
+)
+
+
+def _existing_proposal_ids() -> set[str] | None:
+    """Lowercased IDs of every proposal that actually exists in the store
+    (any status). Returns None if the store can't be read — the output
+    guard must FAIL OPEN (never block a reply because a side file was
+    unreadable)."""
+    try:
+        from proposals import _store
+        return {str(p.get("id", "")).lower() for p in _store().list("all")}
+    except Exception:
+        return None
+
 # System-prompt-leak detection: per-request canary token + paraphrase
 # fingerprints. Same pattern the umang-portfolio chat uses — random
 # token embedded in the prompt; if it appears in the model's output
@@ -3023,6 +3055,30 @@ class Agent:
                             violations.append("success_claim_tool_failed")
                             break
 
+        # Artifact-claim verification (the robust, phrasing-independent rule).
+        # propose_skill succeeded this turn → any prop-NNNN it minted is now
+        # in the store, so legit filings pass.
+        proposed_ok = any(
+            o.get("name") == "propose_skill" and o.get("success") for o in tool_outcomes
+        )
+        # (a) The reply cites a concrete proposal ID — verify it actually
+        #     exists. A fabricated "prop-0005" fails against the store. This
+        #     is what caught the live confabulation that every phrase guard
+        #     missed (the agent invented the ID with zero tool calls).
+        cited_ids = {m.lower() for m in _GUARD_PROPOSAL_ID_RE.findall(reply)}
+        if cited_ids:
+            real_ids = _existing_proposal_ids()
+            if real_ids is not None and not cited_ids.issubset(real_ids):
+                violations.append("unverified_artifact_claim")
+        # (b) No ID, but the reply asserts a COMPLETED filing while
+        #     propose_skill did not succeed this turn → fabricated.
+        if (
+            "unverified_artifact_claim" not in violations
+            and not proposed_ok
+            and any(p in lower_reply for p in _GUARD_PROPOSAL_FILED_PHRASES)
+        ):
+            violations.append("unverified_artifact_claim")
+
         # Claim/result inconsistency — the reply asserts a successful action
         # against a specific target (file path or URL) but the matching tool
         # call in this turn errored. Stress probe #22: agent called
@@ -3114,6 +3170,16 @@ class Agent:
         "for a failed call."
     )
 
+    _ARTIFACT_CLAIM_CORRECTION_PROMPT = (
+        "Your previous reply pointed the user at a proposal that does not exist — "
+        "you cited a prop-NNNN ID or said you 'filed it' / it 'awaits approval on "
+        "the Overview page', but propose_skill did not successfully run this turn, "
+        "so there is nothing for the user to approve. NEVER invent a proposal ID or "
+        "claim a filing that didn't happen — the user will go looking and find "
+        "nothing. Either actually call propose_skill now and report the REAL id it "
+        "returns, or tell the user plainly that you have not filed anything yet."
+    )
+
     _FUTURE_PROMISE_CORRECTION_PROMPT = (
         "Your previous reply ended the turn with a promise of immediate next action "
         "('I will try X next', 'Let me check Y', 'I'll search again'). This is dishonest: "
@@ -3140,6 +3206,8 @@ class Agent:
             or "success_claim_tool_failed" in violations
         ):
             correction = self._SUCCESS_CLAIM_CORRECTION_PROMPT
+        elif violations and "unverified_artifact_claim" in violations:
+            correction = self._ARTIFACT_CLAIM_CORRECTION_PROMPT
         elif violations and "claim_inconsistent_with_tool_result" in violations:
             correction = self._CLAIM_INCONSISTENT_CORRECTION_PROMPT
         elif violations and "false_future_promise" in violations:
