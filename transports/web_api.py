@@ -797,6 +797,11 @@ async def tasks_run_stream(task_id: str, request: Request):
     # Fresh agent — task execution must NOT share history with the chat
     # session (would pollute future chat turns with task-execution noise).
     fresh_agent = Agent(memory=_chat_memory)
+    # Fold the linked skill's declared success_criteria into the task's
+    # effective criteria — exactly as a scheduled tick's _plan_tick does —
+    # so a manual run enforces (and the prompt shows) the same quality bar.
+    from skills import effective_success_criteria
+    task["success_criteria"] = effective_success_criteria(task, MEMORY_DIR)
     prompt = HEARTBEAT_PROMPT_TEMPLATE.format(
         now_iso=now_user_tz().isoformat(timespec="seconds"),
         # forced=True: this is an operator-triggered "run now", not a

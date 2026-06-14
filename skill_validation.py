@@ -134,6 +134,21 @@ def validate_skill_body(
                         f"'states' references tools that don't exist: {missing}"
                     )
 
+    # A skill may declare its own success_criteria (the quality bar for any
+    # task that runs it — see skills.effective_success_criteria). Validate
+    # them so a proposal can't ship a criterion the TaskGuard can't evaluate.
+    sc = fm.get("success_criteria")
+    if sc is not None:
+        if not isinstance(sc, list):
+            errors.append("frontmatter 'success_criteria' must be a list")
+        else:
+            for c in normalize_criteria(sc):
+                if c.get("type") not in _KNOWN_CRITERIA:
+                    errors.append(
+                        f"unknown success_criteria type {c.get('type')!r}; "
+                        f"allowed: {sorted(_KNOWN_CRITERIA)}"
+                    )
+
     return ValidationResult(
         ok=not errors,
         errors=errors,
@@ -151,21 +166,46 @@ _KNOWN_CRITERIA = {
     "notify_contains", "notify_matches", "notify_unique",
 }
 
+# Compact single-key YAML form a skill author naturally writes
+# (e.g. `- notify_min_chars: 200`, `- notify_contains: "Foo"`) → the
+# canonical {"type": <name>, <param>: <value>} shape TaskGuard reads.
+# Maps each value-bearing criterion to its TaskGuard param key.
+_COMPACT_VALUE_KEY = {
+    "notify_min_chars": "n",
+    "notify_contains": "text",
+    "notify_matches": "pattern",
+    "notify_unique": "pattern",
+}
+
 
 def normalize_criteria(criteria: list) -> list[dict]:
     """Coerce success_criteria to the list-of-dicts shape TaskGuard reads.
 
-    Models routinely write a bare list of type names
-    (["notify_called", "notify_contains"]); accept that and lift each
-    string to {"type": <name>}. Dicts pass through untouched. Stored
-    criteria are always dicts so TaskGuard's c.get('type') never hits a
-    string."""
+    Three input shapes are accepted, so task specs and skill frontmatter
+    can both be written the natural way:
+    - bare string  "notify_called"          → {"type": "notify_called"}
+    - canonical    {"type": "...", ...}      → passed through untouched
+    - compact YAML {"notify_min_chars": 200} → {"type": "notify_min_chars",
+                                                "n": 200}
+    Stored criteria are always {"type": ...} dicts so TaskGuard's
+    c.get('type') never hits a string or a key-as-type."""
     out: list[dict] = []
     for c in criteria or []:
         if isinstance(c, str):
             out.append({"type": c})
         elif isinstance(c, dict):
-            out.append(c)
+            if "type" in c:
+                out.append(c)
+            elif len(c) == 1:
+                (key, val), = c.items()
+                norm = {"type": key}
+                if key in _COMPACT_VALUE_KEY:
+                    norm[_COMPACT_VALUE_KEY[key]] = val
+                out.append(norm)
+            else:
+                # Malformed (multi-key, no 'type') — pass through so
+                # validation surfaces it as an unknown type.
+                out.append(c)
     return out
 
 
