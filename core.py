@@ -75,6 +75,41 @@ _GUARD_ACTION_CLAIM_PHRASES = (
     "i've submitted", "i have submitted",
 )
 
+# Per-tool success-claim phrases. If the named tool was CALLED this turn,
+# EVERY call to it failed, and the reply asserts that specific action
+# succeeded (without acknowledging the failure), the reply is
+# confabulating. This generalises success_claim_all_tools_failed to
+# per-tool granularity: a turn where OTHER tools succeeded (read_file,
+# web_fetch, …) but the action tool failed is still caught. Live case:
+# propose_skill returned {"ok": false} yet the agent said "the edit is
+# now submitted … awaits your approval" — read_file had succeeded, so the
+# all-tools-failed rule (and the generic phrase list, which only matches
+# "I've submitted") both missed it.
+_GUARD_TOOL_SUCCESS_PHRASES = {
+    "propose_skill": (
+        "awaits your approval", "awaits approval", "for your approval",
+        "for my approval", "filed for approval", "proposal has been",
+        "proposal is now", "submitted as a", "edit is now submitted",
+        "modification proposal", "filed a proposal", "filed the proposal",
+        "submitted the proposal", "proposal is awaiting",
+    ),
+    "create_task": (
+        "task has been created", "task was created", "task is scheduled",
+        "reminder has been set", "reminder is set", "i've scheduled",
+    ),
+    "schedule_task": ("task is scheduled", "rescheduled it", "scheduled it for"),
+    "notify": ("notification has been sent", "notification was sent", "i've notified you"),
+}
+
+# Terms that mean the reply DOES own up to a failure — when present we do
+# not flag a per-tool success claim, so honest "I tried to file it but it
+# was rejected: …" replies are never treated as confabulation.
+_GUARD_FAILURE_ACK_TERMS = (
+    "fail", "error", "could not", "couldn't", "cannot", "can't",
+    "reject", "invalid", "blocked", "unable", "wasn't able", "was not able",
+    "didn't go through", "did not go through", "went wrong", "n't work",
+)
+
 # System-prompt-leak detection: per-request canary token + paraphrase
 # fingerprints. Same pattern the umang-portfolio chat uses — random
 # token embedded in the prompt; if it appears in the model's output
@@ -2972,6 +3007,22 @@ class Agent:
         if claims_action and tool_outcomes and not any(o.get("success") for o in tool_outcomes):
             violations.append("success_claim_all_tools_failed")
 
+        # Per-tool confabulation: the specific action tool was called this
+        # turn, EVERY call to it failed, and the reply asserts that action
+        # succeeded without owning the failure. Fires even when other tools
+        # succeeded (the all-tools-failed rule above does not). Conservative:
+        # needs the tool actually called + all its calls failed + a matching
+        # success phrase + no failure acknowledgement anywhere in the reply.
+        if tool_outcomes and "success_claim_all_tools_failed" not in violations:
+            acknowledges_failure = any(t in lower_reply for t in _GUARD_FAILURE_ACK_TERMS)
+            if not acknowledges_failure:
+                for tool_name, phrases in _GUARD_TOOL_SUCCESS_PHRASES.items():
+                    calls = [o for o in tool_outcomes if o.get("name") == tool_name]
+                    if calls and not any(o.get("success") for o in calls):
+                        if any(p in lower_reply for p in phrases):
+                            violations.append("success_claim_tool_failed")
+                            break
+
         # Claim/result inconsistency — the reply asserts a successful action
         # against a specific target (file path or URL) but the matching tool
         # call in this turn errored. Stress probe #22: agent called
@@ -3055,11 +3106,12 @@ class Agent:
 
     _SUCCESS_CLAIM_CORRECTION_PROMPT = (
         "Your previous reply claimed an action succeeded (filed/created/sent/saved/"
-        "proposed), but EVERY tool call this turn FAILED — including the one that "
-        "would have performed it (e.g. propose_skill returned {\"ok\": false} with "
-        "errors). Do not pretend it worked. Read the tool error, tell the user "
-        "plainly what failed and why, and either fix the inputs and call the tool "
-        "again now, or say it didn't go through. Never report success for a failed call."
+        "proposed), but the tool that would have performed it FAILED this turn "
+        "(e.g. propose_skill returned {\"ok\": false} with errors). Do not pretend "
+        "it worked just because other tool calls succeeded. Read the tool error, "
+        "tell the user plainly what failed and why, and either fix the inputs and "
+        "call the tool again now, or say it didn't go through. Never report success "
+        "for a failed call."
     )
 
     _FUTURE_PROMISE_CORRECTION_PROMPT = (
@@ -3083,7 +3135,10 @@ class Agent:
         """
         if violations and "action_claim_without_tool_call" in violations:
             correction = self._ACTION_CLAIM_CORRECTION_PROMPT
-        elif violations and "success_claim_all_tools_failed" in violations:
+        elif violations and (
+            "success_claim_all_tools_failed" in violations
+            or "success_claim_tool_failed" in violations
+        ):
             correction = self._SUCCESS_CLAIM_CORRECTION_PROMPT
         elif violations and "claim_inconsistent_with_tool_result" in violations:
             correction = self._CLAIM_INCONSISTENT_CORRECTION_PROMPT
