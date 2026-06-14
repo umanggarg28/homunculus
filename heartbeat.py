@@ -757,7 +757,7 @@ def _plan_tick(
     own instructions (observed live 2026-06-11: delivered an algomap.io
     link for a task whose playbook says LeetCode GraphQL only).
     """
-    from skills import load_skill_playbook
+    from skills import effective_success_criteria, load_skill_playbook
 
     playbooks: list[str] = []
     for t in due_tasks:
@@ -773,6 +773,13 @@ def _plan_tick(
                 flush=True,
             )
             continue
+        # Skill is the source of truth for its own quality bar: fold any
+        # success_criteria it declares into the task's effective criteria
+        # (additive — never weakens the task). Both the prompt
+        # (_format_due_tasks) and the TaskGuard read t["success_criteria"],
+        # so setting it on this ephemeral, freshly-loaded task dict covers
+        # both without persisting anything back to tasks.json.
+        t["success_criteria"] = effective_success_criteria(t, memory_root)
         block = (
             f"# Playbook for task '{t['id']}' "
             f"(auto-loaded from {skill_name})\n\n{body.strip()}"

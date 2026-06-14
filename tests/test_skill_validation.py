@@ -153,3 +153,48 @@ def test_normalize_drops_non_str_non_dict():
     from skill_validation import normalize_criteria
     assert normalize_criteria(["notify_called", 5, None, {"type": "notify_unique"}]) == \
         [{"type": "notify_called"}, {"type": "notify_unique"}]
+
+
+def test_normalize_compact_yaml_form():
+    """A skill author's natural compact form maps to TaskGuard's canonical
+    shape, with each value routed to the right param key."""
+    from skill_validation import normalize_criteria
+    assert normalize_criteria([
+        "notify_called",
+        {"notify_min_chars": 200},
+        {"notify_contains": "Hacker News AI Summary"},
+        {"notify_matches": "https?://"},
+        {"notify_unique": "leetcode\\.com/problems/([a-z0-9-]+)"},
+    ]) == [
+        {"type": "notify_called"},
+        {"type": "notify_min_chars", "n": 200},
+        {"type": "notify_contains", "text": "Hacker News AI Summary"},
+        {"type": "notify_matches", "pattern": "https?://"},
+        {"type": "notify_unique", "pattern": "leetcode\\.com/problems/([a-z0-9-]+)"},
+    ]
+
+
+def test_canonical_dict_passes_through_unchanged():
+    from skill_validation import normalize_criteria
+    canonical = [{"type": "notify_min_chars", "n": 50}]
+    assert normalize_criteria(canonical) == canonical
+
+
+def test_skill_body_validates_success_criteria():
+    """A skill declaring an unknown criterion is rejected; a valid compact
+    one passes."""
+    good = (
+        "---\nname: skill_links\ndescription: d\ntype: skill\n"
+        "success_criteria:\n  - notify_called\n  - notify_matches: 'https?://'\n---\n"
+        "Step 1: do the thing. Step 2: notify with a link." + "x" * 40
+    )
+    assert validate_skill_body(good, expected_name="skill_links").ok
+
+    bad = (
+        "---\nname: skill_pop\ndescription: d\ntype: skill\n"
+        "success_criteria:\n  - make_it_pop\n---\n"
+        "Step 1: do the thing." + "x" * 40
+    )
+    res = validate_skill_body(bad, expected_name="skill_pop")
+    assert not res.ok
+    assert any("unknown success_criteria" in e for e in res.errors)

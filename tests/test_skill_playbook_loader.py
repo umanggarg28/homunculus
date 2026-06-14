@@ -137,3 +137,75 @@ def test_missing_file_raises_FileNotFoundError(tmp_path):
     so the operator can fix the wiring (vs. silently doing nothing)."""
     with pytest.raises(FileNotFoundError):
         load_skill_playbook(tmp_path, "skill_does_not_exist")
+
+
+# ---- success_criteria loading + merge ---------------------------------
+
+
+def test_load_skill_success_criteria_compact_form(tmp_path):
+    from skills import load_skill_success_criteria
+    _write(tmp_path, "skill_hn", (
+        "---\n"
+        "name: skill_hn\n"
+        "type: skill\n"
+        "success_criteria:\n"
+        "  - notify_called\n"
+        "  - notify_contains: \"Hacker News AI Summary\"\n"
+        "  - notify_min_chars: 200\n"
+        "---\n"
+        "Fetch, summarize, notify.\n"
+    ))
+    raw = load_skill_success_criteria(tmp_path, "skill_hn")
+    assert raw == [
+        "notify_called",
+        {"notify_contains": "Hacker News AI Summary"},
+        {"notify_min_chars": 200},
+    ]
+
+
+def test_load_skill_success_criteria_missing_or_none(tmp_path):
+    from skills import load_skill_success_criteria
+    # no such file
+    assert load_skill_success_criteria(tmp_path, "nope") == []
+    # file with no success_criteria
+    _write(tmp_path, "skill_plain", "---\nname: skill_plain\ntype: skill\n---\nbody")
+    assert load_skill_success_criteria(tmp_path, "skill_plain") == []
+
+
+def test_effective_criteria_is_additive_union(tmp_path):
+    """Skill criteria are folded into the task's (canonical) criteria;
+    the task is strengthened, never weakened, and duplicates dedupe."""
+    from skills import effective_success_criteria
+    _write(tmp_path, "skill_hn", (
+        "---\nname: skill_hn\ntype: skill\n"
+        "success_criteria:\n"
+        "  - notify_called\n"
+        "  - notify_contains: \"Hacker News AI Summary\"\n"
+        "  - notify_min_chars: 200\n---\nbody"
+    ))
+    task = {"id": "t", "skill": "skill_hn",
+            "success_criteria": [{"type": "notify_called"}]}
+    eff = effective_success_criteria(task, tmp_path)
+    assert eff == [
+        {"type": "notify_called"},  # task's own — deduped, not doubled
+        {"type": "notify_contains", "text": "Hacker News AI Summary"},
+        {"type": "notify_min_chars", "n": 200},
+    ]
+
+
+def test_effective_criteria_no_skill_unchanged(tmp_path):
+    from skills import effective_success_criteria
+    task = {"id": "t", "success_criteria": [{"type": "notify_called"}]}
+    assert effective_success_criteria(task, tmp_path) == [{"type": "notify_called"}]
+
+
+def test_effective_criteria_skill_without_criteria_unchanged(tmp_path):
+    """A skill-backed task whose skill declares no criteria keeps its own
+    exactly (the provable no-op for every live task except HN)."""
+    from skills import effective_success_criteria
+    _write(tmp_path, "skill_q", "---\nname: skill_q\ntype: skill\nstates:\n  - tool: notify\n---\nbody")
+    task = {"id": "t", "skill": "skill_q",
+            "success_criteria": [{"type": "notify_called"}, {"type": "notify_min_chars", "n": 40}]}
+    assert effective_success_criteria(task, tmp_path) == [
+        {"type": "notify_called"}, {"type": "notify_min_chars", "n": 40},
+    ]

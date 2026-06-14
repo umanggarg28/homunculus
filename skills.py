@@ -276,6 +276,33 @@ class Skills:
 # yaml directly keeps the loader self-contained.
 
 
+def _parse_skill_frontmatter(text: str) -> tuple[dict, str]:
+    """Split a skill file into (frontmatter_dict, body).
+
+    Returns ({}, <text-or-body>) for any missing/malformed frontmatter so
+    callers degrade to legacy behaviour (no states, no criteria) instead
+    of crashing on a broken skill file.
+    """
+    # No frontmatter: whole file is the body.
+    if not text.startswith("---\n"):
+        return {}, text
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        # Opening fence with no closing — treat the whole file as body.
+        return {}, text
+    frontmatter_text = text[4:end]
+    body = text[end + 5:]
+
+    import yaml
+    try:
+        parsed = yaml.safe_load(frontmatter_text) or {}
+    except yaml.YAMLError:
+        return {}, body
+    if not isinstance(parsed, dict):
+        return {}, body
+    return parsed, body
+
+
 def load_skill_playbook(
     memory_root: Path,
     skill_name: str,
@@ -294,30 +321,7 @@ def load_skill_playbook(
     """
     skill_path = memory_root / f"{skill_name}.md"
     text = skill_path.read_text(encoding="utf-8")
-
-    # No frontmatter: whole file is the body, no states.
-    if not text.startswith("---\n"):
-        return None, text
-
-    end = text.find("\n---\n", 4)
-    if end == -1:
-        # Malformed frontmatter (opening fence with no closing): treat
-        # the whole file as body and surface no states. Caller will
-        # fall back to free-form.
-        return None, text
-
-    frontmatter_text = text[4:end]
-    body = text[end + 5:]
-
-    import yaml
-    try:
-        parsed = yaml.safe_load(frontmatter_text) or {}
-    except yaml.YAMLError:
-        # Malformed YAML — degrade to legacy (no states).
-        return None, body
-
-    if not isinstance(parsed, dict):
-        return None, body
+    parsed, body = _parse_skill_frontmatter(text)
 
     states = parsed.get("states")
     if states is None:
@@ -334,3 +338,46 @@ def load_skill_playbook(
             return None, body
 
     return states, body
+
+
+def load_skill_success_criteria(memory_root: Path, skill_name: str) -> list:
+    """Return a skill's declared `success_criteria` (frontmatter), raw form.
+
+    Empty list if the skill declares none or the file is missing/malformed.
+    The returned shape is whatever YAML produced (bare strings and/or
+    compact single-key dicts) — normalize_criteria coerces it to the
+    canonical {"type": ...} shape the TaskGuard reads.
+    """
+    skill_path = memory_root / f"{skill_name}.md"
+    try:
+        text = skill_path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        return []
+    parsed, _ = _parse_skill_frontmatter(text)
+    raw = parsed.get("success_criteria")
+    return raw if isinstance(raw, list) else []
+
+
+def effective_success_criteria(task: dict, memory_root: Path) -> list[dict]:
+    """The criteria the TaskGuard should enforce for `task`.
+
+    A skill-backed task's quality bar lives with the SKILL (single source
+    of truth — Hermes/skill-creator pattern): the skill declares its
+    `success_criteria`, the task is just the schedule trigger. This folds
+    the skill's declared criteria into the task's own as an ADDITIVE union
+    (skill criteria added on top, exact duplicates deduped, nothing
+    removed) so a task can only ever be strengthened, never weakened.
+
+    Recomputed from the live skill file on every tick — there is no stored
+    merged copy to drift. Tasks with no skill, or a skill that declares no
+    criteria, are returned unchanged.
+    """
+    from skill_validation import normalize_criteria
+
+    merged = normalize_criteria(task.get("success_criteria") or [])
+    skill_name = task.get("skill")
+    if skill_name:
+        for c in normalize_criteria(load_skill_success_criteria(memory_root, skill_name)):
+            if c not in merged:
+                merged.append(c)
+    return merged
