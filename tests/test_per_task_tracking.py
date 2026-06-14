@@ -109,3 +109,35 @@ def test_empty_usage_dict_does_not_pollute_run(tmp_path):
     last = updated["last_runs"][-1]
     assert "input_tokens" not in last
     assert "cost_cents" not in last
+
+
+def test_attribute_delivered_text_retrofits_and_caps(tmp_path):
+    """The actual notify() text is retrofitted onto the success run so the
+    reflection can self-critique delivery quality. Capped to DELIVERED_TEXT_CAP."""
+    _, store = _store(tmp_path)
+    task = _new_task(store)
+    store.complete(task["id"], result="delivered")
+    assert "delivered_text" not in store.get(task["id"])["last_runs"][-1]
+
+    long_text = "Hacker News AI Summary " + ("x" * 5000)
+    store.attribute_delivered_text_to_last_run(task["id"], long_text)
+    last = store.get(task["id"])["last_runs"][-1]
+    assert last["delivered_text"].startswith("Hacker News AI Summary")
+    assert len(last["delivered_text"]) == store.DELIVERED_TEXT_CAP
+
+
+def test_attribute_delivered_text_no_op_on_empty_and_missing(tmp_path):
+    _, store = _store(tmp_path)
+    task = _new_task(store)
+    store.complete(task["id"], result="done")
+    store.attribute_delivered_text_to_last_run(task["id"], "   ")  # empty/whitespace
+    assert "delivered_text" not in store.get(task["id"])["last_runs"][-1]
+    # missing task must not raise
+    store.attribute_delivered_text_to_last_run("ghost", "hello")
+
+
+def test_attribute_delivered_text_no_op_on_empty_runs(tmp_path):
+    _, store = _store(tmp_path)
+    task = _new_task(store)
+    store.attribute_delivered_text_to_last_run(task["id"], "hello")
+    assert store.get(task["id"])["last_runs"] == []

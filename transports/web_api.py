@@ -860,8 +860,13 @@ async def tasks_run_stream(task_id: str, request: Request):
                 )
                 yield _format_sse_data("[silent drop — marked partial, will resume next tick]")
             else:
-                # complete_task ran — retrofit usage onto the success run.
+                # complete_task ran — retrofit usage and the delivered text
+                # onto the success run (delivered_text feeds the reflection's
+                # quality self-critique).
                 store.attribute_usage_to_last_run(task_id, usage)
+                store.attribute_delivered_text_to_last_run(
+                    task_id, guard.combined_notify_text()
+                )
                 yield _format_sse_data("[run-now finished]")
         finally:
             tools.set_pre_execute_hook(None)
