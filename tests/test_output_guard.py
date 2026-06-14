@@ -229,6 +229,42 @@ def test_no_claim_phrase_does_not_fire():
     assert clean == reply
 
 
+def test_per_tool_confab_fires_when_other_tools_succeeded():
+    # The exact live miss: propose_skill failed but read_file succeeded, so
+    # the all-tools-failed rule could not fire — and the reply phrasing
+    # ("is now submitted … awaits your approval") matches none of the
+    # generic claim phrases. The per-tool rule must still catch it.
+    reply = ("The edit is now submitted as a skill-modification proposal and "
+             "awaits your approval. Once you approve it the summary will improve.")
+    outcomes = [
+        {"name": "read_file", "args": {}, "success": True},
+        {"name": "propose_skill", "args": {}, "success": False},
+    ]
+    clean, violations = _guard_with_outcomes(reply, outcomes)
+    assert clean is None
+    assert "success_claim_tool_failed" in violations
+
+
+def test_per_tool_confab_not_fired_when_failure_acknowledged():
+    # Honest reply that owns the failure must pass even though propose_skill
+    # failed and the word "proposal" appears.
+    reply = ("I tried to file the skill proposal but it was rejected: the "
+             "frontmatter was invalid. I'll fix it and try again.")
+    outcomes = [
+        {"name": "read_file", "args": {}, "success": True},
+        {"name": "propose_skill", "args": {}, "success": False},
+    ]
+    clean, violations = _guard_with_outcomes(reply, outcomes)
+    assert "success_claim_tool_failed" not in violations
+
+
+def test_per_tool_confab_not_fired_when_that_tool_succeeded():
+    reply = "The edit is now submitted as a proposal and awaits your approval."
+    outcomes = [{"name": "propose_skill", "args": {}, "success": True}]
+    clean, violations = _guard_with_outcomes(reply, outcomes)
+    assert "success_claim_tool_failed" not in violations
+
+
 # ---- structured-failure recognition ------------------------------------
 
 
