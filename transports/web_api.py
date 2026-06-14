@@ -799,7 +799,11 @@ async def tasks_run_stream(task_id: str, request: Request):
     fresh_agent = Agent(memory=_chat_memory)
     prompt = HEARTBEAT_PROMPT_TEMPLATE.format(
         now_iso=now_user_tz().isoformat(timespec="seconds"),
-        due_tasks=_format_due_tasks([task]),
+        # forced=True: this is an operator-triggered "run now", not a
+        # scheduled tick. The task's due_at is its next recurrence (often
+        # days out); without this flag the model reads that future date and
+        # skips the task as "not due".
+        due_tasks=_format_due_tasks([task], forced=True),
     )
 
     guard = TaskGuard({task_id: task.get("success_criteria") or []})

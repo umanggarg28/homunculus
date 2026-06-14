@@ -158,3 +158,23 @@ def test_format_due_tasks_lists_already_delivered():
     }])
     assert "already_delivered" in block
     assert "two-sum, rotate-array" in block
+
+
+def test_format_due_tasks_forced_overrides_future_due_at():
+    """Manual run-now: a future due_at must not let the model skip the task.
+
+    Regression for the 2026-06-14 HN run where due_at was 3 days out, the
+    model read it as "not due", and bailed without running the skill."""
+    task = {
+        "id": "weekly-hn",
+        "title": "Weekly HN",
+        "due_at": "2026-06-17T09:00:00",  # future
+        "recurrence": "weekly",
+        "notify": True,
+        "description": "summarize HN",
+    }
+    forced = _format_due_tasks([task], forced=True)
+    assert "manually triggered" in forced.lower()
+    assert "regardless of the scheduled due_at" in forced
+    # Default (scheduled-tick) rendering carries no such override.
+    assert "manually triggered" not in _format_due_tasks([task]).lower()
