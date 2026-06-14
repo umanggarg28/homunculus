@@ -934,11 +934,23 @@ def _settle_silent_drop(
             )
 
 
-def _format_due_tasks(tasks: list[dict]) -> str:
+def _format_due_tasks(tasks: list[dict], forced: bool = False) -> str:
     import json as _json
     from tasks import read_scratchpad
     tasks_root = Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks"))
     lines = []
+    if forced:
+        # Manual "run now" (operator clicked ARMED / hit run-stream). The
+        # task's due_at is its NEXT scheduled occurrence, which is almost
+        # always in the future — without this the weak model reads that
+        # future date, concludes "nothing is due", and bails without
+        # running the skill (observed 2026-06-14). Override that reading.
+        lines.append(
+            "NOTE: the operator manually triggered the task(s) below RIGHT "
+            "NOW. Run them immediately regardless of the scheduled due_at "
+            "(which is just the next recurrence) — do NOT skip them as "
+            '"not due yet".'
+        )
     for task in tasks:
         block = (
             f"- id: {task.get('id')}\n"
