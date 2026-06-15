@@ -388,7 +388,7 @@ export function LandingPage() {
           {renderBrand()}
         </pre>
 
-        <div className="mt-4 mb-2 brut-body" style={{ color: "var(--color-text)", fontStyle: "italic" }}>
+        <div className="mt-4 mb-2 brut-body" style={{ color: "var(--color-text)" }}>
           <span style={{ color: "var(--color-accent)" }}>›</span> {tagline}
         </div>
         <div className="mb-4 brut-meta" style={{ color: "var(--color-text-muted)" }}>
