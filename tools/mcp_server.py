@@ -474,13 +474,23 @@ def rss_feed(
 
 
 @mcp.tool(annotations={"readOnlyHint": False})
-def quiz_pick() -> str:
-    """Pick the concept most due for spaced-repetition review and mark it
-    pending. Returns the topic to quiz; compose ONE question on it, send
-    via notify, then grade the user's reply next turn with quiz_grade.
-    If a question is already pending, re-ask that same topic. Scheduling
-    is handled for you — do not choose topics yourself."""
-    return coach.quiz_pick()
+def quiz_pick(
+    topic: Annotated[
+        str,
+        Field(description='Leave EMPTY on the first call. If the result is mode '
+              '"explore", choose a new sub-topic within the returned area, research '
+              'it, then call again with topic="<your chosen sub-topic>" to register '
+              'it as pending.'),
+    ] = "",
+) -> str:
+    """Decide what to quiz this tick. Call with no argument first: you get
+    either a due topic to REVIEW (already chosen for you) or an EXPLORE
+    directive (nothing due → pick a fresh sub-topic within the area, research
+    it, then call quiz_pick(topic=...) to commit it). The harness owns
+    scheduling/rotation; you own choosing+researching the sub-topic, writing
+    the question, and grading. Send the question via notify, grade the reply
+    next turn with quiz_grade."""
+    return coach.quiz_pick(topic)
 
 
 @mcp.tool(annotations={"readOnlyHint": False})

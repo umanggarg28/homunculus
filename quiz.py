@@ -64,6 +64,20 @@ class QuizStore:
 
     # --- topic management ------------------------------------------------
 
+    # --- learning area (the one human-set input) -------------------------
+
+    def set_area(self, area: str) -> str:
+        """Set the broad domain the coach quizzes within (e.g. 'deep
+        learning'). This is the ONLY human-supplied input — the agent
+        autonomously chooses sub-topics inside it and composes questions."""
+        data = self._load()
+        data["area"] = (area or "").strip()
+        self._save(data)
+        return data["area"]
+
+    def get_area(self) -> str:
+        return self._load().get("area", "")
+
     def add_topics(self, topics: list[str]) -> int:
         """Add new topics (idempotent by title). Returns count added."""
         data = self._load()
@@ -87,36 +101,83 @@ class QuizStore:
             self._save(data)
         return added
 
-    def _most_due(self, topics: list[dict]) -> dict | None:
-        """The topic with the earliest due_at (most overdue first)."""
-        if not topics:
-            return None
-        return min(topics, key=lambda t: t.get("due_at", ""))
+    def _due_topics(self, topics: list[dict], now: datetime) -> list[dict]:
+        return [t for t in topics if t.get("due_at", "") <= now.isoformat()]
 
-    def pick(self) -> dict | None:
-        """Select the most-due topic and mark it pending (awaiting an
-        answer). If a question is already pending, return that one
-        instead of stacking a second — the coach asks one at a time.
-        Returns None only when there are no topics at all.
+    def _set_pending(self, data: dict, topic_title: str, now: datetime) -> None:
+        data["pending"] = {"topic": topic_title, "asked_at": now.isoformat(timespec="seconds")}
+
+    def pick(self, topic: str = "") -> dict:
+        """Decide what to quiz, OR commit an agent-chosen topic.
+
+        Modes returned in the result dict:
+          - "review":  a due topic to re-ask (pending set) — harness picked it.
+          - "explore": nothing due → the agent should pick a NEW sub-topic
+                       within `area` (avoiding `covered`) and call
+                       pick(topic=<that topic>). No pending set yet.
+          - "ask":     the agent supplied `topic` — registered (if new) and
+                       marked pending, ready to ask.
+
+        Stale-pending rotation: a question asked on an EARLIER day that was
+        never graded is lapsed (rescheduled, no score change) instead of
+        being re-asked forever — the old behavior repeated the same
+        question every day until the user happened to grade it.
         """
         data = self._load()
-        if data.get("pending"):
-            pending_id = data["pending"]["topic"]
-            current = next((t for t in data["topics"] if t["topic"] == pending_id), None)
-            if current is not None:
-                return {**current, "already_pending": True}
-            # Pending points at a deleted topic — drop it and pick fresh.
+        now = _now()
+        topic = (topic or "").strip()
+
+        # Agent committed a (newly explored or re-asked) topic → register + pend.
+        if topic:
+            existing = next((t for t in data["topics"] if t["topic"] == topic), None)
+            if existing is None:
+                existing = {
+                    "topic": topic, "box": 0,
+                    "due_at": now.isoformat(timespec="seconds"),
+                    "last_reviewed": None, "seen": 0, "correct": 0,
+                }
+                data["topics"].append(existing)
+            self._set_pending(data, topic, now)
+            self._save(data)
+            return {**existing, "mode": "ask", "already_pending": False}
+
+        # Lapse a stale pending (asked on a prior day, never graded).
+        pending = data.get("pending")
+        if pending:
+            asked = pending.get("asked_at", "")
+            if asked and asked[:10] >= now.date().isoformat():
+                # Asked today, not yet graded — re-ask the SAME one (don't
+                # stack two questions in a day).
+                cur = next((t for t in data["topics"] if t["topic"] == pending["topic"]), None)
+                if cur is not None:
+                    return {**cur, "mode": "review", "already_pending": True}
+            lapsed = next((t for t in data["topics"] if t["topic"] == pending["topic"]), None)
+            if lapsed is not None:
+                iv = _INTERVALS_DAYS[min(int(lapsed.get("box", 0)), _MAX_BOX)]
+                lapsed["due_at"] = (now + timedelta(days=iv)).isoformat(timespec="seconds")
             data["pending"] = None
 
-        topic = self._most_due(data["topics"])
-        if topic is None:
+        # A due topic to review? Most-overdue first; tie-break on oldest
+        # last_reviewed so equal-due topics rotate instead of repeating.
+        due = self._due_topics(data["topics"], now)
+        if due:
+            chosen = min(due, key=lambda t: (t.get("due_at", ""), t.get("last_reviewed") or ""))
+            self._set_pending(data, chosen["topic"], now)
             self._save(data)
-            return None
-        now = _now()
-        data["pending"] = {"topic": topic["topic"], "asked_at": now.isoformat(timespec="seconds")}
+            overdue_days = (now - datetime.fromisoformat(chosen["due_at"])).days
+            return {**chosen, "mode": "review", "already_pending": False,
+                    "overdue_days": max(0, overdue_days)}
+
+        # Nothing due → tell the agent to EXPLORE a new sub-topic in the area.
         self._save(data)
-        overdue_days = (now - datetime.fromisoformat(topic["due_at"])).days
-        return {**topic, "already_pending": False, "overdue_days": max(0, overdue_days)}
+        covered = [
+            t["topic"] for t in sorted(
+                data["topics"],
+                key=lambda t: t.get("last_reviewed") or t.get("due_at", ""),
+                reverse=True,
+            )[:20]
+        ]
+        return {"mode": "explore", "area": data.get("area", ""), "covered": covered}
 
     def grade(self, outcome: str) -> dict:
         """Apply an outcome to the pending topic and reschedule it.
