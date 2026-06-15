@@ -829,7 +829,17 @@ async def tasks_run_stream(task_id: str, request: Request):
                 # mid-run model text) OUT of /api/chat/history — _visible_
                 # chat_history drops _NON_CHAT_SOURCES. Without this the
                 # tick prompt rendered as a fake "YOU" bubble in chat.
-                for chunk in fresh_agent.chat_stream(prompt, source="heartbeat"):
+                #
+                # expected_completions=1: a run-now drives exactly ONE task,
+                # so exit the loop the moment it's closed (complete/record_
+                # failure/cancel/continue). Without this the loop kept
+                # prodding under tool_choice=required AFTER a successful
+                # complete_task, and the model called record_failure on the
+                # just-completed task — flipping a real success to a failure
+                # (observed 2026-06-15).
+                for chunk in fresh_agent.chat_stream(
+                    prompt, source="heartbeat", expected_completions=1,
+                ):
                     yield _format_sse_data(chunk)
             except Exception as e:
                 err = f"{type(e).__name__}: {e}"

@@ -296,3 +296,17 @@ def test_heartbeat_tick_passes_expected_completions():
         "to agent.chat — otherwise the loop-exit branch never fires in "
         "production."
     )
+
+
+def test_run_stream_passes_expected_completions():
+    """Static check: the run-now/run-stream endpoint drives exactly ONE
+    task, so it must pass expected_completions=1. Without it the loop kept
+    prodding under tool_choice=required after a successful complete_task and
+    the model called record_failure on the just-completed task, flipping a
+    real success to a failure (observed 2026-06-15)."""
+    from pathlib import Path
+    src = (Path(__file__).parent.parent / "transports" / "web_api.py").read_text()
+    assert "expected_completions=1" in src, (
+        "run-stream must pass expected_completions=1 to chat_stream so the "
+        "loop exits the moment the single task is closed."
+    )
