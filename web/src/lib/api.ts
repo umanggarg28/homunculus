@@ -150,6 +150,13 @@ export const api = {
   proposals: (status: "pending" | "approved" | "rejected" | "all" = "pending") =>
     jsonGet<Proposal[]>(`/proposals?status=${status}`),
 
+  // Whether the agent is waiting on input from the user (e.g. a quiz
+  // answer). Drives the CHAT sidebar badge.
+  inputExpected: () =>
+    jsonGet<{ expected: boolean; reason: string | null; detail: string | null }>(
+      "/input-expected",
+    ),
+
   proposalApprove: (id: string) =>
     fetch(`${API_BASE}/proposals/${encodeURIComponent(id)}/approve`, {
       method: "POST",

@@ -615,6 +615,21 @@ def proposals_list(status: str = "pending") -> JSONResponse:
     return JSONResponse(_proposal_store().list(status))
 
 
+@app.get("/api/input-expected", dependencies=[Depends(require_web_auth)])
+def input_expected() -> JSONResponse:
+    """Whether the agent is waiting on input from the user — drives the CHAT
+    sidebar badge. Currently the one persisted 'your turn' state is an
+    unanswered quiz question (the agent asked, awaits your answer)."""
+    try:
+        from quiz import _store
+        pending = (_store()._load().get("pending") or {}).get("topic")
+    except Exception:
+        pending = None
+    if pending:
+        return JSONResponse({"expected": True, "reason": "quiz", "detail": pending})
+    return JSONResponse({"expected": False, "reason": None, "detail": None})
+
+
 @app.post("/api/proposals/{proposal_id}/approve", dependencies=[Depends(require_web_auth)])
 def proposals_approve(proposal_id: str) -> JSONResponse:
     """Approve a pending proposal: re-validate against the live tool

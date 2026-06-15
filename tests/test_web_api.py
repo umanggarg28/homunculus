@@ -492,3 +492,26 @@ def test_double_approve_conflict(client, web_api):
     p = _file_proposal(web_api)
     assert client.post(f"/api/proposals/{p['id']}/approve").status_code == 200
     assert client.post(f"/api/proposals/{p['id']}/approve").status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# /api/input-expected — drives the CHAT "your turn" sidebar badge
+# ---------------------------------------------------------------------------
+
+
+def test_input_expected_reflects_pending_quiz(client, tmp_path, monkeypatch):
+    qf = tmp_path / "quiz.json"
+    monkeypatch.setenv("HOMUNCULUS_QUIZ_FILE", str(qf))
+
+    qf.write_text(json.dumps({"area": "deep learning", "topics": [], "pending": None}))
+    r = client.get("/api/input-expected").json()
+    assert r["expected"] is False
+
+    qf.write_text(json.dumps({
+        "area": "deep learning", "topics": [],
+        "pending": {"topic": "attention", "asked_at": "2026-06-16T20:00:00"},
+    }))
+    r = client.get("/api/input-expected").json()
+    assert r["expected"] is True
+    assert r["reason"] == "quiz"
+    assert r["detail"] == "attention"
