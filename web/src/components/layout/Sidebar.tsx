@@ -66,6 +66,20 @@ export function Sidebar() {
     };
   }, []);
 
+  // The agent is waiting on YOUR input (e.g. an unanswered quiz question)
+  // → a badge on CHAT so you know it's your turn even from another page.
+  const [inputExpected, setInputExpected] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      api.inputExpected()
+        .then((r) => { if (!cancelled) setInputExpected(Boolean(r.expected)); })
+        .catch(() => undefined);
+    load();
+    const t = setInterval(load, 20_000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, []);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -88,6 +102,11 @@ export function Sidebar() {
       }}
     >
       <style>{`
+        @keyframes hm-input-pulse {
+          0%, 100% { opacity: 0.55; }
+          50%      { opacity: 1; }
+        }
+        .hm-input-dot { animation: hm-input-pulse 1.6s ease-in-out infinite; }
         .brut-sidebar .nav-row {
           color: var(--color-text-dim);
           background: transparent;
@@ -248,6 +267,21 @@ export function Sidebar() {
                         >
                           {pendingProposals}
                         </span>
+                      )}
+                      {item.to === "/chat" && inputExpected && (
+                        <span
+                          className="hm-input-dot"
+                          title="The agent is waiting for your reply"
+                          aria-label="reply expected"
+                          style={{
+                            width: 7,
+                            height: 7,
+                            borderRadius: "50%",
+                            background: "var(--color-warning)",
+                            boxShadow: "0 0 8px color-mix(in srgb, var(--color-warning) 70%, transparent)",
+                            flex: "0 0 auto",
+                          }}
+                        />
                       )}
                       {item.kbd && (
                         <span

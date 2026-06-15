@@ -2119,7 +2119,7 @@ class Agent:
         self._agents_md_cache = (str(path), mtime, content)
         return content
 
-    def _current_system_prompt(self) -> str:
+    def _current_system_prompt(self, source: str = "") -> str:
         """Build the system prompt for this turn.
 
         STRUCTURE FOR PROVIDER CACHE HIT RATE — order matters here.
@@ -2190,6 +2190,29 @@ class Agent:
             state = self.memory.world_state.read()
             if state:
                 prompt += "\n\n# Session world state\n\n" + json.dumps(state, indent=2)
+
+        # Pending-quiz grading — CHAT turns only. The quiz is asked from a
+        # heartbeat tick and its skill (with the grading protocol) is never
+        # loaded into a chat turn, so without this the chat agent doesn't
+        # know to grade the user's answer — questions went ungraded forever
+        # (every topic stuck at seen=0). The question text itself reaches
+        # chat via the notification drain; this adds the "grade it" awareness
+        # + the pending topic. Re-rendered each turn, so it never stacks.
+        if source in ("web", "telegram", "repl"):
+            try:
+                from quiz import _store
+                pending = (_store()._load().get("pending") or {}).get("topic")
+            except Exception:
+                pending = None
+            if pending:
+                prompt += (
+                    "\n\n# Pending quiz — the user may be answering\n"
+                    f'You posed a quiz question on "{pending}" that is awaiting an '
+                    "answer. If the user's message IS their answer, judge it "
+                    "(correct / partial / wrong), call quiz_grade(outcome), then "
+                    "reply with brief warm feedback and when it'll resurface. If "
+                    "the message is clearly not about the quiz, ignore this."
+                )
 
         # Recent rate-limit signal. When a provider just cooled in the
         # last 2 minutes, nudge the agent to checkpoint / continue_task
@@ -2269,7 +2292,7 @@ class Agent:
 
         # Refresh the system prompt with the current date/time each turn so
         # the agent always has accurate temporal context (e.g. for scheduling).
-        self.history[0]["content"] = self._current_system_prompt()
+        self.history[0]["content"] = self._current_system_prompt(source)
 
         evicted = _evict_prior_tool_results(self.history)
         if evicted:
