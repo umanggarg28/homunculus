@@ -5,7 +5,8 @@ Run once after deploying the quiz tools:
   $ docker compose exec heartbeat uv run python /app/scripts/bootstrap_quiz_coach.py
 
 Idempotent:
-  - seeds the topic bank (add_topics skips ones already present)
+  - sets the learning AREA (the agent grows the curriculum itself — no
+    hardcoded topic list)
   - writes skill_quiz_coach.md only if absent
   - creates the evening "quiz-coach" task only if absent
 
@@ -24,104 +25,67 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 os.environ.setdefault("HOMUNCULUS_USER_TZ_FILE", str(REPO / "workspace" / "user_tz.txt"))
 
-# Deep-learning + ML-interview concepts, weighted to what Umang is
-# building from scratch (nanoGPT, micrograd, transformers, RL). The bank
-# grows over time — the agent can add topics via the store too.
-SEED_TOPICS = [
-    "Backpropagation: deriving the chain rule through a computation graph",
-    "Why we need non-linear activation functions",
-    "Vanishing and exploding gradients: causes and fixes",
-    "Batch normalization: what it normalizes and why it helps",
-    "Layer normalization vs batch normalization",
-    "Dropout: train-time vs test-time behavior",
-    "Self-attention: the query/key/value formulation",
-    "Multi-head attention: why multiple heads",
-    "Positional encodings in transformers",
-    "Why scaled dot-product attention divides by sqrt(d_k)",
-    "Cross-entropy loss and its gradient w.r.t. logits",
-    "Softmax: numerical stability via the max-subtraction trick",
-    "Adam optimizer: what the first and second moments track",
-    "Learning rate warmup and decay schedules",
-    "Weight initialization: Xavier vs He",
-    "The bias-variance tradeoff",
-    "Overfitting: how to detect and regularize against it",
-    "L1 vs L2 regularization: sparsity vs weight shrinkage",
-    "Gradient descent variants: batch, mini-batch, stochastic",
-    "Residual connections: why they ease deep-network training",
-    "Tokenization: BPE and why subword units",
-    "KV-cache in autoregressive decoding",
-    "Temperature and top-k/top-p sampling",
-    "The exploration-exploitation tradeoff in RL",
-    "Policy gradients: the REINFORCE estimator",
-    "Q-learning vs policy-based methods",
-    "Embeddings: what a learned vector space captures",
-    "Convolution: parameter sharing and translation equivariance",
-    "Why transformers replaced RNNs for long sequences",
-    "Teacher forcing and exposure bias",
-]
+# The ONLY human-supplied input: the broad learning domain. The agent
+# autonomously chooses sub-topics within it, researches them, and grows
+# the curriculum — there is no hardcoded topic list (that would defeat the
+# point of an autonomous coach). Override with HOMUNCULUS_QUIZ_AREA.
+DEFAULT_AREA = "deep learning"
 
 SKILL_BODY = """---
 name: skill_quiz_coach
-description: Run the daily spaced-repetition quiz — ask one concept in the evening, grade the user's reply, let the harness schedule what's due next.
+description: Daily self-directed spaced-repetition coach — autonomously choose and research a sub-topic within the user's learning area, ask one question, grade the reply.
 type: skill
-states:
-  - tool: quiz_pick
-  - tool: notify
-  - tool: complete_task
 related: [[skill_daily_brief]]
 ---
 
-# Quiz Coach — execution playbook
+# Quiz Coach — autonomous execution playbook
 
 ## What this is
-A spaced-repetition coach. The HARNESS decides which concept is due
-(quiz_pick) and how the interval moves after grading (quiz_grade) —
-you only write the question and judge the answer. Never pick topics
-yourself; never decide scheduling.
+A SELF-DIRECTED spaced-repetition coach for the user's chosen learning
+AREA. The harness owns scheduling (what's due, intervals, rotation); YOU
+own choosing which sub-topic to explore, researching it, writing the
+question, and grading. There is NO fixed topic list — you grow the
+curriculum yourself.
 
 ## Phase 1 — Evening tick (the recurring task fires)
 
-1. **Call `quiz_pick()`.** It returns the concept to quiz and marks it
-   pending. If `status` is `no_topics`, send a one-line note saying the
-   bank is empty and complete the task. If `already_pending`, the last
-   question was never answered — re-ask that SAME topic.
-2. **Compose ONE question** on the returned `topic`. Make it a real
-   question that probes understanding, not a definition prompt. Vary
-   the angle on repeat topics (derive it, compare it, apply it).
-3. **Call `notify(text=...)`** with the question. Open with `🧠 Quiz —`
-   so it's recognizable. Tell the user to just reply with their answer.
+1. **Call `quiz_pick()`** with no argument. Branch on `status`:
+   - `"picked"` (a due topic to review) → go to step 3 with `topic`.
+   - `"explore"` (nothing due) → choose ONE specific sub-topic within the
+     returned `area` that is NOT in `recently_covered`, **`web_search` it**
+     to ground an accurate, current question, then call
+     `quiz_pick(topic="<the sub-topic you chose>")` to register it.
+   - `"pending"` → a prior question is still open today; re-ask that SAME
+     topic.
+   - `"explore"` with an empty `area` → ask the user which broad domain to
+     be quizzed on; do NOT guess one.
+2. **Compose ONE question** on the topic — probe understanding, not a
+   definition prompt. web_search first if accuracy/recency helps.
+3. **Call `notify(text=...)`** opening with `🧠 Quiz —` so it's
+   recognizable. Tell the user to just reply with their answer.
 4. **Call `complete_task(task_id="quiz-coach", result="Asked: <topic>")`.**
 
 Do NOT grade in this phase — the user hasn't answered yet.
 
 ## Phase 2 — Grading (when the user replies in chat)
 
-When the user sends a message that is clearly answering the quiz
-question (you'll see your `🧠 Quiz` question earlier in the
-conversation, and quiz_pick state is pending):
+When the user's message clearly answers your `🧠 Quiz` question:
 
-1. Judge their answer against the concept: `correct` (got the key
-   idea), `partial` (right direction, missed something important), or
-   `wrong` (incorrect or "I don't know").
-2. **Call `quiz_grade(outcome=...)`** with that judgment.
-3. Reply with brief, warm feedback: confirm what they got right, fill
-   the gap if any, in 2–4 sentences. Mention when it'll come back up
-   (quiz_grade returns `next_review_in_days`).
+1. Judge it: `correct` (got the key idea), `partial` (right direction,
+   missed something), or `wrong` (incorrect / "I don't know").
+2. **Call `quiz_grade(outcome=...)`.**
+3. Reply with brief, warm feedback (2–4 sentences); mention when it comes
+   back up (`quiz_grade` returns `next_review_in_days`).
 
-Be encouraging. The point is durable learning, not a test score. A
-"wrong" is a topic to revisit, said kindly.
+Be encouraging — durable learning, not a test score.
 
 ## Success criteria (mirror the task)
-- `notify_called` — exactly one notify() in the evening tick
-- `notify_min_chars` ≥ 40
-- `notify_contains` "Quiz"
+- `notify_called`, `notify_min_chars` ≥ 40, `notify_contains` "Quiz"
 
 ## Watch outs
-- One question per evening. quiz_pick gives one; don't batch.
-- If the user ignores a question for days, quiz_pick keeps returning it
-  as pending — just re-ask it; nothing is lost.
-- Grading is a chat interaction, not a scheduled task. If the user
-  answers hours later, grade it then.
+- ONE question per evening; quiz_pick gives one focus — don't batch.
+- NEVER pull from a fixed list — choose and research sub-topics yourself.
+- Vary the angle; don't repeat a recently-covered sub-topic.
 """
 
 
@@ -139,11 +103,13 @@ def _next_8pm_user_naive() -> str:
     return target.isoformat(timespec="seconds")
 
 
-def _seed_topics() -> None:
+def _set_area() -> None:
     from quiz import QuizStore
     path = Path(os.environ.get("HOMUNCULUS_QUIZ_FILE", str(REPO / "workspace" / "quiz.json")))
-    added = QuizStore(path).add_topics(SEED_TOPICS)
-    print(f"[bootstrap_quiz_coach] seeded {added} new topics into {path}")
+    area = os.environ.get("HOMUNCULUS_QUIZ_AREA", DEFAULT_AREA)
+    QuizStore(path).set_area(area)
+    print(f"[bootstrap_quiz_coach] set learning area to {area!r} in {path}")
+    print("[bootstrap_quiz_coach] no topics seeded — the agent grows the curriculum itself")
 
 
 def _ensure_skill_file() -> None:
@@ -160,7 +126,7 @@ def _ensure_skill_file() -> None:
 def main() -> int:
     from tasks import TaskStore
 
-    _seed_topics()
+    _set_area()
     _ensure_skill_file()
 
     store = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", str(REPO / "workspace" / "tasks"))))
