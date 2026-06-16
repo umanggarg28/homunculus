@@ -99,8 +99,8 @@ def deliver(text: str) -> dict:
     the heartbeat's autonomous fallback.
 
     The web app is treated as a guaranteed channel: we record FIRST so a delivery
-    is never lost even when every push channel is down — exactly the 2026-06 India
-    Telegram block. Push channels are best-effort on top. Returns a dict:
+    is never lost even when every push channel is unavailable. Push channels are
+    best-effort on top. Returns a dict:
     {recorded: bool, delivered: [names], failed: [(name, err)]}.
     """
     recorded = _record_to_feed(text)
@@ -120,8 +120,8 @@ def deliver(text: str) -> dict:
 
 def _channel_senders() -> list[tuple[str, "callable"]]:
     """Configured push channels, in order. Additive: a channel is included only
-    when its credentials are present, so Telegram resuming (post-block) or Discord
-    being added needs no code change — just env vars."""
+    when its credentials are present, so enabling or disabling a channel needs no
+    code change — just env vars."""
     senders: list[tuple[str, callable]] = []
     if os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_ALLOWED_USER_ID"):
         senders.append(("telegram", _send_to_telegram))
@@ -148,19 +148,16 @@ def _format_delivery(text: str, result: dict) -> str:
     return "Notification delivered — " + "; ".join(parts) + "."
 
 
-# A single Telegram send timing out used to discard the whole delivery —
-# observed live 2026-06-16: a generated quiz question was lost to one 20s
-# timeout and recorded as a task failure. Transient network blips (timeout,
-# connect reset, DNS hiccup) are retried with short backoff before giving up;
-# only a persistent failure surfaces as an error. Zero LLM cost.
+# Transient send failures (timeout, connect reset, DNS hiccup) are retried with
+# short backoff so one blip doesn't discard a delivery; only a persistent failure
+# surfaces as an error. Zero LLM cost.
 NOTIFY_SEND_ATTEMPTS = int(os.environ.get("HOMUNCULUS_NOTIFY_SEND_ATTEMPTS", "3"))
 _NOTIFY_BACKOFF_S = (1.0, 2.5)  # waited before attempt 2, attempt 3
-# Explicit per-phase timeouts. The connect cap is short on purpose: when a
-# channel is *blocked* (e.g. the India Telegram block — TCP connect just hangs),
-# the default ~equal-to-timeout dual-stack connect made one attempt take ~20s,
-# so 3 retries blew past the 60s tool-execution wrapper and the brief ground for
-# ~8 min. A 5s connect cap means 3 attempts + backoff ≈ 18s → notify fails fast
-# and clean, the agent records a failure instead of stalling the loop.
+# Short connect cap on purpose: when a channel host is unreachable, TCP connect
+# hangs, and a default dual-stack connect (~20s) × retries would exceed the 60s
+# tool-execution wrapper and stall the agent loop. A 5s connect cap keeps three
+# attempts + backoff to ~18s, so notify fails fast and the agent can record a
+# clean failure instead of grinding.
 _NOTIFY_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=5.0)
 
 

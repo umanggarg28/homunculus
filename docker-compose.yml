@@ -77,6 +77,24 @@ services:
     restart: unless-stopped
     # No stdin_open/tty — daemon that long-polls Telegram for messages.
 
+  # Discord — a parallel chat channel alongside Telegram. Relay transport:
+  # outbound-only, no inbound reachability needed. Inert until DISCORD_BOT_TOKEN
+  # is set in .env, so it's safe to leave defined.
+  discord:
+    build: .
+    image: homunculus:phase1
+    env_file: .env
+    environment:
+      HOMUNCULUS_SERVICE: discord
+      DOCKER_HOST: tcp://docker-proxy:2375
+      PYTHONPATH: /app
+    working_dir: /app/workspace
+    volumes:
+      - ./workspace:/app/workspace  # Same workspace mount → shared memory
+      - /var/run/docker.sock:/var/run/docker.sock  # for python_exec sandbox
+    command: ["uv", "run", "--project", "/app", "python", "-m", "transports.discord"]
+    restart: unless-stopped
+
   web:
     build: .
     image: homunculus:phase1

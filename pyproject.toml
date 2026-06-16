@@ -16,6 +16,7 @@ dependencies = [
     "watchfiles>=0.24",
     "mcp-server-fetch>=2025.1.17",
     "markdown-it-py>=3.0",
+    "discord-py>=2.3",
 ]
 
 [dependency-groups]
