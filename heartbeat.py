@@ -760,6 +760,22 @@ def tick(memory: Memory, model: str | None) -> None:
             print(f"[heartbeat] post-tick check failed for {task['id']}: {inner}", flush=True)
 
 
+def _known_tool_names() -> set[str] | None:
+    """Live registered tool names from the tool catalogue, or None if it
+    can't be read (then the capability gate is skipped — fail open rather
+    than block every task on an introspection hiccup)."""
+    try:
+        names: set[str] = set()
+        for s in getattr(tools, "SCHEMAS", []) or []:
+            fn = s.get("function") if isinstance(s, dict) else None
+            name = (fn or {}).get("name") if fn else (s.get("name") if isinstance(s, dict) else None)
+            if name:
+                names.add(name)
+        return names or None
+    except Exception:
+        return None
+
+
 def _plan_tick(
     due_tasks: list[dict[str, Any]],
     memory_root: Path,
@@ -780,7 +796,13 @@ def _plan_tick(
     own instructions (observed live 2026-06-11: delivered an algomap.io
     link for a task whose playbook says LeetCode GraphQL only).
     """
-    from skills import effective_success_criteria, load_skill_playbook
+    from skills import (
+        effective_success_criteria,
+        load_skill_playbook,
+        load_skill_requires_tools,
+    )
+
+    known_tools = _known_tool_names()
 
     playbooks: list[str] = []
     for t in due_tasks:
@@ -796,6 +818,36 @@ def _plan_tick(
                 flush=True,
             )
             continue
+        # Capability gate (Hermes requires_tools): if the skill depends on tools
+        # that aren't registered, do NOT inject its playbook — that's the path
+        # that made the model fabricate (the morning-brief weather/calendar).
+        # Inject a blocker directive instead so the agent records a clean
+        # failure rather than improvising a capability it doesn't have.
+        if known_tools is not None:
+            missing = [tn for tn in load_skill_requires_tools(memory_root, skill_name)
+                       if tn not in known_tools]
+            if missing:
+                print(
+                    f"[heartbeat] {t['id']!r} skill {skill_name!r} requires "
+                    f"unavailable tools {missing}; blocking (no fabrication)",
+                    flush=True,
+                )
+                events.emit(
+                    "skill_capability_missing",
+                    name=t["id"],
+                    text=f"{skill_name} requires {missing}",
+                    result="blocked — record_failure",
+                )
+                playbooks.append(
+                    f"# Task '{t['id']}' BLOCKED — missing capability\n\n"
+                    f"The skill {skill_name!r} requires tool(s) that are not "
+                    f"available right now: {missing}. You CANNOT complete this "
+                    f"task and you must NOT improvise or fabricate the missing "
+                    f"data. Call record_failure(task_id='{t['id']}', "
+                    f"reason='skill requires unavailable tool(s): {missing}') "
+                    f"and do nothing else for this task."
+                )
+                continue
         # Skill is the source of truth for its own quality bar: fold any
         # success_criteria it declares into the task's effective criteria
         # (additive — never weakens the task). Both the prompt

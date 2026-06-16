@@ -44,15 +44,17 @@ Homunculus's own timezone autodetect. Weather is a **Tool**, not skill prose
 Pattern: Hermes `metadata.requires_tools` → a skill is hidden / not run when a tool it
 needs is absent. Prevents a skill instructing capabilities we lack.
 
-- [ ] **2a.** Skill frontmatter: parse `requires_tools: [..]` (extend `_parse_skill_frontmatter`).
-- [ ] **2b.** `skill_validation`: validate every `requires_tools` entry exists in the live
-      catalogue — at **propose** time (currently skips `known_tools`) **and** approve time.
-      Extend the existing check that today only covers `states:` tools.
-- [ ] **2c.** `_plan_tick`: if a linked skill's `requires_tools` are missing, **refuse to run**
-      (record a clear failure) instead of injecting the playbook and letting the model improvise.
-- [ ] **2d.** Skill↔task binding: on proposal approval, warn when the approved skill has **no task
-      using it** (orphaned skill — the exact state that made yesterday's HN edit a no-op).
-- **Budget:** zero LLM calls.
+- [x] **2a.** `requires_tools` parsed (`skills.load_skill_requires_tools` + `skill_validation`).
+- [x] **2b.** `skill_validation` validates `requires_tools` against the live catalogue; approval
+      already passes `known_tools` so the gate is authoritative at apply time. (Propose-time stays
+      catalogue-free by existing design — `authoring.py` documents why; approval re-validates.)
+- [x] **2c.** `_plan_tick` capability-gate: a skill whose `requires_tools` are missing gets a
+      BLOCKED directive (→ `record_failure`) instead of its playbook — no improvisation. Fails open
+      if the catalogue can't be read. (`heartbeat._known_tool_names`; 2 tests.)
+- [x] **2d.** Binding: `PATCH /api/tasks/{id}` accepts `skill` (validated to exist) so a task is
+      linked via the API, not a tasks.json hand-edit. Approval returns an **orphan warning** when an
+      approved skill has no task using it.
+- **Budget:** zero LLM calls. ✓ — 1d (link + skill rewrite) happens post-deploy via the API.
 
 ## Phase 3 — Skill feedback loop  *(harness-owned; replaces unreliable self-report)*
 

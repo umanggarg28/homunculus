@@ -358,6 +358,25 @@ def load_skill_success_criteria(memory_root: Path, skill_name: str) -> list:
     return raw if isinstance(raw, list) else []
 
 
+def load_skill_requires_tools(memory_root: Path, skill_name: str) -> list[str]:
+    """Return a skill's declared `requires_tools` (frontmatter) — the tools the
+    skill's procedure depends on (Hermes pattern). Empty list if none declared
+    or the file is missing/malformed. The heartbeat reads this to refuse running
+    a skill whose required tools aren't registered, rather than letting the
+    model improvise a capability it doesn't have (the morning-brief fabrication).
+    """
+    skill_path = memory_root / f"{skill_name}.md"
+    try:
+        text = skill_path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        return []
+    parsed, _ = _parse_skill_frontmatter(text)
+    raw = parsed.get("requires_tools")
+    if not isinstance(raw, list):
+        return []
+    return [t for t in raw if isinstance(t, str) and t]
+
+
 def effective_success_criteria(task: dict, memory_root: Path) -> list[dict]:
     """The criteria the TaskGuard should enforce for `task`.
 

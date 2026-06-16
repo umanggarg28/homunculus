@@ -723,9 +723,23 @@ def proposals_approve(proposal_id: str) -> JSONResponse:
             raise HTTPException(400, f"skill saved (v{version}) but task creation failed: {e}")
 
     store.mark_approved(proposal_id, note=f"applied as v{version}")
+
+    # Orphan check: an approved skill that no task runs is a no-op — exactly the
+    # state that made yesterday's brief HN edit do nothing (the task had
+    # skill=None). Warn so the operator links it (PATCH /api/tasks/<id> {skill}).
+    warning = None
+    if created_task is None:
+        linked = any((t.get("skill") == p["skill_name"]) for t in _task_store().all())
+        if not linked:
+            warning = (
+                f"Skill {p['skill_name']} is approved but NO task is linked to it — "
+                f"it won't run until you link a task (set its skill to "
+                f"{p['skill_name']})."
+            )
+
     return JSONResponse({
         "ok": True, "skill": p["skill_name"], "version": version,
-        "task": created_task,
+        "task": created_task, "warning": warning,
     })
 
 
@@ -775,6 +789,14 @@ async def tasks_create(request: Request) -> JSONResponse:
 @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_web_auth)])
 async def tasks_update(task_id: str, request: Request) -> JSONResponse:
     body = await request.json() or {}
+    # Linking a task to a skill is a real operation (not a tasks.json hand-edit):
+    # this is what binds a skill to the task that runs it, so an approved skill
+    # can't sit orphaned (the morning-brief bug). A non-empty skill must exist.
+    skill = body.get("skill")
+    if skill:
+        from skills import Skills
+        if Skills(MEMORY_DIR).load(skill) is None:
+            raise HTTPException(400, f"skill {skill!r} does not exist — create it first")
     try:
         task = _task_store().update(
             task_id,
@@ -784,6 +806,7 @@ async def tasks_update(task_id: str, request: Request) -> JSONResponse:
             recurrence=body.get("recurrence"),
             notify=body.get("notify"),
             success_criteria=body.get("success_criteria"),
+            skill=skill,
         )
     except KeyError:
         raise HTTPException(404, f"task '{task_id}' not found")
