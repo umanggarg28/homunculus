@@ -295,6 +295,15 @@ class TaskGuard:
                 self._completed_tasks.add(task_id)
             return None
 
+        if name == "rate_skill":
+            # The harness rates skills from the authoritative run verdict after
+            # the tick (success vs record_failure), so a self-reported rating
+            # here would double-count or fabricate. Suppress it during ticks.
+            return (
+                "Noted — skill outcomes for scheduled runs are recorded "
+                "automatically from the task result; no rate_skill call needed."
+            )
+
         return None  # all other tools pass through unmodified
 
     def criteria_failures(self, task_id: str) -> list[str]:
@@ -739,6 +748,7 @@ def tick(memory: Memory, model: str | None) -> None:
                     task["id"], guard.combined_notify_text()
                 )
                 _settle_quiz_pending(task, delivered=True)
+                _rate_task_skill(memory, task, "success")
                 continue
             # Distinguish the failure shape so we can act on it differently:
             #   - silent drop  → agent never called complete_task or record_failure.
@@ -748,11 +758,16 @@ def tick(memory: Memory, model: str | None) -> None:
             #                     already in the task's last_runs; don't double-log.
             if task["id"] not in silently_dropped:
                 # Agent explicitly closed the task (record_failure /
-                # cancel_task / continue_task) — respect its decision. The
-                # quiz wasn't delivered (no due_at advance), so drop any pending
-                # it armed — otherwise the CHAT badge lights for a question the
-                # user never got (the 2026-06-16 notify-timeout case).
+                # cancel_task / continue_task) — respect its decision. A
+                # non-delivered run drops any quiz pending it armed so the CHAT
+                # badge never lights for a question the user never received.
                 _settle_quiz_pending(task, delivered=False)
+                # Rate the skill a failure only when the close was an actual
+                # record_failure (not a user cancel / deferral) — the recorded
+                # run status is the authoritative signal.
+                last_runs = current.get("last_runs") or []
+                if last_runs and last_runs[-1].get("status") == "failure":
+                    _rate_task_skill(memory, task, "failure")
                 continue
             _settle_silent_drop(
                 tasks,
@@ -916,6 +931,23 @@ def _settle_quiz_pending(task: dict[str, Any], *, delivered: bool) -> None:
             _store().clear_pending()
     except Exception as e:
         print(f"[heartbeat] quiz pending settle failed for {task['id']}: {e}", flush=True)
+
+
+def _rate_task_skill(memory: "Memory", task: dict[str, Any], outcome: str) -> None:
+    """Record a skill's success/failure from the harness's authoritative verdict,
+    not the model's self-report. The weak model is unreliable about calling
+    rate_skill (and can fabricate it); the harness already knows whether the run
+    delivered, so it owns the signal that drives the reflection's skill review.
+    No-op for tasks without a linked skill."""
+    skill_name = task.get("skill")
+    if not skill_name:
+        return
+    try:
+        # rate_skill slugifies and re-prepends `skill_`; strip the prefix so it
+        # resolves to skill_<slug>.md directly.
+        memory.rate_skill(skill_name.removeprefix("skill_"), outcome)
+    except Exception as e:
+        print(f"[heartbeat] rate_skill({skill_name}, {outcome}) failed: {e}", flush=True)
 
 
 def _settle_silent_drop(
