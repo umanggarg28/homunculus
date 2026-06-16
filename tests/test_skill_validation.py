@@ -38,6 +38,49 @@ def test_well_formed_skill_passes():
     assert r.states_tools == ["rss_feed", "notify"]
 
 
+REQUIRES = """---
+name: skill_daily_brief
+description: Morning brief with weather and HN.
+type: skill
+requires_tools:
+  - get_weather
+  - task_health_summary
+---
+
+# Daily brief — playbook
+
+1. get_weather() for today's conditions.
+2. task_health_summary() for commitments.
+3. notify the brief.
+"""
+
+
+def test_requires_tools_all_present_passes():
+    r = validate_skill_body(REQUIRES, known_tools={"get_weather", "task_health_summary", "notify"})
+    assert r.ok, r.errors
+    assert r.requires_tools == ["get_weather", "task_health_summary"]
+
+
+def test_requires_tools_missing_rejected():
+    # The morning-brief bug: a skill demanding a capability we don't have.
+    r = validate_skill_body(REQUIRES, known_tools={"task_health_summary", "notify"})  # no get_weather
+    assert not r.ok
+    assert any("requires_tools" in e and "get_weather" in e for e in r.errors)
+
+
+def test_requires_tools_not_a_list_rejected():
+    body = "---\nname: skill_x_brief\ndescription: d\ntype: skill\nrequires_tools: get_weather\n---\nbody body body body body body body"
+    r = validate_skill_body(body, known_tools={"get_weather"})
+    assert not r.ok
+    assert any("requires_tools" in e for e in r.errors)
+
+
+def test_requires_tools_omitted_is_fine():
+    r = validate_skill_body(GOOD, known_tools={"rss_feed", "notify"})
+    assert r.ok
+    assert r.requires_tools == []
+
+
 def test_missing_frontmatter_fails():
     r = validate_skill_body("# just a heading\n\nsome text that is long enough to pass body length easily")
     assert not r.ok

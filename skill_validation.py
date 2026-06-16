@@ -37,6 +37,7 @@ class ValidationResult:
     warnings: list[str] = field(default_factory=list)
     frontmatter: dict = field(default_factory=dict)
     states_tools: list[str] = field(default_factory=list)
+    requires_tools: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
@@ -45,6 +46,7 @@ class ValidationResult:
             "warnings": self.warnings,
             "frontmatter": self.frontmatter,
             "states_tools": self.states_tools,
+            "requires_tools": self.requires_tools,
         }
 
 
@@ -78,9 +80,11 @@ def validate_skill_body(
     expected_name — if given (an edit to a known skill), the frontmatter
       `name` must match it; a proposal can't silently retarget another
       skill.
-    known_tools — if given, every tool referenced in a `states:` block
-      must exist in it; otherwise the heartbeat would force a call to a
-      tool that isn't registered. Omitted in pure-logic tests.
+    known_tools — if given, every tool referenced in a `states:` block AND
+      every tool listed in `requires_tools:` must exist in it; otherwise the
+      skill would instruct the model toward a capability that isn't registered
+      (the morning-brief hallucination: a playbook demanding weather/calendar
+      with no such tool → the weak model fabricates). Omitted in pure-logic tests.
     """
     errors: list[str] = []
     warnings: list[str] = []
@@ -134,6 +138,26 @@ def validate_skill_body(
                         f"'states' references tools that don't exist: {missing}"
                     )
 
+    # Hermes-style capability declaration: a skill names the tools it needs.
+    # Validated against the live catalogue so a skill can't ship instructions
+    # for a capability we don't have. The heartbeat also reads this to refuse
+    # running a skill whose required tools are missing (capability gating)
+    # rather than letting the model improvise/fabricate.
+    requires_tools: list[str] = []
+    rt = fm.get("requires_tools")
+    if rt is not None:
+        if not isinstance(rt, list) or not all(isinstance(t, str) and t for t in rt):
+            errors.append("'requires_tools' must be a list of tool-name strings")
+        else:
+            requires_tools = rt
+            if known_tools is not None:
+                missing = [t for t in requires_tools if t not in known_tools]
+                if missing:
+                    errors.append(
+                        f"'requires_tools' lists tools that don't exist: {missing} "
+                        f"— a skill may not depend on a capability that isn't registered"
+                    )
+
     # A skill may declare its own success_criteria (the quality bar for any
     # task that runs it — see skills.effective_success_criteria). Validate
     # them so a proposal can't ship a criterion the TaskGuard can't evaluate.
@@ -155,6 +179,7 @@ def validate_skill_body(
         warnings=warnings,
         frontmatter=fm,
         states_tools=states_tools,
+        requires_tools=requires_tools,
     )
 
 
