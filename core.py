@@ -781,8 +781,10 @@ World state:
   prior steps already completed (safe after restarts/interruptions).
 - Call update_world_state() as you progress: set focus, active_task, step,
   last_ok. This lets you resume safely and lets the UI show live status.
-- Call rate_skill(name, outcome) after using a skill_*.md procedure so the
-  system can learn what works and flag skills that need refinement.
+- Scheduled task runs are rated automatically from their outcome — you do NOT
+  need to call rate_skill during a heartbeat tick. In chat, you may rate_skill
+  (name, outcome) after using a skill_*.md procedure so the system learns what
+  works and flags skills that need refinement.
 
 Self-extension (Pi-style):
 - For non-trivial Python you'll want again later — data parsing, a

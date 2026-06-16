@@ -47,6 +47,26 @@ if "tools" not in sys.modules or not hasattr(sys.modules["tools"], "init"):
         set_pre_turn_hook=lambda *a, **k: None,
     )
 
+# Canonical tools.notify stub. heartbeat imports `deliver`; many test modules
+# also install their own minimal stub (guarded on absence), so provide a
+# complete one here once — with deliver + _send_to_telegram and capture lists —
+# so those guards skip and every importer of heartbeat works, in isolation too.
+if "tools.notify" not in sys.modules or not hasattr(sys.modules["tools.notify"], "deliver"):
+    _deliver_calls: list = []
+    _telegram_calls: list = []
+
+    def _stub_deliver(text):
+        _deliver_calls.append(text)
+        return {"recorded": True, "delivered": [], "failed": []}
+
+    _stub_module(
+        "tools.notify",
+        deliver=_stub_deliver,
+        _deliver_calls=_deliver_calls,
+        _send_to_telegram=lambda text: _telegram_calls.append(text) or None,
+        _telegram_calls=_telegram_calls,
+    )
+
 
 def load_real_tool_submodule(name: str):
     """Load tools/<name>.py as the real module `tools.<name>`.

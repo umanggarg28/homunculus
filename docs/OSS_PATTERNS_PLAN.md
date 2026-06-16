@@ -62,9 +62,9 @@ Pattern: Voyager objective verification + Hermes evaluate→refine. Today `rate_
 **self-reported by the weak model** — unreliable. The harness already computes the
 authoritative pass/fail (TaskGuard verdict).
 
-- [ ] **3a.** Harness auto-rates the skill from the post-tick verdict (`memory.rate_skill` on the
-      task's `skill`). Suppress the model's `rate_skill` during heartbeat ticks (guard no-op) so
-      counts can't be double-counted/fabricated.
+- [x] **3a.** Harness auto-rates the skill from the post-tick verdict (`_rate_task_skill` →
+      `memory.rate_skill` on success / explicit record_failure). Model's `rate_skill` suppressed
+      during ticks via the TaskGuard. 6 tests. Conftest now ships a canonical `tools.notify` stub.
 - [ ] **3b.** 👍/👎 on deliveries → feeds the same skill track record + the reflection digest
       (endpoint + a tactile CRT control + notification action). The cheap, high-quality human
       signal the weak model can't produce itself.
