@@ -78,9 +78,11 @@ services:
     # No stdin_open/tty — daemon that long-polls Telegram for messages.
 
   # Discord — a parallel chat channel alongside Telegram. Relay transport:
-  # outbound-only, no inbound reachability needed. Inert until DISCORD_BOT_TOKEN
-  # is set in .env, so it's safe to leave defined.
+  # outbound-only, no inbound reachability needed. Opt-in via a profile so it
+  # doesn't crash-loop before DISCORD_BOT_TOKEN is set; once configured, start
+  # it with `docker compose --profile discord up -d discord`.
   discord:
+    profiles: ["discord"]
     build: .
     image: homunculus:phase1
     env_file: .env
