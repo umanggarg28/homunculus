@@ -2201,7 +2201,10 @@ class Agent:
         if source in ("web", "telegram", "repl"):
             try:
                 from quiz import _store
-                pending = (_store()._load().get("pending") or {}).get("topic")
+                p = (_store()._load().get("pending") or {})
+                # Only prompt grading for a question that was actually delivered
+                # — a pending whose delivery failed was never seen by the user.
+                pending = p.get("topic") if p.get("delivered") else None
             except Exception:
                 pending = None
             if pending:

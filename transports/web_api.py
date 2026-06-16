@@ -668,7 +668,11 @@ def input_expected() -> JSONResponse:
     unanswered quiz question (the agent asked, awaits your answer)."""
     try:
         from quiz import _store
-        pending = (_store()._load().get("pending") or {}).get("topic")
+        p = _store()._load().get("pending") or {}
+        # Only a DELIVERED question is "your turn" — a pending whose delivery
+        # failed (notify timeout) must not light the badge for a question the
+        # user never saw. Missing `delivered` (pre-fix orphan) reads as False.
+        pending = p.get("topic") if p.get("delivered") else None
     except Exception:
         pending = None
     if pending:

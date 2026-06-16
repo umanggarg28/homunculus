@@ -507,11 +507,26 @@ def test_input_expected_reflects_pending_quiz(client, tmp_path, monkeypatch):
     r = client.get("/api/input-expected").json()
     assert r["expected"] is False
 
+    # A DELIVERED pending → your turn.
     qf.write_text(json.dumps({
         "area": "deep learning", "topics": [],
-        "pending": {"topic": "attention", "asked_at": "2026-06-16T20:00:00"},
+        "pending": {"topic": "attention", "asked_at": "2026-06-16T20:00:00", "delivered": True},
     }))
     r = client.get("/api/input-expected").json()
     assert r["expected"] is True
     assert r["reason"] == "quiz"
     assert r["detail"] == "attention"
+
+    # A pending whose delivery FAILED (delivered False / missing) must NOT light
+    # the badge — the user never saw the question (the notify-timeout case).
+    qf.write_text(json.dumps({
+        "area": "deep learning", "topics": [],
+        "pending": {"topic": "attention", "asked_at": "2026-06-16T20:00:00", "delivered": False},
+    }))
+    assert client.get("/api/input-expected").json()["expected"] is False
+
+    qf.write_text(json.dumps({
+        "area": "deep learning", "topics": [],
+        "pending": {"topic": "attention", "asked_at": "2026-06-16T20:00:00"},  # legacy orphan, no flag
+    }))
+    assert client.get("/api/input-expected").json()["expected"] is False

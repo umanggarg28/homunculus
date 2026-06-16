@@ -738,6 +738,7 @@ def tick(memory: Memory, model: str | None) -> None:
                 tasks.attribute_delivered_text_to_last_run(
                     task["id"], guard.combined_notify_text()
                 )
+                _settle_quiz_pending(task, delivered=True)
                 continue
             # Distinguish the failure shape so we can act on it differently:
             #   - silent drop  → agent never called complete_task or record_failure.
@@ -747,7 +748,11 @@ def tick(memory: Memory, model: str | None) -> None:
             #                     already in the task's last_runs; don't double-log.
             if task["id"] not in silently_dropped:
                 # Agent explicitly closed the task (record_failure /
-                # cancel_task / continue_task) — respect its decision.
+                # cancel_task / continue_task) — respect its decision. The
+                # quiz wasn't delivered (no due_at advance), so drop any pending
+                # it armed — otherwise the CHAT badge lights for a question the
+                # user never got (the 2026-06-16 notify-timeout case).
+                _settle_quiz_pending(task, delivered=False)
                 continue
             _settle_silent_drop(
                 tasks,
@@ -756,6 +761,7 @@ def tick(memory: Memory, model: str | None) -> None:
                 duration_s=(datetime.now() - started).total_seconds(),
                 usage=measure_llm_usage_since(started_utc),
             )
+            _settle_quiz_pending(task, delivered=False)
         except Exception as inner:
             print(f"[heartbeat] post-tick check failed for {task['id']}: {inner}", flush=True)
 
@@ -888,6 +894,28 @@ def _record_delivery_keys(
                 tasks.record_delivery(task["id"], key)
         except Exception as e:
             print(f"[heartbeat] record_delivery failed for {task['id']}: {e}", flush=True)
+
+
+# The quiz coach is the one skill that arms a "your turn" pending. The harness
+# owns the delivery verdict, so it (not the weak model) decides whether the
+# pending is real — confirm on a delivered run, drop it on a failed one.
+_QUIZ_COACH_SKILL = "skill_quiz_coach"
+
+
+def _settle_quiz_pending(task: dict[str, Any], *, delivered: bool) -> None:
+    """Reconcile the quiz pending with the run's objective outcome. No-op for
+    non-quiz tasks. delivered=True → arm the badge/grading; False → clear the
+    pending so a failed delivery never leaves a stale CHAT badge."""
+    if task.get("skill") != _QUIZ_COACH_SKILL:
+        return
+    try:
+        from quiz import _store
+        if delivered:
+            _store().confirm_delivered()
+        else:
+            _store().clear_pending()
+    except Exception as e:
+        print(f"[heartbeat] quiz pending settle failed for {task['id']}: {e}", flush=True)
 
 
 def _settle_silent_drop(

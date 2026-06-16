@@ -68,6 +68,27 @@ def test_pick_marks_pending_and_does_not_stack(store):
     assert second["topic"] == first["topic"]
 
 
+def test_pick_arms_pending_undelivered(store):
+    """A freshly picked pending is NOT yet delivered — the badge stays off
+    until the harness confirms the question actually went out."""
+    store.add_topics(["A"])
+    store.pick()
+    pending = store._load()["pending"]
+    assert pending["delivered"] is False
+
+
+def test_confirm_delivered_then_clear(store):
+    store.add_topics(["A"])
+    store.pick()
+    assert store.confirm_delivered() is True
+    assert store._load()["pending"]["delivered"] is True
+    assert store.clear_pending() is True
+    assert store._load()["pending"] is None
+    # Idempotent / safe when there's nothing pending.
+    assert store.confirm_delivered() is False
+    assert store.clear_pending() is False
+
+
 # ---- grading / scheduling ----------------------------------------------
 
 
