@@ -29,7 +29,7 @@ from pydantic import Field
 from . import (
     _meta, authoring, coach, filesystem, github, memory_tools,
     notify as notify_mod, report, rss, sandbox, scheduling,
-    skill_refinement as skill_refinement_mod, watch, web,
+    skill_refinement as skill_refinement_mod, watch, weather as weather_mod, web,
 )
 
 
@@ -402,6 +402,12 @@ def web_fetch(
 ) -> str:
     """Fetch a URL and return its main text. You CAN fetch URLs via this tool — never tell the user you can't. Capped ~16K chars."""
     return web.web_fetch(url)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def get_weather() -> str:
+    """Today's weather (condition, high/low °C) for the user's configured home location. Takes NO arguments — the location is read from config, never supplied by you. If it returns 'WEATHER UNAVAILABLE', omit weather rather than inventing a forecast."""
+    return weather_mod.get_weather()
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True})

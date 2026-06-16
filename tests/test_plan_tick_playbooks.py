@@ -91,3 +91,43 @@ def test_tasks_without_skills_have_no_playbooks(tmp_path):
     assert states is None
     assert len(selected) == 2
     assert playbooks == []
+
+
+REQUIRES_MISSING = """---
+name: skill_needs_weather
+description: Needs a tool we don't have
+type: skill
+requires_tools:
+  - get_weather
+---
+
+# Playbook
+1. get_weather()
+2. notify the result.
+"""
+
+
+def test_capability_gate_blocks_when_required_tool_missing(tmp_path, monkeypatch):
+    """A skill requiring an unavailable tool gets a BLOCKED directive (→
+    record_failure), not its playbook — so the model can't improvise/fabricate."""
+    import heartbeat
+    (tmp_path / "skill_needs_weather.md").write_text(REQUIRES_MISSING, encoding="utf-8")
+    # Live catalogue WITHOUT get_weather.
+    monkeypatch.setattr(heartbeat, "_known_tool_names", lambda: {"notify", "task_health_summary"})
+    states, selected, playbooks = _plan_tick([_task("t1", "skill_needs_weather")], tmp_path)
+    assert states is None
+    assert len(playbooks) == 1
+    assert "BLOCKED" in playbooks[0]
+    assert "record_failure" in playbooks[0]
+    assert "get_weather" in playbooks[0]
+    assert "Playbook\n1. get_weather" not in playbooks[0]  # real playbook NOT injected
+
+
+def test_capability_gate_passes_when_required_tool_present(tmp_path, monkeypatch):
+    import heartbeat
+    (tmp_path / "skill_needs_weather.md").write_text(REQUIRES_MISSING, encoding="utf-8")
+    monkeypatch.setattr(heartbeat, "_known_tool_names", lambda: {"get_weather", "notify"})
+    states, selected, playbooks = _plan_tick([_task("t1", "skill_needs_weather")], tmp_path)
+    assert len(playbooks) == 1
+    assert "BLOCKED" not in playbooks[0]
+    assert "get_weather()" in playbooks[0]  # the real playbook IS injected

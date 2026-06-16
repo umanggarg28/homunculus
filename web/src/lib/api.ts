@@ -157,6 +157,24 @@ export const api = {
       "/input-expected",
     ),
 
+  // Home location for the weather tool. Captured once from the browser
+  // (geolocation) or a typed city; persisted server-side like the timezone.
+  userLocationGet: () =>
+    jsonGet<{ location: { lat: number; lon: number; label: string } | null }>(
+      "/user-location",
+    ),
+
+  userLocationSet: (body: { lat: number; lon: number; label?: string } | { city: string }) =>
+    fetch(`${API_BASE}/user-location`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    }).then(async (r) => {
+      const data = await r.json();
+      if (!r.ok || !data.ok) throw new Error(data.reason || `Set location failed: ${r.status}`);
+      return data as { ok: boolean; stored: { lat: number; lon: number; label: string } };
+    }),
+
   proposalApprove: (id: string) =>
     fetch(`${API_BASE}/proposals/${encodeURIComponent(id)}/approve`, {
       method: "POST",

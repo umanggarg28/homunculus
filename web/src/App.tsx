@@ -45,6 +45,40 @@ function UserTimezoneSync() {
   return null;
 }
 
+/** Capture the user's home location ONCE from the browser, the same way
+ *  UserTimezoneSync handles the timezone. The weather tool and heartbeat read
+ *  the persisted value — the model never guesses coordinates. If geolocation
+ *  is denied/unavailable we stay silent; the brief gracefully omits weather,
+ *  and the user can set a city later via Settings. */
+function UserLocationSync() {
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/user-location")
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled || d?.location) return; // already set — don't re-prompt
+        if (!("geolocation" in navigator)) return;
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            fetch("/api/user-location", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                lat: pos.coords.latitude,
+                lon: pos.coords.longitude,
+              }),
+            }).catch(() => undefined);
+          },
+          () => undefined, // denied / unavailable — silent
+          { maximumAge: 86_400_000, timeout: 10_000 },
+        );
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
+  return null;
+}
+
 const LandingPage = lazy(() => import("@/pages/LandingPage").then((m) => ({ default: m.LandingPage })));
 const OverviewPage = lazy(() => import("@/pages/OverviewPage").then((m) => ({ default: m.OverviewPage })));
 const ChatPage = lazy(() => import("@/pages/ChatPage").then((m) => ({ default: m.ChatPage })));
@@ -74,6 +108,7 @@ export default function App() {
       <BrowserRouter>
         <ScrollToTop />
         <UserTimezoneSync />
+        <UserLocationSync />
         <StatusFavicon />
         <DashboardShell>
           <Suspense fallback={<RouteFallback />}>

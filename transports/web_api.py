@@ -181,6 +181,52 @@ def user_tz_get() -> JSONResponse:
         return JSONResponse({"tz": "UTC", "error": str(e)})
 
 
+@app.post("/api/user-location")
+async def user_location_set(request: Request) -> JSONResponse:
+    """Persist the user's home location so the weather tool and heartbeat can
+    use it. Called by the web UI once — sibling of /api/user-tz.
+
+    Body, either:
+      {"lat": 12.97, "lon": 77.59, "label": "Bengaluru"}   (browser geolocation)
+      {"city": "Bengaluru"}                                 (typed fallback → geocoded)
+
+    Location is configured here, never guessed by the model.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "reason": "invalid json"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "reason": "missing body"}, status_code=400)
+    from user_location import set_user_location
+
+    lat, lon, label = body.get("lat"), body.get("lon"), body.get("label", "")
+    if lat is None or lon is None:
+        # No coordinates → treat as a typed city and geocode it (Open-Meteo).
+        city = body.get("city")
+        if not isinstance(city, str) or not city.strip():
+            return JSONResponse({"ok": False, "reason": "need lat+lon or city"}, status_code=400)
+        from tools.weather import geocode_city
+        geo = geocode_city(city)
+        if not geo:
+            return JSONResponse({"ok": False, "reason": f"could not geocode {city!r}"}, status_code=404)
+        lat, lon, label = geo["lat"], geo["lon"], geo["label"]
+    stored = set_user_location(lat, lon, label or "")
+    if not stored:
+        return JSONResponse({"ok": False, "reason": "invalid coordinates"}, status_code=400)
+    return JSONResponse({"ok": True, "stored": stored})
+
+
+@app.get("/api/user-location")
+def user_location_get() -> JSONResponse:
+    """Return the stored home location, or {"location": null} if unset."""
+    try:
+        from user_location import get_user_location
+        return JSONResponse({"location": get_user_location()})
+    except Exception as e:
+        return JSONResponse({"location": None, "error": str(e)})
+
+
 @app.get("/api/model")
 def model_info() -> JSONResponse:
     """Return the model that actually handled the last request.
@@ -677,9 +723,23 @@ def proposals_approve(proposal_id: str) -> JSONResponse:
             raise HTTPException(400, f"skill saved (v{version}) but task creation failed: {e}")
 
     store.mark_approved(proposal_id, note=f"applied as v{version}")
+
+    # Orphan check: an approved skill that no task runs is a no-op — exactly the
+    # state that made yesterday's brief HN edit do nothing (the task had
+    # skill=None). Warn so the operator links it (PATCH /api/tasks/<id> {skill}).
+    warning = None
+    if created_task is None:
+        linked = any((t.get("skill") == p["skill_name"]) for t in _task_store().all())
+        if not linked:
+            warning = (
+                f"Skill {p['skill_name']} is approved but NO task is linked to it — "
+                f"it won't run until you link a task (set its skill to "
+                f"{p['skill_name']})."
+            )
+
     return JSONResponse({
         "ok": True, "skill": p["skill_name"], "version": version,
-        "task": created_task,
+        "task": created_task, "warning": warning,
     })
 
 
@@ -729,6 +789,14 @@ async def tasks_create(request: Request) -> JSONResponse:
 @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_web_auth)])
 async def tasks_update(task_id: str, request: Request) -> JSONResponse:
     body = await request.json() or {}
+    # Linking a task to a skill is a real operation (not a tasks.json hand-edit):
+    # this is what binds a skill to the task that runs it, so an approved skill
+    # can't sit orphaned (the morning-brief bug). A non-empty skill must exist.
+    skill = body.get("skill")
+    if skill:
+        from skills import Skills
+        if Skills(MEMORY_DIR).load(skill) is None:
+            raise HTTPException(400, f"skill {skill!r} does not exist — create it first")
     try:
         task = _task_store().update(
             task_id,
@@ -738,6 +806,7 @@ async def tasks_update(task_id: str, request: Request) -> JSONResponse:
             recurrence=body.get("recurrence"),
             notify=body.get("notify"),
             success_criteria=body.get("success_criteria"),
+            skill=skill,
         )
     except KeyError:
         raise HTTPException(404, f"task '{task_id}' not found")
