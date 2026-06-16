@@ -181,6 +181,52 @@ def user_tz_get() -> JSONResponse:
         return JSONResponse({"tz": "UTC", "error": str(e)})
 
 
+@app.post("/api/user-location")
+async def user_location_set(request: Request) -> JSONResponse:
+    """Persist the user's home location so the weather tool and heartbeat can
+    use it. Called by the web UI once — sibling of /api/user-tz.
+
+    Body, either:
+      {"lat": 12.97, "lon": 77.59, "label": "Bengaluru"}   (browser geolocation)
+      {"city": "Bengaluru"}                                 (typed fallback → geocoded)
+
+    Location is configured here, never guessed by the model.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "reason": "invalid json"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "reason": "missing body"}, status_code=400)
+    from user_location import set_user_location
+
+    lat, lon, label = body.get("lat"), body.get("lon"), body.get("label", "")
+    if lat is None or lon is None:
+        # No coordinates → treat as a typed city and geocode it (Open-Meteo).
+        city = body.get("city")
+        if not isinstance(city, str) or not city.strip():
+            return JSONResponse({"ok": False, "reason": "need lat+lon or city"}, status_code=400)
+        from tools.weather import geocode_city
+        geo = geocode_city(city)
+        if not geo:
+            return JSONResponse({"ok": False, "reason": f"could not geocode {city!r}"}, status_code=404)
+        lat, lon, label = geo["lat"], geo["lon"], geo["label"]
+    stored = set_user_location(lat, lon, label or "")
+    if not stored:
+        return JSONResponse({"ok": False, "reason": "invalid coordinates"}, status_code=400)
+    return JSONResponse({"ok": True, "stored": stored})
+
+
+@app.get("/api/user-location")
+def user_location_get() -> JSONResponse:
+    """Return the stored home location, or {"location": null} if unset."""
+    try:
+        from user_location import get_user_location
+        return JSONResponse({"location": get_user_location()})
+    except Exception as e:
+        return JSONResponse({"location": None, "error": str(e)})
+
+
 @app.get("/api/model")
 def model_info() -> JSONResponse:
     """Return the model that actually handled the last request.
