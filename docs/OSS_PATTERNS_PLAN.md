@@ -100,7 +100,35 @@ ADD / UPDATE / DELETE / NONE per fact against existing memories (dedup + decay).
 - [ ] **6b. `context-engine` slot** (OpenClaw): compaction/assembly as a swappable engine vs inline
       `_maybe_compact`. Low urgency, pure refactor.
 
+## Phase 7 — Multi-channel delivery (OpenClaw channel-router)  *(NEW, prompted by the India Telegram block)*
+
+Telegram is gov-blocked in India until ~2026-06-22. Make delivery channel-agnostic
+and ADDITIVE — Telegram stays and auto-resumes; new channels deliver meanwhile.
+Reachability principle: relay channels (Telegram/Discord) need only OUTBOUND net
+and work anywhere; Web Push needs the server reachable over HTTPS (→ Tailscale).
+
+- [ ] **7a. notify fan-out + web-always-record (foundation).** `notify()` records to the
+      `_notifications.jsonl` feed FIRST (the web app is an always-on channel — a delivery is
+      never lost even with every push channel down), then fans out to each configured channel.
+      Success if recorded OR any channel delivered — a blocked channel must NOT fail the task for
+      days. `deliver(text)` shared by notify + heartbeat's autonomous fallback.
+- [ ] **7b. Discord sender** (REST `POST /channels/{id}/messages`, Bot token) wired into the
+      fan-out. No new dep (httpx). Needs `DISCORD_BOT_TOKEN` + `DISCORD_CHANNEL_ID`. One-way push
+      (briefs/quiz/leetcode) works as soon as those are set. Works from a purely-local deploy.
+- [ ] **7c. Discord listener** (`transports/discord.py`, discord.py gateway) for REPLIES →
+      `agent.chat` + quiz grading, mirroring `transports/telegram.py`. New compose service +
+      `discord.py` dep. Makes it two-way.
+- [ ] **7d. Tailscale (infra, user-run)** — `tailscale serve` exposes the local app over HTTPS to
+      the user's own devices (private, free). The prerequisite for Web Push reachability. Document
+      + a helper; not repo code.
+- [ ] **7e. Web Push (PWA)** — add a `push` handler to `web/public/sw.js`, generate VAPID keys,
+      `/api/push/subscribe` + a subscription store, a push sender in the fan-out, and frontend
+      subscribe-on-permission. iOS 16.4+ supports it for home-screen PWAs (no App Store / Apple
+      dev account) — gated only on the HTTPS reachability from 7d.
+- **Budget:** Discord/Web Push are HTTP (zero LLM cost). Tailscale free. ✓
+
 ---
 
 ## Progress log
-- 2026-06-16: plan written. Starting Phase 1.
+- 2026-06-16: plan written. Phases 1–3 shipped (#195/#196/#197 + #194). Brief grounded & verified.
+- 2026-06-17: India blocked Telegram (→ June 22). Added Phase 7 (multi-channel). Building Discord.
