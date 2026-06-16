@@ -27,12 +27,15 @@ _MAX_ENTRIES = 15
 
 def parse_feed_entries(text: str) -> list[dict[str, str]] | None:
     """Parse an RSS 2.0 or Atom document into a list of
-    ``{"title", "link", "date"}`` dicts in feed-head order, or None if it
-    isn't a recognisable feed. Shared by ``rss_feed`` (change-diff) and the
-    ``news_headlines`` tool so feed parsing lives in exactly one place.
+    ``{"title", "link", "date", "summary", "comments"}`` dicts in feed-head
+    order, or None if it isn't a recognisable feed. Shared by ``rss_feed``
+    (change-diff) and the ``news_headlines`` tool so feed parsing lives in
+    exactly one place.
 
     Atom carries the link in a ``href`` attribute, RSS in element text — both
-    are handled. Entries with neither a title nor a link are dropped."""
+    are handled. ``summary`` is the description/summary text (HN feeds put
+    "Points: N" here); ``comments`` is the discussion URL when present. Entries
+    with neither a title nor a link are dropped."""
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(text, "xml")
@@ -60,11 +63,23 @@ def parse_feed_entries(text: str) -> list[dict[str, str]] | None:
             or entry.find("updated")
             or entry.find("date")
         )
-        date = date_el.get_text(strip=True)[:25] if date_el else ""
+        date = date_el.get_text(strip=True) if date_el else ""
+
+        summary_el = entry.find("description") or entry.find("summary")
+        summary = summary_el.get_text(strip=True) if summary_el else ""
+
+        comments_el = entry.find("comments")
+        comments = comments_el.get_text(strip=True) if comments_el else ""
 
         if not title and not link:
             continue
-        parsed.append({"title": title or "(untitled)", "link": link, "date": date})
+        parsed.append({
+            "title": title or "(untitled)",
+            "link": link,
+            "date": date,
+            "summary": summary,
+            "comments": comments,
+        })
     return parsed
 
 
@@ -86,8 +101,9 @@ def _build_summary(text: str) -> str | None:
     ]
     for entry in entries[:_MAX_ENTRIES]:
         # Date first so the diff groups by recency; body omitted so a publisher
-        # editing post text doesn't read as a new post.
-        line = f"{entry['date']} · {entry['title']} — {entry['link']}".strip(" ·")
+        # editing post text doesn't read as a new post. Date truncated to keep
+        # the snapshot stable against trailing tz/format drift.
+        line = f"{entry['date'][:25]} · {entry['title']} — {entry['link']}".strip(" ·")
         lines.append(f"  {line}")
     return "\n".join(lines)
 
