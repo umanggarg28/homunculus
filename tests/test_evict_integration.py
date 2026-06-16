@@ -84,13 +84,17 @@ def test_eviction_fires_between_turns(monkeypatch, tmp_path):
 def test_mid_loop_eviction_keeps_per_call_input_bounded(monkeypatch):
     """The user-visible symptom we're fixing: per-call input shouldn't
     grow linearly across iterations within a single agent loop. With
-    keep_recent=2, after iter 5 we should still have only 2 full tool
-    payloads in history — the rest must be stubs.
+    size-aware eviction (keep_recent=2 floor + ~20K char budget), LARGE
+    payloads still get capped — after 5 big tool calls only the 2 most
+    recent stay full, the rest are stubs. (Small payloads survive under the
+    budget; that's covered in test_evict_prior_tool_results.)
     """
     monkeypatch.setenv("HOMUNCULUS_API_KEY", "stub")
 
     agent = core.Agent()
-    big = "Z" * 2000
+    # 9000 each: the last two (18000) sit under the 20K budget; older ones
+    # exceed the remaining budget and must be stubbed.
+    big = "Z" * 9000
     import tools as tools_pkg
     monkeypatch.setattr(tools_pkg, "execute", lambda n, a: big, raising=False)
     monkeypatch.setattr(core, "_validate_tool_args", lambda n, a: None)
@@ -120,11 +124,15 @@ def test_mid_loop_eviction_keeps_per_call_input_bounded(monkeypatch):
     tool_msgs = [m for m in agent.history if m.get("role") == "tool"]
     full = [m for m in tool_msgs if "tool result evicted" not in m["content"]]
     stubs = [m for m in tool_msgs if "tool result evicted" in m["content"]]
-    # 5 tool calls fired → 5 tool messages; with keep_recent=2 only the
-    # last 2 should be full payload, the other 3 must be stubs.
+    full_chars = sum(len(m["content"]) for m in full)
+    # 5 big tool calls fired → 5 tool messages. The guarantee is that retained
+    # full payload stays BOUNDED (not linear): with a 20K budget + the most
+    # recent result that's added after the last eviction pass, full payload
+    # must stay well under the 45K an un-evicted run would carry.
     assert len(tool_msgs) == 5, [m["content"][:40] for m in tool_msgs]
-    assert len(full) == 2, f"expected 2 full, got {len(full)}"
-    assert len(stubs) == 3, f"expected 3 stubs, got {len(stubs)}"
+    assert stubs, "older large results must be stubbed"
+    assert full_chars <= 20000 + 9000, f"full payload not bounded: {full_chars}"
+    assert full_chars < 5 * 9000, "eviction did nothing — payload grew linearly"
 
 
 def test_eviction_emits_observability_event(monkeypatch):

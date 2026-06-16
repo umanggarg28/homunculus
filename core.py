@@ -630,9 +630,20 @@ _EVICTED_TOOL_RESULT_TEMPLATE = (
 )
 
 
-def _evict_prior_tool_results(history: list[dict], keep_recent: int = 0) -> int:
+def _evict_prior_tool_results(
+    history: list[dict], keep_recent: int = 0, keep_recent_chars: int = 0
+) -> int:
     """Replace tool-message content with a short stub, leaving the
     most recent `keep_recent` tool messages untouched.
+
+    `keep_recent_chars` (when > 0) additionally protects older recent
+    results whose cumulative size stays under the budget — so a task that
+    fetches several SMALL sources (e.g. the morning brief: commitments +
+    weather + HN) can hold all of them in context to compose, while a task
+    doing a few LARGE web_fetches still gets capped. Count-based `keep_recent`
+    is the floor; the char budget extends protection for small payloads.
+    Without this, keep_recent=2 dropped the brief's first source mid-loop and
+    STUCK_LOOP then blocked re-fetching it — the brief could never assemble.
 
     Two call sites:
 
@@ -666,7 +677,16 @@ def _evict_prior_tool_results(history: list[dict], keep_recent: int = 0) -> int:
         and isinstance(m.get("content"), str)
         and not m["content"].startswith("[tool result evicted")
     ]
-    protected = set(full_tool_idxs[-keep_recent:]) if keep_recent else set()
+    # Protect from most-recent backward: always the last `keep_recent`, plus
+    # any older ones that still fit under `keep_recent_chars`. Cumulative size
+    # only grows, so once the budget is exceeded no older result is protected.
+    protected: set[int] = set()
+    cum = 0
+    for j, i in enumerate(reversed(full_tool_idxs)):
+        clen = len(history[i].get("content") or "")
+        if j < keep_recent or (keep_recent_chars and cum + clen <= keep_recent_chars):
+            protected.add(i)
+            cum += clen
 
     evicted = 0
     for i in full_tool_idxs:
@@ -2438,7 +2458,12 @@ class Agent:
             # it just made; anything older has already been condensed into
             # the assistant's prior decision.
             if _turn_idx > 0:
-                in_loop_evicted = _evict_prior_tool_results(self.history, keep_recent=2)
+                # keep_recent=2 floor + a ~20K char budget so a multi-source
+                # task (brief: commitments + weather + HN) keeps all its small
+                # results to compose, while large web_fetch payloads still cap.
+                in_loop_evicted = _evict_prior_tool_results(
+                    self.history, keep_recent=2, keep_recent_chars=20000
+                )
                 if in_loop_evicted:
                     try:
                         events.emit(
