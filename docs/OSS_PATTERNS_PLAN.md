@@ -107,15 +107,15 @@ and ADDITIVE — Telegram stays and auto-resumes; new channels deliver meanwhile
 Reachability principle: relay channels (Telegram/Discord) need only OUTBOUND net
 and work anywhere; Web Push needs the server reachable over HTTPS (→ Tailscale).
 
-- [ ] **7a. notify fan-out + web-always-record (foundation).** `notify()` records to the
+- [x] **7a. notify fan-out + web-always-record (foundation).** Shipped #198. Live-verified. `notify()` records to the
       `_notifications.jsonl` feed FIRST (the web app is an always-on channel — a delivery is
       never lost even with every push channel down), then fans out to each configured channel.
       Success if recorded OR any channel delivered — a blocked channel must NOT fail the task for
       days. `deliver(text)` shared by notify + heartbeat's autonomous fallback.
-- [ ] **7b. Discord sender** (REST `POST /channels/{id}/messages`, Bot token) wired into the
+- [x] **7b. Discord sender** — shipped #198, live-verified (pushed via discord). (REST `POST /channels/{id}/messages`, Bot token) wired into the
       fan-out. No new dep (httpx). Needs `DISCORD_BOT_TOKEN` + `DISCORD_CHANNEL_ID`. One-way push
       (briefs/quiz/leetcode) works as soon as those are set. Works from a purely-local deploy.
-- [ ] **7c. Discord listener** (`transports/discord.py`, discord.py gateway) for REPLIES →
+- [x] **7c. Discord listener** — shipped #198, live (bot locked to user, replies route to chat). (`transports/discord.py`, discord.py gateway) for REPLIES →
       `agent.chat` + quiz grading, mirroring `transports/telegram.py`. New compose service +
       `discord.py` dep. Makes it two-way.
 - [ ] **7d. Tailscale (infra, user-run)** — `tailscale serve` exposes the local app over HTTPS to
@@ -131,4 +131,6 @@ and work anywhere; Web Push needs the server reachable over HTTPS (→ Tailscale
 
 ## Progress log
 - 2026-06-16: plan written. Phases 1–3 shipped (#195/#196/#197 + #194). Brief grounded & verified.
-- 2026-06-17: India blocked Telegram (→ June 22). Added Phase 7 (multi-channel). Building Discord.
+- 2026-06-17: India blocked Telegram (→ June 22). Added Phase 7 (multi-channel). Discord shipped
+  (#198) + configured + live-verified (push + two-way, locked to user). Web feed fallback live.
+  Remaining: 7d Tailscale + 7e Web Push. Backlog: Phase 3 (skill feedback loop), 4, 5.
