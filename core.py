@@ -2218,7 +2218,7 @@ class Agent:
         # (every topic stuck at seen=0). The question text itself reaches
         # chat via the notification drain; this adds the "grade it" awareness
         # + the pending topic. Re-rendered each turn, so it never stacks.
-        if source in ("web", "telegram", "repl"):
+        if source in ("web", "telegram", "discord", "repl"):
             try:
                 from quiz import _store
                 p = (_store()._load().get("pending") or {})

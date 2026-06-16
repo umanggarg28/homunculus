@@ -74,21 +74,13 @@ def notify(text: str, preview: bool = False) -> str:
     on a single round-trip (the user can then say "send it" and the
     agent re-calls notify without preview).
     """
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_ALLOWED_USER_ID")
-    if not token or not chat_id:
-        return (
-            "ERROR: Telegram is not configured (TELEGRAM_BOT_TOKEN or "
-            "TELEGRAM_ALLOWED_USER_ID missing). Cannot send notification."
-        )
-
     if not text or not text.strip():
         return "ERROR: notify() requires non-empty text."
 
     if preview:
         body = _markdown_to_telegram_html(text)
         return (
-            f"[PREVIEW · not sent] would push {len(text)} chars to Telegram:\n"
+            f"[PREVIEW · not sent] would push {len(text)} chars:\n"
             f"---\n{body}\n---\n"
             f"Call notify(text) again without preview to actually send."
         )
@@ -97,42 +89,99 @@ def notify(text: str, preview: bool = False) -> str:
     if rate_err:
         return rate_err
 
-    err = _send_to_telegram(text)
-    if err:
-        return err
-    # _send_to_telegram already queued the text for chat-history
-    # bridging — queueing here too wrote every notification twice
-    # (visible as doubled rows in the transmissions feed).
-    return f"Notification delivered ({len(text)} chars)."
+    result = deliver(text)
+    return _format_delivery(text, result)
 
 
-# A single Telegram send timing out used to discard the whole delivery —
-# observed live 2026-06-16: a generated quiz question was lost to one 20s
-# timeout and recorded as a task failure. Transient network blips (timeout,
-# connect reset, DNS hiccup) are retried with short backoff before giving up;
-# only a persistent failure surfaces as an error. Zero LLM cost.
+def deliver(text: str) -> dict:
+    """Record the message to the web feed (always-on channel) and fan it out to
+    every configured push channel (Telegram, Discord, …). Shared by notify() and
+    the heartbeat's autonomous fallback.
+
+    The web app is treated as a guaranteed channel: we record FIRST so a delivery
+    is never lost even when every push channel is unavailable. Push channels are
+    best-effort on top. Returns a dict:
+    {recorded: bool, delivered: [names], failed: [(name, err)]}.
+    """
+    recorded = _record_to_feed(text)
+    delivered: list[str] = []
+    failed: list[tuple[str, str]] = []
+    for name, send in _channel_senders():
+        try:
+            err = send(text)
+        except Exception as e:  # a channel must never crash the others
+            err = f"{type(e).__name__}: {e}"
+        if err:
+            failed.append((name, err))
+        else:
+            delivered.append(name)
+    return {"recorded": recorded, "delivered": delivered, "failed": failed}
+
+
+def _channel_senders() -> list[tuple[str, "callable"]]:
+    """Configured push channels, in order. Additive: a channel is included only
+    when its credentials are present, so enabling or disabling a channel needs no
+    code change — just env vars."""
+    senders: list[tuple[str, callable]] = []
+    if os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_ALLOWED_USER_ID"):
+        senders.append(("telegram", _send_to_telegram))
+    if os.environ.get("DISCORD_BOT_TOKEN") and os.environ.get("DISCORD_CHANNEL_ID"):
+        senders.append(("discord", _send_to_discord))
+    return senders
+
+
+def _format_delivery(text: str, result: dict) -> str:
+    """The agent-facing summary. Success when the message reached at least the
+    always-on web feed — a blocked push channel must NOT fail the task for days
+    (the agent should still complete_task; the message is readable in the app)."""
+    n = len(text)
+    parts: list[str] = []
+    if result["recorded"]:
+        parts.append(f"recorded to the web app feed ({n} chars)")
+    if result["delivered"]:
+        parts.append("pushed via " + ", ".join(result["delivered"]))
+    if result["failed"]:
+        parts.append("push channel(s) unavailable: "
+                     + "; ".join(f"{nm} ({err})" for nm, err in result["failed"]))
+    if not (result["recorded"] or result["delivered"]):
+        return "ERROR: notify could not record or deliver the message anywhere."
+    return "Notification delivered — " + "; ".join(parts) + "."
+
+
+# Transient send failures (timeout, connect reset, DNS hiccup) are retried with
+# short backoff so one blip doesn't discard a delivery; only a persistent failure
+# surfaces as an error. Zero LLM cost.
 NOTIFY_SEND_ATTEMPTS = int(os.environ.get("HOMUNCULUS_NOTIFY_SEND_ATTEMPTS", "3"))
 _NOTIFY_BACKOFF_S = (1.0, 2.5)  # waited before attempt 2, attempt 3
+# Short connect cap on purpose: when a channel host is unreachable, TCP connect
+# hangs, and a default dual-stack connect (~20s) × retries would exceed the 60s
+# tool-execution wrapper and stall the agent loop. A 5s connect cap keeps three
+# attempts + backoff to ~18s, so notify fails fast and the agent can record a
+# clean failure instead of grinding.
+_NOTIFY_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=5.0)
 
 
-def _post_telegram(token: str, payload: dict) -> tuple[object | None, str | None]:
-    """POST to Telegram, retrying transient transport errors (timeout, connect
-    reset). Returns (response, None) once a request completes (any HTTP status),
-    or (None, error) if every attempt hit a transport error. An HTTP error
-    status is NOT retried here — the caller handles the HTML→plain fallback."""
+def _post_with_retry(
+    url: str, json_payload: dict, headers: dict | None = None
+) -> tuple[object | None, str | None]:
+    """POST JSON, retrying transient transport errors (timeout, connect reset)
+    with short backoff. Returns (response, None) once a request completes (any
+    HTTP status), or (None, error) if every attempt hit a transport error. Used
+    by all channel senders so retry/timeout policy lives in one place."""
     last_err = ""
     for attempt in range(NOTIFY_SEND_ATTEMPTS):
         try:
-            return httpx.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json=payload,
-                timeout=10.0,
-            ), None
+            return httpx.post(url, json=json_payload, headers=headers or {}, timeout=_NOTIFY_TIMEOUT), None
         except httpx.HTTPError as e:
             last_err = str(e) or type(e).__name__
             if attempt < NOTIFY_SEND_ATTEMPTS - 1:
                 time.sleep(_NOTIFY_BACKOFF_S[min(attempt, len(_NOTIFY_BACKOFF_S) - 1)])
     return None, last_err
+
+
+def _post_telegram(token: str, payload: dict) -> tuple[object | None, str | None]:
+    """Telegram sendMessage with retry (delegates to _post_with_retry)."""
+    return _post_with_retry(f"https://api.telegram.org/bot{token}/sendMessage", payload)
 
 
 def _send_to_telegram(text: str) -> str | None:
@@ -161,14 +210,50 @@ def _send_to_telegram(text: str) -> str | None:
         if fallback.status_code != 200:
             return f"ERROR: Telegram send failed ({response.status_code}); fallback {fallback.status_code}"
 
-    _queue_for_telegram_history(text)
+    # NOTE: feed recording is done once in deliver(), not here — sending to
+    # multiple channels must not write the same notification N times.
     return None
 
 
-def _queue_for_telegram_history(text: str) -> None:
-    """Append the sent text to memory/_notifications.jsonl so the
-    Telegram bot can drain it into its agent's history before the
-    next user message. Best-effort — failures logged but don't break notify."""
+def _send_to_discord(text: str) -> str | None:
+    """Send text to a Discord channel via the bot REST API. Returns an error
+    string on failure, None on success. Discord relays to the user's phone, so
+    this needs only outbound internet — no public URL/tunnel (unlike Web Push).
+
+    Discord renders **bold**/*italic*/`code` natively but NOT [label](url) links
+    in plain messages, so links are flattened to 'label: url' (Discord auto-embeds
+    bare URLs). 2000-char message cap is enforced."""
+    token = os.environ.get("DISCORD_BOT_TOKEN")
+    channel_id = os.environ.get("DISCORD_CHANNEL_ID")
+    if not token or not channel_id:
+        return None  # not configured — skip silently (same as Telegram)
+
+    body = _markdown_to_discord(text)
+    if len(body) > 2000:
+        body = body[:1997] + "..."
+    resp, err = _post_with_retry(
+        f"https://discord.com/api/v10/channels/{channel_id}/messages",
+        json_payload={"content": body},
+        headers={"Authorization": f"Bot {token}"},
+    )
+    if err is not None:
+        return f"ERROR: Discord request failed after {NOTIFY_SEND_ATTEMPTS} attempts: {err}"
+    if resp.status_code not in (200, 201):
+        return f"ERROR: Discord send failed (HTTP {resp.status_code}): {resp.text[:200]}"
+    return None
+
+
+def _markdown_to_discord(text: str) -> str:
+    """Discord supports most markdown natively; only [label](url) links don't
+    render in plain messages. Flatten those to 'label: url' so links stay usable
+    (Discord auto-links the bare URL)."""
+    return re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\1: \2", text)
+
+
+def _record_to_feed(text: str) -> bool:
+    """Append the message to memory/_notifications.jsonl — the always-on web
+    channel. The web transmissions feed shows it and the Telegram/Discord bots
+    drain it into chat history. Best-effort; returns True on success."""
     try:
         memory_dir = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
         memory_dir.mkdir(parents=True, exist_ok=True)
@@ -176,10 +261,14 @@ def _queue_for_telegram_history(text: str) -> None:
         entry = {"ts": time.time(), "text": text}
         with queue_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        return True
     except OSError as e:
-        # Don't silence — print so the user can see something went wrong
-        # in the logs (notification arrived but bridge is broken).
-        print(f"[notify] WARNING: could not queue for history: {e}", flush=True)
+        print(f"[notify] WARNING: could not record to feed: {e}", flush=True)
+        return False
+
+
+# Back-compat alias — some callers/tests import the old name.
+_queue_for_telegram_history = _record_to_feed
 
 
 # ── markdown → telegram HTML ────────────────────────────────────────

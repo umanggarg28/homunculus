@@ -32,7 +32,7 @@ import tools
 from core import Agent, measure_llm_usage_since
 from memory import Memory
 from tasks import TaskStore, clear_scratchpad
-from tools.notify import _send_to_telegram
+from tools.notify import deliver
 
 
 HEARTBEAT_PROMPT_TEMPLATE = """It's a scheduled heartbeat tick — no user is
@@ -1031,7 +1031,7 @@ def _settle_silent_drop(
             return
         try:
             title = task.get("title") or task_id
-            _send_to_telegram(
+            deliver(
                 f"⚠️ I tried '{title}' multiple times today and "
                 f"couldn't get it through (provider limits or "
                 f"task is broken). Pausing automatic retries; "
