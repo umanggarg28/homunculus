@@ -93,3 +93,35 @@ def test_multiple_tool_results_all_evicted():
     assert _evict_prior_tool_results(history) == 3
     for msg in history:
         assert "tool result evicted" in msg["content"]
+
+
+def test_keep_recent_chars_protects_small_older_results():
+    """Size-aware retention: with a char budget, several SMALL older results
+    survive (a 3-source brief can compose) even though keep_recent=2. The
+    regression: keep_recent=2 alone dropped the brief's first source mid-loop,
+    and STUCK_LOOP then blocked re-fetching it."""
+    history = [
+        _tool_msg("a", "A" * 500),   # commitments
+        _tool_msg("b", "B" * 200),   # weather
+        _tool_msg("c", "C" * 800),   # HN
+        _tool_msg("d", "D" * 300),   # something else
+    ]
+    # Budget easily fits all four small results → nothing evicted.
+    assert _evict_prior_tool_results(history, keep_recent=2, keep_recent_chars=20000) == 0
+    assert all("evicted" not in m["content"] for m in history)
+
+
+def test_keep_recent_chars_still_caps_large_payloads():
+    """A large recent payload exhausts the budget, so older results beyond the
+    keep_recent floor are still stubbed."""
+    history = [
+        _tool_msg("a", "A" * 5000),   # old, should evict (over budget)
+        _tool_msg("b", "B" * 9000),   # big recent
+        _tool_msg("c", "C" * 9000),   # big recent
+    ]
+    # keep_recent=2 protects b,c (18000); budget 20000 leaves 2000 — a's 5000
+    # doesn't fit → evicted.
+    assert _evict_prior_tool_results(history, keep_recent=2, keep_recent_chars=20000) == 1
+    assert "evicted" in history[0]["content"]
+    assert history[1]["content"] == "B" * 9000
+    assert history[2]["content"] == "C" * 9000
