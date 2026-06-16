@@ -105,7 +105,40 @@ class QuizStore:
         return [t for t in topics if t.get("due_at", "") <= now.isoformat()]
 
     def _set_pending(self, data: dict, topic_title: str, now: datetime) -> None:
-        data["pending"] = {"topic": topic_title, "asked_at": now.isoformat(timespec="seconds")}
+        # `delivered` is the "your turn" gate: a pending is armed at pick time
+        # but only counts as awaiting the user's answer once the question was
+        # ACTUALLY delivered (notify succeeded). The harness flips this via
+        # confirm_delivered() on a successful quiz run, and clear_pending() when
+        # the run fails — so a failed delivery can't leave a stale CHAT badge
+        # for a question the user never saw (observed 2026-06-16: a quiz lost to
+        # a notify timeout still lit the badge).
+        data["pending"] = {
+            "topic": topic_title,
+            "asked_at": now.isoformat(timespec="seconds"),
+            "delivered": False,
+        }
+
+    def confirm_delivered(self) -> bool:
+        """Mark the current pending question as actually delivered to the user.
+        Called by the harness when the quiz run succeeds. Returns True if a
+        pending existed to confirm."""
+        data = self._load()
+        pending = data.get("pending")
+        if not pending:
+            return False
+        pending["delivered"] = True
+        self._save(data)
+        return True
+
+    def clear_pending(self) -> bool:
+        """Drop the current pending question (e.g. its delivery failed, so it
+        was never asked). Returns True if there was one to clear."""
+        data = self._load()
+        if not data.get("pending"):
+            return False
+        data["pending"] = None
+        self._save(data)
+        return True
 
     def pick(self, topic: str = "") -> dict:
         """Decide what to quiz, OR commit an agent-chosen topic.
