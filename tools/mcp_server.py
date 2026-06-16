@@ -27,8 +27,8 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from . import (
-    _meta, authoring, coach, filesystem, github, memory_tools,
-    notify as notify_mod, report, rss, sandbox, scheduling,
+    _meta, authoring, coach, filesystem, github,
+    memory_tools, news as news_mod, notify as notify_mod, report, rss, sandbox, scheduling,
     skill_refinement as skill_refinement_mod, watch, weather as weather_mod, web,
 )
 
@@ -408,6 +408,15 @@ def web_fetch(
 def get_weather() -> str:
     """Today's weather (condition, high/low °C) for the user's configured home location. Takes NO arguments — the location is read from config, never supplied by you. If it returns 'WEATHER UNAVAILABLE', omit weather rather than inventing a forecast."""
     return weather_mod.get_weather()
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def news_headlines(
+    topic: Annotated[str, Field(description="Optional topic to prefer feeds by label, e.g. 'tech', 'ai', 'world', 'hackernews'. Empty = all sources.")] = "",
+    limit: Annotated[int, Field(description="How many headlines total (1-15).")] = 5,
+) -> str:
+    """Top headlines from the user's configured news feeds as a ready-to-use markdown list of REAL links. Covers every source the user has listed (HN, tech, arXiv, world). Use the returned lines verbatim — never invent links. If it returns 'NEWS_UNAVAILABLE', omit the news section."""
+    return news_mod.news_headlines(topic=topic, limit=limit)
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True})

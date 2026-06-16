@@ -25,33 +25,47 @@ import httpx
 _MAX_ENTRIES = 15
 
 
-def _entry_text(entry, link_tag_name: str) -> str | None:
-    """One stable line per entry: 'YYYY-MM-DD · Title — link'.
+def parse_feed_entries(text: str) -> list[dict[str, str]] | None:
+    """Parse an RSS 2.0 or Atom document into a list of
+    ``{"title", "link", "date"}`` dicts in feed-head order, or None if it
+    isn't a recognisable feed. Shared by ``rss_feed`` (change-diff) and the
+    ``news_headlines`` tool so feed parsing lives in exactly one place.
 
-    Date first so the diff groups by recency; we deliberately omit the
-    body so a publisher editing post text doesn't read as a new post."""
-    title_el = entry.find("title")
-    title = title_el.get_text(strip=True) if title_el else "(untitled)"
+    Atom carries the link in a ``href`` attribute, RSS in element text — both
+    are handled. Entries with neither a title nor a link are dropped."""
+    from bs4 import BeautifulSoup
 
-    link_el = entry.find(link_tag_name)
-    if link_el is None:
-        link = ""
-    elif link_el.get("href"):  # Atom: <link href="...">
-        link = link_el.get("href", "")
-    else:  # RSS: <link>text</link>
-        link = link_el.get_text(strip=True)
-
-    date_el = (
-        entry.find("pubDate")
-        or entry.find("published")
-        or entry.find("updated")
-        or entry.find("date")
-    )
-    date = date_el.get_text(strip=True)[:25] if date_el else ""
-
-    if title == "(untitled)" and not link:
+    soup = BeautifulSoup(text, "xml")
+    items = soup.find_all("item")
+    entries = items if items else soup.find_all("entry")
+    if not entries:
         return None
-    return f"{date} · {title} — {link}".strip(" ·")
+
+    parsed: list[dict[str, str]] = []
+    for entry in entries:
+        title_el = entry.find("title")
+        title = title_el.get_text(strip=True) if title_el else ""
+
+        link_el = entry.find("link")
+        if link_el is None:
+            link = ""
+        elif link_el.get("href"):  # Atom: <link href="...">
+            link = link_el.get("href", "")
+        else:  # RSS: <link>text</link>
+            link = link_el.get_text(strip=True)
+
+        date_el = (
+            entry.find("pubDate")
+            or entry.find("published")
+            or entry.find("updated")
+            or entry.find("date")
+        )
+        date = date_el.get_text(strip=True)[:25] if date_el else ""
+
+        if not title and not link:
+            continue
+        parsed.append({"title": title or "(untitled)", "link": link, "date": date})
+    return parsed
 
 
 def _build_summary(text: str) -> str | None:
@@ -59,22 +73,22 @@ def _build_summary(text: str) -> str | None:
     recognisable feed."""
     from bs4 import BeautifulSoup
 
-    soup = BeautifulSoup(text, "xml")
-    # RSS uses <item>; Atom uses <entry>. Atom <link> carries the URL in
-    # an href attribute, RSS in element text — _entry_text handles both.
-    items = soup.find_all("item")
-    entries = items if items else soup.find_all("entry")
-    if not entries:
+    entries = parse_feed_entries(text)
+    if entries is None:
         return None
 
-    channel_title_el = soup.find("title")
-    feed_title = channel_title_el.get_text(strip=True) if channel_title_el else "(feed)"
+    feed_title_el = BeautifulSoup(text, "xml").find("title")
+    feed_title = feed_title_el.get_text(strip=True) if feed_title_el else "(feed)"
 
-    lines = [f"feed: {feed_title}", f"entries: {len(entries)} (showing {min(len(entries), _MAX_ENTRIES)})"]
+    lines = [
+        f"feed: {feed_title}",
+        f"entries: {len(entries)} (showing {min(len(entries), _MAX_ENTRIES)})",
+    ]
     for entry in entries[:_MAX_ENTRIES]:
-        line = _entry_text(entry, link_tag_name="link")
-        if line:
-            lines.append(f"  {line}")
+        # Date first so the diff groups by recency; body omitted so a publisher
+        # editing post text doesn't read as a new post.
+        line = f"{entry['date']} · {entry['title']} — {entry['link']}".strip(" ·")
+        lines.append(f"  {line}")
     return "\n".join(lines)
 
 
