@@ -106,6 +106,35 @@ def notify(text: str, preview: bool = False) -> str:
     return f"Notification delivered ({len(text)} chars)."
 
 
+# A single Telegram send timing out used to discard the whole delivery —
+# observed live 2026-06-16: a generated quiz question was lost to one 20s
+# timeout and recorded as a task failure. Transient network blips (timeout,
+# connect reset, DNS hiccup) are retried with short backoff before giving up;
+# only a persistent failure surfaces as an error. Zero LLM cost.
+NOTIFY_SEND_ATTEMPTS = int(os.environ.get("HOMUNCULUS_NOTIFY_SEND_ATTEMPTS", "3"))
+_NOTIFY_BACKOFF_S = (1.0, 2.5)  # waited before attempt 2, attempt 3
+
+
+def _post_telegram(token: str, payload: dict) -> tuple[object | None, str | None]:
+    """POST to Telegram, retrying transient transport errors (timeout, connect
+    reset). Returns (response, None) once a request completes (any HTTP status),
+    or (None, error) if every attempt hit a transport error. An HTTP error
+    status is NOT retried here — the caller handles the HTML→plain fallback."""
+    last_err = ""
+    for attempt in range(NOTIFY_SEND_ATTEMPTS):
+        try:
+            return httpx.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json=payload,
+                timeout=10.0,
+            ), None
+        except httpx.HTTPError as e:
+            last_err = str(e) or type(e).__name__
+            if attempt < NOTIFY_SEND_ATTEMPTS - 1:
+                time.sleep(_NOTIFY_BACKOFF_S[min(attempt, len(_NOTIFY_BACKOFF_S) - 1)])
+    return None, last_err
+
+
 def _send_to_telegram(text: str) -> str | None:
     """Send text to Telegram. Returns an error string on failure, None on success."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -114,25 +143,21 @@ def _send_to_telegram(text: str) -> str | None:
         return None  # silently skip if not configured (e.g. during tests)
 
     body = _markdown_to_telegram_html(text)
-    try:
-        response = httpx.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": body, "parse_mode": "HTML", "disable_web_page_preview": True},
-            timeout=10.0,
-        )
-    except httpx.HTTPError as e:
-        return f"ERROR: Telegram request failed: {e}"
+    response, err = _post_telegram(
+        token,
+        {"chat_id": chat_id, "text": body, "parse_mode": "HTML", "disable_web_page_preview": True},
+    )
+    if err is not None:
+        return f"ERROR: Telegram request failed after {NOTIFY_SEND_ATTEMPTS} attempts: {err}"
 
     if response.status_code != 200:
         plain = _strip_markdown(text)
-        try:
-            fallback = httpx.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": plain, "disable_web_page_preview": True},
-                timeout=10.0,
-            )
-        except httpx.HTTPError as e:
-            return f"ERROR: Telegram HTML send failed ({response.status_code}) and fallback also failed: {e}"
+        fallback, ferr = _post_telegram(
+            token,
+            {"chat_id": chat_id, "text": plain, "disable_web_page_preview": True},
+        )
+        if ferr is not None:
+            return f"ERROR: Telegram HTML send failed ({response.status_code}) and fallback also failed: {ferr}"
         if fallback.status_code != 200:
             return f"ERROR: Telegram send failed ({response.status_code}); fallback {fallback.status_code}"
 
