@@ -219,6 +219,31 @@ _GUARD_FUTURE_PROMISE_RE = re.compile(
     r"\s+(?:another|the\s+next|more|other|again|now|next)"
 )
 
+# Forward-tense MUTATION promise: "I'll edit the skill", "I'll create a task".
+# Same lie family as action_claim_without_tool_call (past tense) and
+# false_future_promise (retry shape) — the model says it WILL change a concrete
+# artifact but the turn ends without calling the tool, so nothing happens. Tight
+# on purpose: needs a promise verb AND a concrete artifact noun in the same
+# clause ([^.?!] stops at sentence/question boundaries), so "I'll update you"
+# (no artifact) and clarifying questions don't match.
+_GUARD_MUTATION_PROMISE_RE = re.compile(
+    r"(?i)\b(?:I'?ll|I\s+will|let\s+me|I'?m\s+going\s+to)\s+"
+    r"(?:edit|update|modify|change|adjust|add|create|write|set\s+up|configure|"
+    r"file|propose|register|schedule|build|implement|revise|tweak)\b"
+    r"[^.?!]*?\b"
+    r"(?:skill|task|brief|reminder|proposal|memory|note|playbook|workflow|"
+    r"schedule|quiz|feed)\b"
+)
+
+# Tools that actually change persistent state. A mutation PROMISE is only a lie
+# if NONE of these ran this turn — if the agent called one, it acted on the
+# promise (success/failure of that call is covered by the success-claim guards).
+_MUTATING_TOOLS = frozenset({
+    "propose_skill", "create_task", "update_task", "delete_task", "cancel_task",
+    "complete_task", "record_failure", "write_file", "append_file", "remember",
+    "schedule_next_tick", "update_world_state", "quiz_pick",
+})
+
 
 # Map tool names → which arg holds the targeted resource (file path or
 # URL). The claim/result consistency check uses this to recover the
@@ -3233,6 +3258,19 @@ class Agent:
         if _GUARD_FUTURE_PROMISE_RE.search(reply):
             violations.append("false_future_promise")
 
+        # Forward-tense mutation promise with no mutating tool called this turn.
+        # "I'll edit the daily-LeetCode skill to add explanations." with zero
+        # tool calls is the same lie as a retry promise — the turn ends and the
+        # edit never happens. Only when tools are available (not Q&A-only) and
+        # the reply isn't a clarifying question (no '?').
+        if (
+            tools.SCHEMAS
+            and "?" not in reply
+            and not (tool_names_used & _MUTATING_TOOLS)
+            and _GUARD_MUTATION_PROMISE_RE.search(reply)
+        ):
+            violations.append("false_mutation_promise")
+
         if not violations:
             return reply, []
 
@@ -3322,6 +3360,17 @@ class Agent:
         "follow-up work you won't perform."
     )
 
+    _MUTATION_PROMISE_CORRECTION_PROMPT = (
+        "Your previous reply said you WILL edit/create/update a skill, task, or "
+        "file (e.g. 'I'll edit the skill to add ...'), but you did not call any "
+        "tool that performs that change — and your turn ends after you reply, so "
+        "the change will NEVER happen. The user asked for it, so DO IT NOW: call "
+        "propose_skill (to change a skill), create_task / update_task (for a "
+        "task), or the appropriate tool, and report the REAL result it returns. "
+        "If you genuinely need one detail first, ask that question plainly — do "
+        "not promise an edit you won't make."
+    )
+
     def _self_correct(self, tool_names_used: set[str], violations: list[str] | None = None, tool_outcomes: list[dict] | None = None) -> str:
         """Inject a correction prompt and re-call the LLM once (non-streaming).
 
@@ -3344,6 +3393,8 @@ class Agent:
             correction = self._CLAIM_INCONSISTENT_CORRECTION_PROMPT
         elif violations and "false_future_promise" in violations:
             correction = self._FUTURE_PROMISE_CORRECTION_PROMPT
+        elif violations and "false_mutation_promise" in violations:
+            correction = self._MUTATION_PROMISE_CORRECTION_PROMPT
         else:
             correction = self._SELF_CORRECTION_PROMPT
         self.history.append({
