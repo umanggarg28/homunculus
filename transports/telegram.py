@@ -22,14 +22,17 @@ Run:
     docker compose stop telegram
 """
 
+import asyncio
 import logging
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
 from telegram import Update
+from telegram.error import Forbidden, InvalidToken, NetworkError, TimedOut
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -314,15 +317,7 @@ def main() -> None:
     else:
         logging.info("Bot locked to user_id=%d", allowed)
 
-    app = Application.builder().token(token).build()
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("reset", reset_command))
-    app.add_handler(CommandHandler("pause", pause_command))
-    app.add_handler(CommandHandler("resume", resume_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
     def _ping_loop() -> None:
-        import time
         while True:
             try:
                 _events.emit("service_ping", name="telegram", text="alive")
@@ -332,8 +327,64 @@ def main() -> None:
 
     threading.Thread(target=_ping_loop, daemon=True).start()
 
+    def _build_app() -> Application:
+        # Fresh Application per attempt — a failed initialize leaves the old
+        # one in a partial state that can't be re-run.
+        app = Application.builder().token(token).build()
+        app.add_handler(CommandHandler("start", start_command))
+        app.add_handler(CommandHandler("reset", reset_command))
+        app.add_handler(CommandHandler("pause", pause_command))
+        app.add_handler(CommandHandler("resume", resume_command))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        return app
+
     logging.info("Telegram bot starting (long-polling)...")
-    app.run_polling()
+    run_polling_with_retry(_build_app)
+
+
+def _fresh_event_loop() -> None:
+    """Install a new asyncio event loop for the next polling attempt.
+
+    run_polling() runs the bot on the current loop and CLOSES it on exit, so a
+    retry on the old loop raises 'Event loop is closed'. A fresh loop per
+    attempt lets the listener actually reconnect, not just avoid crashing."""
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+
+def run_polling_with_retry(build_app, *, base_backoff: int = 30, max_backoff: int = 600,
+                           sleep=time.sleep, reset_loop=_fresh_event_loop) -> None:
+    """Run the bot, surviving an unreachable Telegram.
+
+    ``run_polling()`` initializes by calling ``get_me()``, which times out when
+    api.telegram.org is unreachable (e.g. a regional block). Crashing here would
+    make Docker restart the container in a tight loop. Instead we wait and retry
+    with exponential backoff so the listener stays alive and reconnects when
+    Telegram is reachable again. Outbound notifications are unaffected:
+    tools.notify degrades to Discord + the web feed independently of this.
+    """
+    backoff = base_backoff
+    while True:
+        reset_loop()  # fresh loop each attempt — run_polling() closes the loop on exit
+        app = build_app()
+        try:
+            app.run_polling()
+            return  # clean shutdown (SIGTERM) — don't loop
+        except (InvalidToken, Forbidden):
+            # Misconfiguration, not a transient outage — retrying forever would
+            # just hide it. Fail loudly so the operator fixes the token/perms.
+            logging.exception("Telegram rejected the bot credentials — not retrying")
+            raise
+        except (TimedOut, NetworkError) as e:
+            logging.warning(
+                "Telegram unreachable (%s). Retrying in %ds — Discord and the "
+                "web feed are unaffected.", e, backoff,
+            )
+        except Exception:
+            # Unexpected, but treat as transient: stay alive and retry rather
+            # than crash-loop. logging.exception keeps it visible in the logs.
+            logging.exception("Telegram polling failed; retrying in %ds", backoff)
+        sleep(backoff)
+        backoff = min(backoff * 2, max_backoff)
 
 
 if __name__ == "__main__":
