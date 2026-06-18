@@ -485,10 +485,12 @@ class Memory:
     # Falls back to keyword search if the Gemini key is missing or the
     # API is unavailable.
 
-    _EMBED_MODEL = "models/gemini-embedding-2"
+    # gemini-embedding-001 is the GA embedding model (3072-dim, free tier:
+    # 1500 RPD). Override the model id with HOMUNCULUS_EMBED_MODEL.
+    _EMBED_MODEL = os.environ.get("HOMUNCULUS_EMBED_MODEL", "gemini-embedding-001")
     _EMBED_URL = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        "gemini-embedding-2:embedContent?key={key}"
+        "{model}:embedContent?key={key}"
     )
     _EMBED_DIM = 3072
 
@@ -590,15 +592,21 @@ class Memory:
             return []
 
     def _embed(self, text: str) -> list[float] | None:
-        """Call Gemini embedding API. Returns a float vector or None on failure."""
-        key = os.environ.get("HOMUNCULUS_API_KEY", "")
+        """Call the Gemini embedding API. Returns a float vector or None on
+        failure. Requires a Google AI Studio key (GOOGLE_API_KEY / GEMINI_API_KEY)
+        — distinct from the OpenRouter LLM key, since the endpoint is Google's,
+        not the chat provider's. Missing key → keyword-search fallback."""
+        key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY", "")
         if not key:
             return None
         try:
             import httpx
             resp = httpx.post(
-                self._EMBED_URL.format(key=key),
-                json={"model": self._EMBED_MODEL, "content": {"parts": [{"text": text[:8000]}]}},
+                self._EMBED_URL.format(model=self._EMBED_MODEL, key=key),
+                json={
+                    "model": f"models/{self._EMBED_MODEL}",
+                    "content": {"parts": [{"text": text[:8000]}]},
+                },
                 timeout=10.0,
             )
             if resp.status_code != 200:
