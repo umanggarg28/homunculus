@@ -14,6 +14,7 @@ Hardening notes:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -35,6 +36,14 @@ except Exception:  # pragma: no cover — fallback if dep missing in container
 # bug-induced storm of pushes.
 NOTIFY_MAX_PER_WINDOW = int(os.environ.get("HOMUNCULUS_NOTIFY_MAX_PER_MIN", "5"))
 NOTIFY_WINDOW_S = float(os.environ.get("HOMUNCULUS_NOTIFY_WINDOW_S", "60"))
+
+# Idempotency: re-sending the exact same text within this window is suppressed,
+# so a retry storm, a heartbeat restart mid-run, or a skill that re-calls notify
+# on a partial success can never produce duplicate user messages. The guarantee
+# is deterministic — it does not depend on the model reading the return value
+# correctly. Set to 0 to disable. Two genuinely-identical messages minutes apart
+# essentially only happen from a bug or retry, so a few minutes is safe.
+NOTIFY_DEDUP_WINDOW_S = float(os.environ.get("HOMUNCULUS_NOTIFY_DEDUP_WINDOW_S", "300"))
 
 # Telegram-supported HTML tags. Anything else we generate gets stripped
 # before send so a stray `<table>` from a code block doesn't 400 the API.
@@ -101,8 +110,14 @@ def deliver(text: str) -> dict:
     The web app is treated as a guaranteed channel: we record FIRST so a delivery
     is never lost even when every push channel is unavailable. Push channels are
     best-effort on top. Returns a dict:
-    {recorded: bool, delivered: [names], failed: [(name, err)]}.
+    {recorded: bool, delivered: [names], failed: [(name, err)], duplicate: bool}.
+
+    Idempotent: an exact-text resend within NOTIFY_DEDUP_WINDOW_S is suppressed
+    (duplicate=True) and reaches no channel, so the user never gets the same
+    message twice no matter how many times this is called.
     """
+    if _recently_delivered(text):
+        return {"recorded": False, "delivered": [], "failed": [], "duplicate": True}
     recorded = _record_to_feed(text)
     delivered: list[str] = []
     failed: list[tuple[str, str]] = []
@@ -115,7 +130,43 @@ def deliver(text: str) -> dict:
             failed.append((name, err))
         else:
             delivered.append(name)
-    return {"recorded": recorded, "delivered": delivered, "failed": failed}
+    if failed:
+        # Raw transport errors are diagnostic, not actionable by the agent.
+        # They live in the logs so they don't leak into the agent-facing
+        # return, where words like "failed"/"timed out" read as "retry me".
+        logging.warning(
+            "notify: delivered via %s; channel(s) unreachable: %s",
+            delivered or ["web feed only"],
+            "; ".join(f"{nm} ({err})" for nm, err in failed),
+        )
+    return {"recorded": recorded, "delivered": delivered, "failed": failed, "duplicate": False}
+
+
+def _recently_delivered(text: str) -> bool:
+    """True if this exact text was delivered within NOTIFY_DEDUP_WINDOW_S. Reads
+    the persistent feed log (every delivery records there), so the dedup holds
+    across separate notify() calls in one run and across a process restart. On
+    any read error it returns False — failing open, so a dedup-store hiccup never
+    silently swallows a real notification."""
+    if NOTIFY_DEDUP_WINDOW_S <= 0:
+        return False
+    try:
+        memory_dir = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
+        queue_path = memory_dir / "_notifications.jsonl"
+        if not queue_path.exists():
+            return False
+        cutoff = time.time() - NOTIFY_DEDUP_WINDOW_S
+        # Notifications are infrequent; scanning the tail is cheap and bounds work.
+        for line in queue_path.read_text(encoding="utf-8").splitlines()[-50:]:
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if entry.get("text") == text and entry.get("ts", 0) >= cutoff:
+                return True
+    except OSError:
+        return False
+    return False
 
 
 def _channel_senders() -> list[tuple[str, "callable"]]:
@@ -131,21 +182,35 @@ def _channel_senders() -> list[tuple[str, "callable"]]:
 
 
 def _format_delivery(text: str, result: dict) -> str:
-    """The agent-facing summary. Success when the message reached at least the
-    always-on web feed — a blocked push channel must NOT fail the task for days
-    (the agent should still complete_task; the message is readable in the app)."""
-    n = len(text)
-    parts: list[str] = []
-    if result["recorded"]:
-        parts.append(f"recorded to the web app feed ({n} chars)")
-    if result["delivered"]:
-        parts.append("pushed via " + ", ".join(result["delivered"]))
-    if result["failed"]:
-        parts.append("push channel(s) unavailable: "
-                     + "; ".join(f"{nm} ({err})" for nm, err in result["failed"]))
+    """The agent-facing result. The web app feed is the always-on channel, so a
+    message that reaches the feed (or any push channel) IS delivered — and the
+    return must read that way to a weak model, or it resends the same message
+    over and over. So we (a) lead with an unambiguous verdict and an explicit
+    "do not resend", and (b) keep raw transport errors out of the string: words
+    like "failed"/"timed out"/"ERROR" from a best-effort channel read as "the
+    call failed, retry me". Those go to the logs instead (see deliver()). A hard
+    ERROR is returned only when the message reached nothing at all."""
+    if result.get("duplicate"):
+        return (
+            "ALREADY DELIVERED — this exact message was just sent, so this call "
+            "was suppressed as a duplicate. The user has it. Do not resend."
+        )
     if not (result["recorded"] or result["delivered"]):
         return "ERROR: notify could not record or deliver the message anywhere."
-    return "Notification delivered — " + "; ".join(parts) + "."
+
+    reached: list[str] = []
+    if result["recorded"]:
+        reached.append("web app feed")
+    reached.extend(result["delivered"])
+    summary = f"DELIVERED to the user via {', '.join(reached)}. Do not resend."
+
+    if result["failed"]:
+        skipped = ", ".join(nm for nm, _ in result["failed"])
+        summary += (
+            f" ({skipped} unreachable and skipped — expected, no action needed; "
+            f"the user already has the message.)"
+        )
+    return summary
 
 
 # Transient send failures (timeout, connect reset, DNS hiccup) are retried with
