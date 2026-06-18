@@ -319,56 +319,6 @@ def _claim_target_inconsistencies(reply: str, tool_outcomes: list[dict]) -> list
     return inconsistent
 
 
-# Link-grounding verification (source-agnostic). The weak model fabricates
-# news/citation links — it presents plausible URLs (or item?id=N discussion
-# links) it never fetched. The rule, generalised from the prop-NNNN check
-# above and matching OpenClaw's "verify the URL before using it" / Hermes's
-# "verify every citation": any external link the agent puts in a delivery or
-# final reply must have appeared in a tool result THIS turn. A link that
-# didn't come from a real fetch is treated as fabricated.
-_URL_RE = re.compile(r"https?://[^\s'\"`)>\]]+", re.IGNORECASE)
-
-# Tools that deliver text to the user out-of-band (not the chat reply). Their
-# payload is link-verified before dispatch — the fabricated-news bug rides in
-# here, not in the final assistant message.
-_DELIVERY_TOOLS = frozenset({"notify"})
-
-# Hosts whose links are safe to emit without a fetch: the app's own surfaces
-# and ubiquitous references the model legitimately knows. Kept deliberately
-# tiny — the point is to catch invented news/citation links, not to whitelist
-# the open web.
-_LINK_ALLOWED_HOSTS = (
-    "localhost", "127.0.0.1", "homunculus", "github.com/umanggarg28",
-)
-
-
-def _normalize_url(url: str) -> str:
-    """Strip trailing punctuation a sentence/markdown wrapper leaves on a URL
-    so the same link compares equal whether it ended a sentence or sat in
-    `[t](url)`."""
-    return url.rstrip(".,;:!?)\"'`>]").strip().lower()
-
-
-def _extract_urls(text: str) -> set[str]:
-    if not isinstance(text, str) or not text:
-        return set()
-    return {_normalize_url(m.group(0)) for m in _URL_RE.finditer(text)}
-
-
-def _unverified_urls(text: str, grounded_urls: set[str]) -> set[str]:
-    """URLs in ``text`` that did NOT appear in any tool result this turn and
-    aren't on the tiny allow-list. A non-empty result means the text carries
-    links the agent never actually fetched — i.e. fabricated."""
-    out: set[str] = set()
-    for url in _extract_urls(text):
-        if url in grounded_urls:
-            continue
-        if any(h in url for h in _LINK_ALLOWED_HOSTS):
-            continue
-        out.add(url)
-    return out
-
-
 def tool_result_indicates_failure(result) -> bool:
     """Whether a tool result string signals failure.
 
@@ -2436,9 +2386,6 @@ class Agent:
         # tool call so we can answer "did the agent actually succeed at the
         # action it's now claiming to have done?"
         tool_outcomes: list[dict] = []
-        # Every external URL seen in a tool result this turn. A delivery (or
-        # final reply) may only carry links from this set — see _unverified_urls.
-        grounded_urls: set[str] = set()
         # Fresh canary per request. The token gets embedded in the
         # system prompt by _current_system_prompt and checked against
         # every final reply by _detect_prompt_leak.
@@ -2983,26 +2930,6 @@ class Agent:
                         f"ERROR: invalid arguments for '{name}': {validation_error}. "
                         f"Check the tool schema and retry with corrected arguments."
                     )
-                # Link-grounding gate on delivery tools. The fabricated-news
-                # bug lives in the notify() payload, not the final reply, so we
-                # verify HERE: every link in the message must have come from a
-                # tool result this turn. Reject (don't deliver) when it didn't,
-                # so the model drops the invented link or re-fetches.
-                elif name in _DELIVERY_TOOLS and (
-                    bad := _unverified_urls((args or {}).get("text", ""), grounded_urls)
-                ):
-                    result = (
-                        f"ERROR: the message contains link(s) that did not come from any "
-                        f"tool result this turn: {', '.join(sorted(bad))}. These are likely "
-                        f"fabricated. Call news_headlines / web_fetch to get REAL links, "
-                        f"then use those verbatim — or remove the link(s) — and send again."
-                    )
-                    events.emit(
-                        "output_guard",
-                        name=name,
-                        text="blocked delivery: unverified link(s)",
-                        result=", ".join(sorted(bad))[:120],
-                    )
                 else:
                     # Intercept load_tool BEFORE dispatching so the
                     # active set is updated for the next LLM call. The
@@ -3076,12 +3003,6 @@ class Agent:
                     "args": args,
                     "success": _outcome_success,
                 })
-                # Harvest real links from successful tool results so a later
-                # delivery (or the final reply) can be checked against them.
-                # Only successful results ground a link — an ERROR string that
-                # happens to echo a URL must not whitelist it.
-                if _outcome_success and isinstance(result, str):
-                    grounded_urls |= _extract_urls(result)
                 # Terminal-tool accounting: a successful call to any of
                 # these closes the agent's responsibility for one due
                 # task. The post-iteration check uses the counter to
