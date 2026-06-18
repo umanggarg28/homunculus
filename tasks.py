@@ -481,11 +481,19 @@ class TaskStore:
             self._write(remaining)
 
     def run_now(self, task_id: str) -> dict[str, Any]:
-        """Set due_at to now so heartbeat fires on its next tick."""
+        """Set due_at to now so heartbeat fires on its next tick.
+
+        Reactivating a cancelled task starts a fresh failure budget: a task
+        auto-cancelled after consecutive failures would otherwise re-cancel on
+        its very next failure, since the counter survives the cancel. Clearing
+        it on reactivation makes "run now" a genuine reset, not a one-shot.
+        """
         with self._locked():
             tasks = self.all()
             task = self._find(tasks, task_id)
             now_iso = now_user_naive().isoformat(timespec="seconds")
+            if task.get("status") == "cancelled":
+                task["consecutive_failures"] = 0
             task["due_at"] = now_iso
             task["status"] = "active"
             task["updated_at"] = now_iso
