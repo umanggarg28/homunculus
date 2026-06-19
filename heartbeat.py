@@ -109,6 +109,13 @@ you. Do NOT read tasks.json; everything you need to judge is right here:
 Before proposing anything, call list_proposals(status="pending") and skip
 any skill that already has a pending proposal — never file a duplicate.
 
+Also check the `tool trace` on each delivery. If a tool ran multiple times in
+one run (e.g. `notify ×4`), or the trace shows a tool being retried, the skill's
+handling of that tool's RESULT is probably stale — read_file the skill and the
+tool's current behavior, then reconcile the skill to what the tool actually
+returns now (surgical edit). This is how you keep skills in sync with tools that
+changed underneath them — the trace is the evidence, don't wait to be told.
+
 For EACH delivery above:
   a) `last run: failure` → read_file the skill, identify what broke from the
      result, and propose_skill(name=<skill>, kind="skill_edit",
@@ -226,6 +233,11 @@ class TaskGuard:
         # the silent-failure mode (agent loop ran but no due task was
         # completed) and report a *specific* failure.
         self._completed_tasks: set[str] = set()
+        # Ordered tool-call trace for the tick — the sequence of tool names the
+        # agent invoked. Attributed to the run record so the daily reflection
+        # can spot skill staleness that delivered_text/status can't (e.g. a tool
+        # called repeatedly because the skill misreads its result).
+        self._tool_trace: list[str] = []
 
     def on_tool_call(self, name: str, arguments: dict) -> str | None:
         """Hook fn passed to tools.set_pre_execute_hook().
@@ -233,6 +245,7 @@ class TaskGuard:
         Returns None to allow the call, or a non-empty string to block it
         and return that string as the tool result.
         """
+        self._tool_trace.append(name)
         if name == "notify":
             text = str(arguments.get("text") or "")
             # Check criteria across ALL due tasks. If any task's criteria
@@ -334,6 +347,21 @@ class TaskGuard:
         (delivered_text) so the daily reflection can self-critique delivery
         QUALITY, not just pass/fail. Empty if nothing was sent."""
         return "\n\n".join(t for t in self._notify_texts if t)
+
+    def tool_trace(self) -> str:
+        """The tick's tool-call sequence as a compact, run-over-counted string,
+        e.g. 'quiz_pick, notify ×4, recall, complete_task'. Consecutive repeats
+        are collapsed with a count so the reflection sees retry storms at a
+        glance. Empty if no tools ran."""
+        if not self._tool_trace:
+            return ""
+        parts: list[str] = []
+        for name in self._tool_trace:
+            if parts and parts[-1][0] == name:
+                parts[-1] = (name, parts[-1][1] + 1)
+            else:
+                parts.append((name, 1))
+        return ", ".join(n if c == 1 else f"{n} ×{c}" for n, c in parts)
 
     def expected_remaining(self) -> list[str]:
         """Task IDs that were due at the start of this tick but have not yet
@@ -749,6 +777,7 @@ def tick(memory: Memory, model: str | None) -> None:
                 tasks.attribute_delivered_text_to_last_run(
                     task["id"], guard.combined_notify_text()
                 )
+                tasks.attribute_tool_trace_to_last_run(task["id"], guard.tool_trace())
                 _settle_quiz_pending(task, delivered=True)
                 _rate_task_skill(memory, task, "success")
                 continue
@@ -769,6 +798,7 @@ def tick(memory: Memory, model: str | None) -> None:
                 # run status is the authoritative signal.
                 last_runs = current.get("last_runs") or []
                 if last_runs and last_runs[-1].get("status") == "failure":
+                    tasks.attribute_tool_trace_to_last_run(task["id"], guard.tool_trace())
                     _rate_task_skill(memory, task, "failure")
                 continue
             _settle_silent_drop(
@@ -1170,6 +1200,15 @@ def _format_recent_deliveries(tasks: TaskStore, text_cap: int = 1200) -> str:
             body = "delivered_text (what the user received):\n  " + delivered.replace("\n", "\n  ")
         else:
             body = "result: " + (last.get("result") or "")[:400]
+        # The execution trace lets the reflection spot skill staleness that
+        # delivered_text/status can't — e.g. a tool fired repeatedly because
+        # the skill's handling of its result is out of date.
+        trace = (last.get("tool_trace") or "").strip()
+        if trace:
+            body += "\ntool trace: " + trace
+            if "×" in trace:
+                body += ("\n  ⚠ a tool ran multiple times in one run — if the skill "
+                         "didn't intend that, its handling of that tool's result may be stale.")
         blocks.append(header + "\n" + body)
     if not blocks:
         return "(no recent skill-backed deliveries captured yet)"

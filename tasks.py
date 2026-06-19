@@ -637,6 +637,28 @@ class TaskStore:
             runs[-1]["delivered_text"] = text[: self.DELIVERED_TEXT_CAP]
             self._write(tasks)
 
+    def attribute_tool_trace_to_last_run(self, task_id: str, trace: str) -> None:
+        """Retrofit the run's tool-call trace (the sequence of tools the agent
+        invoked) onto the most recent run. The daily reflection reads this to
+        detect skill staleness that delivered_text/status can't show — e.g. a
+        tool called repeatedly because the skill's handling of its result is
+        out of date. Mirrors attribute_delivered_text_to_last_run: idempotent,
+        no-op if empty or no runs."""
+        trace = (trace or "").strip()
+        if not trace:
+            return
+        with self._locked():
+            tasks = self.all()
+            try:
+                task = self._find(tasks, task_id)
+            except KeyError:
+                return
+            runs = task.get("last_runs") or []
+            if not runs:
+                return
+            runs[-1]["tool_trace"] = trace[:1000]
+            self._write(tasks)
+
     def schedule(
         self,
         task_id: str,

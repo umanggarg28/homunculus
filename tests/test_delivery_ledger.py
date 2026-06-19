@@ -131,6 +131,58 @@ def test_combined_notify_text_captures_sent_text():
     assert "second line" in combined
 
 
+# ---- tool trace (skill-staleness evidence for reflection) -----------------
+
+def test_tool_trace_collapses_consecutive_repeats_with_counts():
+    """The trace surfaces retry storms: a tool called repeatedly in a row is
+    collapsed to 'name ×N' so the reflection sees it at a glance."""
+    guard = TaskGuard({"t1": [{"type": "notify_called"}]})
+    assert guard.tool_trace() == ""
+    for name, args in [
+        ("quiz_pick", {}), ("notify", {"text": "q"}), ("notify", {"text": "q"}),
+        ("notify", {"text": "q"}), ("notify", {"text": "q"}), ("complete_task", {}),
+    ]:
+        guard.on_tool_call(name, args)
+    assert guard.tool_trace() == "quiz_pick, notify ×4, complete_task"
+
+
+def test_tool_trace_attributed_and_flagged_in_digest():
+    """The reflection digest includes the trace and flags multi-run tools as a
+    possible stale-skill signal — the evidence the agent reconciles against."""
+    from heartbeat import _format_recent_deliveries
+
+    class _FakeStore:
+        def list(self, status):  # noqa: ARG002
+            return [
+                {"id": "quiz", "skill": "skill_quiz",
+                 "last_runs": [{"status": "failure",
+                                "result": "failed to notify after retries",
+                                "tool_trace": "quiz_pick, notify ×4, complete_task"}]},
+                {"id": "hn", "skill": "skill_hn",
+                 "last_runs": [{"status": "success",
+                                "delivered_text": "HN Summary",
+                                "tool_trace": "rss_feed, notify"}]},
+            ]
+
+    out = _format_recent_deliveries(_FakeStore())
+    assert "tool trace: quiz_pick, notify ×4, complete_task" in out
+    assert "⚠" in out                       # repeat → staleness warning raised
+    assert "tool trace: rss_feed, notify" in out
+    # a clean single-call trace must NOT raise the warning for that block
+    assert out.count("⚠") == 1
+
+
+def test_attribute_tool_trace_to_last_run(tmp_path):
+    store = _real_tasks_module().TaskStore(tmp_path)
+    task = store.create("Quiz", recurrence="daily", due_at="2026-06-11T09:00:00")
+    store.record_failure(task["id"], "notify failed")     # appends a run
+    store.attribute_tool_trace_to_last_run(task["id"], "quiz_pick, notify ×4")
+    assert store.get(task["id"])["last_runs"][-1]["tool_trace"] == "quiz_pick, notify ×4"
+    # idempotent / no-op on empty
+    store.attribute_tool_trace_to_last_run(task["id"], "")
+    assert store.get(task["id"])["last_runs"][-1]["tool_trace"] == "quiz_pick, notify ×4"
+
+
 # ---- notify_unique criterion ----------------------------------------------
 
 def test_notify_unique_blocks_already_delivered_key():
