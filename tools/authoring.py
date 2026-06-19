@@ -30,21 +30,81 @@ def _skills():
     return Skills(Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory")))
 
 
+def _edit_field(edit: dict, *names: str) -> str | None:
+    """Pull a field from an edit dict, tolerating the aliases a weak model
+    reaches for (old / old_str / old_string). Returns None if absent."""
+    for n in names:
+        if n in edit and edit[n] is not None:
+            return str(edit[n])
+    return None
+
+
+def _apply_edits(current: str, edits: list[dict]) -> tuple[str | None, list[str]]:
+    """Apply surgical {old, new} string replacements to a skill body, the way
+    Letta's core_memory_replace / Anthropic's str_replace editor do: each `old`
+    must match EXACTLY and UNIQUELY, or we fail back to the agent so it can add
+    surrounding context and retry. Untouched text is never regenerated, so this
+    can't drop sections or corrupt unicode — the failure modes of a full rewrite
+    that a weak (open-weight) model is especially prone to.
+
+    Returns (new_text, []) on success or (None, [errors])."""
+    errors: list[str] = []
+    if not isinstance(edits, list) or not edits:
+        return None, ["edits must be a non-empty list of {old, new} objects"]
+
+    text = current
+    for i, edit in enumerate(edits):
+        if not isinstance(edit, dict):
+            errors.append(f"edit #{i + 1} must be an object with 'old' and 'new'")
+            continue
+        old = _edit_field(edit, "old", "old_str", "old_string", "old_content")
+        new = _edit_field(edit, "new", "new_str", "new_string", "new_content")
+        if old is None or not old:
+            errors.append(f"edit #{i + 1}: 'old' is required and must be non-empty")
+            continue
+        if new is None:
+            new = ""  # empty new = deletion (Letta semantics)
+        count = text.count(old)
+        if count == 0:
+            errors.append(
+                f"edit #{i + 1}: 'old' text not found in the current skill. "
+                f"Read the skill again and copy the exact text verbatim."
+            )
+        elif count > 1:
+            errors.append(
+                f"edit #{i + 1}: 'old' text matches {count} places — add surrounding "
+                f"context so it identifies exactly one location."
+            )
+        else:
+            text = text.replace(old, new, 1)
+    if errors:
+        return None, errors
+    return text, []
+
+
 def propose_skill(
     name: str,
-    body: str,
+    body: str = "",
     rationale: str = "",
     kind: str | None = None,
     task: dict | None = None,
+    edits: list[dict] | None = None,
 ) -> str:
     """File a skill proposal for human review. Returns JSON describing
-    the queued proposal, or the validation errors to fix."""
+    the queued proposal, or the validation errors to fix.
+
+    A skill_edit may be expressed either as a full `body` rewrite OR as a list
+    of surgical `edits` ({old, new} string replacements against the current
+    skill). Prefer `edits` for targeted changes — it's the str_replace pattern
+    open-weight models handle most reliably, and it cannot drop or corrupt the
+    parts of the skill you didn't touch."""
     name = (name or "").strip()
     if not name:
         return json.dumps({"ok": False, "errors": ["name is required"]})
 
     skills = _skills()
-    exists = skills.load(name) is not None
+    current = skills.load(name)
+    exists = current is not None
 
     # Infer kind if the agent didn't state it, then sanity-check against
     # reality so a "new" proposal can't silently clobber an existing skill.
@@ -59,6 +119,29 @@ def propose_skill(
         return json.dumps({
             "ok": False,
             "errors": [f"skill {name!r} already exists — use kind='skill_edit' to change it"],
+        })
+
+    # Surgical-edit mode: apply {old, new} replacements to the current skill to
+    # produce the full body, which then flows through the same validation and
+    # approval path as a hand-written body. This keeps untouched text verbatim.
+    if edits is not None:
+        if kind == KIND_NEW_SKILL:
+            return json.dumps({
+                "ok": False,
+                "errors": ["edits apply to an existing skill; a new_skill needs a full body"],
+            })
+        if body:
+            return json.dumps({
+                "ok": False,
+                "errors": ["provide either a full body OR edits, not both"],
+            })
+        body, edit_errors = _apply_edits(current, edits)
+        if edit_errors:
+            return json.dumps({"ok": False, "errors": edit_errors}, indent=2)
+    elif not body:
+        return json.dumps({
+            "ok": False,
+            "errors": ["provide a full body, or edits=[{old, new}] for a skill_edit"],
         })
 
     result = validate_skill_body(body, expected_name=name)

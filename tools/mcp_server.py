@@ -527,11 +527,15 @@ def quiz_grade(
 @mcp.tool(annotations={"readOnlyHint": False})
 def propose_skill(
     name: Annotated[str, Field(description="Skill name, skill_<slug> (e.g. 'skill_summarize_hn').")],
-    body: Annotated[str, Field(description="The FULL skill markdown: '---' frontmatter (name, description, type: skill, optional states:) then the playbook body.")],
+    body: Annotated[str, Field(description="The COMPLETE skill markdown — '---' frontmatter (name, description, type: skill, optional states:) then the full playbook body. The body REPLACES the file, so it must be self-contained: never write 'unchanged', 'as before', or a diff. Required for a new_skill; for a skill_edit prefer `edits` instead.")] = "",
     rationale: Annotated[str, Field(description="Why this skill / edit — what failure it fixes or what job it enables.")] = "",
     kind: Annotated[
         Literal["new_skill", "skill_edit"] | None,
         Field(description="Omit to auto-detect: edit if the skill exists, else new."),
+    ] = None,
+    edits: Annotated[
+        list[dict] | None,
+        Field(description="Surgical edits for a skill_edit, as [{\"old\": \"exact text from the current skill\", \"new\": \"replacement\"}]. Each `old` must match the current skill EXACTLY and UNIQUELY (add surrounding lines if it's ambiguous); empty `new` deletes. PREFER this over `body` for targeted changes — it changes only what you specify and can't drop or corrupt the rest. Read the skill first, then copy the text to replace verbatim."),
     ] = None,
     task: Annotated[
         dict | None,
@@ -543,7 +547,7 @@ def propose_skill(
     the operator approves or rejects in the dashboard. Use this to learn
     a recurring job from a request, or to fix a skill that keeps failing.
     Validation errors come straight back so you can correct and re-propose."""
-    return authoring.propose_skill(name, body, rationale, kind, task)
+    return authoring.propose_skill(name, body, rationale, kind, task, edits)
 
 
 @mcp.tool(annotations={"readOnlyHint": True})

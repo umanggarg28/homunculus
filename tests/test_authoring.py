@@ -116,3 +116,111 @@ def test_task_on_edit_is_rejected(env):
     ))
     assert out["ok"] is False
     assert any("only allowed on a new_skill" in e for e in out["errors"])
+
+
+# ── surgical {old, new} edits (str_replace pattern) ──────────────────────
+
+EMOJI_BODY = """---
+name: skill_quiz
+description: Daily quiz coach.
+type: skill
+states:
+  - tool: notify
+---
+
+# Quiz — playbook
+
+1. Pick a topic.
+2. notify(text="🧠 Quiz — <question>").
+   - If notify returns a timeout or error, retry once.
+3. Done — emojis like 🧠 must survive an edit untouched.
+"""
+
+
+def _seed(env, body=EMOJI_BODY, name="skill_quiz"):
+    from skills import Skills
+    Skills(env / "memory").save(name, body, source="user-edit")
+
+
+def test_surgical_edit_changes_only_target_and_keeps_rest_verbatim(env):
+    _seed(env)
+    out = json.loads(_authoring.propose_skill(
+        "skill_quiz", kind="skill_edit",
+        edits=[{"old": "If notify returns a timeout or error, retry once.",
+                "new": "Treat a DELIVERED result as success; only retry on ERROR."}],
+        rationale="align with notify contract",
+    ))
+    assert out["ok"] is True, out
+    body = _store(env).get(out["proposal_id"])["body"]
+    assert "Treat a DELIVERED result as success" in body
+    assert "timeout or error, retry once" not in body
+    # untouched content — including the emoji — survives verbatim
+    assert "🧠 Quiz — <question>" in body
+    assert "emojis like 🧠 must survive" in body
+
+
+def test_surgical_edit_deletes_with_empty_new(env):
+    _seed(env)
+    out = json.loads(_authoring.propose_skill(
+        "skill_quiz", kind="skill_edit",
+        edits=[{"old": "\n   - If notify returns a timeout or error, retry once.", "new": ""}],
+    ))
+    assert out["ok"] is True, out
+    assert "retry once" not in _store(env).get(out["proposal_id"])["body"]
+
+
+def test_surgical_edit_old_not_found_bounces(env):
+    _seed(env)
+    out = json.loads(_authoring.propose_skill(
+        "skill_quiz", kind="skill_edit",
+        edits=[{"old": "text that is not in the skill", "new": "x"}],
+    ))
+    assert out["ok"] is False
+    assert any("not found" in e for e in out["errors"])
+    assert _store(env).pending_count() == 0
+
+
+def test_surgical_edit_ambiguous_match_bounces(env):
+    _seed(env)
+    out = json.loads(_authoring.propose_skill(
+        "skill_quiz", kind="skill_edit",
+        edits=[{"old": "🧠", "new": "🤖"}],  # appears twice
+    ))
+    assert out["ok"] is False
+    assert any("matches" in e and "context" in e for e in out["errors"])
+
+
+def test_surgical_edit_on_missing_skill_bounces(env):
+    out = json.loads(_authoring.propose_skill(
+        "skill_ghost", kind="skill_edit", edits=[{"old": "a", "new": "b"}],
+    ))
+    assert out["ok"] is False
+    assert any("no skill named" in e for e in out["errors"])
+
+
+def test_body_and_edits_together_bounces(env):
+    _seed(env)
+    out = json.loads(_authoring.propose_skill(
+        "skill_quiz", VALID_BODY, kind="skill_edit",
+        edits=[{"old": "Pick a topic.", "new": "Pick a hard topic."}],
+    ))
+    assert out["ok"] is False
+    assert any("either a full body OR edits" in e for e in out["errors"])
+
+
+def test_edit_with_neither_body_nor_edits_bounces(env):
+    _seed(env)
+    out = json.loads(_authoring.propose_skill("skill_quiz", kind="skill_edit"))
+    assert out["ok"] is False
+    assert any("full body, or edits" in e for e in out["errors"])
+
+
+def test_edit_field_aliases_accepted(env):
+    """A weak model may reach for old_str/new_str or old_string; accept them."""
+    _seed(env)
+    out = json.loads(_authoring.propose_skill(
+        "skill_quiz", kind="skill_edit",
+        edits=[{"old_str": "Pick a topic.", "new_str": "Pick a hard topic."}],
+    ))
+    assert out["ok"] is True, out
+    assert "Pick a hard topic." in _store(env).get(out["proposal_id"])["body"]
