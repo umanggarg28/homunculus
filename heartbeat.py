@@ -111,9 +111,11 @@ any skill that already has a pending proposal — never file a duplicate.
 
 For EACH delivery above:
   a) `last run: failure` → read_file the skill, identify what broke from the
-     result, and propose_skill(name=<skill>, body=<FULL corrected body>,
-     rationale=<what failed + the fix>, kind="skill_edit"). Keep everything
-     you didn't change verbatim (code, queries, URLs).
+     result, and propose_skill(name=<skill>, kind="skill_edit",
+     edits=[{"old": "<exact text to change>", "new": "<replacement>"}],
+     rationale=<what failed + the fix>). Use `edits` (surgical str_replace),
+     not a full body — it changes only what you target and leaves the rest
+     verbatim. Copy each `old` from the skill exactly.
   b) `last run: success` → SELF-CRITIQUE the delivered_text. A run can pass
      its success_criteria and still be poor. Judge it honestly against what
      the skill is FOR, and flag:
@@ -124,8 +126,8 @@ For EACH delivery above:
          it technically passed.
      If the delivery is genuinely good → no action. If NOT → read_file the
      skill, find the ROOT cause (e.g. a brittle data source the model has to
-     guess from), and propose_skill(kind="skill_edit") with the FULL
-     corrected body: fix the procedure (prefer a reliable structured data
+     guess from), and propose_skill(kind="skill_edit", edits=[{"old": ...,
+     "new": ...}]): fix the procedure (prefer a reliable structured data
      source over scraping/guessing — you MAY web_search to find one) AND,
      where it helps, add a stricter success_criterion so the same gap FAILS
      the gate next time. Do NOT fabricate the fix — base it on what you
