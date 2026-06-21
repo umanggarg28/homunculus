@@ -15,7 +15,7 @@ from __future__ import annotations
 
 
 def test_date_line_comes_after_loadable_tools(tmp_path, monkeypatch):
-    import core
+    from homunculus import core
     monkeypatch.setenv("HOMUNCULUS_AGENTS_MD", str(tmp_path / "nope.md"))
     agent = core.Agent()
     prompt = agent._current_system_prompt()
@@ -31,7 +31,7 @@ def test_date_line_comes_after_loadable_tools(tmp_path, monkeypatch):
 def test_agents_md_comes_before_date_line(tmp_path, monkeypatch):
     """AGENTS.md is mostly stable — must be cacheable, i.e. before
     the volatile date line."""
-    import core
+    from homunculus import core
     agents_path = tmp_path / "AGENTS.md"
     agents_path.write_text("# Persona\nbe terse", encoding="utf-8")
     monkeypatch.setenv("HOMUNCULUS_AGENTS_MD", str(agents_path))
@@ -46,8 +46,8 @@ def test_agents_md_comes_before_date_line(tmp_path, monkeypatch):
 def test_world_state_comes_after_stable_prefix(tmp_path, monkeypatch):
     """World state changes every turn — must be at the end of the
     prompt, after the cacheable prefix."""
-    import core
-    from memory import Memory
+    from homunculus import core
+    from homunculus.memory import Memory
     monkeypatch.setenv("HOMUNCULUS_AGENTS_MD", str(tmp_path / "nope.md"))
     mem = Memory(tmp_path)
     mem.world_state.update({"focus": "testing", "step": 1})
@@ -64,7 +64,7 @@ def test_rate_limit_heads_up_is_last_when_present(monkeypatch):
     """Rate-limit signal is sporadic; when present it must be the
     final piece so its absence/presence doesn't shift the cache key
     of everything before it."""
-    import core
+    from homunculus import core
     monkeypatch.setattr(core, "_PROVIDER_LAST_COOLED_AT", core.time.time())
     monkeypatch.setenv("HOMUNCULUS_AGENTS_MD", "/nope")
     agent = core.Agent()

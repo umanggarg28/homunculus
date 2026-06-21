@@ -17,7 +17,7 @@ import pytest
 from tests.conftest import load_real_tool_submodule
 
 _authoring = load_real_tool_submodule("authoring")
-from proposals import ProposalStore  # noqa: E402
+from homunculus.proposals import ProposalStore  # noqa: E402
 
 
 VALID_BODY = """---
@@ -92,7 +92,7 @@ def test_edit_of_missing_skill_is_rejected(env):
 
 def test_new_skill_over_existing_is_rejected(env):
     # Seed an existing skill, then a 'new_skill' for the same name must bounce.
-    from skills import Skills
+    from homunculus.skills import Skills
     Skills(env / "memory").save("skill_summarize_hn", VALID_BODY, source="user-edit")
     out = json.loads(_authoring.propose_skill("skill_summarize_hn", VALID_BODY, kind="new_skill"))
     assert out["ok"] is False
@@ -100,7 +100,7 @@ def test_new_skill_over_existing_is_rejected(env):
 
 
 def test_kind_inferred_as_edit_for_existing_skill(env):
-    from skills import Skills
+    from homunculus.skills import Skills
     Skills(env / "memory").save("skill_summarize_hn", VALID_BODY, source="user-edit")
     out = json.loads(_authoring.propose_skill("skill_summarize_hn", VALID_BODY))
     assert out["ok"] is True
@@ -108,7 +108,7 @@ def test_kind_inferred_as_edit_for_existing_skill(env):
 
 
 def test_task_on_edit_is_rejected(env):
-    from skills import Skills
+    from homunculus.skills import Skills
     Skills(env / "memory").save("skill_summarize_hn", VALID_BODY, source="user-edit")
     out = json.loads(_authoring.propose_skill(
         "skill_summarize_hn", VALID_BODY, kind="skill_edit",
@@ -138,7 +138,7 @@ states:
 
 
 def _seed(env, body=EMOJI_BODY, name="skill_quiz"):
-    from skills import Skills
+    from homunculus.skills import Skills
     Skills(env / "memory").save(name, body, source="user-edit")
 
 

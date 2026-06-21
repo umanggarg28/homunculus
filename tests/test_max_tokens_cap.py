@@ -15,7 +15,7 @@ Groq, Cerebras) don't reserve credit and can stay at their defaults.
 
 from __future__ import annotations
 
-import core
+from homunculus import core
 
 
 def test_openrouter_gets_max_tokens_cap() -> None:

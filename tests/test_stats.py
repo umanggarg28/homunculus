@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-import stats
+from homunculus import stats
 
 
 def _write_events(path, records):

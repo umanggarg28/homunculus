@@ -21,7 +21,7 @@ def _real_task_store():
     test_schema_validation / test_output_guard) don't replace it with a
     _FakeStore."""
     spec = importlib.util.spec_from_file_location(
-        "tasks_real_anchor_test", Path(__file__).parent.parent / "tasks.py"
+        "tasks_real_anchor_test", Path(__file__).parent.parent / "homunculus" / "tasks.py"
     )
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(mod)  # type: ignore[union-attr]

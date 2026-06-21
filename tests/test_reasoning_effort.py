@@ -9,7 +9,7 @@ chain-of-thought. The agent loop already IS the reasoning structure
 
 from __future__ import annotations
 
-from core import _apply_reasoning_effort
+from homunculus.core import _apply_reasoning_effort
 
 
 def test_gpt_oss_120b_gets_low_reasoning_effort() -> None:

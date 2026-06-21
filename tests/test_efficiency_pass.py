@@ -20,7 +20,7 @@ def core_mod():
     """Import core fresh-enough for the helpers. core itself is never
     stubbed by other tests (they stub `tools`, `mcp`, etc.) so importing
     it directly is safe even after other suites have run."""
-    import core
+    from homunculus import core
     return core
 
 
@@ -86,14 +86,14 @@ def test_always_loaded_contains_load_tool():
     # Direct attribute access via the module; if `tools` is currently
     # stubbed (some other test ran first) this attribute won't exist
     # and the test skips rather than reporting a false failure.
-    import tools
+    from homunculus import tools
     if not hasattr(tools, "ALWAYS_LOADED"):
         pytest.skip("tools module is stubbed by an earlier test; checked separately")
     assert "load_tool" in tools.ALWAYS_LOADED
 
 
 def test_schemas_for_filters_by_name(monkeypatch):
-    import tools
+    from homunculus import tools
     if not hasattr(tools, "schemas_for") or not hasattr(tools, "_manager"):
         pytest.skip("real tools module not loaded in this test environment")
 
@@ -109,7 +109,7 @@ def test_schemas_for_filters_by_name(monkeypatch):
 
 
 def test_tool_overview_excludes_set(monkeypatch):
-    import tools
+    from homunculus import tools
     if not hasattr(tools, "tool_overview") or not hasattr(tools, "_manager"):
         pytest.skip("real tools module not loaded in this test environment")
 

@@ -43,7 +43,7 @@ tasks_stub.TaskStore = lambda *a, **kw: _FakeStore()
 tasks_stub.ALLOWED_RECURRENCE = {"none", "daily", "weekly"}
 sys.modules.setdefault("tasks", tasks_stub)
 
-from core import _validate_tool_args  # noqa: E402
+from homunculus.core import _validate_tool_args  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Fixture: inject a fake schema into tools.SCHEMAS
@@ -70,7 +70,7 @@ FAKE_SCHEMA = {
 
 @pytest.fixture(autouse=True)
 def patch_schemas(monkeypatch):
-    import tools as _tools
+    import homunculus.tools as _tools
     monkeypatch.setattr(_tools, "SCHEMAS", [FAKE_SCHEMA])
 
 

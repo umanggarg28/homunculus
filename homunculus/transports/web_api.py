@@ -32,12 +32,12 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 
-import agent_controls
-import tools
-from core import Agent, API_URL, MODEL
-from memory import Memory
-from transcript import Transcript
-from tasks import ALLOWED_RECURRENCE, TaskStore
+from homunculus import agent_controls
+from homunculus import tools
+from homunculus.core import Agent, API_URL, MODEL
+from homunculus.memory import Memory
+from homunculus.transcript import Transcript
+from homunculus.tasks import ALLOWED_RECURRENCE, TaskStore
 
 
 # --- Config ---------------------------------------------------------------
@@ -74,7 +74,7 @@ STATUS_STALE_SECONDS = 60 * 60
 
 async def _web_ping_loop() -> None:
     """Emit a service_ping event every 10 minutes so /api/status never goes stale."""
-    import events as _ev
+    import homunculus.events as _ev
     while True:
         try:
             _ev.emit("service_ping", name="web", text="alive")
@@ -85,7 +85,7 @@ async def _web_ping_loop() -> None:
 
 @asynccontextmanager
 async def _lifespan(app_: object):
-    import events as _ev
+    import homunculus.events as _ev
     dropped = _ev.rotate(keep_days=14)
     if dropped:
         print(f"[web] rotated _events.jsonl: dropped {dropped} lines older than 14 days", flush=True)
@@ -164,7 +164,7 @@ async def user_tz_set(request: Request) -> JSONResponse:
     if not isinstance(tz, str) or not tz:
         return JSONResponse({"ok": False, "reason": "missing tz"}, status_code=400)
     try:
-        from user_tz import set_user_tz_name, get_user_tz_name
+        from homunculus.user_tz import set_user_tz_name, get_user_tz_name
         set_user_tz_name(tz)
         return JSONResponse({"ok": True, "stored": get_user_tz_name()})
     except Exception as e:
@@ -175,7 +175,7 @@ async def user_tz_set(request: Request) -> JSONResponse:
 def user_tz_get() -> JSONResponse:
     """Return the currently stored user TZ (for debugging / UI display)."""
     try:
-        from user_tz import get_user_tz_name
+        from homunculus.user_tz import get_user_tz_name
         return JSONResponse({"tz": get_user_tz_name()})
     except Exception as e:
         return JSONResponse({"tz": "UTC", "error": str(e)})
@@ -198,7 +198,7 @@ async def user_location_set(request: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "reason": "invalid json"}, status_code=400)
     if not isinstance(body, dict):
         return JSONResponse({"ok": False, "reason": "missing body"}, status_code=400)
-    from user_location import set_user_location
+    from homunculus.user_location import set_user_location
 
     lat, lon, label = body.get("lat"), body.get("lon"), body.get("label", "")
     if lat is None or lon is None:
@@ -206,7 +206,7 @@ async def user_location_set(request: Request) -> JSONResponse:
         city = body.get("city")
         if not isinstance(city, str) or not city.strip():
             return JSONResponse({"ok": False, "reason": "need lat+lon or city"}, status_code=400)
-        from tools.weather import geocode_city
+        from homunculus.tools.weather import geocode_city
         geo = geocode_city(city)
         if not geo:
             return JSONResponse({"ok": False, "reason": f"could not geocode {city!r}"}, status_code=404)
@@ -221,7 +221,7 @@ async def user_location_set(request: Request) -> JSONResponse:
 def user_location_get() -> JSONResponse:
     """Return the stored home location, or {"location": null} if unset."""
     try:
-        from user_location import get_user_location
+        from homunculus.user_location import get_user_location
         return JSONResponse({"location": get_user_location()})
     except Exception as e:
         return JSONResponse({"location": None, "error": str(e)})
@@ -470,7 +470,7 @@ async def agent_controls_update(request: Request) -> JSONResponse:
         tools.set_mode(mode)
     controls = agent_controls.save_controls(body).to_dict()
     controls["mode"] = tools.get_mode()
-    import events as _events
+    import homunculus.events as _events
     _events.emit(
         "agent_controls_updated",
         name="agent_controls",
@@ -641,7 +641,7 @@ def _task_store() -> TaskStore:
 # own behavior.
 
 def _proposal_store():
-    from proposals import ProposalStore
+    from homunculus.proposals import ProposalStore
     return ProposalStore(Path(os.environ.get("HOMUNCULUS_PROPOSALS_FILE", "./proposals.json")))
 
 
@@ -667,7 +667,7 @@ def input_expected() -> JSONResponse:
     sidebar badge. Currently the one persisted 'your turn' state is an
     unanswered quiz question (the agent asked, awaits your answer)."""
     try:
-        from quiz import _store
+        from homunculus.quiz import _store
         p = _store()._load().get("pending") or {}
         # Only a DELIVERED question is "your turn" — a pending whose delivery
         # failed (notify timeout) must not light the badge for a question the
@@ -684,8 +684,8 @@ def input_expected() -> JSONResponse:
 def proposals_approve(proposal_id: str) -> JSONResponse:
     """Approve a pending proposal: re-validate against the live tool
     catalogue, commit the skill (versioned), and create any bundled task."""
-    from skills import Skills
-    from skill_validation import validate_skill_body
+    from homunculus.skills import Skills
+    from homunculus.skill_validation import validate_skill_body
 
     store = _proposal_store()
     p = store.get(proposal_id)
@@ -798,7 +798,7 @@ async def tasks_update(task_id: str, request: Request) -> JSONResponse:
     # can't sit orphaned (the morning-brief bug). A non-empty skill must exist.
     skill = body.get("skill")
     if skill:
-        from skills import Skills
+        from homunculus.skills import Skills
         if Skills(MEMORY_DIR).load(skill) is None:
             raise HTTPException(400, f"skill {skill!r} does not exist — create it first")
     try:
@@ -874,8 +874,8 @@ async def tasks_run_stream(task_id: str, request: Request):
         raise HTTPException(409, f"task is {task.get('status')} — only active tasks can be run")
 
     # Import lazily to avoid pulling heartbeat at module-import time.
-    from heartbeat import HEARTBEAT_PROMPT_TEMPLATE, TaskGuard, _format_due_tasks
-    from user_tz import now_user_tz
+    from homunculus.heartbeat import HEARTBEAT_PROMPT_TEMPLATE, TaskGuard, _format_due_tasks
+    from homunculus.user_tz import now_user_tz
 
     # Stamp last_fired_at and executing=True before we start so concurrent
     # heartbeat ticks don't pick up the same task. Heartbeat's 30-min
@@ -888,7 +888,7 @@ async def tasks_run_stream(task_id: str, request: Request):
     # Fold the linked skill's declared success_criteria into the task's
     # effective criteria — exactly as a scheduled tick's _plan_tick does —
     # so a manual run enforces (and the prompt shows) the same quality bar.
-    from skills import effective_success_criteria
+    from homunculus.skills import effective_success_criteria
     task["success_criteria"] = effective_success_criteria(task, MEMORY_DIR)
     prompt = HEARTBEAT_PROMPT_TEMPLATE.format(
         now_iso=now_user_tz().isoformat(timespec="seconds"),
@@ -903,7 +903,7 @@ async def tasks_run_stream(task_id: str, request: Request):
     tools.set_pre_execute_hook(guard.on_tool_call)
     tools.set_pre_turn_hook(guard.on_pre_turn)
     from datetime import timezone as _tz
-    from core import measure_llm_usage_since
+    from homunculus.core import measure_llm_usage_since
     due_at_before = task.get("due_at")
     started_iso = datetime.now().isoformat(timespec="seconds")
     started_utc = datetime.now(_tz.utc)
@@ -1123,7 +1123,7 @@ async def webhook(request: Request) -> JSONResponse:
         recurrence="none",
         notify=True,
     )
-    import events as _events
+    import homunculus.events as _events
     _events.emit("webhook_received", name=source, text=task_title, result=task["id"])
     return JSONResponse({"ok": True, "mode": "task", "task_id": task["id"], "source": source})
 
@@ -1190,7 +1190,7 @@ def agent_upcoming() -> JSONResponse:
 
 # Pricing + event counting live in stats.py — shared with the agent's
 # own week_in_review tool so both surfaces report identical numbers.
-from stats import model_cost_cents as _model_cost_cents, summarize_events
+from homunculus.stats import model_cost_cents as _model_cost_cents, summarize_events
 
 
 def _build_agent_replay(limit: int = 12) -> list[dict]:
@@ -1378,7 +1378,7 @@ def stats_today() -> JSONResponse:
     """
     from datetime import timezone
     try:
-        from user_tz import get_user_tz_name
+        from homunculus.user_tz import get_user_tz_name
         from zoneinfo import ZoneInfo
         tz = ZoneInfo(get_user_tz_name())
         local_midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)

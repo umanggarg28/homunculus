@@ -15,7 +15,7 @@ Two live bugs (2026-06-11 screenshots):
    and core no longer journals no-op rewrites.
 """
 
-from transports.web_api import _visible_chat_history
+from homunculus.transports.web_api import _visible_chat_history
 
 
 def _user(content, source="web", idx_ts="t"):

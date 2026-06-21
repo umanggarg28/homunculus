@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 from telegram.error import Forbidden, InvalidToken, NetworkError, TimedOut
 
-from transports.telegram import run_polling_with_retry
+from homunculus.transports.telegram import run_polling_with_retry
 
 
 class _FakeApp:

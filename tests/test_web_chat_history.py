@@ -10,8 +10,8 @@ def _load_web_api():
         tools_stub.init = lambda *a, **k: None
         tools_stub.get_mode = lambda: "build"
         tools_stub.set_mode = lambda mode: None
-        sys.modules["tools"] = tools_stub
-    return importlib.import_module("transports.web_api")
+        sys.modules["homunculus.tools"] = tools_stub
+    return importlib.import_module("homunculus.transports.web_api")
 
 
 def test_visible_chat_history_drops_orphan_user_turns():

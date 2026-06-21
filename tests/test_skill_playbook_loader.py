@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from skills import load_skill_playbook
+from homunculus.skills import load_skill_playbook
 
 
 def _write(tmp: Path, name: str, content: str) -> None:
@@ -143,7 +143,7 @@ def test_missing_file_raises_FileNotFoundError(tmp_path):
 
 
 def test_load_skill_success_criteria_compact_form(tmp_path):
-    from skills import load_skill_success_criteria
+    from homunculus.skills import load_skill_success_criteria
     _write(tmp_path, "skill_hn", (
         "---\n"
         "name: skill_hn\n"
@@ -164,7 +164,7 @@ def test_load_skill_success_criteria_compact_form(tmp_path):
 
 
 def test_load_skill_success_criteria_missing_or_none(tmp_path):
-    from skills import load_skill_success_criteria
+    from homunculus.skills import load_skill_success_criteria
     # no such file
     assert load_skill_success_criteria(tmp_path, "nope") == []
     # file with no success_criteria
@@ -175,7 +175,7 @@ def test_load_skill_success_criteria_missing_or_none(tmp_path):
 def test_effective_criteria_is_additive_union(tmp_path):
     """Skill criteria are folded into the task's (canonical) criteria;
     the task is strengthened, never weakened, and duplicates dedupe."""
-    from skills import effective_success_criteria
+    from homunculus.skills import effective_success_criteria
     _write(tmp_path, "skill_hn", (
         "---\nname: skill_hn\ntype: skill\n"
         "success_criteria:\n"
@@ -194,7 +194,7 @@ def test_effective_criteria_is_additive_union(tmp_path):
 
 
 def test_effective_criteria_no_skill_unchanged(tmp_path):
-    from skills import effective_success_criteria
+    from homunculus.skills import effective_success_criteria
     task = {"id": "t", "success_criteria": [{"type": "notify_called"}]}
     assert effective_success_criteria(task, tmp_path) == [{"type": "notify_called"}]
 
@@ -202,7 +202,7 @@ def test_effective_criteria_no_skill_unchanged(tmp_path):
 def test_effective_criteria_skill_without_criteria_unchanged(tmp_path):
     """A skill-backed task whose skill declares no criteria keeps its own
     exactly (the provable no-op for every live task except HN)."""
-    from skills import effective_success_criteria
+    from homunculus.skills import effective_success_criteria
     _write(tmp_path, "skill_q", "---\nname: skill_q\ntype: skill\nstates:\n  - tool: notify\n---\nbody")
     task = {"id": "t", "skill": "skill_q",
             "success_criteria": [{"type": "notify_called"}, {"type": "notify_min_chars", "n": 40}]}

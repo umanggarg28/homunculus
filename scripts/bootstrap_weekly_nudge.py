@@ -29,7 +29,7 @@ except ImportError:
 def _user_tz_name() -> str:
     try:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from user_tz import get_user_tz_name  # type: ignore[import-not-found]
+        from homunculus.user_tz import get_user_tz_name  # type: ignore[import-not-found]
         return get_user_tz_name()
     except Exception:
         return "Asia/Kolkata"
@@ -175,7 +175,7 @@ def _ensure_skill_file() -> None:
 
 def main() -> int:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from tasks import TaskStore  # type: ignore[import-not-found]
+    from homunculus.tasks import TaskStore  # type: ignore[import-not-found]
     from pathlib import Path
 
     _ensure_skill_file()

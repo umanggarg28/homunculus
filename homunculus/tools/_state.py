@@ -8,7 +8,7 @@ startup, and every tool reads via the helpers below.
 
 from __future__ import annotations
 
-from memory import Memory
+from homunculus.memory import Memory
 
 
 _memory: Memory | None = None

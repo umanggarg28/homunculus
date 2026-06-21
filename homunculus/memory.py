@@ -39,12 +39,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-from archival import ArchivalMemory
-from notifications import NotificationQueue
-from stores import NextTickStore, ReflectionStore, WorldStateStore
+from homunculus.archival import ArchivalMemory
+from homunculus.notifications import NotificationQueue
+from homunculus.stores import NextTickStore, ReflectionStore, WorldStateStore
 
 try:
-    import events as _events
+    import homunculus.events as _events
 except ImportError:
     _events = None  # type: ignore
 

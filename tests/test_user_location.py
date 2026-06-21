@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-import user_location
+from homunculus import user_location
 from tests.conftest import load_real_tool_submodule
 
 weather = load_real_tool_submodule("weather")

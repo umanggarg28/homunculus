@@ -53,7 +53,7 @@ tasks_stub.TaskStore = lambda *a, **kw: _FakeStore()
 tasks_stub.ALLOWED_RECURRENCE = {"none", "daily", "weekly"}
 sys.modules.setdefault("tasks", tasks_stub)
 
-from core import Agent  # noqa: E402  (import after stubs)
+from homunculus.core import Agent  # noqa: E402  (import after stubs)
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +187,7 @@ def test_clean_reply_passes(text):
 # Rule — confabulated success (claims an action worked while every tool failed)
 # ---------------------------------------------------------------------------
 
-from core import tool_result_indicates_failure  # noqa: E402
+from homunculus.core import tool_result_indicates_failure  # noqa: E402
 
 
 def _guard_with_outcomes(reply, tool_outcomes, tool_names_used=None):
@@ -330,7 +330,7 @@ def test_tool_result_success_is_not_failure():
 
 # ---- citation-artifact stripping (gpt-oss 【n†source】 leaks) ------------
 
-from core import _strip_citation_artifacts  # noqa: E402
+from homunculus.core import _strip_citation_artifacts  # noqa: E402
 
 
 def test_strips_citation_markers():

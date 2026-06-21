@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from skills import Skills
+from homunculus.skills import Skills
 
 
 # ---- names + paths ----------------------------------------------------

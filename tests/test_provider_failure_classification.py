@@ -21,15 +21,15 @@ import types
 
 import httpx
 
-if "tools.notify" not in sys.modules:
-    _stub = types.ModuleType("tools.notify")
+if "homunculus.tools.notify" not in sys.modules:
+    _stub = types.ModuleType("homunculus.tools.notify")
     _telegram_calls: list[str] = []
     _stub._send_to_telegram = lambda text: _telegram_calls.append(text) or None
     _stub._telegram_calls = _telegram_calls
-    sys.modules["tools.notify"] = _stub
+    sys.modules["homunculus.tools.notify"] = _stub
 
-from core import _is_transient_provider_error  # noqa: E402
-from heartbeat import _is_infra_error  # noqa: E402
+from homunculus.core import _is_transient_provider_error  # noqa: E402
+from homunculus.heartbeat import _is_infra_error  # noqa: E402
 
 
 def _resp(status: int, body: str = "") -> httpx.Response:

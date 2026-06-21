@@ -2,8 +2,8 @@
 heartbeat tick is fully inert — it must return before touching task
 state, memory, or any LLM machinery."""
 
-import agent_controls
-import heartbeat
+from homunculus import agent_controls
+from homunculus import heartbeat
 
 
 def test_paused_round_trips_through_controls(tmp_path):

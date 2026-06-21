@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-import core
+from homunculus import core
 
 
 def _capture_tool_choice():

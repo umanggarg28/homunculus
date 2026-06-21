@@ -26,8 +26,8 @@ from unittest.mock import patch
 
 import pytest
 
-import core
-import tools as tools_module
+from homunculus import core
+import homunculus.tools as tools_module
 
 
 # ---- shared fixtures -------------------------------------------------

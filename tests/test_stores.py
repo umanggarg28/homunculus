@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from stores import NextTickStore, ReflectionStore, WorldStateStore
+from homunculus.stores import NextTickStore, ReflectionStore, WorldStateStore
 
 
 # ---- WorldStateStore --------------------------------------------------
@@ -111,21 +111,21 @@ def test_reflection_mark_overwrites(tmp_path: Path) -> None:
 
 
 def test_memory_world_state_returns_store(tmp_path: Path) -> None:
-    from memory import Memory
+    from homunculus.memory import Memory
     mem = Memory(tmp_path)
     assert isinstance(mem.world_state, WorldStateStore)
     assert mem.world_state is mem.world_state  # lazy singleton
 
 
 def test_memory_next_tick_returns_store(tmp_path: Path) -> None:
-    from memory import Memory
+    from homunculus.memory import Memory
     mem = Memory(tmp_path)
     assert isinstance(mem.next_tick, NextTickStore)
     assert mem.next_tick is mem.next_tick
 
 
 def test_memory_reflection_returns_store(tmp_path: Path) -> None:
-    from memory import Memory
+    from homunculus.memory import Memory
     mem = Memory(tmp_path)
     assert isinstance(mem.reflection, ReflectionStore)
     assert mem.reflection is mem.reflection
@@ -134,7 +134,7 @@ def test_memory_reflection_returns_store(tmp_path: Path) -> None:
 def test_memory_sub_stores_share_root(tmp_path: Path) -> None:
     """All sub-stores must root at Memory.root so they all touch the
     same agent dir — otherwise a reset on one wouldn't reset the others."""
-    from memory import Memory
+    from homunculus.memory import Memory
     mem = Memory(tmp_path)
     assert mem.world_state.root == tmp_path
     assert mem.next_tick.root == tmp_path

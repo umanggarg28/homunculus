@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from proposals import ProposalStore, KIND_NEW_SKILL, KIND_SKILL_EDIT
+from homunculus.proposals import ProposalStore, KIND_NEW_SKILL, KIND_SKILL_EDIT
 
 
 @pytest.fixture()

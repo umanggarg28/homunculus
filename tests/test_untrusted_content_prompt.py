@@ -15,7 +15,7 @@ from __future__ import annotations
 
 
 def test_system_prompt_names_the_threat_model():
-    from core import SYSTEM_PROMPT
+    from homunculus.core import SYSTEM_PROMPT
     lower = SYSTEM_PROMPT.lower()
     # The clause must (a) call the data untrusted and (b) name at least
     # one of the content-fetching tools so the model has a concrete
@@ -34,6 +34,6 @@ def test_system_prompt_tells_agent_how_to_report_an_injection_attempt():
     """The clause should not just say 'don't' — it should give the agent
     a concrete behavior for the case where it does encounter an
     injection: report it to the user."""
-    from core import SYSTEM_PROMPT
+    from homunculus.core import SYSTEM_PROMPT
     lower = SYSTEM_PROMPT.lower()
     assert "summarise that fact" in lower or "report" in lower or "tell the user" in lower

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from skill_validation import validate_skill_body, validate_task_spec
+from homunculus.skill_validation import validate_skill_body, validate_task_spec
 
 
 GOOD = """---
@@ -177,7 +177,7 @@ def test_unknown_criterion_rejected():
 
 
 def test_string_criteria_are_accepted_and_normalized():
-    from skill_validation import normalize_criteria
+    from homunculus.skill_validation import normalize_criteria
     assert validate_task_spec({
         "title": "x", "recurrence": "daily",
         "success_criteria": ["notify_called", "notify_has_code"],
@@ -193,7 +193,7 @@ def test_unknown_string_criterion_still_rejected():
 
 
 def test_normalize_drops_non_str_non_dict():
-    from skill_validation import normalize_criteria
+    from homunculus.skill_validation import normalize_criteria
     assert normalize_criteria(["notify_called", 5, None, {"type": "notify_unique"}]) == \
         [{"type": "notify_called"}, {"type": "notify_unique"}]
 
@@ -201,7 +201,7 @@ def test_normalize_drops_non_str_non_dict():
 def test_normalize_compact_yaml_form():
     """A skill author's natural compact form maps to TaskGuard's canonical
     shape, with each value routed to the right param key."""
-    from skill_validation import normalize_criteria
+    from homunculus.skill_validation import normalize_criteria
     assert normalize_criteria([
         "notify_called",
         {"notify_min_chars": 200},
@@ -218,7 +218,7 @@ def test_normalize_compact_yaml_form():
 
 
 def test_canonical_dict_passes_through_unchanged():
-    from skill_validation import normalize_criteria
+    from homunculus.skill_validation import normalize_criteria
     canonical = [{"type": "notify_min_chars", "n": 50}]
     assert normalize_criteria(canonical) == canonical
 

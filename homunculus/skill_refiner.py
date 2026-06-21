@@ -48,7 +48,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # avoid import at module-load time
-    from memory import Memory
+    from homunculus.memory import Memory
 
 
 # Default model for refinement runs.
@@ -212,9 +212,9 @@ def refine_skill(
     `skill_refiner` cheap to import in tests and in the reflection-tick
     path (which only needs `build_refinement_prompt` to plan).
     """
-    from core import Agent, get_config
-    from skills import Skills
-    from tools import _state as tool_state
+    from homunculus.core import Agent, get_config
+    from homunculus.skills import Skills
+    from homunculus.tools import _state as tool_state
 
     skills = Skills(memory.root)
     current_body = skills.load(skill_name) or ""

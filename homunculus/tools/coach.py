@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from quiz import _store
+from homunculus.quiz import _store
 
 
 def quiz_pick(topic: str = "") -> str:

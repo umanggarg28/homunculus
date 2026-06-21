@@ -27,12 +27,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 from dotenv import load_dotenv
 
-import events
-import tools
-from config import get_config
-from memory import Memory
-from transcript import Transcript
-from tasks import TaskStore
+from homunculus import events, REPO_ROOT
+from homunculus import tools
+from homunculus.config import get_config
+from homunculus.memory import Memory
+from homunculus.transcript import Transcript
+from homunculus.tasks import TaskStore
 
 # Output guard — compiled once at module load.
 _GUARD_MEMORY_FILENAME_RE = re.compile(
@@ -137,7 +137,7 @@ def _existing_proposal_ids() -> set[str] | None:
     guard must FAIL OPEN (never block a reply because a side file was
     unreadable)."""
     try:
-        from proposals import _store
+        from homunculus.proposals import _store
         return {str(p.get("id", "")).lower() for p in _store().list("all")}
     except Exception:
         return None
@@ -341,7 +341,7 @@ def tool_result_indicates_failure(result) -> bool:
 # Load .env at module import so config reads below see its values. Safe
 # to call twice (main.py also calls it) — load_dotenv won't overwrite
 # env vars that are already set, e.g. by docker-compose's env_file.
-load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(REPO_ROOT / ".env")
 
 
 # --- Config ---------------------------------------------------------------
@@ -926,7 +926,7 @@ def _today_spend_cents() -> float:
     # Window on the user's local midnight, not UTC — otherwise the
     # budget appears to roll over at 05:30 IST for an IST user.
     try:
-        from user_tz import get_user_tz_name
+        from homunculus.user_tz import get_user_tz_name
         from zoneinfo import ZoneInfo
         tz = ZoneInfo(get_user_tz_name())
         local_midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -2247,7 +2247,7 @@ class Agent:
         # + the pending topic. Re-rendered each turn, so it never stacks.
         if source in ("web", "telegram", "discord", "repl"):
             try:
-                from quiz import _store
+                from homunculus.quiz import _store
                 p = (_store()._load().get("pending") or {})
                 # Only prompt grading for a question that was actually delivered
                 # — a pending whose delivery failed was never seen by the user.

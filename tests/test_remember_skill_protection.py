@@ -24,9 +24,9 @@ import pytest
 
 def _real_memory(tmp_path: Path):
     """Memory has side effects on tools/_state; load a fresh module."""
-    sys.modules.pop("memory", None)
+    sys.modules.pop("homunculus.memory", None)
     import importlib
-    memory = importlib.import_module("memory")
+    memory = importlib.import_module("homunculus.memory")
     return memory.Memory(tmp_path)
 
 

@@ -26,7 +26,7 @@ from email.utils import parsedate_to_datetime
 
 import httpx
 
-import news_feeds
+from homunculus import news_feeds
 
 from . import rss
 from .web import _url_block_reason

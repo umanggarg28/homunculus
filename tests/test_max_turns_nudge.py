@@ -13,10 +13,10 @@ appended to history exactly at iter `MAX_TURNS - 2` (index MAX_TURNS - 2).
 
 from unittest.mock import patch
 
-import core
-import tools
-from core import Agent
-from config import get_config
+from homunculus import core
+from homunculus import tools
+from homunculus.core import Agent
+from homunculus.config import get_config
 
 # MAX_TURNS moved into HomunculusConfig.loop.max_turns during the
 # agent refactor. Tests keep a local alias for readability — the value
@@ -27,7 +27,7 @@ MAX_TURNS = get_config().loop.max_turns
 # Other test modules stub events.truncate_preview with `n=` kwarg, but core.py
 # calls it with `limit=`. Re-stub here so the call signature works regardless
 # of test execution order.
-import events  # noqa: E402
+from homunculus import events  # noqa: E402
 events.truncate_preview = lambda s, limit=200, **_kw: str(s)[:limit]
 events.emit = lambda *_a, **_kw: None  # quiet, no side effects in unit tests
 events.full_text = lambda t: t

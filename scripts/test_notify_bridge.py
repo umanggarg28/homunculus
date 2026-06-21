@@ -27,10 +27,10 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-import tools  # noqa: E402  (must come after load_dotenv)
-from core import Agent, SYSTEM_PROMPT  # noqa: E402
-from memory import Memory  # noqa: E402
-from transports.telegram import (  # noqa: E402
+from homunculus import tools  # noqa: E402  (must come after load_dotenv)
+from homunculus.core import Agent, SYSTEM_PROMPT  # noqa: E402
+from homunculus.memory import Memory  # noqa: E402
+from homunculus.transports.telegram import (  # noqa: E402
     TELEGRAM_PROMPT_SUFFIX,
     _drain_notifications_into_history,
 )

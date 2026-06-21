@@ -15,7 +15,7 @@ from unittest.mock import patch
 import pytest
 
 _spec = importlib.util.spec_from_file_location(
-    "notify_channels_under_test", Path(__file__).parent.parent / "tools" / "notify.py"
+    "notify_channels_under_test", Path(__file__).parent.parent / "homunculus" / "tools" / "notify.py"
 )
 notify = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(notify)

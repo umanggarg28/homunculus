@@ -41,11 +41,12 @@ from telegram.ext import (
     filters,
 )
 
-import events as _events
+import homunculus.events as _events
+from homunculus import REPO_ROOT
 import threading
-import tools
-from core import Agent, SYSTEM_PROMPT
-from memory import Memory
+from homunculus import tools
+from homunculus.core import Agent, SYSTEM_PROMPT
+from homunculus.memory import Memory
 
 
 # Telegram doesn't render markdown tables. It also doesn't render headers
@@ -285,7 +286,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 def main() -> None:
-    load_dotenv(Path(__file__).parent / ".env")
+    load_dotenv(REPO_ROOT / ".env")
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:

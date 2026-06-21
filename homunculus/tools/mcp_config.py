@@ -24,7 +24,8 @@ from pathlib import Path
 import yaml
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from homunculus import REPO_ROOT
+
 CONFIG_PATH = REPO_ROOT / "homunculus.yaml"
 
 

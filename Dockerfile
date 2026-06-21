@@ -37,17 +37,13 @@ WORKDIR /app
 COPY pyproject.toml ./
 RUN uv sync --no-install-project
 
-# Copy the source code into the image.
-# All top-level modules. A glob instead of an explicit list — the list
-# kept silently going stale as modules were added (archival.py, skills.py,
-# transcript.py, ... were missing), which broke fresh builds while stale
-# layer caches masked the problem on incremental ones.
-COPY *.py homunculus.yaml AGENTS.md ./
-COPY tools/ ./tools/
-COPY transports/ ./transports/
+# Copy the source code into the image. The application lives in the
+# `homunculus` package; operational scripts and runtime config sit beside it.
+COPY homunculus/ ./homunculus/
 COPY scripts/ ./scripts/
+COPY homunculus.yaml AGENTS.md ./
 COPY --from=web-build /web/dist /app/web-dist
 
 # Default command is the REPL transport. docker-compose overrides per
 # service (telegram, web_api, heartbeat) — see docker-compose.yml.
-CMD ["uv", "run", "--project", "/app", "python", "-m", "transports.repl"]
+CMD ["uv", "run", "--project", "/app", "python", "-m", "homunculus.transports.repl"]

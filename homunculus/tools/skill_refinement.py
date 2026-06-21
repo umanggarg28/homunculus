@@ -12,7 +12,7 @@ saving into the wrong place.
 
 from __future__ import annotations
 
-from skill_refiner import RefinementResult
+from homunculus.skill_refiner import RefinementResult
 
 from . import _state
 

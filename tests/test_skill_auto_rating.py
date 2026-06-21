@@ -8,7 +8,7 @@ model's own rate_skill call.
 
 from __future__ import annotations
 
-from heartbeat import TaskGuard, _rate_task_skill
+from homunculus.heartbeat import TaskGuard, _rate_task_skill
 
 
 def test_guard_suppresses_model_rate_skill_during_tick():

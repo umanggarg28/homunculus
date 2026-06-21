@@ -16,8 +16,8 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 
-import stats
-from user_tz import get_user_tz
+from homunculus import stats
+from homunculus.user_tz import get_user_tz
 
 from .scheduling import _task_store
 

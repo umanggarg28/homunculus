@@ -20,7 +20,7 @@ from pathlib import Path
 # conftest stubs `tools` as a flat module so `from tools._intake import ...`
 # silently returns nothing. Load _intake.py directly — it has no package-
 # relative imports so it loads cleanly on its own.
-_intake_path = Path(__file__).parent.parent / "tools" / "_intake.py"
+_intake_path = Path(__file__).parent.parent / "homunculus" / "tools" / "_intake.py"
 _spec = importlib.util.spec_from_file_location("intake_real", _intake_path)
 assert _spec and _spec.loader
 _intake = importlib.util.module_from_spec(_spec)

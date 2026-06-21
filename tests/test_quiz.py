@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from quiz import QuizStore, _INTERVALS_DAYS, _MAX_BOX
+from homunculus.quiz import QuizStore, _INTERVALS_DAYS, _MAX_BOX
 from tests.conftest import load_real_tool_submodule
 
 

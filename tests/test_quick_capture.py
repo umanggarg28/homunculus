@@ -24,8 +24,8 @@ def _load_app():
         tools_stub.set_mode = lambda mode: None
         tools_stub.set_pre_execute_hook = lambda h: None
         tools_stub.set_pre_turn_hook = lambda h: None
-        sys.modules["tools"] = tools_stub
-    web_api = importlib.import_module("transports.web_api")
+        sys.modules["homunculus.tools"] = tools_stub
+    web_api = importlib.import_module("homunculus.transports.web_api")
     return web_api
 
 

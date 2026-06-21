@@ -40,10 +40,10 @@ tasks_stub.TaskStore = lambda *a, **kw: _FakeStore()
 tasks_stub.ALLOWED_RECURRENCE = {"none", "daily", "weekly"}
 sys.modules.setdefault("tasks", tasks_stub)
 
-import core  # noqa: E402
+from homunculus import core  # noqa: E402
 
 # Constants moved into HomunculusConfig; tests override via set_config().
-from config import (  # noqa: E402
+from homunculus.config import (  # noqa: E402
     HomunculusConfig,
     ProviderConfig,
     set_config,

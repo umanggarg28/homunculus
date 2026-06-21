@@ -63,9 +63,9 @@ def main() -> int:
         sys.stderr.write("ERROR: HOMUNCULUS_API_KEY is not set\n")
         return 1
 
-    from memory import Memory
-    from skill_refiner import refine_skill
-    import tools
+    from homunculus.memory import Memory
+    from homunculus.skill_refiner import refine_skill
+    from homunculus import tools
 
     memory_dir = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
     memory = Memory(memory_dir)
@@ -77,7 +77,7 @@ def main() -> int:
     # Print the model the refiner will actually pick (CLI > env > default).
     # The general HOMUNCULUS_MODEL env is for execution; refinement reads
     # HOMUNCULUS_MODEL_REFINEMENT or falls back to DEFAULT_REFINEMENT_MODEL.
-    from skill_refiner import _resolve_refinement_model
+    from homunculus.skill_refiner import _resolve_refinement_model
     print(f"[refine]   model:      {_resolve_refinement_model(args.model)}", flush=True)
     print(f"[refine]   context:    {args.context}", flush=True)
     print(flush=True)
@@ -97,7 +97,7 @@ def main() -> int:
         print(f"[refine]   rationale:   {result.rationale}", flush=True)
         print(
             f"[refine] roll back with: "
-            f"python -c \"from memory import Memory; from skills import Skills; "
+            f"python -c \"from homunculus.memory import Memory; from homunculus.skills import Skills; "
             f"Skills(Memory(Path('{memory_dir}')).root).revert_to('{args.skill}', "
             f"{result.new_version - 1 if result.new_version and result.new_version > 1 else 1})\"",
             flush=True,

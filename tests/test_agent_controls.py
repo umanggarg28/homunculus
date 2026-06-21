@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timezone
 
-import agent_controls
+from homunculus import agent_controls
 
 
 def test_controls_normalize_and_persist(tmp_path):
@@ -39,7 +39,7 @@ def test_tool_block_reason_respects_allow_block_and_dry_run():
 
 
 def test_agent_replay_groups_turns(monkeypatch, tmp_path):
-    from transports import web_api
+    from homunculus.transports import web_api
 
     events_path = tmp_path / "_events.jsonl"
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")

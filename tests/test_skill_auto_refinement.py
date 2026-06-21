@@ -12,7 +12,7 @@ from pathlib import Path
 
 # Load the pure-python module without going through tools/__init__.py
 # (which has package-relative imports that fail under conftest stubs).
-_SR_PATH = Path(__file__).parent.parent / "tools" / "_skill_refiner.py"
+_SR_PATH = Path(__file__).parent.parent / "homunculus" / "tools" / "_skill_refiner.py"
 _spec = importlib.util.spec_from_file_location("skill_refiner_real", _SR_PATH)
 assert _spec and _spec.loader
 _sr = importlib.util.module_from_spec(_spec)

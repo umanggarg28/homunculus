@@ -7,7 +7,7 @@ and the topic-selection fallback.
 
 from __future__ import annotations
 
-import news_feeds
+from homunculus import news_feeds
 
 
 def test_defaults_when_file_absent(tmp_path, monkeypatch):

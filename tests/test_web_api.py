@@ -30,19 +30,19 @@ def web_api(tmp_path, monkeypatch):
         ev.emit = lambda *a, **k: None
         ev.full_text = lambda t: t
         ev.truncate_preview = lambda t, limit=200: t[:limit]
-        sys.modules["events"] = ev
+        sys.modules["homunculus.events"] = ev
 
     # Ensure agent_controls is importable.
     if "agent_controls" not in sys.modules:
-        import agent_controls  # noqa: F401
+        from homunculus import agent_controls  # noqa: F401
 
     # Restore the real tasks module so _task_store() uses the real TaskStore,
     # not the _FakeStore injected by test_schema_validation / test_output_guard.
     import importlib.util as _ilu
-    _tasks_spec = _ilu.spec_from_file_location("tasks", Path(__file__).parent.parent / "tasks.py")
+    _tasks_spec = _ilu.spec_from_file_location("tasks", Path(__file__).parent.parent / "homunculus" / "tasks.py")
     _tasks_real = _ilu.module_from_spec(_tasks_spec)
     _tasks_spec.loader.exec_module(_tasks_real)
-    sys.modules["tasks"] = _tasks_real
+    sys.modules["homunculus.tasks"] = _tasks_real
 
     # Point modules to tmp dirs via env vars BEFORE import.
     monkeypatch.setenv("HOMUNCULUS_MEMORY_DIR", str(tmp_path / "memory"))
@@ -58,10 +58,10 @@ def web_api(tmp_path, monkeypatch):
     (tmp_path / "dist" / "assets").mkdir()
 
     # Always reload so module-level Path() and imports pick up fresh state.
-    if "transports.web_api" in sys.modules:
-        mod = importlib.reload(sys.modules["transports.web_api"])
+    if "homunculus.transports.web_api" in sys.modules:
+        mod = importlib.reload(sys.modules["homunculus.transports.web_api"])
     else:
-        mod = importlib.import_module("transports.web_api")
+        mod = importlib.import_module("homunculus.transports.web_api")
 
     # Patch module globals to tmp paths (belt-and-suspenders).
     mod.MEMORY_DIR = tmp_path / "memory"
@@ -426,7 +426,7 @@ states:
 def _file_proposal(web_api, **over):
     """Create a pending proposal directly in the store the API reads."""
     import os
-    from proposals import ProposalStore
+    from homunculus.proposals import ProposalStore
     store = ProposalStore(os.environ["HOMUNCULUS_PROPOSALS_FILE"])
     kwargs = dict(
         kind="new_skill", skill_name="skill_demo_job", body=_VALID_NEW_SKILL,

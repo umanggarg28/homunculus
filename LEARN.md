@@ -67,26 +67,48 @@ Outside this stack, two background concerns:
 
 ## 3. Project Layout
 
+All application code lives in a single importable package, `homunculus/`.
+The repo root holds only project-level files (config, Dockerfile, tests,
+docs). This is the layout single-app Python agents converge on — one
+top-level package at the root, internals grouped by area — rather than a
+`src/` layout (which earns its keep for libraries you publish to PyPI, not
+for a service you only ever run in a container).
+
 ```
-homunculus/
-├── pyproject.toml        # uv-managed deps
-├── docker-compose.yml    # one container per service
-├── Dockerfile            # multi-stage: web bundle → python runtime
+.                            # repo root
+├── pyproject.toml           # uv-managed deps + tooling config
+├── docker-compose.yml       # one container per service
+├── Dockerfile               # multi-stage: web bundle → python runtime
 ├── .env.example
-├── core.py               # Agent class + LLM client + fallback chain
-├── memory.py             # Markdown-frontmatter memory store
-├── tasks.py              # Structured tasks (tasks.json)
-├── events.py             # Shared event log writer
-├── heartbeat.py          # Background autonomy daemon
-├── tools/                # tool registry + implementations (§6)
-├── transports/           # repl.py, telegram.py, web_api.py
-├── web/                  # React + Vite SPA
-├── workspace/            # mounted volume (memory, sessions, events)
-└── LEARN.md              # ← you are here
+├── homunculus/              # the application package
+│   ├── __init__.py
+│   ├── core.py              # Agent class + LLM client + fallback chain
+│   ├── memory.py            # Markdown-frontmatter memory store
+│   ├── tasks.py             # Structured tasks (tasks.json)
+│   ├── events.py            # Shared event log writer
+│   ├── heartbeat.py         # Background autonomy daemon
+│   ├── tools/               # tool registry + implementations (§6)
+│   └── transports/          # repl.py, telegram.py, web_api.py
+├── scripts/                 # one-off operational scripts (bootstraps, migrations)
+├── tests/                   # pytest suite
+├── web/                     # React + Vite SPA
+├── workspace/               # mounted volume (memory, sessions, events)
+└── LEARN.md                 # ← you are here
 ```
 
-Each top-level Python file or package has one job. Read in this order
-the first time: `core.py` → `tools/` → `memory.py` → `heartbeat.py` →
+Because everything is one package, code imports siblings by their full
+path — `from homunculus.core import Agent`, `from homunculus.tools.notify
+import deliver` — and the services start as modules:
+
+```
+python -m homunculus.transports.repl      # interactive REPL
+python -m homunculus.heartbeat            # autonomy daemon
+uvicorn homunculus.transports.web_api:app # web API + SPA
+```
+
+Nothing is pip-installed; `PYTHONPATH=/app` (set in docker-compose) puts the
+package on the import path. Each module has one job. Read in this order the
+first time: `core.py` → `tools/` → `memory.py` → `heartbeat.py` →
 `transports/`.
 
 ---
@@ -652,7 +674,7 @@ Python or want the bundled production SPA.
 - **Web UI**: `http://localhost:8765` (production bundle) or
   `:5173` (HMR).
 - **Telegram**: message your bot.
-- **REPL**: `docker compose exec homunculus uv run python -m transports.repl`
+- **REPL**: `docker compose exec homunculus uv run python -m homunculus.transports.repl`
 
 ### Free-tier notes
 

@@ -95,7 +95,7 @@ def _next_8pm_user_naive() -> str:
     constructing ZoneInfo from a possibly-abbreviated name like macOS's
     'IST' (not a valid IANA key); now_user_naive only trusts a stored
     IANA name and otherwise uses system-local wall clock."""
-    from user_tz import now_user_naive
+    from homunculus.user_tz import now_user_naive
     now_local = now_user_naive()
     target = now_local.replace(hour=20, minute=0, second=0, microsecond=0)
     if target <= now_local:
@@ -104,7 +104,7 @@ def _next_8pm_user_naive() -> str:
 
 
 def _set_area() -> None:
-    from quiz import QuizStore
+    from homunculus.quiz import QuizStore
     path = Path(os.environ.get("HOMUNCULUS_QUIZ_FILE", str(REPO / "workspace" / "quiz.json")))
     area = os.environ.get("HOMUNCULUS_QUIZ_AREA", DEFAULT_AREA)
     QuizStore(path).set_area(area)
@@ -124,7 +124,7 @@ def _ensure_skill_file() -> None:
 
 
 def main() -> int:
-    from tasks import TaskStore
+    from homunculus.tasks import TaskStore
 
     _set_area()
     _ensure_skill_file()

@@ -24,16 +24,16 @@ as a successful close and exits the loop early.
 import sys
 import types
 
-if "tools.notify" not in sys.modules:
-    _stub = types.ModuleType("tools.notify")
+if "homunculus.tools.notify" not in sys.modules:
+    _stub = types.ModuleType("homunculus.tools.notify")
     # Mirror test_autonomous_fallback_notify's stub shape — whichever
     # test module is imported first installs the stub for everyone.
     _telegram_calls: list[str] = []
     _stub._send_to_telegram = lambda text: _telegram_calls.append(text) or None
     _stub._telegram_calls = _telegram_calls
-    sys.modules["tools.notify"] = _stub
+    sys.modules["homunculus.tools.notify"] = _stub
 
-from heartbeat import TaskGuard  # noqa: E402
+from homunculus.heartbeat import TaskGuard  # noqa: E402
 
 
 CRITERIA = [

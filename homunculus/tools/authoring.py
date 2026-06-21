@@ -21,12 +21,12 @@ import json
 import os
 from pathlib import Path
 
-from proposals import KIND_NEW_SKILL, KIND_SKILL_EDIT, _store
-from skill_validation import normalize_criteria, validate_skill_body, validate_task_spec
+from homunculus.proposals import KIND_NEW_SKILL, KIND_SKILL_EDIT, _store
+from homunculus.skill_validation import normalize_criteria, validate_skill_body, validate_task_spec
 
 
 def _skills():
-    from skills import Skills
+    from homunculus.skills import Skills
     return Skills(Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory")))
 
 

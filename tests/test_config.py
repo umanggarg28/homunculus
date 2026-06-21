@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from config import (
+from homunculus.config import (
     CacheConfig,
     HomunculusConfig,
     LoopConfig,

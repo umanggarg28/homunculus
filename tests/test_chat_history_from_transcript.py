@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from memory import Memory
-from transcript import Transcript
-from transports.web_api import _visible_chat_history
+from homunculus.memory import Memory
+from homunculus.transcript import Transcript
+from homunculus.transports.web_api import _visible_chat_history
 
 
 def _append_msgs(t: Transcript, msgs: list[dict]) -> None:

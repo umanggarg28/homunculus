@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 
-from config import get_config
+from homunculus.config import get_config
 
 from ._state import is_autonomous
 

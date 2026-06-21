@@ -1,7 +1,7 @@
 """
 Shared test fixtures and pre-import stubs.
 
-Several modules (tools, transports.web_api) pull in deps that are only
+Several modules (homunculus.tools, homunculus.transports.web_api) pull in deps that are only
 available inside the Docker container (mcp, fastmcp). This conftest stubs
 them out before any test module is imported, so tests that don't need the
 real implementations can run locally without Docker.
@@ -32,9 +32,9 @@ for _name in [
 
 # Stub the tools package so web_api and other importers get a working module.
 # Tests that need the real tools module must reload it themselves.
-if "tools" not in sys.modules or not hasattr(sys.modules["tools"], "init"):
+if "homunculus.tools" not in sys.modules or not hasattr(sys.modules["homunculus.tools"], "init"):
     _tools_stub = _stub_module(
-        "tools",
+        "homunculus.tools",
         SCHEMAS=[],
         init=lambda *a, **k: None,
         get_mode=lambda: "build",
@@ -51,7 +51,9 @@ if "tools" not in sys.modules or not hasattr(sys.modules["tools"], "init"):
 # also install their own minimal stub (guarded on absence), so provide a
 # complete one here once — with deliver + _send_to_telegram and capture lists —
 # so those guards skip and every importer of heartbeat works, in isolation too.
-if "tools.notify" not in sys.modules or not hasattr(sys.modules["tools.notify"], "deliver"):
+if "homunculus.tools.notify" not in sys.modules or not hasattr(
+    sys.modules["homunculus.tools.notify"], "deliver"
+):
     _deliver_calls: list = []
     _telegram_calls: list = []
 
@@ -60,7 +62,7 @@ if "tools.notify" not in sys.modules or not hasattr(sys.modules["tools.notify"],
         return {"recorded": True, "delivered": [], "failed": []}
 
     _stub_module(
-        "tools.notify",
+        "homunculus.tools.notify",
         deliver=_stub_deliver,
         _deliver_calls=_deliver_calls,
         _send_to_telegram=lambda text: _telegram_calls.append(text) or None,
@@ -80,15 +82,15 @@ def load_real_tool_submodule(name: str):
     import importlib.util
     from pathlib import Path
 
-    src = Path(__file__).parent.parent / "tools" / f"{name}.py"
-    full = f"tools.{name}"
+    src = Path(__file__).parent.parent / "homunculus" / "tools" / f"{name}.py"
+    full = f"homunculus.tools.{name}"
     if full in sys.modules:
         return sys.modules[full]
     spec = importlib.util.spec_from_file_location(full, src)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
-    if "tools" in sys.modules and not hasattr(sys.modules["tools"], "__path__"):
-        sys.modules["tools"].__path__ = [str(src.parent)]  # type: ignore[attr-defined]
+    if "homunculus.tools" in sys.modules and not hasattr(sys.modules["homunculus.tools"], "__path__"):
+        sys.modules["homunculus.tools"].__path__ = [str(src.parent)]  # type: ignore[attr-defined]
     sys.modules[full] = mod
     spec.loader.exec_module(mod)
     return mod
