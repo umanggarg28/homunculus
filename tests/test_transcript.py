@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from transcript import Transcript
+from homunculus.transcript import Transcript
 
 
 # ---- basic round-trip --------------------------------------------------

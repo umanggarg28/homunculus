@@ -21,16 +21,16 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import tools  # noqa: E402
-from core import Agent  # noqa: E402
-from heartbeat import (  # noqa: E402
+from homunculus import tools  # noqa: E402
+from homunculus.core import Agent  # noqa: E402
+from homunculus.heartbeat import (  # noqa: E402
     REFLECTION_PROMPT_TEMPLATE,
     _format_recent_deliveries,
     _today_str,
     _yesterday_iso_and_path,
 )
-from memory import Memory  # noqa: E402
-from tasks import TaskStore  # noqa: E402
+from homunculus.memory import Memory  # noqa: E402
+from homunculus.tasks import TaskStore  # noqa: E402
 
 
 def main() -> None:

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from memory import Memory
+from homunculus.memory import Memory
 
 
 @pytest.fixture()

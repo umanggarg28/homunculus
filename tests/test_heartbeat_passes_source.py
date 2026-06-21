@@ -22,7 +22,7 @@ def _tick_source() -> str:
     directly instead of importing heartbeat, because the conftest
     `tools` stub doesn't expose tools.notify and importing heartbeat
     explodes at module load."""
-    text = (Path(__file__).parent.parent / "heartbeat.py").read_text()
+    text = (Path(__file__).parent.parent / "homunculus" / "heartbeat.py").read_text()
     # Slice from `def tick(` to the next top-level `def `.
     start = text.index("\ndef tick(")
     rest = text[start + 1:]

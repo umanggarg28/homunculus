@@ -1,7 +1,7 @@
 """Built-in MCP server (FastMCP) exposing Homunculus's tools over stdio.
 
-Runs as a standalone process: `python -m tools.mcp_server`. The manager
-(`tools/mcp_manager.py`) launches it as a subprocess and talks to it
+Runs as a standalone process: `python -m homunculus.tools.mcp_server`. The
+manager (`homunculus/tools/mcp_manager.py`) launches it as a subprocess and talks to it
 over stdio — the same transport used for every external MCP server, so
 the builtin gets no special treatment.
 
@@ -369,7 +369,7 @@ def get_current_time(
         # config. Falls back to system local then UTC if no detection
         # has happened yet.
         try:
-            from user_tz import get_user_tz_name
+            from homunculus.user_tz import get_user_tz_name
             default_tz = get_user_tz_name()
         except Exception:
             default_tz = "UTC"
@@ -846,7 +846,7 @@ def main() -> None:
     # manager passes config via env vars.
     import os
     from pathlib import Path
-    from memory import Memory
+    from homunculus.memory import Memory
     from ._state import init as init_state
 
     memory_dir = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))

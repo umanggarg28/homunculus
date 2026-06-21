@@ -23,7 +23,7 @@ import pytest
 # the tools/ directory; relative imports (._helpers) resolve within it.
 if "tools_real" not in sys.modules:
     _pkg = types.ModuleType("tools_real")
-    _pkg.__path__ = [str(Path(__file__).parent.parent / "tools")]
+    _pkg.__path__ = [str(Path(__file__).parent.parent / "homunculus" / "tools")]
     sys.modules["tools_real"] = _pkg
 
 _web = importlib.import_module("tools_real.web")

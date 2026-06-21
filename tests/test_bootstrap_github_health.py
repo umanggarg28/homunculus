@@ -29,7 +29,7 @@ def _load_script():
 
 def _next_monday(now: datetime) -> datetime:
     mod = _load_script()
-    with patch("user_tz.now_user_naive", return_value=now):
+    with patch("homunculus.user_tz.now_user_naive", return_value=now):
         return datetime.fromisoformat(mod._next_monday_9am_user_naive())
 
 

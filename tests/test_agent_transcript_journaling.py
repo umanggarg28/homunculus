@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core import Agent
-from memory import Memory
-from transcript import Transcript
+from homunculus.core import Agent
+from homunculus.memory import Memory
+from homunculus.transcript import Transcript
 
 
 def _agent(tmp_path: Path) -> Agent:

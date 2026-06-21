@@ -17,8 +17,8 @@ from unittest.mock import patch
 
 import pytest
 
-from memory import Memory
-from skills import Skills
+from homunculus.memory import Memory
+from homunculus.skills import Skills
 
 # tools/_state.py and tools/skill_refinement.py need to be loadable as
 # real modules and address each other. Load _state first under the
@@ -30,7 +30,7 @@ tool_state = load_real_tool_submodule("_state")
 refine_tools = load_real_tool_submodule("skill_refinement")
 
 
-from skill_refiner import (
+from homunculus.skill_refiner import (
     DEFAULT_REFINEMENT_MODEL,
     RefinementResult,
     _resolve_refinement_model,
@@ -230,7 +230,7 @@ def test_refine_skill_with_stubbed_agent_saves(tmp_path: Path) -> None:
             self.history = [{"role": "system", "content": system_prompt}]
         chat = fake_chat
 
-    with patch("core.Agent", FakeAgent):
+    with patch("homunculus.core.Agent", FakeAgent):
         result = refine_skill(
             skill_name="skill_x",
             failure_context="3 consecutive 403s on example.com",
@@ -288,7 +288,7 @@ def test_refine_skill_passes_resolved_model_to_agent(tmp_path: Path, monkeypatch
         def chat(self, user_message, source="web"):
             return "stub done"
 
-    with patch("core.Agent", CaptureAgent):
+    with patch("homunculus.core.Agent", CaptureAgent):
         refine_skill(
             skill_name="skill_x",
             failure_context="ctx",
@@ -316,7 +316,7 @@ def test_refine_skill_explicit_model_wins(tmp_path: Path, monkeypatch) -> None:
         def chat(self, user_message, source="web"):
             return "stub done"
 
-    with patch("core.Agent", CaptureAgent):
+    with patch("homunculus.core.Agent", CaptureAgent):
         refine_skill(
             skill_name="skill_x",
             failure_context="ctx",
@@ -342,7 +342,7 @@ def test_refine_skill_exhausted_when_neither_tool_called(tmp_path: Path) -> None
             self.history = [{"role": "system", "content": system_prompt}]
         chat = fake_chat
 
-    with patch("core.Agent", FakeAgent):
+    with patch("homunculus.core.Agent", FakeAgent):
         result = refine_skill(
             skill_name="skill_x",
             failure_context="some context",

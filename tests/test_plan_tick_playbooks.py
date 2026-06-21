@@ -11,14 +11,14 @@ whose playbook mandates LeetCode GraphQL).
 import sys
 import types
 
-if "tools.notify" not in sys.modules:
-    _stub = types.ModuleType("tools.notify")
+if "homunculus.tools.notify" not in sys.modules:
+    _stub = types.ModuleType("homunculus.tools.notify")
     _telegram_calls: list[str] = []
     _stub._send_to_telegram = lambda text: _telegram_calls.append(text) or None
     _stub._telegram_calls = _telegram_calls
-    sys.modules["tools.notify"] = _stub
+    sys.modules["homunculus.tools.notify"] = _stub
 
-from heartbeat import _plan_tick  # noqa: E402
+from homunculus.heartbeat import _plan_tick  # noqa: E402
 
 
 STATELESS_SKILL = """---
@@ -110,7 +110,7 @@ requires_tools:
 def test_capability_gate_blocks_when_required_tool_missing(tmp_path, monkeypatch):
     """A skill requiring an unavailable tool gets a BLOCKED directive (→
     record_failure), not its playbook — so the model can't improvise/fabricate."""
-    import heartbeat
+    from homunculus import heartbeat
     (tmp_path / "skill_needs_weather.md").write_text(REQUIRES_MISSING, encoding="utf-8")
     # Live catalogue WITHOUT get_weather.
     monkeypatch.setattr(heartbeat, "_known_tool_names", lambda: {"notify", "task_health_summary"})
@@ -124,7 +124,7 @@ def test_capability_gate_blocks_when_required_tool_missing(tmp_path, monkeypatch
 
 
 def test_capability_gate_passes_when_required_tool_present(tmp_path, monkeypatch):
-    import heartbeat
+    from homunculus import heartbeat
     (tmp_path / "skill_needs_weather.md").write_text(REQUIRES_MISSING, encoding="utf-8")
     monkeypatch.setattr(heartbeat, "_known_tool_names", lambda: {"get_weather", "notify"})
     states, selected, playbooks = _plan_tick([_task("t1", "skill_needs_weather")], tmp_path)

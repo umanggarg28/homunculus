@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import core
+from homunculus import core
 
 
 # ---- helper: _apply_provider_constraints ------------------------------

@@ -23,8 +23,8 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 os.environ.setdefault("HOMUNCULUS_USER_TZ_FILE", str(REPO / "workspace" / "user_tz.txt"))
 
-from skills import Skills  # noqa: E402
-from tasks import TaskStore  # noqa: E402
+from homunculus.skills import Skills  # noqa: E402
+from homunculus.tasks import TaskStore  # noqa: E402
 
 MEMORY_ROOT = REPO / "workspace" / "memory"
 TASKS_ROOT = REPO / "workspace" / "tasks"

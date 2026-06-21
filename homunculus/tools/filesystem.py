@@ -6,7 +6,7 @@ import os
 import re
 from pathlib import Path
 
-from config import get_config
+from homunculus.config import get_config
 
 from ._helpers import (
     PathOutsideWorkspace,

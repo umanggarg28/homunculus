@@ -19,8 +19,8 @@ from unittest.mock import patch
 
 import pytest
 
-import core
-import tools as tools_module
+from homunculus import core
+import homunculus.tools as tools_module
 
 
 def _schema(name: str) -> dict:
@@ -286,7 +286,7 @@ def test_heartbeat_tick_passes_expected_completions():
     """Static check: heartbeat.tick passes expected_completions=len(due_tasks)
     so the exit branch is reachable in production."""
     from pathlib import Path
-    src = (Path(__file__).parent.parent / "heartbeat.py").read_text()
+    src = (Path(__file__).parent.parent / "homunculus" / "heartbeat.py").read_text()
     # Find the agent.chat( call inside tick(). The non-comment call
     # must include expected_completions=.
     assert "expected_completions=len(due_tasks)" in src or (
@@ -305,7 +305,7 @@ def test_run_stream_passes_expected_completions():
     the model called record_failure on the just-completed task, flipping a
     real success to a failure (observed 2026-06-15)."""
     from pathlib import Path
-    src = (Path(__file__).parent.parent / "transports" / "web_api.py").read_text()
+    src = (Path(__file__).parent.parent / "homunculus" / "transports" / "web_api.py").read_text()
     assert "expected_completions=1" in src, (
         "run-stream must pass expected_completions=1 to chat_stream so the "
         "loop exits the moment the single task is closed."

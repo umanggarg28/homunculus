@@ -96,7 +96,7 @@ Totals: <S> stars · <F> followers · <R> public repos
 def _next_monday_9am_user_naive() -> str:
     """Next Monday 09:00 as naive user-local wall clock (TaskStore's
     frame). Uses now_user_naive to avoid the macOS 'IST' ZoneInfo trap."""
-    from user_tz import now_user_naive
+    from homunculus.user_tz import now_user_naive
     now_local = now_user_naive()
     # Monday = 0. Days until next Monday; if today is Monday before 9am,
     # fire today, else next Monday.
@@ -122,7 +122,7 @@ def _ensure_skill_file() -> None:
 
 
 def main() -> int:
-    from tasks import TaskStore
+    from homunculus.tasks import TaskStore
 
     _ensure_skill_file()
 

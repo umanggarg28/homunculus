@@ -21,7 +21,7 @@ def _real_task_store():
     """Load the real TaskStore directly from tasks.py, bypassing any
     sys.modules stub a prior test may have installed."""
     spec = importlib.util.spec_from_file_location(
-        "tasks_real_due_test", Path(__file__).parent.parent / "tasks.py"
+        "tasks_real_due_test", Path(__file__).parent.parent / "homunculus" / "tasks.py"
     )
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
@@ -35,7 +35,7 @@ def ist_user(tmp_path, monkeypatch):
     tz_file.write_text("Asia/Kolkata", encoding="utf-8")
     monkeypatch.setenv("HOMUNCULUS_USER_TZ_FILE", str(tz_file))
     # Clear the in-module cache so the new env var takes effect.
-    import user_tz
+    from homunculus import user_tz
     user_tz._cached_name = None
     user_tz._cached_mtime = None
     yield
@@ -46,7 +46,7 @@ def test_task_due_at_user_local_fires_on_user_clock(tmp_path, ist_user):
     must consider it overdue once the user's clock is past it, regardless
     of the container's TZ."""
     TaskStore = _real_task_store()
-    from user_tz import now_user_naive
+    from homunculus.user_tz import now_user_naive
 
     store = TaskStore(tmp_path)
     # Schedule for 1 minute ago in user-local time.
@@ -67,7 +67,7 @@ def test_future_user_local_task_is_not_due(tmp_path, ist_user):
     """A due_at 1 hour in the future (user-local) must not be flagged
     as due."""
     TaskStore = _real_task_store()
-    from user_tz import now_user_naive
+    from homunculus.user_tz import now_user_naive
 
     store = TaskStore(tmp_path)
     future = (now_user_naive() + timedelta(hours=1)).isoformat(timespec="seconds")
@@ -79,7 +79,7 @@ def test_due_does_not_depend_on_container_tz(tmp_path, ist_user, monkeypatch):
     """Even if the process inherits a wildly different TZ env, due()
     must keep using user wall time."""
     TaskStore = _real_task_store()
-    from user_tz import now_user_naive
+    from homunculus.user_tz import now_user_naive
 
     # Simulate the container running in UTC: set TZ env to UTC.
     monkeypatch.setenv("TZ", "UTC")

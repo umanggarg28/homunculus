@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import core
+from homunculus import core
 
 
 def _tool_call_msg(name: str = "complete_task") -> dict:

@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-import memory as memory_module
+import homunculus.memory as memory_module
 
 
 def _make_memory(tmp_path: Path) -> memory_module.Memory:

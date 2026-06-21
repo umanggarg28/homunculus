@@ -7,7 +7,7 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from tasks import (
+from homunculus.tasks import (
     TaskStore,
     append_scratchpad,
     clear_scratchpad,
@@ -15,7 +15,7 @@ from tasks import (
     task_health_summary as _task_health_summary,
     write_scratchpad,
 )
-from user_tz import now_user_naive
+from homunculus.user_tz import now_user_naive
 
 from ._state import get_memory
 
@@ -42,7 +42,7 @@ def schedule_next_tick(iso_datetime: str) -> str:
     # prompts quote. The old datetime.now() was container-naive (UTC in
     # Docker), so a valid "wake me at 13:00 IST" was either rejected as
     # past or silently discarded by _compute_sleep later.
-    from user_tz import get_user_tz
+    from homunculus.user_tz import get_user_tz
     if target.tzinfo is not None:
         tz = get_user_tz()
         target = (target.astimezone(tz) if tz else target.astimezone()).replace(tzinfo=None)

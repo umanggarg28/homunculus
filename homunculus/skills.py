@@ -391,7 +391,7 @@ def effective_success_criteria(task: dict, memory_root: Path) -> list[dict]:
     merged copy to drift. Tasks with no skill, or a skill that declares no
     criteria, are returned unchanged.
     """
-    from skill_validation import normalize_criteria
+    from homunculus.skill_validation import normalize_criteria
 
     merged = normalize_criteria(task.get("success_criteria") or [])
     skill_name = task.get("skill")

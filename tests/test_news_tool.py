@@ -16,7 +16,7 @@ from email.utils import format_datetime
 
 import httpx
 
-import news_feeds
+from homunculus import news_feeds
 from tests.conftest import load_real_tool_submodule
 
 load_real_tool_submodule("_helpers")

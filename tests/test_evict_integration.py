@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-import core
+from homunculus import core
 
 
 def _stub_llm_with_tool_call(history, tool_schemas, model=None, tool_choice="auto", reasoning_effort="low", provider_constraints=None):
@@ -41,7 +41,7 @@ def test_eviction_fires_between_turns(monkeypatch, tmp_path):
     # later assert was replaced by a stub.
     big_payload = "X" * 1500
 
-    import tools as tools_pkg
+    import homunculus.tools as tools_pkg
 
     monkeypatch.setattr(tools_pkg, "execute", lambda name, args: big_payload, raising=False)
     monkeypatch.setattr(core, "call_llm", _stub_llm_with_tool_call)
@@ -95,7 +95,7 @@ def test_mid_loop_eviction_keeps_per_call_input_bounded(monkeypatch):
     # 9000 each: the last two (18000) sit under the 20K budget; older ones
     # exceed the remaining budget and must be stubbed.
     big = "Z" * 9000
-    import tools as tools_pkg
+    import homunculus.tools as tools_pkg
     monkeypatch.setattr(tools_pkg, "execute", lambda n, a: big, raising=False)
     monkeypatch.setattr(core, "_validate_tool_args", lambda n, a: None)
 
@@ -142,14 +142,14 @@ def test_eviction_emits_observability_event(monkeypatch):
     monkeypatch.setenv("HOMUNCULUS_API_KEY", "stub")
 
     agent = core.Agent()
-    import tools as tools_pkg
+    import homunculus.tools as tools_pkg
 
     monkeypatch.setattr(tools_pkg, "execute", lambda n, a: "Y" * 500, raising=False)
     monkeypatch.setattr(core, "call_llm", _stub_llm_with_tool_call)
     monkeypatch.setattr(core, "_validate_tool_args", lambda n, a: None)
 
     events_captured: list[dict] = []
-    import events
+    from homunculus import events
 
     real_emit = events.emit
 

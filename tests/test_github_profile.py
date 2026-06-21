@@ -119,9 +119,9 @@ def test_no_user_and_no_config_asks_instead_of_guessing(gh_env, monkeypatch):
     # Empty arg + nothing configured/learned: refuse and tell the agent
     # to ask the operator and remember — never guess.
     import sys, types
-    fake_state = types.ModuleType("tools._state")
+    fake_state = types.ModuleType("homunculus.tools._state")
     fake_state.get_memory = lambda: None
-    monkeypatch.setitem(sys.modules, "tools._state", fake_state)
+    monkeypatch.setitem(sys.modules, "homunculus.tools._state", fake_state)
     out = _gh.github_profile()
     assert out.startswith("ERROR: I don't know the operator's GitHub handle")
     assert "ASK the user" in out
@@ -134,9 +134,9 @@ def test_learned_handle_in_world_state_is_used(gh_env, monkeypatch):
     fake_mem = type("M", (), {
         "world_state": type("W", (), {"read": lambda self: {"github_user": "umanggarg28"}})()
     })()
-    fake_state = types.ModuleType("tools._state")
+    fake_state = types.ModuleType("homunculus.tools._state")
     fake_state.get_memory = lambda: fake_mem
-    monkeypatch.setitem(sys.modules, "tools._state", fake_state)
+    monkeypatch.setitem(sys.modules, "homunculus.tools._state", fake_state)
     assert _gh.default_user() == "umanggarg28"
 
 

@@ -18,27 +18,27 @@ import types
 from unittest.mock import patch
 
 # tools.notify stub so heartbeat imports work
-if "tools.notify" not in sys.modules:
-    _stub = types.ModuleType("tools.notify")
+if "homunculus.tools.notify" not in sys.modules:
+    _stub = types.ModuleType("homunculus.tools.notify")
     _stub._send_to_telegram = lambda *_a, **_kw: None
-    sys.modules["tools.notify"] = _stub
+    sys.modules["homunculus.tools.notify"] = _stub
 
-import core  # noqa: E402
-import tools  # noqa: E402
-import events  # noqa: E402
+from homunculus import core  # noqa: E402
+from homunculus import tools  # noqa: E402
+from homunculus import events  # noqa: E402
 
 # Defensive stubs for cross-test pollution
 events.truncate_preview = lambda s, limit=200, **_kw: str(s)[:limit]
 events.emit = lambda *_a, **_kw: None
 events.full_text = lambda t: t
 
-from core import Agent  # noqa: E402
-from config import get_config  # noqa: E402
+from homunculus.core import Agent  # noqa: E402
+from homunculus.config import get_config  # noqa: E402
 
 # MAX_TURNS moved into HomunculusConfig.loop.max_turns. Tests keep a
 # local alias for readability.
 MAX_TURNS = get_config().loop.max_turns
-from heartbeat import TaskGuard  # noqa: E402
+from homunculus.heartbeat import TaskGuard  # noqa: E402
 
 
 def _tool_call_msg(name: str, args: dict, call_id: str = "c1") -> dict:

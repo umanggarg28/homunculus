@@ -14,12 +14,12 @@ that the agent already has the data — letting it move on faster.
 import json
 from unittest.mock import patch
 
-import core
-import tools
-from core import Agent, READ_ONLY_CACHEABLE_TOOLS
+from homunculus import core
+from homunculus import tools
+from homunculus.core import Agent, READ_ONLY_CACHEABLE_TOOLS
 
 # Defensive stubs for cross-test pollution (see test_max_turns_nudge.py).
-import events  # noqa: E402
+from homunculus import events  # noqa: E402
 events.truncate_preview = lambda s, limit=200, **_kw: str(s)[:limit]
 events.emit = lambda *_a, **_kw: None
 events.full_text = lambda t: t

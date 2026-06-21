@@ -17,7 +17,7 @@ import pytest
 
 def _real_tasks_module():
     spec = importlib.util.spec_from_file_location(
-        "tasks_real_tz_test", Path(__file__).parent.parent / "tasks.py"
+        "tasks_real_tz_test", Path(__file__).parent.parent / "homunculus" / "tasks.py"
     )
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
@@ -29,7 +29,7 @@ def ist_user(tmp_path, monkeypatch):
     tz_file = tmp_path / "user_tz.txt"
     tz_file.write_text("Asia/Kolkata", encoding="utf-8")
     monkeypatch.setenv("HOMUNCULUS_USER_TZ_FILE", str(tz_file))
-    import user_tz
+    from homunculus import user_tz
     user_tz._cached_name = None
     user_tz._cached_mtime = None
     yield

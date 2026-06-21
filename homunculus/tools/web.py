@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from config import get_config
+from homunculus.config import get_config
 
 from ._helpers import (
     cache_get,

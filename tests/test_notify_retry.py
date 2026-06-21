@@ -15,11 +15,11 @@ import httpx
 import pytest
 
 # Load tools/notify.py as a STANDALONE module (not under the shared
-# sys.modules["tools.notify"] key) so we don't clobber the stub that
+# sys.modules["homunculus.tools.notify"] key) so we don't clobber the stub that
 # test_autonomous_fallback_notify installs there. notify.py has no relative
 # imports, so it loads cleanly on its own.
 _spec = importlib.util.spec_from_file_location(
-    "notify_under_test", Path(__file__).parent.parent / "tools" / "notify.py"
+    "notify_under_test", Path(__file__).parent.parent / "homunculus" / "tools" / "notify.py"
 )
 notify = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(notify)

@@ -17,8 +17,8 @@ from pathlib import Path
 
 
 def _store(tmp_path: Path):
-    sys.modules.pop("tasks", None)
-    tasks = importlib.import_module("tasks")
+    sys.modules.pop("homunculus.tasks", None)
+    tasks = importlib.import_module("homunculus.tasks")
     return tasks, tasks.TaskStore(tmp_path)
 
 

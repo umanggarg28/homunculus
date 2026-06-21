@@ -22,9 +22,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-import tools
-from core import Agent
-from memory import Memory
+from homunculus import tools, REPO_ROOT
+from homunculus.core import Agent
+from homunculus.memory import Memory
 
 # Where the agent stores its persistent memory on disk. Inside the Docker
 # container this resolves under the bind-mounted workspace, so memory
@@ -33,10 +33,10 @@ MEMORY_DIR = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
 
 
 def main() -> None:
-    load_dotenv(Path(__file__).parent / ".env")
+    load_dotenv(REPO_ROOT / ".env")
 
     if not os.environ.get("HOMUNCULUS_API_KEY"):
-        sys.exit("HOMUNCULUS_API_KEY is not set. Put it in homunculus/.env or export it.")
+        sys.exit("HOMUNCULUS_API_KEY is not set. Put it in .env at the repo root or export it.")
 
     # Wire up memory: instantiate, give the remember() tool a reference,
     # then hand the same instance to the agent so it can load the index.

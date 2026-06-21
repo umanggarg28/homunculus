@@ -16,7 +16,7 @@ from unittest.mock import patch
 def test_agents_md_hot_reload_picks_up_disk_edits(tmp_path, monkeypatch):
     """Edit AGENTS.md on disk → next _current_system_prompt call
     reflects the change without a restart."""
-    import core
+    from homunculus import core
     agents_path = tmp_path / "AGENTS.md"
     agents_path.write_text("# Original persona\nbe terse", encoding="utf-8")
     monkeypatch.setenv("HOMUNCULUS_AGENTS_MD", str(agents_path))
@@ -40,7 +40,7 @@ def test_agents_md_hot_reload_picks_up_disk_edits(tmp_path, monkeypatch):
 def test_agents_md_cached_when_mtime_unchanged(tmp_path, monkeypatch):
     """Repeated reads of an unchanged AGENTS.md hit the cache —
     we don't want disk IO on every turn for a stable file."""
-    import core
+    from homunculus import core
     agents_path = tmp_path / "AGENTS.md"
     agents_path.write_text("# Same persona", encoding="utf-8")
     monkeypatch.setenv("HOMUNCULUS_AGENTS_MD", str(agents_path))
@@ -66,7 +66,7 @@ def test_agents_md_cached_when_mtime_unchanged(tmp_path, monkeypatch):
 
 def test_agents_md_missing_is_silent(tmp_path, monkeypatch):
     """No AGENTS.md = no error, no identity block in the prompt."""
-    import core
+    from homunculus import core
     monkeypatch.setenv("HOMUNCULUS_AGENTS_MD", str(tmp_path / "nope.md"))
     agent = core.Agent()
     prompt = agent._current_system_prompt()

@@ -16,7 +16,7 @@ from tests.conftest import load_real_tool_submodule
 
 load_real_tool_submodule("_state")
 _sched = load_real_tool_submodule("scheduling")
-from tasks import TaskStore  # noqa: E402
+from homunculus.tasks import TaskStore  # noqa: E402
 
 
 @pytest.fixture()
@@ -45,7 +45,7 @@ def test_record_failure_auto_cancels_after_repeated_failures(tasks_dir, monkeypa
     store = TaskStore(tasks_dir)
     task = store.create("Doomed", "", None, "daily", True)
     # Drive past the consecutive-failure limit.
-    from config import get_config
+    from homunculus.config import get_config
     limit = get_config().task.consecutive_failure_limit
     out = ""
     for _ in range(limit):

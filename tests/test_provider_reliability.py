@@ -18,7 +18,7 @@ import pytest
 
 def _load_real_tasks():
     """Load tasks.py directly by path, bypassing any sys.modules stub."""
-    spec = importlib.util.spec_from_file_location("tasks_real", Path(__file__).parent.parent / "tasks.py")
+    spec = importlib.util.spec_from_file_location("tasks_real", Path(__file__).parent.parent / "homunculus" / "tasks.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -198,13 +198,13 @@ def test_concurrent_mark_fired_does_not_corrupt(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_user_agent_constant_exists():
-    import core
+    from homunculus import core
     assert hasattr(core, "_HTTP_HEADERS_BASE"), "_HTTP_HEADERS_BASE missing from core.py"
     assert "User-Agent" in core._HTTP_HEADERS_BASE
 
 
 def test_user_agent_value_not_empty():
-    import core
+    from homunculus import core
     assert core._HTTP_HEADERS_BASE["User-Agent"].strip()
 
 
@@ -212,7 +212,7 @@ def test_all_httpx_calls_use_header_base():
     """Every httpx.post call in core.py must spread _HTTP_HEADERS_BASE into headers."""
     import ast
     import pathlib
-    src = pathlib.Path("core.py").read_text()
+    src = pathlib.Path("homunculus/core.py").read_text()
     tree = ast.parse(src)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -236,14 +236,14 @@ def test_all_httpx_calls_use_header_base():
 # ---------------------------------------------------------------------------
 
 def test_model_fallback_excludes_hermes():
-    import core
+    from homunculus import core
     assert "hermes" not in core.MODEL_FALLBACK.lower(), (
         "hermes-3-405b:free does not support tool calling — remove from MODEL_FALLBACK"
     )
 
 
 def test_model_fallback_contains_verified_models():
-    import core
+    from homunculus import core
     verified = [
         "meta-llama/llama-3.3-70b-instruct",
         "openai/gpt-oss-120b",
@@ -268,7 +268,7 @@ def test_empty_api_key_slot_is_skipped(monkeypatch):
     the slot that has a key. What matters is no provider tuple goes
     out with an empty key string.
     """
-    import core
+    from homunculus import core
     monkeypatch.setenv("HOMUNCULUS_API_KEY_FALLBACK", "")
     slots = core._providers("some-model")
     empty_key_entries = [(u, k, m) for u, k, m in slots if not k]

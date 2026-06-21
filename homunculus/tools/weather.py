@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import httpx
 
-from user_location import get_user_location
+from homunculus.user_location import get_user_location
 
 # WMO weather interpretation codes → short human text.
 # https://open-meteo.com/en/docs (WMO Weather interpretation codes)

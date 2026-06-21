@@ -30,9 +30,9 @@ services:
       # Identifies which service emitted each event in the live feed.
       HOMUNCULUS_SERVICE: repl
       DOCKER_HOST: tcp://docker-proxy:2375
-      # /app contains the agent package; cwd is /app/workspace for data
-      # paths. PYTHONPATH lets `python -m transports.repl` find the
-      # package without changing the working_dir convention.
+      # /app contains the homunculus package; cwd is /app/workspace for
+      # data paths. PYTHONPATH lets `python -m homunculus.transports.repl`
+      # find the package without changing the working_dir convention.
       PYTHONPATH: /app
     working_dir: /app/workspace # The agent's "current directory" inside the container
     volumes:
@@ -41,7 +41,7 @@ services:
       # can only read/write files INSIDE this directory by default.
       - ./workspace:/app/workspace
 
-    command: ["uv", "run", "--project", "/app", "python", "-m", "transports.repl"]
+    command: ["uv", "run", "--project", "/app", "python", "-m", "homunculus.transports.repl"]
 
   heartbeat:
     build: .
@@ -55,7 +55,7 @@ services:
     volumes:
       - ./workspace:/app/workspace  # Same workspace mount → shared memory
     # Override the default CMD to launch the daemon instead of the REPL.
-    command: ["uv", "run", "--project", "/app", "python", "/app/heartbeat.py"]
+    command: ["uv", "run", "--project", "/app", "python", "-m", "homunculus.heartbeat"]
     # Auto-restart if the daemon crashes (but not if we explicitly stop it).
     restart: unless-stopped
     # No stdin_open/tty — this is a background daemon, not an interactive
@@ -73,7 +73,7 @@ services:
     volumes:
       - ./workspace:/app/workspace  # Same workspace mount → shared memory
       - /var/run/docker.sock:/var/run/docker.sock  # for python_exec sandbox
-    command: ["uv", "run", "--project", "/app", "python", "-m", "transports.telegram"]
+    command: ["uv", "run", "--project", "/app", "python", "-m", "homunculus.transports.telegram"]
     restart: unless-stopped
     # No stdin_open/tty — daemon that long-polls Telegram for messages.
 
@@ -94,7 +94,7 @@ services:
     volumes:
       - ./workspace:/app/workspace  # Same workspace mount → shared memory
       - /var/run/docker.sock:/var/run/docker.sock  # for python_exec sandbox
-    command: ["uv", "run", "--project", "/app", "python", "-m", "transports.discord"]
+    command: ["uv", "run", "--project", "/app", "python", "-m", "homunculus.transports.discord"]
     restart: unless-stopped
 
   web:
@@ -113,7 +113,7 @@ services:
     # collide — 8765 avoids common defaults.)
     ports:
       - "127.0.0.1:8765:8765"
-    command: ["uv", "run", "--project", "/app", "uvicorn", "transports.web_api:app", "--host", "0.0.0.0", "--port", "8765", "--app-dir", "/app"]
+    command: ["uv", "run", "--project", "/app", "uvicorn", "homunculus.transports.web_api:app", "--host", "0.0.0.0", "--port", "8765", "--app-dir", "/app"]
     restart: unless-stopped
 
   # Docker API gatekeeper. python_exec spawns sandbox containers through

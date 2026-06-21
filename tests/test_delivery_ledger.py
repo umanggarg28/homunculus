@@ -26,20 +26,20 @@ import sys
 import types
 from pathlib import Path
 
-if "tools.notify" not in sys.modules:
-    _stub = types.ModuleType("tools.notify")
+if "homunculus.tools.notify" not in sys.modules:
+    _stub = types.ModuleType("homunculus.tools.notify")
     _telegram_calls: list[str] = []
     _stub._send_to_telegram = lambda text: _telegram_calls.append(text) or None
     _stub._telegram_calls = _telegram_calls
-    sys.modules["tools.notify"] = _stub
+    sys.modules["homunculus.tools.notify"] = _stub
 
-from heartbeat import TaskGuard, _format_due_tasks, _record_delivery_keys  # noqa: E402
+from homunculus.heartbeat import TaskGuard, _format_due_tasks, _record_delivery_keys  # noqa: E402
 
 
 def _real_tasks_module():
     """Load tasks.py directly, bypassing any sys.modules stub."""
     spec = importlib.util.spec_from_file_location(
-        "tasks_real_ledger_test", Path(__file__).parent.parent / "tasks.py"
+        "tasks_real_ledger_test", Path(__file__).parent.parent / "homunculus" / "tasks.py"
     )
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
@@ -83,7 +83,7 @@ def test_format_recent_deliveries_digest():
     """The reflection digest hands the model each skill-backed task's most
     recent run — success deliveries with their text, failures with the
     result — and skips tasks with no skill / no runs / no captured text."""
-    from heartbeat import _format_recent_deliveries
+    from homunculus.heartbeat import _format_recent_deliveries
 
     class _FakeStore:
         def __init__(self, tasks):
@@ -110,7 +110,7 @@ def test_format_recent_deliveries_digest():
 
 
 def test_format_recent_deliveries_empty():
-    from heartbeat import _format_recent_deliveries
+    from homunculus.heartbeat import _format_recent_deliveries
 
     class _Empty:
         def list(self, status):  # noqa: ARG002
@@ -149,7 +149,7 @@ def test_tool_trace_collapses_consecutive_repeats_with_counts():
 def test_tool_trace_attributed_and_flagged_in_digest():
     """The reflection digest includes the trace and flags multi-run tools as a
     possible stale-skill signal — the evidence the agent reconciles against."""
-    from heartbeat import _format_recent_deliveries
+    from homunculus.heartbeat import _format_recent_deliveries
 
     class _FakeStore:
         def list(self, status):  # noqa: ARG002

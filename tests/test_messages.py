@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-import messages as msgs
+import homunculus.messages as msgs
 
 
 # ---------------------------------------------------------------------------

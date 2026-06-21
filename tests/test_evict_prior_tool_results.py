@@ -7,7 +7,7 @@ Replace with a stub; preserve tool_call_id on the message itself so
 the API's tool_call/tool_result pairing rule still holds.
 """
 
-from core import _evict_prior_tool_results
+from homunculus.core import _evict_prior_tool_results
 
 
 def _tool_msg(call_id: str, content: str) -> dict:

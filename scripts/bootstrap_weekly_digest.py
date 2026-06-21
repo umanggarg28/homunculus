@@ -119,7 +119,7 @@ If everything is quiet:
 def _next_sunday_9am_user_naive() -> str:
     """Next Sunday 09:00 as naive user-local wall clock (TaskStore's
     frame). now_user_naive avoids the macOS 'IST' ZoneInfo trap."""
-    from user_tz import now_user_naive
+    from homunculus.user_tz import now_user_naive
     now_local = now_user_naive()
     # Monday=0 .. Sunday=6. Days until next Sunday.
     days_ahead = (6 - now_local.weekday()) % 7
@@ -132,7 +132,7 @@ def _next_sunday_9am_user_naive() -> str:
 
 
 def _ensure_task() -> None:
-    from tasks import TaskStore
+    from homunculus.tasks import TaskStore
 
     store = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", str(REPO / "workspace" / "tasks"))))
     existing = next((t for t in store.all() if t["id"] == "weekly-nudge"), None)
@@ -161,7 +161,7 @@ def _ensure_task() -> None:
 
 
 def main() -> int:
-    from skills import Skills
+    from homunculus.skills import Skills
 
     memory_dir = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", str(REPO / "workspace" / "memory")))
     skills = Skills(memory_dir)

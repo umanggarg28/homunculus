@@ -34,7 +34,7 @@ _STATUSES = {"pending", "approved", "rejected"}
 
 
 def _now() -> str:
-    from user_tz import now_user_naive
+    from homunculus.user_tz import now_user_naive
     return now_user_naive().isoformat(timespec="seconds")
 
 

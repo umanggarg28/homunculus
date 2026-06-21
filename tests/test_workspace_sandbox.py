@@ -25,7 +25,7 @@ def _load_helpers(workspace: Path):
     os.environ["HOMUNCULUS_WORKSPACE_ROOT"] = str(workspace)
     spec = importlib.util.spec_from_file_location(
         "helpers_sandbox_test",
-        Path(__file__).parent.parent / "tools" / "_helpers.py",
+        Path(__file__).parent.parent / "homunculus" / "tools" / "_helpers.py",
     )
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(mod)  # type: ignore[union-attr]

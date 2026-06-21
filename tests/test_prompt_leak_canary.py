@@ -16,12 +16,12 @@ from __future__ import annotations
 import sys
 import types
 
-if "tools.notify" not in sys.modules:
-    _stub = types.ModuleType("tools.notify")
+if "homunculus.tools.notify" not in sys.modules:
+    _stub = types.ModuleType("homunculus.tools.notify")
     _stub._send_to_telegram = lambda *_a, **_kw: None
-    sys.modules["tools.notify"] = _stub
+    sys.modules["homunculus.tools.notify"] = _stub
 
-import core  # noqa: E402
+from homunculus import core  # noqa: E402
 
 
 def test_canary_format_is_session_unique():

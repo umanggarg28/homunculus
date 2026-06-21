@@ -393,6 +393,6 @@ class MCPManager:
 
 # Module-level singleton. NOT auto-started — `tools.init()` calls
 # `manager.start()` from the parent process. The subprocess form
-# (`python -m tools.mcp_server`) imports the package but must never
+# (`python -m homunculus.tools.mcp_server`) imports the package but must never
 # start the manager, otherwise it spawns itself recursively.
 manager = MCPManager()

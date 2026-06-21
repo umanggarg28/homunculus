@@ -12,14 +12,14 @@ import sys
 import types
 
 # tools.notify stub so heartbeat imports work in test isolation
-if "tools.notify" not in sys.modules:
-    _stub = types.ModuleType("tools.notify")
+if "homunculus.tools.notify" not in sys.modules:
+    _stub = types.ModuleType("homunculus.tools.notify")
     _stub._send_to_telegram = lambda *_a, **_kw: None
-    sys.modules["tools.notify"] = _stub
+    sys.modules["homunculus.tools.notify"] = _stub
 
 import httpx  # noqa: E402
 
-from heartbeat import _is_transient_network_error  # noqa: E402
+from homunculus.heartbeat import _is_transient_network_error  # noqa: E402
 
 
 def test_dns_resolution_failure_is_transient():

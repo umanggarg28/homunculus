@@ -39,10 +39,11 @@ from pathlib import Path
 import discord
 from dotenv import load_dotenv
 
-import events as _events
-import tools
-from core import Agent, SYSTEM_PROMPT
-from memory import Memory
+import homunculus.events as _events
+from homunculus import REPO_ROOT
+from homunculus import tools
+from homunculus.core import Agent, SYSTEM_PROMPT
+from homunculus.memory import Memory
 
 
 DISCORD_PROMPT_SUFFIX = """
@@ -101,7 +102,7 @@ def _drain_notifications_into_history(agent: Agent) -> None:
 
 
 def main() -> None:
-    load_dotenv(Path(__file__).parent / ".env")
+    load_dotenv(REPO_ROOT / ".env")
 
     token = os.environ.get("DISCORD_BOT_TOKEN")
     if not token:

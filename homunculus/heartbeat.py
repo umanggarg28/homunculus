@@ -26,13 +26,13 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-import agent_controls
-import events
-import tools
-from core import Agent, measure_llm_usage_since
-from memory import Memory
-from tasks import TaskStore, clear_scratchpad
-from tools.notify import deliver
+from homunculus import agent_controls, REPO_ROOT
+from homunculus import events
+from homunculus import tools
+from homunculus.core import Agent, measure_llm_usage_since
+from homunculus.memory import Memory
+from homunculus.tasks import TaskStore, clear_scratchpad
+from homunculus.tools.notify import deliver
 
 
 HEARTBEAT_PROMPT_TEMPLATE = """It's a scheduled heartbeat tick — no user is
@@ -388,7 +388,7 @@ class TaskGuard:
 
         Imported locally to avoid a circular import at module load.
         """
-        from config import get_config  # local import — see docstring
+        from homunculus.config import get_config  # local import — see docstring
         max_turns = get_config().loop.max_turns
         if turn_idx != max_turns - 1:
             return None
@@ -513,7 +513,7 @@ class TaskGuard:
 # User TZ is autodetected from the browser (see user_tz module) — no env
 # var, no hardcoding. The browser writes workspace/user_tz.txt on its first
 # visit; this module reads from there and falls back to system local.
-from user_tz import now_user_tz as _now_user_tz, now_user_naive as _now_user_naive  # noqa: E402
+from homunculus.user_tz import now_user_tz as _now_user_tz, now_user_naive as _now_user_naive  # noqa: E402
 
 
 def _today_str() -> str:
@@ -849,7 +849,7 @@ def _plan_tick(
     own instructions (observed live 2026-06-11: delivered an algomap.io
     link for a task whose playbook says LeetCode GraphQL only).
     """
-    from skills import (
+    from homunculus.skills import (
         effective_success_criteria,
         load_skill_playbook,
         load_skill_requires_tools,
@@ -956,7 +956,7 @@ def _settle_quiz_pending(task: dict[str, Any], *, delivered: bool) -> None:
     if task.get("skill") != _QUIZ_COACH_SKILL:
         return
     try:
-        from quiz import _store
+        from homunculus.quiz import _store
         if delivered:
             _store().confirm_delivered()
         else:
@@ -1061,7 +1061,7 @@ def _settle_silent_drop(
     # related skill_*.md so next-run's agent has the lesson available
     # without us having to manually update the skill. Best-effort.
     try:
-        from tools._skill_refiner import update_skill_on_failure
+        from homunculus.tools._skill_refiner import update_skill_on_failure
         updated_path = update_skill_on_failure(
             task_id,
             "silent drop on a heartbeat run — agent reached the end of "
@@ -1110,7 +1110,7 @@ def _settle_silent_drop(
 
 def _format_due_tasks(tasks: list[dict], forced: bool = False) -> str:
     import json as _json
-    from tasks import read_scratchpad
+    from homunculus.tasks import read_scratchpad
     tasks_root = Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks"))
     lines = []
     if forced:
@@ -1216,7 +1216,7 @@ def _format_recent_deliveries(tasks: TaskStore, text_cap: int = 1200) -> str:
 
 
 def main() -> None:
-    load_dotenv(Path(__file__).parent / ".env")
+    load_dotenv(REPO_ROOT / ".env")
     if not os.environ.get("HOMUNCULUS_API_KEY"):
         sys.exit("HOMUNCULUS_API_KEY is not set.")
 

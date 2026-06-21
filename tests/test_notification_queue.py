@@ -10,7 +10,7 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-from notifications import NotificationQueue
+from homunculus.notifications import NotificationQueue
 
 
 def test_queue_then_drain_returns_entry(tmp_path: Path) -> None:
@@ -112,7 +112,7 @@ def test_memory_notifications_property_returns_queue(tmp_path: Path) -> None:
     """Memory.notifications must return a NotificationQueue rooted at
     the same dir, so legacy `mem.notifications.queue(...)` callers
     work unchanged after the extraction."""
-    from memory import Memory
+    from homunculus.memory import Memory
     mem = Memory(tmp_path)
     q = mem.notifications
     assert isinstance(q, NotificationQueue)

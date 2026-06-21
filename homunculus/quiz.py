@@ -35,7 +35,7 @@ _OUTCOMES = {"correct", "partial", "wrong"}
 
 def _now() -> datetime:
     # Naive user-local wall clock, consistent with TaskStore timestamps.
-    from user_tz import now_user_naive
+    from homunculus.user_tz import now_user_naive
     return now_user_naive()
 
 

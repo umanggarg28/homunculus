@@ -17,7 +17,7 @@ from __future__ import annotations
 
 
 def test_prompt_forbids_false_tool_unavailable_refusals():
-    from core import SYSTEM_PROMPT
+    from homunculus.core import SYSTEM_PROMPT
     lower = SYSTEM_PROMPT.lower()
     assert "never claim a tool" in lower or "do not claim a tool" in lower
     # Must list at least the most common tools the agent has lied about
@@ -29,7 +29,7 @@ def test_prompt_forbids_false_tool_unavailable_refusals():
 def test_prompt_says_create_task_handles_one_shot_reminders():
     """Round-5 probe 45: 'remind me at 8pm' was refused because the old
     prompt only mentioned recurring commitments. Pin the clarification."""
-    from core import SYSTEM_PROMPT
+    from homunculus.core import SYSTEM_PROMPT
     lower = SYSTEM_PROMPT.lower()
     assert "one-shot" in lower or "remind me" in lower
     assert 'recurrence="none"' in SYSTEM_PROMPT or "recurrence='none'" in SYSTEM_PROMPT
@@ -38,7 +38,7 @@ def test_prompt_says_create_task_handles_one_shot_reminders():
 def test_prompt_specifies_decline_format():
     """If the agent IS going to refuse, it must do so with a reason —
     not by claiming the tool doesn't exist."""
-    from core import SYSTEM_PROMPT
+    from homunculus.core import SYSTEM_PROMPT
     lower = SYSTEM_PROMPT.lower()
     # The "I'm not going to do that because Y" template is the anchor.
     assert "i'm not going to" in lower or "i am not going to" in lower

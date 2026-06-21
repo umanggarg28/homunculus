@@ -19,8 +19,8 @@ from pathlib import Path
 def _store(tmp_path: Path):
     # Other tests in this suite stub `tasks` with a fake — force-reload
     # the real module so we exercise the actual TaskStore.
-    sys.modules.pop("tasks", None)
-    tasks = importlib.import_module("tasks")
+    sys.modules.pop("homunculus.tasks", None)
+    tasks = importlib.import_module("homunculus.tasks")
     return tasks.TaskStore(tmp_path)
 
 

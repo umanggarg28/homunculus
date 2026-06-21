@@ -15,7 +15,7 @@ servers:
   # notify). Runs in-tree but as its own process for symmetry with
   # external servers.
   builtin:
-    command: ["python", "-m", "tools.mcp_server"]
+    command: ["python", "-m", "homunculus.tools.mcp_server"]
     permissions:
       mutating: true        # can write_file, remember, python, schedule, ...
 

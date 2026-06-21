@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import core
-from core import _extract_assistant_message
+from homunculus import core
+from homunculus.core import _extract_assistant_message
 
 
 def test_extract_helper_returns_message_on_valid_shape():

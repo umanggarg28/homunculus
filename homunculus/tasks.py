@@ -21,8 +21,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from config import get_config
-from user_tz import now_user_naive
+from homunculus.config import get_config
+from homunculus.user_tz import now_user_naive
 from typing import Any, Iterator
 
 
@@ -736,7 +736,7 @@ class TaskStore:
             return None
         target = datetime.fromisoformat(value)
         if target.tzinfo is not None:
-            from user_tz import get_user_tz
+            from homunculus.user_tz import get_user_tz
             tz = get_user_tz()
             target = (
                 target.astimezone(tz) if tz else target.astimezone()
