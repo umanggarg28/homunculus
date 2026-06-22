@@ -42,7 +42,7 @@ from collections.abc import Iterator
 
 from homunculus.archival import ArchivalMemory
 from homunculus.notifications import NotificationQueue
-from homunculus.stores import NextTickStore, ReflectionStore, WorldStateStore
+from homunculus.stores import NextTickStore, ReflectionStore, SkillStatsStore, WorldStateStore
 
 log = logging.getLogger(__name__)
 
@@ -128,6 +128,7 @@ class Memory:
         self._world_state: WorldStateStore | None = None
         self._next_tick: NextTickStore | None = None
         self._reflection: ReflectionStore | None = None
+        self._skill_stats: SkillStatsStore | None = None
         self._archival: ArchivalMemory | None = None
 
     # ---- read side -----------------------------------------------------
@@ -393,16 +394,19 @@ class Memory:
         return self._world_state
 
     # ---- skill evaluation ----------------------------------------------
-    # Skills are `skill_*.md` memories. We track `uses` and `consecutive_failures`
-    # in each file's frontmatter so the daily reflection can spot skills that
-    # need refinement.
+    # Skills are `skill_*.md` memories. Their execution telemetry (use count,
+    # consecutive-failure streak, run log) lives in stores.SkillStatsStore,
+    # NOT in the file — the file stays clean authored content the agent edits
+    # only through the proposal flow.
 
     def rate_skill(self, name: str, outcome: str, notes: str = "") -> str:
         """Record a success or failure against a named skill.
 
-        Increments `uses` and, on failure, `consecutive_failures`. Resets
-        `consecutive_failures` on success. The daily reflection uses these
-        counters to decide which skills need review.
+        Telemetry is written to the skill-stats sidecar: `uses` increments,
+        `consecutive_failures` resets on success / increments on failure.
+        The daily reflection consults these to spot skills needing review.
+        Opportunistically migrates a legacy skill file (strips in-file
+        counters and Run log / Watch outs) on the way through.
         """
         if outcome not in ("success", "failure"):
             return "ERROR: outcome must be 'success' or 'failure'"
@@ -414,32 +418,14 @@ class Memory:
                 return f"Skill '{name}' not found. Use recall() to find the exact name."
             path = candidates[0]
 
-        text = path.read_text(encoding="utf-8")
-        uses_m = re.search(r"^uses:\s*(\d+)", text, re.MULTILINE)
-        failures_m = re.search(r"^consecutive_failures:\s*(\d+)", text, re.MULTILINE)
-        uses = int(uses_m.group(1)) if uses_m else 0
-        consec = int(failures_m.group(1)) if failures_m else 0
+        from homunculus.skills import migrate_skill_file
 
-        uses += 1
-        consec = 0 if outcome == "success" else consec + 1
-
-        def _set_fm(t: str, key: str, value: int) -> str:
-            pattern = rf"^{key}:\s*\d+$"
-            if re.search(pattern, t, re.MULTILINE):
-                return re.sub(pattern, f"{key}: {value}", t, flags=re.MULTILINE)
-            return t.replace("---\n", f"---\n{key}: {value}\n", 1)
-
-        text = _set_fm(text, "uses", uses)
-        text = _set_fm(text, "consecutive_failures", consec)
-
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        note_line = f"\n- {now_str} · {outcome}" + (f" — {notes}" if notes else "")
-        if "\n## Run log" in text:
-            text = text.rstrip() + note_line + "\n"
-        else:
-            text = text.rstrip() + f"\n\n## Run log{note_line}\n"
-
-        path.write_text(text, encoding="utf-8")
+        # Seed-then-clean before recording, so a legacy `uses` count carries
+        # over into the sidecar rather than resetting to 1.
+        migrate_skill_file(path, self.skill_stats)
+        entry = self.skill_stats.record(path.stem, outcome, notes)
+        uses = entry.get("uses", 0)
+        consec = entry.get("consecutive_failures", 0)
         flag = " ⚠ consider reviewing this skill" if consec >= 3 else ""
         return f"Rated '{path.stem}': {outcome} (uses={uses}, consecutive_failures={consec}){flag}"
 
@@ -465,6 +451,18 @@ class Memory:
         if self._reflection is None:
             self._reflection = ReflectionStore(self.root)
         return self._reflection
+
+    # ---- skill execution telemetry -------------------------------------
+    #
+    # Owned by stores.SkillStatsStore (_skill_stats.json). Use counts and
+    # failure streaks live here, NOT in the skill_*.md frontmatter/body, so
+    # the skill file stays clean authored content.
+
+    @property
+    def skill_stats(self) -> SkillStatsStore:
+        if self._skill_stats is None:
+            self._skill_stats = SkillStatsStore(self.root)
+        return self._skill_stats
 
     def recent_log_paths(self, days: int = 3) -> list[Path]:
         """Return paths to log files from the last `days` days (newest first).

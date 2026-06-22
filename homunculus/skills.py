@@ -277,6 +277,95 @@ class Skills:
 # yaml directly keeps the loader self-contained.
 
 
+# Runtime state that earlier versions wrote into the skill file itself.
+# These are now owned by stores.SkillStatsStore; the helpers below strip
+# them so a skill file is purely authored content. `uses` /
+# `consecutive_failures` were frontmatter keys; "Run log" / "Watch outs"
+# were body sections auto-appended on each run/failure.
+_RUNTIME_FM_KEYS = re.compile(r"^(?:uses|consecutive_failures)\s*:", re.IGNORECASE)
+_RUNTIME_SECTIONS = ("run log", "watch outs", "watch-outs")
+
+
+def _strip_runtime_body_sections(body: str) -> str:
+    """Drop machine-appended ``## Run log`` / ``## Watch outs`` sections.
+
+    Pure function returning the body with only authored content. Splits on
+    level-2 headings so an authored section is never touched unless its
+    heading names one of the runtime sections.
+    """
+    parts = re.split(r"(?m)^(?=## )", body)
+    kept = []
+    for part in parts:
+        stripped = part.lstrip()
+        if stripped.startswith("## "):
+            heading = stripped[3:].splitlines()[0].strip().lower()
+            if any(heading.startswith(s) for s in _RUNTIME_SECTIONS):
+                continue
+        kept.append(part)
+    cleaned = "".join(kept).rstrip()
+    return cleaned + "\n" if cleaned else ""
+
+
+def _strip_runtime_frontmatter(text: str) -> str:
+    """Remove the runtime frontmatter keys, leaving authored YAML byte-identical.
+
+    A targeted line removal — not a YAML round-trip — so the formatting of
+    description / requires_tools / success_criteria is preserved exactly.
+    """
+    if not text.startswith("---\n"):
+        return text
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return text
+    fm = text[4:end]
+    kept = [ln for ln in fm.split("\n") if not _RUNTIME_FM_KEYS.match(ln)]
+    return "---\n" + "\n".join(kept) + text[end:]
+
+
+def migrate_skill_file(path, stats) -> bool:
+    """One-time cleanup of a legacy ``skill_*.md`` carrying runtime state.
+
+    Seeds ``stats`` (a SkillStatsStore) from any legacy ``uses`` /
+    ``consecutive_failures`` frontmatter — only when the store has no entry
+    yet, so a fresher sidecar value is never clobbered — then rewrites the
+    file with the runtime frontmatter keys and Run log / Watch outs sections
+    removed. Returns True if the file changed. Idempotent and best-effort
+    (any OS error is swallowed; a dirty file is harmless, just noisier).
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    parsed, _ = _parse_skill_frontmatter(text)
+    legacy_uses = parsed.get("uses")
+    legacy_consec = parsed.get("consecutive_failures")
+    if legacy_uses is not None or legacy_consec is not None:
+        stats.seed_if_absent(
+            path.stem,
+            uses=int(legacy_uses or 0),
+            consecutive_failures=int(legacy_consec or 0),
+        )
+
+    cleaned = _strip_runtime_frontmatter(text)
+    fm_end = cleaned.find("\n---\n", 4) if cleaned.startswith("---\n") else -1
+    if fm_end != -1:
+        head, body = cleaned[: fm_end + 5], cleaned[fm_end + 5:]
+        cleaned = head + _strip_runtime_body_sections(body)
+    else:
+        cleaned = _strip_runtime_body_sections(cleaned)
+
+    if cleaned == text:
+        return False
+    try:
+        tmp = path.with_suffix(".md.tmp")
+        tmp.write_text(cleaned, encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        return False
+    return True
+
+
 def _parse_skill_frontmatter(text: str) -> tuple[dict, str]:
     """Split a skill file into (frontmatter_dict, body).
 
@@ -323,6 +412,11 @@ def load_skill_playbook(
     skill_path = memory_root / f"{skill_name}.md"
     text = skill_path.read_text(encoding="utf-8")
     parsed, body = _parse_skill_frontmatter(text)
+    # The injected playbook must be authored content only — never the
+    # machine-appended Run log / Watch outs (telemetry lives in the stats
+    # store). Strip at read time so prompts stay clean regardless of whether
+    # the file on disk has been physically migrated yet.
+    body = _strip_runtime_body_sections(body)
 
     states = parsed.get("states")
     if states is None:

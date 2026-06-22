@@ -241,7 +241,13 @@ def test_skills_failure_counted(client, web_api, monkeypatch):
 
 
 def test_skills_rate_skill_overlay(client, web_api, monkeypatch):
-    """uses/consecutive_failures from skill_*.md appear in the response."""
+    """uses/consecutive_failures from the skill-stats sidecar appear in the response.
+
+    The skill file is matched by its frontmatter `name:`; the counts are
+    sourced from the sidecar (keyed by file stem), not the file body.
+    """
+    from homunculus.stores import SkillStatsStore
+
     monkeypatch.setattr(
         web_api.tools,
         "SCHEMAS",
@@ -249,9 +255,10 @@ def test_skills_rate_skill_overlay(client, web_api, monkeypatch):
     )
     skill_file = web_api.MEMORY_DIR / "skill_my_skill.md"
     skill_file.write_text(
-        "---\nname: my_skill\ndescription: A learned skill\ntype: skill\n"
-        "uses: 5\nconsecutive_failures: 2\n---\n\nBody.\n"
+        "---\nname: my_skill\ndescription: A learned skill\ntype: skill\n---\n\nBody.\n"
     )
+    stats = SkillStatsStore(web_api.MEMORY_DIR)
+    stats.seed_if_absent("skill_my_skill", uses=5, consecutive_failures=2)
 
     resp = client.get("/api/skills")
     skill = resp.json()[0]
