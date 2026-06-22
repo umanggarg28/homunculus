@@ -30,6 +30,7 @@ relevant. This keeps context usage tiny even as memory grows.
 import errno
 import fcntl
 import json
+import logging
 import math
 import os
 import re
@@ -42,6 +43,8 @@ from collections.abc import Iterator
 from homunculus.archival import ArchivalMemory
 from homunculus.notifications import NotificationQueue
 from homunculus.stores import NextTickStore, ReflectionStore, WorldStateStore
+
+log = logging.getLogger(__name__)
 
 try:
     import homunculus.events as _events
@@ -542,7 +545,7 @@ class Memory:
             except Exception:
                 pass
         if migrated:
-            print(f"[memory] migrated {migrated} .vec sidecars → memory.db", flush=True)
+            log.info(f"[memory] migrated {migrated} .vec sidecars → memory.db")
 
     def _db_load_vec(self, filename: str) -> list[float] | None:
         import sqlite3

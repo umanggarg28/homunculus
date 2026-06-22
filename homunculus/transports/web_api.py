@@ -13,6 +13,7 @@ file. UI presentation is fully decoupled from the API layer.
 
 import asyncio
 import json
+import logging
 import os
 import re
 import secrets
@@ -41,6 +42,10 @@ from homunculus.tasks import ALLOWED_RECURRENCE, TaskStore
 # Pricing + event counting live in stats.py — shared with the agent's own
 # week_in_review tool so both surfaces report identical numbers.
 from homunculus.stats import model_cost_cents as _model_cost_cents, summarize_events
+from homunculus.logging_config import configure_logging
+
+configure_logging()
+log = logging.getLogger(__name__)
 
 
 # --- Config ---------------------------------------------------------------
@@ -91,7 +96,7 @@ async def _lifespan(app_: object):
     import homunculus.events as _ev
     dropped = _ev.rotate(keep_days=14)
     if dropped:
-        print(f"[web] rotated _events.jsonl: dropped {dropped} lines older than 14 days", flush=True)
+        log.info("[web] rotated _events.jsonl: dropped %d lines older than 14 days", dropped)
     task = asyncio.create_task(_web_ping_loop())
     yield
     task.cancel()
@@ -1650,7 +1655,7 @@ def _drain_notifications_for_chat(agent) -> None:
     try:
         fresh = agent.memory.notifications.drain()
     except Exception as e:
-        print(f"[web] notification drain failed: {e}", flush=True)
+        log.warning("[web] notification drain failed: %s", e)
         return
     if not fresh:
         return

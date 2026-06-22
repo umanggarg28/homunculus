@@ -44,6 +44,7 @@ from homunculus import REPO_ROOT
 from homunculus import tools
 from homunculus.core import Agent, SYSTEM_PROMPT
 from homunculus.memory import Memory
+from homunculus.logging_config import configure_logging
 
 
 DISCORD_PROMPT_SUFFIX = """
@@ -55,11 +56,7 @@ FORMATTING (you're talking via Discord):
 - Keep replies concise — phone screens are small. 2000-char hard limit per message.
 """
 
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    level=logging.INFO,
-)
-logging.getLogger("discord").setLevel(logging.WARNING)
+configure_logging()
 
 
 def _allowed_user_id() -> int | None:

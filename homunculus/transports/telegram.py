@@ -43,6 +43,7 @@ from telegram.ext import (
 
 import homunculus.events as _events
 from homunculus import REPO_ROOT
+from homunculus.logging_config import configure_logging
 import threading
 from homunculus import tools
 from homunculus.core import Agent, SYSTEM_PROMPT
@@ -92,12 +93,7 @@ def _clean_for_plaintext(text: str) -> str:
     return "\n".join(cleaned_lines)
 
 
-# Quiet down python-telegram-bot's chatty logging.
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    level=logging.INFO,
-)
-logging.getLogger("httpx").setLevel(logging.WARNING)
+configure_logging()
 
 
 # We keep a single Agent for the whole bot lifetime. Each message you
