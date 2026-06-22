@@ -189,6 +189,7 @@ def validate_skill_body(
 _KNOWN_CRITERIA = {
     "notify_called", "notify_min_chars", "notify_has_code",
     "notify_contains", "notify_matches", "notify_unique",
+    "notify_links_grounded",
 }
 
 # Compact single-key YAML form a skill author naturally writes
