@@ -15,6 +15,7 @@ No SDK, no framework. Just httpx and JSON.
 """
 
 import json
+import logging
 import os
 import re
 import secrets
@@ -33,6 +34,8 @@ from homunculus.config import get_config
 from homunculus.memory import Memory
 from homunculus.transcript import Transcript
 from homunculus.tasks import TaskStore
+
+log = logging.getLogger(__name__)
 
 # Output guard — compiled once at module load.
 _GUARD_MEMORY_FILENAME_RE = re.compile(
@@ -1319,7 +1322,7 @@ def call_llm(
             # wait and retry once before falling to lower-quality fallbacks.
             wait_for = retry_after if (retry_after is not None) else get_config().provider.primary_default_retry_wait
             if idx == 0 and wait_for <= get_config().provider.primary_max_retry_wait:
-                print(f"[call_llm] {model_id} 429, waiting {wait_for:.0f}s — retrying primary", flush=True)
+                log.warning(f"[call_llm] {model_id} 429, waiting {wait_for:.0f}s — retrying primary")
                 time.sleep(wait_for)
                 try:
                     retry_resp = httpx.post(
@@ -1342,7 +1345,7 @@ def call_llm(
                     pass
             cool_for = retry_after if retry_after else get_config().provider.cooldown_seconds
             _cool_provider(url, model_id, cool_for)
-            print(f"[call_llm] {model_id} 429 → cooling {cool_for:.0f}s, trying next", flush=True)
+            log.warning(f"[call_llm] {model_id} 429 → cooling {cool_for:.0f}s, trying next")
             try:
                 events.emit("provider_cooled", name=model_id, host=_url_host(url), result=f"429 · cooling {cool_for:.0f}s")
             except Exception:
@@ -1351,10 +1354,9 @@ def call_llm(
         if _is_transient_provider_error(response):
             last_err = response.text
             _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
-            print(
+            log.info(
                 f"[call_llm] {model_id} unavailable ({response.status_code}) "
                 "→ cooling 10m, trying next",
-                flush=True,
             )
             continue
         if response.status_code >= 400:
@@ -1365,13 +1367,13 @@ def call_llm(
         except (ValueError, json.JSONDecodeError):
             last_err = f"non-JSON 200 response: {response.text[:200]}"
             _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
-            print(f"[call_llm] {model_id} returned non-JSON 200 → cooling, trying next", flush=True)
+            log.warning(f"[call_llm] {model_id} returned non-JSON 200 → cooling, trying next")
             continue
         msg = _extract_assistant_message(rj)
         if msg is None:
             last_err = f"malformed 200 response (missing choices/message): {response.text[:200]}"
             _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
-            print(f"[call_llm] {model_id} 200 with no choices → cooling, trying next", flush=True)
+            log.warning(f"[call_llm] {model_id} 200 with no choices → cooling, trying next")
             try:
                 events.emit("provider_cooled", name=model_id, host=_url_host(url), result="200/no-choices")
             except Exception:
@@ -1384,7 +1386,7 @@ def call_llm(
     # then retry the chain once — usually one provider's cooldown will
     # have expired by then.
     wait = 30.0
-    print(f"[call_llm] all providers cooled; sleeping {wait:.0f}s and retrying once", flush=True)
+    log.warning(f"[call_llm] all providers cooled; sleeping {wait:.0f}s and retrying once")
     time.sleep(wait)
     for url, key, model_id in _providers(model):
         if _budget_blocks_model(model_id):
@@ -1641,7 +1643,7 @@ def call_llm_stream(
                 response_ctx.__exit__(None, None, None)
                 response_ctx = None
                 response = None
-                print(f"[call_llm_stream] {model_id} 429, waiting {wait_for:.0f}s — retrying primary", flush=True)
+                log.warning(f"[call_llm_stream] {model_id} 429, waiting {wait_for:.0f}s — retrying primary")
                 time.sleep(wait_for)
                 try:
                     response_ctx = httpx.stream(
@@ -1668,7 +1670,7 @@ def call_llm_stream(
             if response_ctx is None:
                 cool_for = retry_after if retry_after else get_config().provider.cooldown_seconds
                 _cool_provider(url, model_id, cool_for)
-                print(f"[call_llm_stream] {model_id} 429 → cooling {cool_for:.0f}s, trying next", flush=True)
+                log.warning(f"[call_llm_stream] {model_id} 429 → cooling {cool_for:.0f}s, trying next")
                 continue
             # No retry was attempted (not primary, or retry_after too long) —
             # close the original 429 stream and cool this provider.
@@ -1677,7 +1679,7 @@ def call_llm_stream(
             response_ctx = None
             response = None
             _cool_provider(url, model_id, cool_for)
-            print(f"[call_llm_stream] {model_id} 429 → cooling {cool_for:.0f}s, trying next", flush=True)
+            log.warning(f"[call_llm_stream] {model_id} 429 → cooling {cool_for:.0f}s, trying next")
             continue
         if _is_transient_provider_error(response):
             response.read()
@@ -1687,10 +1689,9 @@ def call_llm_stream(
             response_ctx = None
             response = None
             _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
-            print(
+            log.info(
                 f"[call_llm_stream] {model_id} unavailable ({_status}) "
                 "→ cooling 10m, trying next",
-                flush=True,
             )
             continue
         if response.status_code >= 400:
@@ -1779,10 +1780,9 @@ def call_llm_stream(
                 # Truncated/broken JSON. Best we can do is hand the
                 # model an empty-args call so it surfaces the issue
                 # rather than crashing the whole turn.
-                print(
+                log.info(
                     f"[stream] tool {slot['function'].get('name','?')} args "
                     f"didn't parse, defaulting to {{}}: {args[:120]!r}",
-                    flush=True,
                 )
                 slot["function"]["arguments"] = "{}"
 
@@ -3199,7 +3199,7 @@ class Agent:
             )
         except Exception:
             pass
-        print(f"[output_guard] blocked reply ({violations}): {reply[:80]!r}", flush=True)
+        log.warning(f"[output_guard] blocked reply ({violations}): {reply[:80]!r}")
         return None, violations
 
     _SELF_CORRECTION_PROMPT = (
@@ -3343,7 +3343,7 @@ class Agent:
     @staticmethod
     def _log_tool_call(name: str, args: dict[str, Any]) -> None:
         preview = ", ".join(f"{k}={repr(v)[:40]}" for k, v in args.items())
-        print(f"  -> {name}({preview})")
+        log.info(f"  -> {name}({preview})")
 
     def _handle_local_command(self, user_message: str) -> str | None:
         """Handle explicit local commands without an LLM call.
@@ -3469,10 +3469,9 @@ class Agent:
             )
         except Exception:
             pass
-        print(
+        log.info(
             f"[compact] summarized {len(to_summarize)} old messages "
             f"→ history now {len(self.history)} messages",
-            flush=True,
         )
 
     def _summarize_messages(self, messages: list[dict]) -> str:

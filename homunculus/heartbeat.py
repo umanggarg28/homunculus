@@ -15,11 +15,11 @@ Run:
     docker compose stop heartbeat         # stop it
 """
 
+import logging
 import os
 import re
 import sys
 import time
-import traceback
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from typing import Any
@@ -33,6 +33,9 @@ from homunculus.core import Agent, measure_llm_usage_since
 from homunculus.memory import Memory
 from homunculus.tasks import TaskStore, clear_scratchpad
 from homunculus.tools.notify import deliver
+from homunculus.logging_config import configure_logging
+
+log = logging.getLogger(__name__)
 
 
 HEARTBEAT_PROMPT_TEMPLATE = """It's a scheduled heartbeat tick — no user is
@@ -540,7 +543,7 @@ def tick(memory: Memory, model: str | None) -> None:
     # no reflection, no LLM spend, no state mutation. Chat is unaffected
     # (the switch halts autonomy, not conversation).
     if agent_controls.load_controls().paused:
-        print("[heartbeat] HALTED by operator kill switch — tick skipped", flush=True)
+        log.warning("[heartbeat] HALTED by operator kill switch — tick skipped")
         return
 
     # Use user-TZ-aware now for the prompt — the agent quotes this back to
@@ -578,13 +581,12 @@ def tick(memory: Memory, model: str | None) -> None:
                     f"executing flag stale ({int(age)}s old) — auto-cleared",
                     increment_failures=False,
                 )
-                print(
+                log.info(
                     f"[heartbeat] auto-cleared stale executing flag on {t['id']!r} "
                     f"(age={int(age)}s)",
-                    flush=True,
                 )
             except Exception as _e:
-                print(f"[heartbeat] auto-clear failed for {t['id']}: {_e}", flush=True)
+                log.error(f"[heartbeat] auto-clear failed for {t['id']}: {_e}")
 
     due_tasks = tasks.due()
     events.emit("service_ping", name="heartbeat", text="alive")
@@ -600,8 +602,8 @@ def tick(memory: Memory, model: str | None) -> None:
         if do_reflection:
             agent = Agent(memory=memory, model=model)
             yesterday_iso, yesterday_path = _yesterday_iso_and_path()
-            print(f"\n[heartbeat] REFLECTION tick at {now_iso} "
-                  f"(reviewing {yesterday_iso}, model={agent.model})", flush=True)
+            log.info(f"\n[heartbeat] REFLECTION tick at {now_iso} "
+                  f"(reviewing {yesterday_iso}, model={agent.model})")
             prompt = REFLECTION_PROMPT_TEMPLATE.format(
                 today=today,
                 yesterday=yesterday_iso,
@@ -610,17 +612,16 @@ def tick(memory: Memory, model: str | None) -> None:
             )
             response = agent.chat(prompt, source="heartbeat")
             memory.reflection.mark(today)
-            print(f"[agent] {response}", flush=True)
+            log.info(f"[agent] {response}")
             return
 
-        print(f"\n[heartbeat] tick at {now_iso}: no due tasks; skipping LLM", flush=True)
+        log.info(f"\n[heartbeat] tick at {now_iso}: no due tasks; skipping LLM")
         return
 
     agent = Agent(memory=memory, model=model)
-    print(
+    log.info(
         f"\n[heartbeat] tick at {now_iso}: {len(due_tasks)} due task(s) "
         f"(model={agent.model})",
-        flush=True,
     )
 
     memory_root = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
@@ -634,7 +635,7 @@ def tick(memory: Memory, model: str | None) -> None:
         try:
             tasks.mark_fired(task["id"])
         except Exception as e:
-            print(f"[heartbeat] mark_fired failed for {task['id']}: {e}", flush=True)
+            log.error(f"[heartbeat] mark_fired failed for {task['id']}: {e}")
 
     due_tasks_block = _format_due_tasks(selected_tasks)
     if playbooks:
@@ -696,10 +697,9 @@ def tick(memory: Memory, model: str | None) -> None:
             try:
                 current = tasks.get(task["id"])
                 if current and current.get("due_at") != due_at_before.get(task["id"]):
-                    print(
+                    log.info(
                         f"[heartbeat] {task['id']} due_at advanced — task was completed; "
                         f"skipping record_failure",
-                        flush=True,
                     )
                     continue
                 if is_provider_exhaustion:
@@ -708,10 +708,9 @@ def tick(memory: Memory, model: str | None) -> None:
                     # broken task. mark_partial reschedules ~10 min
                     # later so the same provider's TPM window can
                     # refresh; the scratchpad survives.
-                    print(
+                    log.info(
                         f"[heartbeat] {task['id']} provider-exhaustion — "
                         f"marking partial, will retry shortly",
-                        flush=True,
                     )
                     usage = measure_llm_usage_since(started_utc)
                     tasks.mark_partial(task["id"], err, duration_s=duration, usage=usage)
@@ -734,12 +733,12 @@ def tick(memory: Memory, model: str | None) -> None:
                         ),
                     )
             except Exception as inner:
-                print(f"[heartbeat] record_failure failed for {task['id']}: {inner}", flush=True)
+                log.error(f"[heartbeat] record_failure failed for {task['id']}: {inner}")
         raise
     finally:
         tools.set_pre_execute_hook(None)
         tools.set_pre_turn_hook(None)
-    print(f"[agent] {response}", flush=True)
+    log.info(f"[agent] {response}")
 
     # Post-success completion check. agent.chat() returned without an
     # exception, but that doesn't mean the task was actually delivered —
@@ -810,7 +809,7 @@ def tick(memory: Memory, model: str | None) -> None:
             )
             _settle_quiz_pending(task, delivered=False)
         except Exception as inner:
-            print(f"[heartbeat] post-tick check failed for {task['id']}: {inner}", flush=True)
+            log.error(f"[heartbeat] post-tick check failed for {task['id']}: {inner}")
 
 
 def _known_tool_names() -> set[str] | None:
@@ -865,10 +864,9 @@ def _plan_tick(
         try:
             states, body = load_skill_playbook(memory_root, skill_name)
         except FileNotFoundError:
-            print(
+            log.info(
                 f"[heartbeat] {t['id']!r} skill {skill_name!r} not found; "
                 f"falling back to free-form",
-                flush=True,
             )
             continue
         # Capability gate (Hermes requires_tools): if the skill depends on tools
@@ -880,10 +878,9 @@ def _plan_tick(
             missing = [tn for tn in load_skill_requires_tools(memory_root, skill_name)
                        if tn not in known_tools]
             if missing:
-                print(
+                log.info(
                     f"[heartbeat] {t['id']!r} skill {skill_name!r} requires "
                     f"unavailable tools {missing}; blocking (no fabrication)",
-                    flush=True,
                 )
                 events.emit(
                     "skill_capability_missing",
@@ -913,10 +910,9 @@ def _plan_tick(
             f"(auto-loaded from {skill_name})\n\n{body.strip()}"
         )
         if states:
-            print(
+            log.info(
                 f"[heartbeat] {t['id']!r} → state machine ({len(states)} states) "
                 f"from {skill_name!r}; deferring {len(due_tasks) - 1} other due task(s)",
-                flush=True,
             )
             return states, [t], [block]
         playbooks.append(block)
@@ -940,7 +936,7 @@ def _record_delivery_keys(
             if key:
                 tasks.record_delivery(task["id"], key)
         except Exception as e:
-            print(f"[heartbeat] record_delivery failed for {task['id']}: {e}", flush=True)
+            log.error(f"[heartbeat] record_delivery failed for {task['id']}: {e}")
 
 
 # The quiz coach is the one skill that arms a "your turn" pending. The harness
@@ -962,7 +958,7 @@ def _settle_quiz_pending(task: dict[str, Any], *, delivered: bool) -> None:
         else:
             _store().clear_pending()
     except Exception as e:
-        print(f"[heartbeat] quiz pending settle failed for {task['id']}: {e}", flush=True)
+        log.error(f"[heartbeat] quiz pending settle failed for {task['id']}: {e}")
 
 
 def _rate_task_skill(memory: "Memory", task: dict[str, Any], outcome: str) -> None:
@@ -979,7 +975,7 @@ def _rate_task_skill(memory: "Memory", task: dict[str, Any], outcome: str) -> No
         # resolves to skill_<slug>.md directly.
         memory.rate_skill(skill_name.removeprefix("skill_"), outcome)
     except Exception as e:
-        print(f"[heartbeat] rate_skill({skill_name}, {outcome}) failed: {e}", flush=True)
+        log.error(f"[heartbeat] rate_skill({skill_name}, {outcome}) failed: {e}")
 
 
 def _settle_silent_drop(
@@ -1019,10 +1015,9 @@ def _settle_silent_drop(
         )
         clear_scratchpad(tasks.root, task_id)
         tasks.attribute_usage_to_last_run(task_id, usage)
-        print(
+        log.info(
             f"[heartbeat] {task_id} auto-completed — criteria satisfied, "
             f"agent omitted complete_task",
-            flush=True,
         )
         events.emit(
             "task_complete",
@@ -1031,11 +1026,10 @@ def _settle_silent_drop(
         )
         return
 
-    print(
+    log.info(
         f"[heartbeat] {task_id} silently dropped — agent did not call "
         f"complete_task OR record_failure. Recording soft failure to clear "
         f"executing flag.",
-        flush=True,
     )
     # Silent drop → mark partial (the work was in progress, the agent
     # just didn't call any termination tool). The next tick fires the
@@ -1072,11 +1066,10 @@ def _settle_silent_drop(
             memory_dir=os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"),
         )
         if updated_path:
-            print(f"[heartbeat] auto-refined skill {updated_path}", flush=True)
+            log.info(f"[heartbeat] auto-refined skill {updated_path}")
     except Exception as refine_err:
-        print(
+        log.info(
             f"[heartbeat] skill auto-refine failed for {task_id}: {refine_err}",
-            flush=True,
         )
     # Autonomous fallback notify — only when mark_partial ESCALATED to
     # a real failure (consecutive_failures > 0 after the call). Plain
@@ -1087,10 +1080,9 @@ def _settle_silent_drop(
         refreshed = tasks.get(task_id) or {}
         escalated = int(refreshed.get("consecutive_failures", 0)) > 0
         if not escalated:
-            print(
+            log.info(
                 f"[heartbeat] {task_id} partial — suppressing user "
                 f"notification (will only fire on escalation)",
-                flush=True,
             )
             return
         try:
@@ -1102,9 +1094,8 @@ def _settle_silent_drop(
                 f"check Traces if you want to know why."
             )
         except Exception as notify_err:
-            print(
+            log.info(
                 f"[heartbeat] fallback-notify failed for {task_id}: {notify_err}",
-                flush=True,
             )
 
 
@@ -1216,6 +1207,7 @@ def _format_recent_deliveries(tasks: TaskStore, text_cap: int = 1200) -> str:
 
 
 def main() -> None:
+    configure_logging()
     load_dotenv(REPO_ROOT / ".env")
     if not os.environ.get("HOMUNCULUS_API_KEY"):
         sys.exit("HOMUNCULUS_API_KEY is not set.")
@@ -1235,7 +1227,7 @@ def main() -> None:
 
     dropped = events.rotate(keep_days=14)
     if dropped:
-        print(f"[heartbeat] rotated _events.jsonl: dropped {dropped} lines older than 14 days", flush=True)
+        log.info(f"[heartbeat] rotated _events.jsonl: dropped {dropped} lines older than 14 days")
 
     # Crash recovery: any task left with executing=True from a previous run
     # is stuck and will never fire again. Clear the flag on startup so the
@@ -1250,11 +1242,11 @@ def main() -> None:
                 "cleared by heartbeat restart — previous run did not finish",
                 increment_failures=False,
             )
-            print(f"[heartbeat] cleared stuck executing flag on task {_t['id']!r}", flush=True)
+            log.info(f"[heartbeat] cleared stuck executing flag on task {_t['id']!r}")
         except Exception as _e:
-            print(f"[heartbeat] could not clear executing on {_t['id']}: {_e}", flush=True)
+            log.error(f"[heartbeat] could not clear executing on {_t['id']}: {_e}")
 
-    print(f"[heartbeat] starting, interval = {interval_min} min, model = {model}", flush=True)
+    log.info(f"[heartbeat] starting, interval = {interval_min} min, model = {model}")
 
     default_interval = interval_min * 60
     tick_failed = False
@@ -1264,8 +1256,7 @@ def main() -> None:
             tick_failed = False
         except Exception as e:
             # Don't let one bad tick kill the daemon. Log and continue.
-            print("[heartbeat] error during tick:", flush=True)
-            traceback.print_exc()
+            log.exception("[heartbeat] error during tick")
             # Network-class errors (DNS, connect refused) are usually
             # transient — retry in 60s instead of waiting the full hour
             # backoff. Without this, a single DNS blip during a recurring
@@ -1282,7 +1273,7 @@ def main() -> None:
         # The old datetime.now() wrote UTC wall clock on Docker, which
         # the sidebar read as IST — 5.5h in the past, clamped to "0s".
         wake_at = (_now_user_naive() + timedelta(seconds=sleep_seconds)).isoformat(timespec="seconds")
-        print(f"[heartbeat] sleeping {sleep_seconds:.0f}s, next tick ~{wake_at}", flush=True)
+        log.info(f"[heartbeat] sleeping {sleep_seconds:.0f}s, next tick ~{wake_at}")
         memory.next_tick.set(wake_at)
         _interruptible_sleep(sleep_seconds)
         memory.next_tick.pop()  # consumed — clear so stale value doesn't persist after waking
@@ -1373,7 +1364,7 @@ def _interruptible_sleep(total_seconds: float, poll_interval: float = 60.0) -> N
         now_wall = time.time()
         if now_wall - last_ping >= keepalive_every * 1.5:
             gap = now_wall - last_ping
-            print(f"[heartbeat] detected {gap:.0f}s wall-clock gap (host suspend?) — waking", flush=True)
+            log.warning(f"[heartbeat] detected {gap:.0f}s wall-clock gap (host suspend?) — waking")
             try:
                 events.emit(
                     "host_suspend_detected",
@@ -1390,7 +1381,7 @@ def _interruptible_sleep(total_seconds: float, poll_interval: float = 60.0) -> N
                 pass
             last_ping = now_wall
         if task_store.due():
-            print("[heartbeat] task became due mid-sleep — waking early", flush=True)
+            log.info("[heartbeat] task became due mid-sleep — waking early")
             break
 
 
@@ -1408,7 +1399,7 @@ def _compute_sleep(memory: Memory, default_seconds: float) -> float:
     try:
         target = datetime.fromisoformat(scheduled)
     except ValueError:
-        print(f"[heartbeat] could not parse scheduled time '{scheduled}', using default", flush=True)
+        log.warning(f"[heartbeat] could not parse scheduled time '{scheduled}', using default")
         return min(default_seconds, next_task) if next_task is not None else default_seconds
     # Defense-in-depth: schedule_next_tick now persists naive local time,
     # but older stored values might be timezone-aware. Normalize before
@@ -1420,13 +1411,13 @@ def _compute_sleep(memory: Memory, default_seconds: float) -> float:
     # on a container running in UTC.
     delta = (target - _now_user_naive()).total_seconds()
     if delta <= 0:
-        print(f"[heartbeat] scheduled time {scheduled} is in the past, using default", flush=True)
+        log.warning(f"[heartbeat] scheduled time {scheduled} is in the past, using default")
         return min(default_seconds, next_task) if next_task is not None else default_seconds
     # The schedule_next_tick tool already caps at 24h on the way in, but
     # double-check here as a defense-in-depth.
     capped = min(delta, 24 * 3600)
     if capped < delta:
-        print(f"[heartbeat] capping {delta:.0f}s schedule to 24h", flush=True)
+        log.warning(f"[heartbeat] capping {delta:.0f}s schedule to 24h")
     return min(capped, next_task) if next_task is not None else capped
 
 

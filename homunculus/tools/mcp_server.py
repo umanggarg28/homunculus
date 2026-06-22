@@ -845,8 +845,10 @@ def main() -> None:
     import os
     from pathlib import Path
     from homunculus.memory import Memory
+    from homunculus.logging_config import configure_logging
     from ._state import init as init_state
 
+    configure_logging()
     memory_dir = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
     autonomous = os.environ.get("HOMUNCULUS_AUTONOMOUS", "0") == "1"
     init_state(memory=Memory(memory_dir), autonomous=autonomous, mode="build")

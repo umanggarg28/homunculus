@@ -328,7 +328,7 @@ def _record_to_feed(text: str) -> bool:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         return True
     except OSError as e:
-        print(f"[notify] WARNING: could not record to feed: {e}", flush=True)
+        logging.warning("[notify] could not record to feed: %s", e)
         return False
 
 

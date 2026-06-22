@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 from homunculus import tools, REPO_ROOT
 from homunculus.core import Agent
 from homunculus.memory import Memory
+from homunculus.logging_config import configure_logging
 
 # Where the agent stores its persistent memory on disk. Inside the Docker
 # container this resolves under the bind-mounted workspace, so memory
@@ -33,6 +34,7 @@ MEMORY_DIR = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
 
 
 def main() -> None:
+    configure_logging()
     load_dotenv(REPO_ROOT / ".env")
 
     if not os.environ.get("HOMUNCULUS_API_KEY"):
