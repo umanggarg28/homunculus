@@ -171,6 +171,23 @@ Rules: no notify(), no shell_exec, no writing workspace files, no reading logs o
 """
 
 
+_URL_RE = re.compile(r"https?://[^\s<>\"'\)\]}]+")
+# Trailing punctuation that commonly clings to a URL in prose/markdown but
+# isn't part of the address (e.g. "see https://x/a)." → strip ").").
+_URL_TRAILING = ".,;:!?)]}>\"'"
+
+
+def _extract_urls(text: str) -> list[str]:
+    """Pull URLs out of free text, trimming trailing punctuation. Order-
+    preserving and de-duplicated."""
+    seen: dict[str, None] = {}
+    for raw in _URL_RE.findall(text or ""):
+        url = raw.rstrip(_URL_TRAILING)
+        if url:
+            seen.setdefault(url, None)
+    return list(seen)
+
+
 class TaskGuard:
     """Pi-style output guard for scheduled task delivery.
 
@@ -241,6 +258,10 @@ class TaskGuard:
         # can spot skill staleness that delivered_text/status can't (e.g. a tool
         # called repeatedly because the skill misreads its result).
         self._tool_trace: list[str] = []
+        # Concatenated text of every tool RESULT this tick (minus notify's own
+        # result). The notify_links_grounded criterion checks delivered URLs
+        # against this — a link the agent didn't get from a tool is fabricated.
+        self._tool_result_text: list[str] = []
 
     def on_tool_call(self, name: str, arguments: dict) -> str | None:
         """Hook fn passed to tools.set_pre_execute_hook().
@@ -323,6 +344,21 @@ class TaskGuard:
             )
 
         return None  # all other tools pass through unmodified
+
+    def observe_tool_result(self, name: str, result: str) -> None:
+        """Post-execute hook: record what a tool returned this tick.
+
+        Feeds the notify_links_grounded criterion. notify's own result is
+        skipped — it's a delivery receipt, not a data source, so it can't be
+        used to self-validate a fabricated link.
+        """
+        if name == "notify" or not result:
+            return
+        self._tool_result_text.append(result)
+
+    def _grounded_blob(self) -> str:
+        """All tool-result text seen this tick, for link-provenance checks."""
+        return "\n".join(self._tool_result_text)
 
     def criteria_failures(self, task_id: str) -> list[str]:
         """Failure descriptions for ONE task's criteria, checked against
@@ -505,6 +541,23 @@ class TaskGuard:
                                 f"(the task block lists already_delivered keys)"
                             )
 
+            elif ctype == "notify_links_grounded":
+                # Every URL in the delivery must appear verbatim in a tool
+                # result this run. Catches the fabricated-link failure mode —
+                # the model skips the fetch tool and invents placeholder
+                # (example.com) or hallucinated links that pass a shape check
+                # like notify_matches. We verify against the actual tool
+                # output, never the model's narration.
+                grounded = self._grounded_blob()
+                for url in _extract_urls(combined):
+                    if url not in grounded:
+                        failures.append(
+                            f"notify text contains a link no tool returned this "
+                            f"run: {url} — every URL must be pasted verbatim from "
+                            f"a tool result (e.g. news_headlines). Do not write, "
+                            f"shorten, or invent links."
+                        )
+
             else:
                 # Unknown criterion type — skip rather than hard-fail so
                 # adding new types doesn't break existing tasks.
@@ -658,6 +711,7 @@ def tick(memory: Memory, model: str | None) -> None:
         },
     )
     tools.set_pre_execute_hook(guard.on_tool_call)
+    tools.set_post_execute_hook(guard.observe_tool_result)
     # Item 5 (pragmatic slice): install the turn-level hook so the guard
     # can inject a forced completion message at iter MAX_TURNS-1 when any
     # due task is still unfinished.
@@ -737,6 +791,7 @@ def tick(memory: Memory, model: str | None) -> None:
         raise
     finally:
         tools.set_pre_execute_hook(None)
+        tools.set_post_execute_hook(None)
         tools.set_pre_turn_hook(None)
     log.info(f"[agent] {response}")
 

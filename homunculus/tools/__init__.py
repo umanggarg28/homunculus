@@ -36,6 +36,19 @@ def set_pre_execute_hook(fn: Callable[[str, dict], str | None] | None) -> None:
     _pre_execute_hook = fn
 
 
+# Optional hook installed alongside the pre-execute hook. Called AFTER every
+# tool execution with (name, result) — the final, truncated result string the
+# agent sees. Lets the guard observe what tools actually returned (e.g. to
+# verify that links in a delivery were produced by a tool, not fabricated).
+# Read-only: its return value is ignored.
+_post_execute_hook: Callable[[str, str], None] | None = None
+
+
+def set_post_execute_hook(fn: Callable[[str, str], None] | None) -> None:
+    global _post_execute_hook
+    _post_execute_hook = fn
+
+
 # Item 5 of the robustness plan — turn-level hook. Called at the START of
 # each iteration of the agent loop (before the LLM call). Receives the
 # 0-indexed turn number. Returns either None (do nothing) or a synthetic
@@ -253,12 +266,21 @@ def execute(name: str, arguments: dict) -> str:
             result[:TOOL_RESULT_MAX_CHARS]
             + f"\n\n[... truncated {dropped} chars; result was {original_len} bytes total]"
         )
+    # Let an installed guard observe the result (e.g. to track which links a
+    # tool actually returned). Best-effort and read-only — never let an
+    # observer error break the tool call.
+    if _post_execute_hook is not None:
+        try:
+            _post_execute_hook(name, result)
+        except Exception:
+            pass
     return result
 
 
 __all__ = [
     "init", "execute", "get_mode", "set_mode",
-    "SCHEMAS", "tool_names", "set_pre_execute_hook", "set_pre_turn_hook",
+    "SCHEMAS", "tool_names", "set_pre_execute_hook", "set_post_execute_hook",
+    "set_pre_turn_hook",
 ]
 
 
