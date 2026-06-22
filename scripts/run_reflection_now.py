@@ -45,11 +45,14 @@ def main() -> None:
 
     today = _today_str()
     yesterday_iso, yesterday_path = _yesterday_iso_and_path()
-    prompt = REFLECTION_PROMPT_TEMPLATE.format(
-        today=today,
-        yesterday=yesterday_iso,
-        yesterday_path=yesterday_path,
-        recent_deliveries=_format_recent_deliveries(TaskStore(tasks_dir)),
+    # Use .replace(), not .format(): the template embeds literal JSON braces
+    # (e.g. {"old": ...}) in its skill-edit examples, which str.format() reads
+    # as fields and raises KeyError on. Mirrors heartbeat.tick() exactly.
+    prompt = (
+        REFLECTION_PROMPT_TEMPLATE
+        .replace("{today}", today)
+        .replace("{yesterday_path}", yesterday_path)
+        .replace("{recent_deliveries}", _format_recent_deliveries(TaskStore(tasks_dir)))
     )
     print(
         f"[reflection] today={today} reviewing={yesterday_iso} model={agent.model}",
