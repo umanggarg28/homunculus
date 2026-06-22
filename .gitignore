@@ -4,6 +4,9 @@ __pycache__/
 .venv/
 _events.jsonl
 
+# Personal build-from-scratch learning guide — kept local, not published.
+LEARN.md
+
 # Frontend dependencies and build output.
 web/node_modules/
 web/dist/

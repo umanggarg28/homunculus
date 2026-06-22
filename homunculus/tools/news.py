@@ -21,7 +21,7 @@ A feed that fails to fetch or parse is skipped, not fatal.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from email.utils import parsedate_to_datetime
 
 import httpx
@@ -174,6 +174,6 @@ def _age_hours(date_str: str) -> float:
     if dt is None:
         return _FRESH_HOURS / 2
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    delta = datetime.now(timezone.utc) - dt
+        dt = dt.replace(tzinfo=UTC)
+    delta = datetime.now(UTC) - dt
     return max(0.0, delta.total_seconds() / 3600.0)

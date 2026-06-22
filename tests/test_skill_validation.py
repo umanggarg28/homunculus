@@ -9,7 +9,6 @@ unknown forced-tool references all fail with a clear reason.
 
 from __future__ import annotations
 
-import pytest
 
 from homunculus.skill_validation import validate_skill_body, validate_task_spec
 

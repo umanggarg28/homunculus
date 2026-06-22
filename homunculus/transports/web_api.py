@@ -20,7 +20,7 @@ import threading
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -38,6 +38,9 @@ from homunculus.core import Agent, API_URL, MODEL
 from homunculus.memory import Memory
 from homunculus.transcript import Transcript
 from homunculus.tasks import ALLOWED_RECURRENCE, TaskStore
+# Pricing + event counting live in stats.py — shared with the agent's own
+# week_in_review tool so both surfaces report identical numbers.
+from homunculus.stats import model_cost_cents as _model_cost_cents, summarize_events
 
 
 # --- Config ---------------------------------------------------------------
@@ -276,7 +279,7 @@ def model_info() -> JSONResponse:
 def status() -> JSONResponse:
     """Per-service liveness inferred from event-stream freshness."""
     services = ["heartbeat", "telegram", "web"]
-    last_seen: dict[str, float | None] = {s: None for s in services}
+    last_seen: dict[str, float | None] = dict.fromkeys(services)
 
     if EVENTS_PATH.exists():
         with EVENTS_PATH.open("r", encoding="utf-8") as f:
@@ -724,13 +727,12 @@ def proposals_approve(proposal_id: str) -> JSONResponse:
                 skill=p["skill_name"],
             )
         except (ValueError, KeyError) as e:
-            raise HTTPException(400, f"skill saved (v{version}) but task creation failed: {e}")
+            raise HTTPException(400, f"skill saved (v{version}) but task creation failed: {e}") from e
 
     store.mark_approved(proposal_id, note=f"applied as v{version}")
 
-    # Orphan check: an approved skill that no task runs is a no-op — exactly the
-    # state that made yesterday's brief HN edit do nothing (the task had
-    # skill=None). Warn so the operator links it (PATCH /api/tasks/<id> {skill}).
+    # Orphan check: an approved skill that no task runs is a no-op (the task
+    # has skill=None). Warn so the operator links it (PATCH /api/tasks/<id> {skill}).
     warning = None
     if created_task is None:
         linked = any((t.get("skill") == p["skill_name"]) for t in _task_store().all())
@@ -754,9 +756,9 @@ async def proposals_reject(proposal_id: str, request: Request) -> JSONResponse:
     try:
         p = _proposal_store().mark_rejected(proposal_id, note=(body or {}).get("reason", ""))
     except KeyError:
-        raise HTTPException(404, f"proposal {proposal_id} not found")
+        raise HTTPException(404, f"proposal {proposal_id} not found") from None
     except ValueError as e:
-        raise HTTPException(409, str(e))
+        raise HTTPException(409, str(e)) from e
     return JSONResponse({"ok": True, "id": p["id"], "status": "rejected"})
 
 
@@ -766,7 +768,7 @@ def tasks_list(status: str = "all") -> JSONResponse:
     try:
         items = _task_store().list(status=status)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return JSONResponse(items)
 
 
@@ -786,7 +788,7 @@ async def tasks_create(request: Request) -> JSONResponse:
             success_criteria=body.get("success_criteria"),
         )
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return JSONResponse(task)
 
 
@@ -795,7 +797,7 @@ async def tasks_update(task_id: str, request: Request) -> JSONResponse:
     body = await request.json() or {}
     # Linking a task to a skill is a real operation (not a tasks.json hand-edit):
     # this is what binds a skill to the task that runs it, so an approved skill
-    # can't sit orphaned (the morning-brief bug). A non-empty skill must exist.
+    # can't sit orphaned and never run. A non-empty skill must exist.
     skill = body.get("skill")
     if skill:
         from homunculus.skills import Skills
@@ -813,9 +815,9 @@ async def tasks_update(task_id: str, request: Request) -> JSONResponse:
             skill=skill,
         )
     except KeyError:
-        raise HTTPException(404, f"task '{task_id}' not found")
+        raise HTTPException(404, f"task '{task_id}' not found") from None
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return JSONResponse(task)
 
 
@@ -825,7 +827,7 @@ async def tasks_complete(task_id: str, request: Request) -> JSONResponse:
     try:
         task = _task_store().complete(task_id, result=(body or {}).get("result", ""))
     except KeyError:
-        raise HTTPException(404, f"task '{task_id}' not found")
+        raise HTTPException(404, f"task '{task_id}' not found") from None
     return JSONResponse(task)
 
 
@@ -835,7 +837,7 @@ async def tasks_cancel(task_id: str, request: Request) -> JSONResponse:
     try:
         task = _task_store().cancel(task_id, reason=(body or {}).get("reason", ""))
     except KeyError:
-        raise HTTPException(404, f"task '{task_id}' not found")
+        raise HTTPException(404, f"task '{task_id}' not found") from None
     return JSONResponse(task)
 
 
@@ -849,7 +851,7 @@ def tasks_run_now(task_id: str) -> JSONResponse:
     try:
         task = _task_store().run_now(task_id)
     except KeyError:
-        raise HTTPException(404, f"task '{task_id}' not found")
+        raise HTTPException(404, f"task '{task_id}' not found") from None
     return JSONResponse(task)
 
 
@@ -902,11 +904,10 @@ async def tasks_run_stream(task_id: str, request: Request):
     guard = TaskGuard({task_id: task.get("success_criteria") or []})
     tools.set_pre_execute_hook(guard.on_tool_call)
     tools.set_pre_turn_hook(guard.on_pre_turn)
-    from datetime import timezone as _tz
     from homunculus.core import measure_llm_usage_since
     due_at_before = task.get("due_at")
     started_iso = datetime.now().isoformat(timespec="seconds")
-    started_utc = datetime.now(_tz.utc)
+    started_utc = datetime.now(UTC)
 
     def gen():
         try:
@@ -922,9 +923,9 @@ async def tasks_run_stream(task_id: str, request: Request):
                 # so exit the loop the moment it's closed (complete/record_
                 # failure/cancel/continue). Without this the loop kept
                 # prodding under tool_choice=required AFTER a successful
-                # complete_task, and the model called record_failure on the
-                # just-completed task — flipping a real success to a failure
-                # (observed 2026-06-15).
+                # complete_task, and the model would call record_failure on
+                # the just-completed task — flipping a real success to a
+                # failure.
                 for chunk in fresh_agent.chat_stream(
                     prompt, source="heartbeat", expected_completions=1,
                 ):
@@ -986,7 +987,7 @@ def tasks_delete(task_id: str) -> JSONResponse:
     try:
         _task_store().delete(task_id)
     except KeyError:
-        raise HTTPException(404, f"task '{task_id}' not found")
+        raise HTTPException(404, f"task '{task_id}' not found") from None
     return JSONResponse({"ok": True})
 
 
@@ -1098,7 +1099,7 @@ async def webhook(request: Request) -> JSONResponse:
     try:
         body = await request.json()
     except Exception:
-        raise HTTPException(400, "Request body must be valid JSON")
+        raise HTTPException(400, "Request body must be valid JSON") from None
 
     mode = body.get("mode", "task")
     source = str(body.get("source", "webhook"))[:40]
@@ -1187,10 +1188,8 @@ def agent_upcoming() -> JSONResponse:
 
 
 # --- API: stats -----------------------------------------------------------
-
 # Pricing + event counting live in stats.py — shared with the agent's
 # own week_in_review tool so both surfaces report identical numbers.
-from homunculus.stats import model_cost_cents as _model_cost_cents, summarize_events
 
 
 def _build_agent_replay(limit: int = 12) -> list[dict]:
@@ -1376,15 +1375,14 @@ def stats_today() -> JSONResponse:
     resets when the user's calendar day flips, not at 05:30 IST.
     Falls back to UTC if user_tz isn't set yet.
     """
-    from datetime import timezone
     try:
         from homunculus.user_tz import get_user_tz_name
         from zoneinfo import ZoneInfo
         tz = ZoneInfo(get_user_tz_name())
         local_midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        cutoff = local_midnight.astimezone(timezone.utc)
+        cutoff = local_midnight.astimezone(UTC)
     except Exception:
-        cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        cutoff = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
 
     s = summarize_events(cutoff)
     budget_usd = float(os.environ.get("HOMUNCULUS_DAILY_BUDGET_USD", "0") or "0")
@@ -1771,7 +1769,6 @@ async def chat_send(request: Request):
         # Drain happens inside the lock too — it appends to history.
         _chat_agent_lock.acquire()
         reply_buf: list[str] = []
-        user_ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
         try:
             _drain_notifications_for_chat(agent)
             for chunk in agent.chat_stream(user_message, source="web"):

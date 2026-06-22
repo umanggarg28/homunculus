@@ -8,11 +8,10 @@ the judgment into Python so the LLM only formats.
 from __future__ import annotations
 
 import importlib.util
-import json
 import os
 import sys
 import types
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 import pytest

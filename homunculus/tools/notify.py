@@ -169,7 +169,7 @@ def _recently_delivered(text: str) -> bool:
     return False
 
 
-def _channel_senders() -> list[tuple[str, "callable"]]:
+def _channel_senders() -> list[tuple[str, callable]]:
     """Configured push channels, in order. Additive: a channel is included only
     when its credentials are present, so enabling or disabling a channel needs no
     code change — just env vars."""
@@ -504,20 +504,20 @@ def _render_inline(children, out: list[str], esc) -> None:
         elif ct == "code_inline":
             out.append(f"<code>{esc(c.content)}</code>")
         elif ct == "strong_open":
-            out.append("<b>"); stack.append("</b>")
+            out.append("<b>")
+            stack.append("</b>")
         elif ct == "strong_close":
-            if stack and stack[-1] == "</b>": out.append(stack.pop())
-            else: out.append("</b>")
+            out.append(stack.pop() if stack and stack[-1] == "</b>" else "</b>")
         elif ct == "em_open":
-            out.append("<i>"); stack.append("</i>")
+            out.append("<i>")
+            stack.append("</i>")
         elif ct == "em_close":
-            if stack and stack[-1] == "</i>": out.append(stack.pop())
-            else: out.append("</i>")
+            out.append(stack.pop() if stack and stack[-1] == "</i>" else "</i>")
         elif ct == "s_open":
-            out.append("<s>"); stack.append("</s>")
+            out.append("<s>")
+            stack.append("</s>")
         elif ct == "s_close":
-            if stack and stack[-1] == "</s>": out.append(stack.pop())
-            else: out.append("</s>")
+            out.append(stack.pop() if stack and stack[-1] == "</s>" else "</s>")
         elif ct == "link_open":
             href = c.attrGet("href") or ""
             # Telegram requires URL-safe href; escape special chars
@@ -525,8 +525,7 @@ def _render_inline(children, out: list[str], esc) -> None:
             out.append(f'<a href="{href_esc}">')
             stack.append("</a>")
         elif ct == "link_close":
-            if stack and stack[-1] == "</a>": out.append(stack.pop())
-            else: out.append("</a>")
+            out.append(stack.pop() if stack and stack[-1] == "</a>" else "</a>")
         elif ct == "image":
             alt = c.attrGet("alt") or c.content or "image"
             out.append(f"[{esc(alt)}]")

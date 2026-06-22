@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from homunculus import agent_controls
 
@@ -42,7 +42,7 @@ def test_agent_replay_groups_turns(monkeypatch, tmp_path):
     from homunculus.transports import web_api
 
     events_path = tmp_path / "_events.jsonl"
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    now = datetime.now(UTC).isoformat(timespec="seconds")
     records = [
         {"ts": now, "service": "web", "event": "user_message", "text": "do it"},
         {

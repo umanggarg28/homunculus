@@ -6,8 +6,6 @@ to read from Transcript; this PR just lands the storage layer.
 
 from __future__ import annotations
 
-import json
-import os
 import threading
 from pathlib import Path
 

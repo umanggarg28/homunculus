@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import os
-from typing import Callable
+from collections.abc import Callable
 
 from ._state import get_mode, init as _init_state, set_mode
 from . import mcp_manager as _mgr_mod

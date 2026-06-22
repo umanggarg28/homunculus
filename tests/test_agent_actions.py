@@ -76,6 +76,7 @@ def chat(message: str, timeout: int = TIMEOUT, retries: int = 1) -> str:
                 time.sleep(15)
             else:
                 raise
+    raise RuntimeError("unreachable: retry loop exited without returning")
 
 
 def contains_any(text: str, keywords: list[str]) -> bool:

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 from homunculus import stats
 from homunculus.user_tz import get_user_tz
@@ -23,11 +23,11 @@ from .scheduling import _task_store
 
 
 def week_in_review() -> str:
-    tz = get_user_tz() or timezone.utc
+    tz = get_user_tz() or UTC
     now_local = datetime.now(tz)
     since_local = now_local - timedelta(days=7)
 
-    s = stats.summarize_events(since_local.astimezone(timezone.utc), tz=tz)
+    s = stats.summarize_events(since_local.astimezone(UTC), tz=tz)
 
     # Task outcomes from the run history. last_runs is a capped recent
     # window (not a full archive), so counts are "recent runs within the

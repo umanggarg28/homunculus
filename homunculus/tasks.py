@@ -23,7 +23,8 @@ from pathlib import Path
 
 from homunculus.config import get_config
 from homunculus.user_tz import now_user_naive
-from typing import Any, Iterator
+from typing import Any
+from collections.abc import Iterator
 
 
 ALLOWED_RECURRENCE = {"none", "daily", "weekly"}
@@ -120,7 +121,7 @@ class TaskStore:
         # Open in append-mode so we don't truncate the file. Closing
         # releases the lock.
         with self.lock_path.open("a") as f:
-            for attempt in range(50):  # ~5s total at 100ms sleep
+            for _attempt in range(50):  # ~5s total at 100ms sleep
                 try:
                     fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
@@ -826,7 +827,7 @@ class TaskStore:
 # coupling and can be unit-tested standalone. The MCP tool wrapper is a
 # thin pass-through.
 
-def task_health_summary(store: "TaskStore") -> dict:
+def task_health_summary(store: TaskStore) -> dict:
     """Return a snapshot for the morning brief.
 
     - today_commitments: active tasks whose due_at is within the next

@@ -20,7 +20,7 @@ import re
 import sys
 import time
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from typing import Any
 
@@ -264,7 +264,7 @@ class TaskGuard:
             failures = self._check_against(tentative)
             if failures:
                 return (
-                    f"BLOCKED: notify() not sent. Criteria failed:\n"
+                    "BLOCKED: notify() not sent. Criteria failed:\n"
                     + "\n".join(f"  • {f}" for f in failures)
                     + "\n\nCall notify(text=...) again with content that "
                     "satisfies the failed criterion (e.g. add a fenced "
@@ -281,10 +281,10 @@ class TaskGuard:
             task_id = arguments.get("task_id", "")
             # Gate completion on the task's own criteria. notify()-time
             # checking (above) covers the "bad content" case, but nothing
-            # stopped the model from calling complete_task WITHOUT ever
-            # calling notify — observed live 2026-06-11: "could not fetch
-            # problem ...; task marked complete" closed the task with the
-            # user receiving nothing. The result string must start with
+            # stops the model from calling complete_task WITHOUT ever
+            # calling notify — otherwise a task can close (e.g. "could not
+            # fetch problem ...; task marked complete") with the user
+            # receiving nothing. The result string must start with
             # "ERROR" — core.py's terminal-tool accounting treats any
             # other prefix as a successful close and exits the loop.
             failures = self.criteria_failures(task_id)
@@ -664,7 +664,7 @@ def tick(memory: Memory, model: str | None) -> None:
 
     started = datetime.now()
     # Wall-clock UTC for events.jsonl scan; events log timestamps are UTC.
-    started_utc = datetime.now(timezone.utc)
+    started_utc = datetime.now(UTC)
     try:
         response = agent.chat(
             prompt,
@@ -686,11 +686,11 @@ def tick(memory: Memory, model: str | None) -> None:
         # errors, network blips) are transient — the task itself is not
         # broken. Mark partial → retry in ~10 min, don't count toward
         # consecutive_failures, and crucially don't advance due_at a
-        # whole recurrence step. Observed live 2026-06-11: a provider
-        # 404 at 09:00 was recorded as a REAL failure, which advanced
-        # the daily task to tomorrow and silently skipped the day's
-        # delivery. Only non-infra exceptions (actual task/code bugs)
-        # take the record_failure path now.
+        # whole recurrence step. Otherwise a transient provider 404 at
+        # 09:00 would be recorded as a REAL failure, advancing the daily
+        # task to tomorrow and silently skipping the day's delivery. Only
+        # non-infra exceptions (actual task/code bugs) take the
+        # record_failure path.
         is_provider_exhaustion = _is_infra_error(err)
         for task in selected_tasks:
             try:
@@ -843,11 +843,11 @@ def _plan_tick(
     fire on the wrong task. Other due tasks defer to the next tick.
 
     Stateless skills contribute their playbook body to the prompt.
-    Previously the body was injected ONLY for state-machine skills —
-    a task linked to an ordinary skill ran with no playbook at all,
-    so the model improvised from web_search instead of following its
-    own instructions (observed live 2026-06-11: delivered an algomap.io
-    link for a task whose playbook says LeetCode GraphQL only).
+    If the body were injected ONLY for state-machine skills, a task linked
+    to an ordinary skill would run with no playbook at all, so the model
+    would improvise from web_search (e.g. an algomap.io link) instead of
+    following its own instructions (e.g. a playbook that says LeetCode
+    GraphQL only).
     """
     from homunculus.skills import (
         effective_success_criteria,
@@ -1118,7 +1118,7 @@ def _format_due_tasks(tasks: list[dict], forced: bool = False) -> str:
         # task's due_at is its NEXT scheduled occurrence, which is almost
         # always in the future — without this the weak model reads that
         # future date, concludes "nothing is due", and bails without
-        # running the skill (observed 2026-06-14). Override that reading.
+        # running the skill. Override that reading.
         lines.append(
             "NOTE: the operator manually triggered the task(s) below RIGHT "
             "NOW. Run them immediately regardless of the scheduled due_at "
@@ -1161,7 +1161,7 @@ def _format_due_tasks(tasks: list[dict], forced: bool = False) -> str:
             preview = scratch.strip()
             if len(preview) > 2000:
                 preview = preview[:2000] + f"\n... [+{len(scratch) - 2000} more chars in scratchpad]"
-            block += f"\n  scratchpad (from prior run):\n    " + preview.replace("\n", "\n    ")
+            block += "\n  scratchpad (from prior run):\n    " + preview.replace("\n", "\n    ")
         lines.append(block)
     return "\n".join(lines)
 

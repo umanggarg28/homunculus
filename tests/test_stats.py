@@ -9,7 +9,7 @@ disagree.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -24,7 +24,7 @@ def _write_events(path, records):
 
 
 def _ts(hours_ago: float) -> str:
-    return (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat(
+    return (datetime.now(UTC) - timedelta(hours=hours_ago)).isoformat(
         timespec="seconds"
     )
 
@@ -45,7 +45,7 @@ def test_counts_each_event_kind(events_file):
         {"ts": _ts(1), "event": "llm_call", "model": "x:free",
          "input_tokens": 100, "output_tokens": 50, "cached_tokens": 10},
     ])
-    since = datetime.now(timezone.utc) - timedelta(days=1)
+    since = datetime.now(UTC) - timedelta(days=1)
     s = stats.summarize_events(since, path=events_file)
     assert s["events"] == 7
     assert s["notifies"] == 1
@@ -66,7 +66,7 @@ def test_window_cutoff_excludes_old_events(events_file):
         {"ts": _ts(50), "event": "tool_call", "name": "notify"},
         {"ts": _ts(1), "event": "tool_call", "name": "notify"},
     ])
-    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    since = datetime.now(UTC) - timedelta(hours=24)
     s = stats.summarize_events(since, path=events_file)
     assert s["notifies"] == 1
 
@@ -79,13 +79,13 @@ def test_malformed_lines_and_bad_timestamps_skipped(events_file):
         f.write("{not json\n")
         f.write(json.dumps({"ts": "garbage", "event": "memory_write"}) + "\n")
         f.write(json.dumps({"ts": _ts(0.5), "event": "memory_write"}) + "\n")
-    since = datetime.now(timezone.utc) - timedelta(days=1)
+    since = datetime.now(UTC) - timedelta(days=1)
     s = stats.summarize_events(since, path=events_file)
     assert s["memory_writes"] == 2
 
 
 def test_missing_file_returns_zeroes(tmp_path):
-    since = datetime.now(timezone.utc) - timedelta(days=1)
+    since = datetime.now(UTC) - timedelta(days=1)
     s = stats.summarize_events(since, path=tmp_path / "nope.jsonl")
     assert s["events"] == 0
     assert s["cost_cents"] == 0.0
@@ -113,7 +113,7 @@ def test_paid_model_cost_includes_cached_discount():
 
 def test_cost_bucketed_per_day_in_given_timezone(events_file):
     # An event at 22:00 UTC is the NEXT calendar day in IST (+05:30).
-    late_utc = datetime.now(timezone.utc).replace(
+    late_utc = datetime.now(UTC).replace(
         hour=22, minute=0, second=0, microsecond=0
     ) - timedelta(days=1)
     _write_events(events_file, [
@@ -121,7 +121,7 @@ def test_cost_bucketed_per_day_in_given_timezone(events_file):
          "model": "gemini-2.5-flash", "input_tokens": 1_000_000,
          "output_tokens": 0, "cached_tokens": 0},
     ])
-    since = datetime.now(timezone.utc) - timedelta(days=3)
+    since = datetime.now(UTC) - timedelta(days=3)
     ist = ZoneInfo("Asia/Kolkata")
     s = stats.summarize_events(since, path=events_file, tz=ist)
     expected_day = late_utc.astimezone(ist).date().isoformat()

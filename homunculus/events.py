@@ -19,7 +19,7 @@ plus event-specific fields.
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 
@@ -40,7 +40,7 @@ def emit(event: str, **fields) -> None:
     failure to break the agent's actual work.
     """
     record = {
-        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "service": _SERVICE,
         "event": event,
         **fields,
@@ -64,7 +64,7 @@ def rotate(keep_days: int = 14) -> int:
         return 0
     try:
         from datetime import timedelta
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat(timespec="seconds")
+        cutoff = (datetime.now(UTC) - timedelta(days=keep_days)).isoformat(timespec="seconds")
         lines = _EVENTS_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
         kept: list[str] = []
         dropped = 0

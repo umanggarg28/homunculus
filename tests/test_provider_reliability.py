@@ -8,12 +8,10 @@ Tests for provider-chain reliability fixes:
 """
 
 import importlib.util
-import sys
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import pytest
 
 
 def _load_real_tasks():

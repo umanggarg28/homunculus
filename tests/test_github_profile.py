@@ -9,7 +9,6 @@ the snapshot advances across runs.
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 
@@ -118,7 +117,8 @@ def test_invalid_usernames_rejected(gh_env, bad):
 def test_no_user_and_no_config_asks_instead_of_guessing(gh_env, monkeypatch):
     # Empty arg + nothing configured/learned: refuse and tell the agent
     # to ask the operator and remember — never guess.
-    import sys, types
+    import sys
+    import types
     fake_state = types.ModuleType("homunculus.tools._state")
     fake_state.get_memory = lambda: None
     monkeypatch.setitem(sys.modules, "homunculus.tools._state", fake_state)
@@ -129,7 +129,8 @@ def test_no_user_and_no_config_asks_instead_of_guessing(gh_env, monkeypatch):
 
 
 def test_learned_handle_in_world_state_is_used(gh_env, monkeypatch):
-    import sys, types
+    import sys
+    import types
     monkeypatch.delenv("HOMUNCULUS_GITHUB_USER", raising=False)
     fake_mem = type("M", (), {
         "world_state": type("W", (), {"read": lambda self: {"github_user": "umanggarg28"}})()

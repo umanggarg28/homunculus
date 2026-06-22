@@ -10,8 +10,7 @@ match what's written to the file.
 from __future__ import annotations
 
 import importlib.util
-import os
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 import pytest

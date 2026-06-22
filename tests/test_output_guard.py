@@ -9,7 +9,6 @@ No LLM calls, no HTTP, no disk access. Pure function tests.
 
 import sys
 import types
-from pathlib import Path
 
 import pytest
 

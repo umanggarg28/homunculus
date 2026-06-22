@@ -8,7 +8,6 @@ leetcode task forgetting its own success criteria at iter ~10.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from unittest.mock import patch
 

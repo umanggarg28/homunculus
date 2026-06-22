@@ -37,7 +37,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator
+from collections.abc import Iterator
 
 from homunculus.archival import ArchivalMemory
 from homunculus.notifications import NotificationQueue
@@ -617,7 +617,7 @@ class Memory:
 
     @staticmethod
     def _cosine(a: list[float], b: list[float]) -> float:
-        dot = sum(x * y for x, y in zip(a, b))
+        dot = sum(x * y for x, y in zip(a, b, strict=True))
         mag_a = math.sqrt(sum(x * x for x in a))
         mag_b = math.sqrt(sum(x * x for x in b))
         if mag_a == 0 or mag_b == 0:
@@ -711,7 +711,6 @@ class Memory:
 
             # Load all vectors in one DB round-trip.
             db_vecs = dict(self._db_all_vecs())
-            text_by_name = {p.name: t for p, t in candidates}
 
             scored_embed: list[tuple[float, float, Path, str]] = []
             for path, text in candidates:
@@ -837,10 +836,10 @@ class Memory:
         filename = f"{type}_{slug}.md"
         path = self.root / filename
 
-        # Skill-corruption guard. Discovered live 2026-06-10: the agent
-        # has been periodically calling `remember(type="skill", name="...")`
-        # on its own playbooks, overwriting the canonical body with a
-        # paraphrased summary. Each pass loses detail (links → "step 1",
+        # Skill-corruption guard. Without this, the agent can call
+        # `remember(type="skill", name="...")` on its own playbooks,
+        # overwriting the canonical body with a paraphrased summary.
+        # Each pass loses detail (links → "step 1",
         # GraphQL queries → "use the API", structured code → "(rest
         # omitted)"). Over weeks the skill decays into uselessness — and
         # the heartbeat tick that depended on it silently breaks.

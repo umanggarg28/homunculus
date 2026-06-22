@@ -233,7 +233,7 @@ class HomunculusConfig(BaseModel):
     cache: CacheConfig = Field(default_factory=CacheConfig)
 
     @classmethod
-    def from_env(cls) -> "HomunculusConfig":
+    def from_env(cls) -> HomunculusConfig:
         """Build a config from environment variables.
 
         Each sub-config reads vars under a prefix that matches how

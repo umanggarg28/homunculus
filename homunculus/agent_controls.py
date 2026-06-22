@@ -32,7 +32,7 @@ class AgentControls:
     # the switch halts autonomous action, not human conversation.
     paused: bool = False
 
-    def normalized(self) -> "AgentControls":
+    def normalized(self) -> AgentControls:
         max_steps = min(50, max(1, int(self.max_steps or DEFAULT_MAX_STEPS)))
         allowed = sorted({str(x).strip() for x in self.allowed_tools if str(x).strip()})
         blocked = sorted({str(x).strip() for x in self.blocked_tools if str(x).strip()})

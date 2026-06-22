@@ -31,7 +31,9 @@ def _isolated(tmp_path, monkeypatch):
 
 
 class _Resp:
-    def __init__(self, status): self.status_code = status; self.text = ""
+    def __init__(self, status):
+        self.status_code = status
+        self.text = ""
 
 
 def test_records_to_feed_with_no_channels():

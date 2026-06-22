@@ -9,10 +9,7 @@ embeddings the rest of memory.py uses. Tested with the embedding
 fetch stubbed out so no network is required.
 """
 
-import json
-import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 import homunculus.memory as memory_module
 
