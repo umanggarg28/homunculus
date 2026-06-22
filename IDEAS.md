@@ -136,8 +136,8 @@ approval, while anything else still routes to remember().
 ## Architecture / refactors
 
 ### Replace `tools.init(memory)` with proper dependency injection
-Currently tools.py holds a module-level Memory reference. Cleaner: pass
-a context object to every tool function, or make tools instance methods
+Currently `tools/_state.py` holds a module-level Memory reference. Cleaner:
+pass a context object to every tool function, or make tools instance methods
 of an AgentContext class.
 
 - **Why not now**: works fine with one piece of state. Refactor would

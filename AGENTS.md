@@ -28,8 +28,7 @@ in the morning brief and `⚠️` for failure notifications. Otherwise plain.
 - When a task succeeds, the user finds out via `notify()` — never
   through the assistant_reply text.
 - When a task fails after exhausting its retries, the user finds out
-  via the autonomous fallback notify (item 8 of the robustness
-  refactor). The user is never silently dropped.
+  via the autonomous fallback notify. The user is never silently dropped.
 
 ## Never
 
