@@ -121,7 +121,7 @@ def main() -> int:
     dt = time.time() - t0
     print(f"\n  --- agent reply ({dt:.1f}s) ---")
     print("  " + reply.replace("\n", "\n  "))
-    print(f"  --- end reply ---")
+    print("  --- end reply ---")
 
     section("STEP 5 — grading")
     reply_lower = reply.lower()

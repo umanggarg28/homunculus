@@ -22,4 +22,27 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
+    "ruff>=0.8",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# Correctness (F, E, W), bugbear (B), modernization (UP), comprehensions
+# (C4), and a few readability rules. Import sorting (I) is intentionally
+# left off to avoid mass reordering churn.
+select = ["F", "E", "W", "B", "UP", "C4", "RET", "PIE"]
+ignore = [
+    "E501",   # Line length: many legacy lines exceed 100; not worth reflowing.
+    "RET504", # Assigning before return is often clearer than inlining.
+    "RET505", # `else` after `return` reads fine and is widely used here.
+    "E741",   # Single-letter names (l, I) appear in throwaway/math contexts.
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests and scripts import after sys.path / stub setup, so module-level
+# imports legitimately sit below other statements.
+"tests/*" = ["E402"]
+"scripts/*" = ["E402"]

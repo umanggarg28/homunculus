@@ -50,7 +50,7 @@ than the `.get()` chains it replaces.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -141,7 +141,7 @@ class ToolResultMessage(_BaseMessage):
 
 # Discriminated union — Pydantic picks the right subclass from `role`.
 Message = Annotated[
-    Union[SystemMessage, UserMessage, AssistantMessage, ToolResultMessage],
+    SystemMessage | UserMessage | AssistantMessage | ToolResultMessage,
     Field(discriminator="role"),
 ]
 

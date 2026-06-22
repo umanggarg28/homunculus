@@ -8,8 +8,6 @@ test_evict_prior_tool_results.py only cover the function in isolation.
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import patch
 
 from homunculus import core
 

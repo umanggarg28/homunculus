@@ -50,7 +50,7 @@ def fake_dns(monkeypatch):
             ip = host
         except ValueError:
             if host not in table:
-                raise socket.gaierror(f"unknown host {host}")
+                raise socket.gaierror(f"unknown host {host}") from None
             ip = table[host]
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port or 80))]
 

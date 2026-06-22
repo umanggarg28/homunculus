@@ -3,7 +3,7 @@
 import json
 import sys
 import types
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 
 def _make_tools_stub():
@@ -75,7 +75,7 @@ def test_budget_guard_blocks_known_paid_model_after_cap(monkeypatch, tmp_path):
     events = tmp_path / "_events.jsonl"
     events.write_text(
         json.dumps({
-            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "ts": datetime.now(UTC).isoformat(timespec="seconds"),
             "event": "llm_call",
             "model": "gemini-2.5-flash",
             "input_tokens": 1_000_000,

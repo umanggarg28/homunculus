@@ -11,12 +11,11 @@ per-source cap so the mix stays broad.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from email.utils import format_datetime
 
 import httpx
 
-from homunculus import news_feeds
 from tests.conftest import load_real_tool_submodule
 
 load_real_tool_submodule("_helpers")
@@ -36,7 +35,7 @@ def _feeds(tmp_path, monkeypatch, *pairs):
 
 
 def _rfc822(hours_ago: float) -> str:
-    return format_datetime(datetime.now(timezone.utc) - timedelta(hours=hours_ago))
+    return format_datetime(datetime.now(UTC) - timedelta(hours=hours_ago))
 
 
 def _item(title, url, *, points=None, hours_ago=1.0):

@@ -44,7 +44,8 @@ import re
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator, Literal
+from typing import Literal
+from collections.abc import Iterator
 
 # Sources of a skill save. Tracked in the manifest so a future
 # refinement run can avoid clobbering a skill the user just hand-edited.

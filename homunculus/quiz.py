@@ -109,9 +109,8 @@ class QuizStore:
         # but only counts as awaiting the user's answer once the question was
         # ACTUALLY delivered (notify succeeded). The harness flips this via
         # confirm_delivered() on a successful quiz run, and clear_pending() when
-        # the run fails — so a failed delivery can't leave a stale CHAT badge
-        # for a question the user never saw (observed 2026-06-16: a quiz lost to
-        # a notify timeout still lit the badge).
+        # the run fails — so a failed delivery (e.g. a notify timeout) can't
+        # leave a stale CHAT badge for a question the user never saw.
         data["pending"] = {
             "topic": topic_title,
             "asked_at": now.isoformat(timespec="seconds"),

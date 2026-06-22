@@ -19,7 +19,7 @@ import os
 import re
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -396,12 +396,11 @@ MODEL_FALLBACK = os.environ.get(
     #                               (different rate-limit pool, useful when
     #                               paid hits a transient 429)
     #   meta-llama/llama-3.3-70b-instruct:free — 131K ctx, Meta-hosted
-    # moonshotai/kimi-k2.6:free REMOVED 2026-06-11 — slug went paid-only,
-    #   returns 404 ("unavailable for free"); verified against
-    #   openrouter.ai/api/v1/models the same day.
-    # qwen/qwen3-coder:free REMOVED 2026-06-08 — OpenRouter routes it to
-    #   a deprecated upstream model (Venice qwen3-coder-480b-a35b-instruct).
-    #   Returns 404 instead of an answer.
+    # Deliberately excluded (don't re-add):
+    #   moonshotai/kimi-k2.6:free — slug is paid-only, returns 404
+    #     ("unavailable for free").
+    #   qwen/qwen3-coder:free — OpenRouter routes it to a deprecated upstream
+    #     model (Venice qwen3-coder-480b-a35b-instruct); returns 404.
     "openai/gpt-oss-120b:free,meta-llama/llama-3.3-70b-instruct:free",
 )
 
@@ -930,9 +929,9 @@ def _today_spend_cents() -> float:
         from zoneinfo import ZoneInfo
         tz = ZoneInfo(get_user_tz_name())
         local_midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        cutoff = local_midnight.astimezone(timezone.utc)
+        cutoff = local_midnight.astimezone(UTC)
     except Exception:
-        cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        cutoff = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     total = 0.0
     try:
         lines = events_path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -947,7 +946,7 @@ def _today_spend_cents() -> float:
         try:
             ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
             if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
+                ts = ts.replace(tzinfo=UTC)
         except ValueError:
             continue
         if ts < cutoff:
@@ -994,7 +993,7 @@ def measure_llm_usage_since(
         lines = events_path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return out
-    cutoff = cutoff_ts if cutoff_ts.tzinfo is not None else cutoff_ts.replace(tzinfo=timezone.utc)
+    cutoff = cutoff_ts if cutoff_ts.tzinfo is not None else cutoff_ts.replace(tzinfo=UTC)
     for line in reversed(lines):
         try:
             rec = json.loads(line)
@@ -1004,7 +1003,7 @@ def measure_llm_usage_since(
         try:
             ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
             if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
+                ts = ts.replace(tzinfo=UTC)
         except ValueError:
             continue
         if ts < cutoff:
@@ -1088,11 +1087,11 @@ def _is_transient_provider_error(response: httpx.Response) -> bool:
         # ANY 404 from a chat-completions endpoint is a this-provider
         # problem — model slug removed, free tier paywalled, route
         # deprecated. Raising can't fix it; the next provider in the
-        # chain is independent. Observed live 2026-06-11: OpenRouter's
-        # kimi free slug went paid, its 404 body ("This model is
-        # unavailable for free...") didn't match the old "no endpoints"
-        # substring check, and the raise killed the 9 AM delivery with
-        # two healthy fallback providers unused.
+        # chain is independent. This must cover the full 404 family: a
+        # body like "This model is unavailable for free..." (a slug that
+        # went paid) is just as fatal as "no endpoints", and a narrow
+        # substring check would let the raise kill a delivery while
+        # healthy fallback providers sit unused.
         return True
     if response.status_code == 400:
         # Model capability failures — not a bug in our request, but the
@@ -1252,12 +1251,11 @@ def call_llm(
     model defaults to MODEL; services can override per-call.
 
     tool_choice controls whether the model MUST call a tool ("required")
-    or merely MAY ("auto", default). Letta's `function_call: "required"`
-    pattern (see llm_api_tools.py:200 in letta-ai/letta) — forces every
-    turn to end in a tool call, removing the prose-vs-tool ambiguity that
-    eats heartbeat deliveries when the model drafts content as
-    assistant_reply instead of as notify(text=...). Pi exposes a
-    similar per-call knob in packages/ai/src/providers/*.ts.
+    or merely MAY ("auto", default). Forcing every turn to end in a tool
+    call removes the prose-vs-tool ambiguity that eats heartbeat
+    deliveries when the model drafts content as assistant_reply instead
+    of as notify(text=...). This mirrors the "required tool call" idea
+    seen in agents like Letta and Pi, which expose the same per-call knob.
 
     May also be passed as the OpenAI-shaped dict
     `{"type": "function", "function": {"name": "<tool>"}}` to force one
@@ -2361,7 +2359,7 @@ class Agent:
             "role": "user",
             "content": user_message,
             "source": source,
-            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         })
         if self.memory is not None:
             self.memory.log_turn("user", user_message)
@@ -2459,8 +2457,7 @@ class Agent:
         # provider 400: "Requested tool_choice `<name>` was not
         # defined in the request" — the schema for the forced tool
         # must be present in the payload's `tools` array for the
-        # provider to accept the tool_choice pin. Observed live
-        # 2026-06-10 on the first real state-machine tick.
+        # provider to accept the tool_choice pin.
         if state_sequence is not None and self._active_tool_names is not None:
             for s in state_sequence:
                 t = s.get("tool")
@@ -2698,7 +2695,7 @@ class Agent:
             # Inherit source from the user turn so the unified chat log
             # can tag the reply to the channel it went out on.
             cleaned["source"] = source
-            cleaned["ts"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            cleaned["ts"] = datetime.now(UTC).isoformat(timespec="seconds")
             self._journal_append(cleaned)
 
             tool_calls = assistant_msg.get("tool_calls")
@@ -2720,9 +2717,9 @@ class Agent:
             # ({"type":"function","function":{"name":"X"}}) we're
             # asking the provider to constrain the model to a SPECIFIC
             # tool. Some providers honor this (Anthropic, OpenAI
-            # direct); others (gpt-oss-120b on DeepInfra confirmed via
-            # isolation test 2026-06-10) pass tool_choice through but
-            # don't actually constrain — the model is free to call any
+            # direct); others (e.g. gpt-oss-120b on DeepInfra) pass
+            # tool_choice through but don't actually constrain — the
+            # model is free to call any
             # tool from the catalogue. Catch the mismatch and retry
             # with the same correction shape as the no-tool-call path.
             forced_tool_name: str | None = None
@@ -2775,10 +2772,9 @@ class Agent:
                 # back state_idx so the next iteration re-runs the
                 # SAME state (the forced tool we wanted). Without this
                 # rollback, the retry would advance to the next state
-                # — observed live 2026-06-10: state 2 forced web_post,
-                # model returned prose, detector retried but state 3
-                # fired instead of state 2 again, breaking the
-                # sequence's dependency chain.
+                # (e.g. state 2 forces web_post, the model returns prose,
+                # and the retry fires state 3 instead of state 2 again),
+                # breaking the sequence's dependency chain.
                 if state_sequence is not None and state_idx > 0:
                     state_idx -= 1
                 events.emit(

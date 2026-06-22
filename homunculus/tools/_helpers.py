@@ -69,7 +69,7 @@ def normalize_workspace_path(path: str) -> str:
     except ValueError:
         raise PathOutsideWorkspace(
             f"path {path!r} resolves outside the workspace sandbox"
-        )
+        ) from None
 
     # Return relative-to-cwd form so the existing tool internals (which
     # call Path(...).read_text() etc.) keep working unchanged. Using a
@@ -82,7 +82,7 @@ def normalize_workspace_path(path: str) -> str:
         # can't silently drop sandboxing.
         raise PathOutsideWorkspace(
             f"path {path!r} resolved to {resolved} which is outside the workspace"
-        )
+        ) from None
 
 
 def cache_key(kind: str, value: str) -> Path:

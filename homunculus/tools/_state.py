@@ -2,7 +2,7 @@
 
 Tools need access to a Memory instance and the autonomous-mode flag.
 Rather than threading those through every call, we keep them in this
-module — `init()` (re-exported from `tools.__init__`) sets them once at
+module — `init()` (re-exported from `homunculus.tools`) sets them once at
 startup, and every tool reads via the helpers below.
 """
 

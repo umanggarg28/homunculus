@@ -24,7 +24,7 @@ import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 # Type alias: takes text, returns a vector or None if embedding failed.
 Embedder = Callable[[str], "list[float] | None"]
@@ -39,7 +39,7 @@ def _cosine(a: list[float], b: list[float]) -> float:
     """
     if not a or not b or len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     na = sum(x * x for x in a) ** 0.5
     nb = sum(x * x for x in b) ** 0.5
     if na == 0 or nb == 0:

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone, tzinfo
+from datetime import datetime, tzinfo, UTC
 from pathlib import Path
 
 # Cost estimation for paid models. Slugs not listed cost 0 in the UI —
@@ -63,7 +63,7 @@ def summarize_events(
     """
     if since.tzinfo is None:
         raise ValueError("since must be timezone-aware")
-    bucket_tz = tz or timezone.utc
+    bucket_tz = tz or UTC
 
     total_events = 0
     unique_tools: set[str] = set()
@@ -102,7 +102,7 @@ def summarize_events(
         except ValueError:
             continue
         if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
+            ts = ts.replace(tzinfo=UTC)
         if ts < since:
             break
 

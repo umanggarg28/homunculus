@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from pydantic import ValidationError
 
 import homunculus.messages as msgs
 
@@ -63,7 +64,7 @@ def test_assistant_tool_call_turn():
 def test_tool_result_requires_id():
     """The provider rejects tool messages missing tool_call_id, so the
     model must enforce it."""
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         msgs.ToolResultMessage(content="result")
 
 

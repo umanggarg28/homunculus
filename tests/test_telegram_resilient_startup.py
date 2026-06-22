@@ -36,7 +36,7 @@ def test_retries_on_timeout_then_exits_cleanly():
         calls["n"] += 1
         if calls["n"] < 3:
             raise TimedOut("blocked")
-        return None  # third attempt connects, run_polling returns (clean exit)
+        return  # third attempt connects, run_polling returns (clean exit)
 
     run_polling_with_retry(
         lambda: _FakeApp(behavior),
@@ -61,7 +61,7 @@ def test_network_error_is_retried():
         calls["n"] += 1
         if calls["n"] < 2:
             raise NetworkError("connection reset")
-        return None
+        return
 
     run_polling_with_retry(
         lambda: _FakeApp(behavior), base_backoff=1,
@@ -77,7 +77,7 @@ def test_backoff_caps_at_max():
     def behavior():
         attempts["n"] += 1
         if attempts["n"] > 8:
-            return None
+            return
         raise TimedOut("still blocked")
 
     run_polling_with_retry(
@@ -97,7 +97,7 @@ def test_clean_exit_does_not_retry():
 
     def behavior():
         calls["n"] += 1
-        return None  # immediate clean shutdown
+        return  # immediate clean shutdown
 
     run_polling_with_retry(
         lambda: _FakeApp(behavior), sleep=lambda s: None, reset_loop=lambda: None,

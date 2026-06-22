@@ -38,12 +38,11 @@ from __future__ import annotations
 import errno
 import fcntl
 import json
-import os
 import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator
+from collections.abc import Iterator
 
 
 class Transcript:

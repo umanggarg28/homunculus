@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 try:
     from zoneinfo import ZoneInfo
@@ -45,7 +45,7 @@ def _next_sunday_9am_in_user_tz() -> str:
     )
     if target <= now_local:
         target = target + timedelta(days=7)
-    target_utc = target.astimezone(timezone.utc).replace(tzinfo=None)
+    target_utc = target.astimezone(UTC).replace(tzinfo=None)
     return target_utc.isoformat(timespec="seconds")
 
 
@@ -183,7 +183,7 @@ def main() -> int:
     store = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
     existing = next((t for t in store.all() if t["id"] == "weekly-nudge"), None)
     if existing is not None:
-        print(f"[bootstrap_weekly_nudge] task already exists — leaving alone.")
+        print("[bootstrap_weekly_nudge] task already exists — leaving alone.")
         print(f"  due_at: {existing.get('due_at')}")
         print(f"  status: {existing.get('status')}")
         return 0

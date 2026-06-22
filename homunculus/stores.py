@@ -24,7 +24,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator
+from collections.abc import Iterator
 
 
 # ---- shared lock helper -----------------------------------------------

@@ -21,6 +21,7 @@ modern Claude / GPT models consume tool catalogs.
 from __future__ import annotations
 
 import datetime as _dt
+import json as _json
 from typing import Annotated, Literal
 
 from mcp.server.fastmcp import FastMCP
@@ -150,9 +151,6 @@ def recall(
     Nothing is injected automatically — you decide when to recall.
     """
     return memory_tools.search_memory(query)
-
-
-import json as _json
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -327,11 +325,11 @@ def rate_skill(
 def _resolve_tz(timezone: str):
     """Return (ZoneInfo, error_str). error_str is None on success."""
     try:
-        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        from zoneinfo import ZoneInfo
         return ZoneInfo(timezone), None
     except ImportError:
         return None, "ERROR: zoneinfo not available (requires Python 3.9+)"
-    except (Exception,):
+    except Exception:
         return None, (
             f"Unknown timezone '{timezone}'. "
             "Use IANA names like 'Asia/Tokyo', 'America/New_York', 'Europe/London', 'UTC'."

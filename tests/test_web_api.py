@@ -11,7 +11,7 @@ import importlib
 import json
 import sys
 import types
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 import pytest
@@ -102,7 +102,7 @@ def client(web_api):
 
 
 def _write_event(path: Path, **kwargs):
-    ts = kwargs.pop("ts", datetime.now(timezone.utc).isoformat())
+    ts = kwargs.pop("ts", datetime.now(UTC).isoformat())
     rec = {"ts": ts, **kwargs}
     with path.open("a") as f:
         f.write(json.dumps(rec) + "\n")
@@ -140,7 +140,7 @@ def test_status_empty_events(client):
 
 
 def test_status_live_service(client, web_api):
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now(UTC).isoformat()
     _write_event(web_api.EVENTS_PATH, event="service_ping", service="heartbeat", ts=ts)
     resp = client.get("/api/status")
     assert resp.json()["heartbeat"]["state"] == "live"
@@ -149,7 +149,7 @@ def test_status_live_service(client, web_api):
 
 def test_status_stale_service(client, web_api):
     from datetime import timedelta
-    old_ts = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    old_ts = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
     _write_event(web_api.EVENTS_PATH, event="service_ping", service="telegram", ts=old_ts)
     resp = client.get("/api/status")
     assert resp.json()["telegram"]["state"] == "stale"
@@ -208,7 +208,7 @@ def test_skills_event_aggregation(client, web_api, monkeypatch):
         "SCHEMAS",
         [{"function": {"name": "web_search", "description": "Search the web", "parameters": {}}}],
     )
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now(UTC).isoformat()
     _write_event(web_api.EVENTS_PATH, event="tool_call", name="web_search", ts=ts)
     _write_event(web_api.EVENTS_PATH, event="tool_result", name="web_search", result="ok", ts=ts)
 
@@ -228,7 +228,7 @@ def test_skills_failure_counted(client, web_api, monkeypatch):
         "SCHEMAS",
         [{"function": {"name": "web_fetch", "description": "Fetch URL", "parameters": {}}}],
     )
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now(UTC).isoformat()
     _write_event(web_api.EVENTS_PATH, event="tool_call", name="web_fetch", ts=ts)
     _write_event(
         web_api.EVENTS_PATH, event="tool_result", name="web_fetch", result="ERROR: 403", ts=ts
@@ -271,7 +271,7 @@ def test_stats_today_empty(client):
 
 
 def test_stats_today_counts_llm_events(client, web_api):
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now(UTC).isoformat()
     _write_event(
         web_api.EVENTS_PATH,
         event="llm_call",
@@ -428,10 +428,10 @@ def _file_proposal(web_api, **over):
     import os
     from homunculus.proposals import ProposalStore
     store = ProposalStore(os.environ["HOMUNCULUS_PROPOSALS_FILE"])
-    kwargs = dict(
-        kind="new_skill", skill_name="skill_demo_job", body=_VALID_NEW_SKILL,
-        rationale="demo",
-    )
+    kwargs = {
+        "kind": "new_skill", "skill_name": "skill_demo_job", "body": _VALID_NEW_SKILL,
+        "rationale": "demo",
+    }
     kwargs.update(over)
     return store.create(**kwargs)
 

@@ -182,7 +182,7 @@ def _resolve_refinement_model(explicit: str | None) -> str:
 def refine_skill(
     skill_name: str,
     failure_context: str,
-    memory: "Memory",
+    memory: Memory,
     model: str | None = None,
     max_turns: int = 30,
 ) -> RefinementResult:
