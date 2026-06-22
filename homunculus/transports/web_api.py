@@ -605,30 +605,33 @@ def skills_list() -> JSONResponse:
         entry["uses"] = None
         entry["consecutive_failures"] = None
 
-    # Overlay uses/consecutive_failures from skill_*.md frontmatter (written by rate_skill).
-    # These track agent-learned procedures — distinct from MCP tool call counts above.
+    # Overlay uses/consecutive_failures from the skill-stats sidecar (written
+    # by rate_skill). These track agent-learned procedures — distinct from the
+    # MCP tool call counts above. We match each skill file's frontmatter
+    # `name:` to a by_name entry, then read the counts from the sidecar, which
+    # is keyed by the file stem (`skill_<slug>`).
     mem_dir = MEMORY_DIR if MEMORY_DIR.exists() else None
     if mem_dir:
         import re as _re
+
+        from homunculus.stores import SkillStatsStore
+
+        stats = SkillStatsStore(mem_dir).all()
         for skill_file in mem_dir.glob("skill_*.md"):
             try:
                 text = skill_file.read_text(encoding="utf-8")
             except OSError:
                 continue
-            # Extract skill name from frontmatter `name:` field to match against by_name.
             name_m = _re.search(r"^name:\s*(.+)$", text, _re.MULTILINE)
             if not name_m:
                 continue
-            skill_name = name_m.group(1).strip()
-            entry = by_name.get(skill_name)
+            entry = by_name.get(name_m.group(1).strip())
             if entry is None:
                 continue
-            uses_m = _re.search(r"^uses:\s*(\d+)", text, _re.MULTILINE)
-            cf_m = _re.search(r"^consecutive_failures:\s*(\d+)", text, _re.MULTILINE)
-            if uses_m:
-                entry["uses"] = int(uses_m.group(1))
-            if cf_m:
-                entry["consecutive_failures"] = int(cf_m.group(1))
+            s = stats.get(skill_file.stem)
+            if s:
+                entry["uses"] = s.get("uses")
+                entry["consecutive_failures"] = s.get("consecutive_failures")
 
     return JSONResponse(list(by_name.values()))
 

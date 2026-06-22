@@ -1109,26 +1109,11 @@ def _settle_silent_drop(
             f" · retry in ~10 min"
         ),
     )
-    # T1.2: skill auto-refinement. Append a Watch-out note to the
-    # related skill_*.md so next-run's agent has the lesson available
-    # without us having to manually update the skill. Best-effort.
-    try:
-        from homunculus.tools._skill_refiner import update_skill_on_failure
-        updated_path = update_skill_on_failure(
-            task_id,
-            "silent drop on a heartbeat run — agent reached the end of "
-            "the loop without calling complete_task or record_failure. "
-            "Either provider was degraded or the loop ran out of "
-            "context before the final tool call. Make sure you call "
-            "complete_task or record_failure even with partial data.",
-            memory_dir=os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"),
-        )
-        if updated_path:
-            log.info(f"[heartbeat] auto-refined skill {updated_path}")
-    except Exception as refine_err:
-        log.info(
-            f"[heartbeat] skill auto-refine failed for {task_id}: {refine_err}",
-        )
+    # A silent drop is recorded as a failure (above) so it surfaces in the
+    # next reflection tick, which reads the trace and files a gated
+    # propose_skill edit if the skill itself is at fault. Skill content is
+    # only ever changed through that human-approved flow — the harness does
+    # not edit skill files directly.
     # Autonomous fallback notify — only when mark_partial ESCALATED to
     # a real failure (consecutive_failures > 0 after the call). Plain
     # partials are routine continuation state, not user-actionable, so
