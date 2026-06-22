@@ -657,11 +657,14 @@ def tick(memory: Memory, model: str | None) -> None:
             yesterday_iso, yesterday_path = _yesterday_iso_and_path()
             log.info(f"\n[heartbeat] REFLECTION tick at {now_iso} "
                   f"(reviewing {yesterday_iso}, model={agent.model})")
-            prompt = REFLECTION_PROMPT_TEMPLATE.format(
-                today=today,
-                yesterday=yesterday_iso,
-                yesterday_path=yesterday_path,
-                recent_deliveries=_format_recent_deliveries(tasks),
+            # Substitute by explicit replace, not str.format: the template
+            # embeds literal JSON braces in its skill-edit examples
+            # (edits=[{"old": ...}]) that str.format would misread as fields.
+            prompt = (
+                REFLECTION_PROMPT_TEMPLATE
+                .replace("{today}", today)
+                .replace("{yesterday_path}", yesterday_path)
+                .replace("{recent_deliveries}", _format_recent_deliveries(tasks))
             )
             response = agent.chat(prompt, source="heartbeat")
             memory.reflection.mark(today)
