@@ -908,6 +908,7 @@ async def tasks_run_stream(task_id: str, request: Request):
 
     guard = TaskGuard({task_id: task.get("success_criteria") or []})
     tools.set_pre_execute_hook(guard.on_tool_call)
+    tools.set_post_execute_hook(guard.observe_tool_result)
     tools.set_pre_turn_hook(guard.on_pre_turn)
     from homunculus.core import measure_llm_usage_since
     due_at_before = task.get("due_at")
@@ -974,6 +975,7 @@ async def tasks_run_stream(task_id: str, request: Request):
                 yield _format_sse_data("[run-now finished]")
         finally:
             tools.set_pre_execute_hook(None)
+            tools.set_post_execute_hook(None)
             tools.set_pre_turn_hook(None)
             yield "event: done\ndata: end\n\n"
 
