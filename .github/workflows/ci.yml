@@ -1,0 +1,38 @@
+name: CI
+
+# Quality gate: lint + tests on every push to main and every PR. The suite
+# stubs the container-only deps (MCP) via tests/conftest.py, so it runs
+# without Docker. We install deps only (--no-install-project) and run via
+# `python -m`, which puts the repo root on sys.path so the `homunculus`
+# package imports — the same way the app runs (PYTHONPATH=/app), no build
+# backend required.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --no-install-project
+
+      - name: Lint (ruff)
+        run: uv run ruff check homunculus tests scripts
+
+      - name: Tests (pytest)
+        run: uv run python -m pytest -q
