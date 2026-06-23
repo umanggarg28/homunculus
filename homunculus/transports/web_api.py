@@ -960,13 +960,34 @@ async def tasks_run_stream(task_id: str, request: Request):
             usage = measure_llm_usage_since(started_utc)
             current = store.get(task_id)
             if current and current.get("due_at") == due_at_before and task_id in guard.expected_remaining():
-                store.mark_partial(
-                    task_id,
-                    "run-now: agent finished without complete_task / "
-                    "continue_task / cancel_task",
-                    usage=usage,
-                )
-                yield _format_sse_data("[silent drop — marked partial, will resume next tick]")
+                # Agent delivered but omitted the complete_task bookkeeping call.
+                # If every criterion passed on what actually went out, the harness
+                # completes it — the same deterministic close as
+                # heartbeat._settle_silent_drop — so a manual run of a fully
+                # delivered task isn't mislabeled partial. `task` carries the
+                # skill's folded criteria; `current` (read from disk) does not.
+                criteria = task.get("success_criteria") or []
+                if criteria and not guard.criteria_failures(task_id):
+                    store.complete(
+                        task_id,
+                        "auto-completed by harness: delivery criteria satisfied "
+                        "(agent omitted complete_task)",
+                    )
+                    store.attribute_usage_to_last_run(task_id, usage)
+                    store.attribute_delivered_text_to_last_run(
+                        task_id, guard.combined_notify_text()
+                    )
+                    yield _format_sse_data(
+                        "[auto-completed — criteria satisfied; agent omitted complete_task]"
+                    )
+                else:
+                    store.mark_partial(
+                        task_id,
+                        "run-now: agent finished without complete_task / "
+                        "continue_task / cancel_task",
+                        usage=usage,
+                    )
+                    yield _format_sse_data("[silent drop — marked partial, will resume next tick]")
             else:
                 # complete_task ran — retrofit usage and the delivered text
                 # onto the success run (delivered_text feeds the reflection's
