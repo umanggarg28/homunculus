@@ -674,24 +674,71 @@ def tick(memory: Memory, model: str | None) -> None:
         log.info(f"\n[heartbeat] tick at {now_iso}: no due tasks; skipping LLM")
         return
 
-    agent = Agent(memory=memory, model=model)
     log.info(
         f"\n[heartbeat] tick at {now_iso}: {len(due_tasks)} due task(s) "
-        f"(model={agent.model})",
+        f"(model={model or 'default'})",
     )
 
     memory_root = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
-    state_sequence, selected_tasks, playbooks = _plan_tick(due_tasks, memory_root)
+    # Run each due task in its OWN isolated agent loop — a fresh Agent, a
+    # fresh TaskGuard, its own prompt and success_criteria. Multiplexing
+    # several tasks into one shared loop let the weak model cross-contaminate
+    # them (deliver one task, then record_failure it while handling another).
+    # One scheduled job = one isolated agent context — the pattern OpenClaw
+    # (src/cron/isolated-agent) and Letta (EphemeralAgent) both follow.
+    for idx, task in enumerate(due_tasks, start=1):
+        try:
+            _run_task_isolated(
+                memory, model, tasks, task, memory_root, now_iso, idx, len(due_tasks)
+            )
+        except Exception as e:
+            # Network-class trouble: propagate so main() does its short 60s
+            # retry of the remaining due tasks (completed ones already
+            # advanced due_at and won't re-run). A real per-task failure was
+            # already recorded inside the helper — isolate it so it never
+            # aborts the sibling tasks.
+            if _is_transient_network_error(e):
+                raise
+            log.error(
+                f"[heartbeat] task {task.get('id')!r} failed; "
+                f"continuing with remaining due task(s): {e}",
+            )
+
+
+def _run_task_isolated(
+    memory: Memory,
+    model: str | None,
+    tasks: TaskStore,
+    task: dict[str, Any],
+    memory_root: Path,
+    now_iso: str,
+    task_index: int,
+    task_total: int,
+) -> None:
+    """Execute a single due task in its own isolated agent loop.
+
+    Fresh Agent + fresh TaskGuard scoped to this one task's criteria, so a
+    task's delivery and lifecycle can never be confused with another's. Any
+    failure is recorded here; transient network errors re-raise so the caller
+    can apply its backoff, every other exception is the caller's to isolate.
+    """
+    agent = Agent(memory=memory, model=model)
+    if task_total > 1:
+        log.info(
+            f"[heartbeat] task {task_index}/{task_total}: {task.get('id')!r} "
+            f"(isolated loop, model={agent.model})",
+        )
+
+    state_sequence, selected_tasks, playbooks = _plan_tick([task], memory_root)
 
     # Stamp `last_fired_at` BEFORE running the agent — only on tasks
-    # we actually attempt this tick. Deferred state-machine tasks must
-    # NOT be marked fired here, otherwise the re-fire suppression
-    # window would skip them on the next tick.
-    for task in selected_tasks:
+    # we actually attempt. A task planning skipped (e.g. its skill file
+    # vanished mid-tick) must not be marked fired.
+    for t in selected_tasks:
         try:
-            tasks.mark_fired(task["id"])
+            tasks.mark_fired(t["id"])
         except Exception as e:
-            log.error(f"[heartbeat] mark_fired failed for {task['id']}: {e}")
+            log.error(f"[heartbeat] mark_fired failed for {t['id']}: {e}")
 
     due_tasks_block = _format_due_tasks(selected_tasks)
     if playbooks:
@@ -703,8 +750,8 @@ def tick(memory: Memory, model: str | None) -> None:
     # Snapshot due_at for each task so we can detect if complete_task ran.
     due_at_before = {t["id"]: t.get("due_at") for t in selected_tasks}
 
-    # Install output guard for this tick. The guard intercepts notify() and
-    # complete_task() to enforce each task's success_criteria before allowing
+    # Install output guard for this task. The guard intercepts notify() and
+    # complete_task() to enforce the task's success_criteria before allowing
     # completion. Always cleared in the finally block.
     guard = TaskGuard(
         {t["id"]: t.get("success_criteria") or [] for t in selected_tasks},
@@ -716,8 +763,8 @@ def tick(memory: Memory, model: str | None) -> None:
     tools.set_pre_execute_hook(guard.on_tool_call)
     tools.set_post_execute_hook(guard.observe_tool_result)
     # Item 5 (pragmatic slice): install the turn-level hook so the guard
-    # can inject a forced completion message at iter MAX_TURNS-1 when any
-    # due task is still unfinished.
+    # can inject a forced completion message at iter MAX_TURNS-1 when the
+    # task is still unfinished.
     tools.set_pre_turn_hook(guard.on_pre_turn)
 
     started = datetime.now()
@@ -890,14 +937,17 @@ def _plan_tick(
     due_tasks: list[dict[str, Any]],
     memory_root: Path,
 ) -> tuple[list[dict] | None, list[dict[str, Any]], list[str]]:
-    """Decide what this tick runs and which playbooks reach the prompt.
+    """Plan one task's run: its state sequence and the playbook it gets.
 
-    Returns (state_sequence, selected_tasks, playbook_blocks).
+    Returns (state_sequence, selected_tasks, playbook_blocks). The caller
+    (_run_task_isolated) passes a single-task list, so each due task is
+    planned and executed in its own isolated agent loop; tasks never share
+    a loop. The signature stays list-shaped to keep the per-task selection
+    logic (capability gate, criteria folding) in one place.
 
-    A task linked to a skill with a `states:` frontmatter declaration
-    runs EXCLUSIVELY this tick — state_sequence pins turns 0..N-1, so
-    if the model handled a different task first the pinned turns would
-    fire on the wrong task. Other due tasks defer to the next tick.
+    A task linked to a skill with a `states:` frontmatter declaration pins
+    the agent's turns 0..N-1 (state_sequence) so the fixed tool order is
+    enforced; with one task per loop there is nothing else to confuse it.
 
     Stateless skills contribute their playbook body to the prompt.
     If the body were injected ONLY for state-machine skills, a task linked
@@ -970,7 +1020,7 @@ def _plan_tick(
         if states:
             log.info(
                 f"[heartbeat] {t['id']!r} → state machine ({len(states)} states) "
-                f"from {skill_name!r}; deferring {len(due_tasks) - 1} other due task(s)",
+                f"from {skill_name!r}",
             )
             return states, [t], [block]
         playbooks.append(block)

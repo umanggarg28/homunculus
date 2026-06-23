@@ -86,3 +86,40 @@ def test_ids_continue_after_load(tmp_path, monkeypatch):
     # Fresh instance reading the same file must not reuse prop-0001.
     s2 = ProposalStore(tmp_path / "p.json")
     assert s2.create(kind=KIND_SKILL_EDIT, skill_name="skill_b", body="...")["id"] == "prop-0002"
+
+
+def test_duplicate_pending_proposal_is_deduped(store):
+    """A second pending proposal for the same (skill, kind) returns the
+    existing one flagged, never a duplicate — one change to review, not a pile.
+    A reflection tick can file several near-identical edits in one run."""
+    first = store.create(kind=KIND_SKILL_EDIT, skill_name="skill_a", body="v1", rationale="r1")
+    dup = store.create(kind=KIND_SKILL_EDIT, skill_name="skill_a", body="v2", rationale="r2")
+
+    assert dup["_deduped"] is True
+    assert dup["id"] == first["id"]
+    # Only the first is stored; the second never persisted.
+    pending = store.list("pending")
+    assert len(pending) == 1
+    assert pending[0]["body"] == "v1"
+    assert "_deduped" not in pending[0]  # flag is transient, not persisted
+
+
+def test_dedupe_is_scoped_to_skill_and_kind(store):
+    """Dedupe keys on (skill, kind) — different skills, or a new_skill vs an
+    edit for the same name, are independent proposals."""
+    a = store.create(kind=KIND_SKILL_EDIT, skill_name="skill_a", body="...")
+    b = store.create(kind=KIND_SKILL_EDIT, skill_name="skill_b", body="...")
+    assert b["id"] != a["id"]
+    assert not b.get("_deduped")
+    assert len(store.list("pending")) == 2
+
+
+def test_resolved_proposal_does_not_block_new_one(store):
+    """Once the first is approved/rejected, a fresh proposal for the same
+    (skill, kind) is allowed again — dedupe only guards the PENDING queue."""
+    first = store.create(kind=KIND_SKILL_EDIT, skill_name="skill_a", body="v1")
+    store.mark_rejected(first["id"])
+    second = store.create(kind=KIND_SKILL_EDIT, skill_name="skill_a", body="v2")
+    assert not second.get("_deduped")
+    assert second["id"] != first["id"]
+    assert [p["body"] for p in store.list("pending")] == ["v2"]
