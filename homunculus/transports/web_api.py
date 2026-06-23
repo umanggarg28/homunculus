@@ -883,39 +883,38 @@ async def tasks_run_stream(task_id: str, request: Request):
     if task.get("status") != "active":
         raise HTTPException(409, f"task is {task.get('status')} — only active tasks can be run")
 
-    # Import lazily to avoid pulling heartbeat at module-import time.
-    from homunculus.heartbeat import HEARTBEAT_PROMPT_TEMPLATE, TaskGuard, _format_due_tasks
+    # Run-now shares the scheduled tick's execution core so the two can't
+    # drift: prepare_task_run does the same planning (playbook injection,
+    # capability gate, folded success_criteria, state sequence) + guard, and
+    # settle_task_* does the same close-out. The only differences are
+    # streaming and forced=True — the task's due_at is its next recurrence, so
+    # without that note the model would skip it as "not due".
+    from homunculus.heartbeat import (
+        prepare_task_run,
+        settle_task_failure,
+        settle_task_outcome,
+    )
     from homunculus.user_tz import now_user_tz
-
-    # Stamp last_fired_at and executing=True before we start so concurrent
-    # heartbeat ticks don't pick up the same task. Heartbeat's 30-min
-    # suppression window does the rest.
-    store.mark_fired(task_id)
 
     # Fresh agent — task execution must NOT share history with the chat
     # session (would pollute future chat turns with task-execution noise).
     fresh_agent = Agent(memory=_chat_memory)
-    # Fold the linked skill's declared success_criteria into the task's
-    # effective criteria — exactly as a scheduled tick's _plan_tick does —
-    # so a manual run enforces (and the prompt shows) the same quality bar.
-    from homunculus.skills import effective_success_criteria
-    task["success_criteria"] = effective_success_criteria(task, MEMORY_DIR)
-    prompt = HEARTBEAT_PROMPT_TEMPLATE.format(
-        now_iso=now_user_tz().isoformat(timespec="seconds"),
-        # forced=True: this is an operator-triggered "run now", not a
-        # scheduled tick. The task's due_at is its next recurrence (often
-        # days out); without this flag the model reads that future date and
-        # skips the task as "not due".
-        due_tasks=_format_due_tasks([task], forced=True),
+    # prepare_task_run also stamps last_fired_at, claiming the task before the
+    # agent runs so a concurrent heartbeat tick won't pick it up.
+    prep = prepare_task_run(
+        store, task, MEMORY_DIR,
+        now_user_tz().isoformat(timespec="seconds"),
+        forced=True,
     )
-
-    guard = TaskGuard({task_id: task.get("success_criteria") or []})
+    if prep is None:
+        raise HTTPException(500, f"task '{task_id}' could not be planned (missing skill?)")
+    state_sequence, prompt, guard = prep
     tools.set_pre_execute_hook(guard.on_tool_call)
     tools.set_post_execute_hook(guard.observe_tool_result)
     tools.set_pre_turn_hook(guard.on_pre_turn)
-    from homunculus.core import measure_llm_usage_since
     due_at_before = task.get("due_at")
-    started_iso = datetime.now().isoformat(timespec="seconds")
+    started = datetime.now()
+    started_iso = started.isoformat(timespec="seconds")
     started_utc = datetime.now(UTC)
 
     def gen():
@@ -925,78 +924,41 @@ async def tasks_run_stream(task_id: str, request: Request):
                 # source="heartbeat": a run-now is a task tick, not a chat
                 # turn. Tagging it keeps the heartbeat-style prompt (and any
                 # mid-run model text) OUT of /api/chat/history — _visible_
-                # chat_history drops _NON_CHAT_SOURCES. Without this the
-                # tick prompt rendered as a fake "YOU" bubble in chat.
+                # chat_history drops _NON_CHAT_SOURCES.
                 #
                 # expected_completions=1: a run-now drives exactly ONE task,
-                # so exit the loop the moment it's closed (complete/record_
-                # failure/cancel/continue). Without this the loop kept
-                # prodding under tool_choice=required AFTER a successful
-                # complete_task, and the model would call record_failure on
-                # the just-completed task — flipping a real success to a
-                # failure.
+                # so exit the loop the moment it's closed; state_sequence pins
+                # a state-machine skill's tool order, same as a scheduled tick.
                 for chunk in fresh_agent.chat_stream(
-                    prompt, source="heartbeat", expected_completions=1,
+                    prompt, source="heartbeat",
+                    state_sequence=state_sequence, expected_completions=1,
                 ):
                     yield _format_sse_data(chunk)
             except Exception as e:
                 err = f"{type(e).__name__}: {e}"
                 yield _format_sse_data(f"[loop error: {err}]")
-                try:
-                    current = store.get(task_id)
-                    if current and current.get("due_at") == due_at_before:
-                        store.record_failure(
-                            task_id, err, increment_failures=False,
-                            usage=measure_llm_usage_since(started_utc),
-                        )
-                except Exception:
-                    pass
+                # Same failure recording the scheduled tick uses (infra →
+                # partial, real → failure), then end the stream.
+                settle_task_failure(
+                    store, task, guard, err,
+                    due_at_before=due_at_before,
+                    duration_s=(datetime.now() - started).total_seconds(),
+                    started_utc=started_utc,
+                )
                 yield "event: done\ndata: end\n\n"
                 return
 
-            # Post-success check: did due_at advance? If yes, complete_task
-            # ran. If no, the agent silently dropped — mark partial so
-            # the scratchpad survives and the next attempt resumes.
-            usage = measure_llm_usage_since(started_utc)
-            current = store.get(task_id)
-            if current and current.get("due_at") == due_at_before and task_id in guard.expected_remaining():
-                # Agent delivered but omitted the complete_task bookkeeping call.
-                # If every criterion passed on what actually went out, the harness
-                # completes it — the same deterministic close as
-                # heartbeat._settle_silent_drop — so a manual run of a fully
-                # delivered task isn't mislabeled partial. `task` carries the
-                # skill's folded criteria; `current` (read from disk) does not.
-                criteria = task.get("success_criteria") or []
-                if criteria and not guard.criteria_failures(task_id):
-                    store.complete(
-                        task_id,
-                        "auto-completed by harness: delivery criteria satisfied "
-                        "(agent omitted complete_task)",
-                    )
-                    store.attribute_usage_to_last_run(task_id, usage)
-                    store.attribute_delivered_text_to_last_run(
-                        task_id, guard.combined_notify_text()
-                    )
-                    yield _format_sse_data(
-                        "[auto-completed — criteria satisfied; agent omitted complete_task]"
-                    )
-                else:
-                    store.mark_partial(
-                        task_id,
-                        "run-now: agent finished without complete_task / "
-                        "continue_task / cancel_task",
-                        usage=usage,
-                    )
-                    yield _format_sse_data("[silent drop — marked partial, will resume next tick]")
-            else:
-                # complete_task ran — retrofit usage and the delivered text
-                # onto the success run (delivered_text feeds the reflection's
-                # quality self-critique).
-                store.attribute_usage_to_last_run(task_id, usage)
-                store.attribute_delivered_text_to_last_run(
-                    task_id, guard.combined_notify_text()
-                )
-                yield _format_sse_data("[run-now finished]")
+            # Same deterministic close-out as the scheduled tick (success /
+            # explicit-close / silent-drop with harness auto-complete). The
+            # operator is watching this stream, so suppress the escalation push.
+            settle_task_outcome(
+                _chat_memory, store, task, guard,
+                due_at_before=due_at_before,
+                started=started,
+                started_utc=started_utc,
+                fire_escalation_notify=False,
+            )
+            yield _format_sse_data("[run-now finished]")
         finally:
             tools.set_pre_execute_hook(None)
             tools.set_post_execute_hook(None)

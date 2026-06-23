@@ -729,37 +729,14 @@ def _run_task_isolated(
             f"(isolated loop, model={agent.model})",
         )
 
-    state_sequence, selected_tasks, playbooks = _plan_tick([task], memory_root)
+    prep = prepare_task_run(tasks, task, memory_root, now_iso, forced=False)
+    if prep is None:
+        return  # planning skipped this task (e.g. its skill file vanished)
+    state_sequence, prompt, guard = prep
 
-    # Stamp `last_fired_at` BEFORE running the agent — only on tasks
-    # we actually attempt. A task planning skipped (e.g. its skill file
-    # vanished mid-tick) must not be marked fired.
-    for t in selected_tasks:
-        try:
-            tasks.mark_fired(t["id"])
-        except Exception as e:
-            log.error(f"[heartbeat] mark_fired failed for {t['id']}: {e}")
+    # Snapshot due_at so we can detect whether complete_task advanced it.
+    due_at_before = task.get("due_at")
 
-    due_tasks_block = _format_due_tasks(selected_tasks)
-    if playbooks:
-        due_tasks_block += "\n\n" + "\n\n".join(playbooks)
-    prompt = HEARTBEAT_PROMPT_TEMPLATE.format(
-        now_iso=now_iso,
-        due_tasks=due_tasks_block,
-    )
-    # Snapshot due_at for each task so we can detect if complete_task ran.
-    due_at_before = {t["id"]: t.get("due_at") for t in selected_tasks}
-
-    # Install output guard for this task. The guard intercepts notify() and
-    # complete_task() to enforce the task's success_criteria before allowing
-    # completion. Always cleared in the finally block.
-    guard = TaskGuard(
-        {t["id"]: t.get("success_criteria") or [] for t in selected_tasks},
-        delivered_by_task={
-            t["id"]: {d.get("key", "") for d in (t.get("delivered") or [])}
-            for t in selected_tasks
-        },
-    )
     tools.set_pre_execute_hook(guard.on_tool_call)
     tools.set_post_execute_hook(guard.observe_tool_result)
     # Item 5 (pragmatic slice): install the turn-level hook so the guard
@@ -775,69 +752,21 @@ def _run_task_isolated(
             prompt,
             source="heartbeat",
             state_sequence=state_sequence,
-            expected_completions=len(selected_tasks),
+            expected_completions=1,
         )
     except Exception as e:
-        # If the agent loop crashed AFTER complete_task already ran (e.g.,
-        # the final text-generation LLM call failed), don't record a failure —
-        # the task was delivered; we'd only be inflating consecutive_failures
-        # on a task that will correctly fire again tomorrow.
-        # Notifies sent before the crash DID reach the user — record their
-        # delivery keys so the retry doesn't re-send the same content.
-        _record_delivery_keys(tasks, guard, selected_tasks)
-        duration = (datetime.now() - started).total_seconds()
-        err = f"{type(e).__name__}: {e}"
-        # Infrastructure failures (provider exhaustion, provider API
-        # errors, network blips) are transient — the task itself is not
-        # broken. Mark partial → retry in ~10 min, don't count toward
-        # consecutive_failures, and crucially don't advance due_at a
-        # whole recurrence step. Otherwise a transient provider 404 at
-        # 09:00 would be recorded as a REAL failure, advancing the daily
-        # task to tomorrow and silently skipping the day's delivery. Only
-        # non-infra exceptions (actual task/code bugs) take the
-        # record_failure path.
-        is_provider_exhaustion = _is_infra_error(err)
-        for task in selected_tasks:
-            try:
-                current = tasks.get(task["id"])
-                if current and current.get("due_at") != due_at_before.get(task["id"]):
-                    log.info(
-                        f"[heartbeat] {task['id']} due_at advanced — task was completed; "
-                        f"skipping record_failure",
-                    )
-                    continue
-                if is_provider_exhaustion:
-                    # Provider exhaustion is a partial — work was in
-                    # flight when the infrastructure ran out, not a
-                    # broken task. mark_partial reschedules ~10 min
-                    # later so the same provider's TPM window can
-                    # refresh; the scratchpad survives.
-                    log.info(
-                        f"[heartbeat] {task['id']} provider-exhaustion — "
-                        f"marking partial, will retry shortly",
-                    )
-                    usage = measure_llm_usage_since(started_utc)
-                    tasks.mark_partial(task["id"], err, duration_s=duration, usage=usage)
-                    events.emit(
-                        "task_partial",
-                        name=task["id"],
-                        text=events.truncate_preview(err),
-                        result="provider_exhaustion · retry in ~10 min",
-                    )
-                else:
-                    usage = measure_llm_usage_since(started_utc)
-                    updated = tasks.record_failure(task["id"], err, duration_s=duration, usage=usage)
-                    events.emit(
-                        "task_failure",
-                        name=task["id"],
-                        text=events.truncate_preview(err),
-                        result=(
-                            f"consecutive_failures={updated.get('consecutive_failures', '?')} "
-                            f"status={updated.get('status', '?')}"
-                        ),
-                    )
-            except Exception as inner:
-                log.error(f"[heartbeat] record_failure failed for {task['id']}: {inner}")
+        # Record the outcome (infra → partial, real error → failure), then
+        # re-raise so main() can apply its transient-network backoff. Shared
+        # with run-now via settle_task_failure so the two can't diverge.
+        settle_task_failure(
+            tasks,
+            task,
+            guard,
+            f"{type(e).__name__}: {e}",
+            due_at_before=due_at_before,
+            duration_s=(datetime.now() - started).total_seconds(),
+            started_utc=started_utc,
+        )
         raise
     finally:
         tools.set_pre_execute_hook(None)
@@ -845,76 +774,202 @@ def _run_task_isolated(
         tools.set_pre_turn_hook(None)
     log.info(f"[agent] {response}")
 
-    # Post-success completion check. agent.chat() returned without an
-    # exception, but that doesn't mean the task was actually delivered —
-    # under heavy provider rate-limiting the loop can drop into the
-    # "I'm not sure how to respond — could you rephrase?" fallback path
-    # without ever calling notify() or complete_task(). When that
-    # happens, due_at stays put and executing=True remains stuck.
-    # Detect by checking whether due_at advanced (the dedupe signal we
-    # already use in the failure handler) and record_failure on any
-    # task whose due_at is unchanged so the next tick can pick it up.
-    # Item 4: use guard.expected_remaining() to distinguish "agent explicitly
-    # called record_failure" (intentional fail with reason — don't double-log)
-    # from "agent never touched the task" (silent fall-through — the bug
-    # this whole layer exists to catch).
-    silently_dropped = set(guard.expected_remaining())
-    # Sent notifies are ground truth for what reached the user — record
-    # delivery keys regardless of how the lifecycle ended, so no future
-    # run can re-send the same content.
-    _record_delivery_keys(tasks, guard, selected_tasks)
-    # Measure once for the whole tick — attribute to each task that
-    # ran. When multiple tasks share a tick the attribution is
-    # over-counted; in practice most ticks fire one task at a time.
-    tick_usage = measure_llm_usage_since(started_utc)
-    for task in selected_tasks:
+    # Single deterministic settlement — the same close-out run-now uses.
+    settle_task_outcome(
+        memory,
+        tasks,
+        task,
+        guard,
+        due_at_before=due_at_before,
+        started=started,
+        started_utc=started_utc,
+    )
+
+
+# ── Shared task-execution core ───────────────────────────────────────────
+#
+# One implementation of how a task's run is guarded and settled, called by
+# BOTH the scheduled tick (_run_task_isolated) and the manual run-now
+# (web_api.tasks_run_stream). The two used to hand-copy this logic and drift
+# apart (delivery-key ledger, auto-complete, skill rating, …); centralizing
+# it is the same "one core, many thin entry points" shape Letta uses
+# (step()/step_stream() both delegate to a single _step) and OpenClaw uses
+# (cron + chat both call one agent-core). Streaming vs. blocking and the
+# escalation-notify policy are the only legitimate differences, expressed as
+# the caller's choice / a parameter — never a second copy.
+
+
+def prepare_task_run(
+    tasks: TaskStore,
+    task: dict[str, Any],
+    memory_root: Path,
+    now_iso: str,
+    *,
+    forced: bool,
+) -> tuple[list[dict] | None, str, TaskGuard] | None:
+    """Plan + stamp-fired + build prompt and guard for one task — identical
+    prep for the scheduled tick and the manual run-now.
+
+    Runs _plan_tick (which folds the skill's success_criteria onto the task,
+    applies the capability gate, injects the playbook, and yields any state
+    sequence), stamps last_fired_at, renders the heartbeat prompt, and builds
+    the guard. `forced=True` adds the "run now regardless of due_at" note for
+    an operator-triggered run. Returns (state_sequence, prompt, guard), or
+    None if planning skipped the task (e.g. its skill file vanished mid-run).
+    """
+    state_sequence, selected_tasks, playbooks = _plan_tick([task], memory_root)
+    if not selected_tasks:
+        return None
+
+    # Stamp `last_fired_at` only on the task we actually attempt.
+    for t in selected_tasks:
         try:
-            current = tasks.get(task["id"])
-            if current is None:
-                continue
-            if current.get("due_at") != due_at_before.get(task["id"]):
-                # complete_task ran, due_at advanced. Retrofit usage and
-                # the delivered text onto the success run the tool layer
-                # appended (the latter feeds the reflection's quality
-                # self-critique).
-                tasks.attribute_usage_to_last_run(task["id"], tick_usage)
-                tasks.attribute_delivered_text_to_last_run(
-                    task["id"], guard.combined_notify_text()
-                )
-                tasks.attribute_tool_trace_to_last_run(task["id"], guard.tool_trace())
-                _settle_quiz_pending(task, delivered=True)
-                _rate_task_skill(memory, task, "success")
-                continue
-            # Distinguish the failure shape so we can act on it differently:
-            #   - silent drop  → agent never called complete_task or record_failure.
-            #                    The post-success check has to clean up.
-            #   - explicit fail → agent called record_failure with a reason
-            #                     (which the TaskGuard tracked). The reason is
-            #                     already in the task's last_runs; don't double-log.
-            if task["id"] not in silently_dropped:
-                # Agent explicitly closed the task (record_failure /
-                # cancel_task / continue_task) — respect its decision. A
-                # non-delivered run drops any quiz pending it armed so the CHAT
-                # badge never lights for a question the user never received.
-                _settle_quiz_pending(task, delivered=False)
-                # Rate the skill a failure only when the close was an actual
-                # record_failure (not a user cancel / deferral) — the recorded
-                # run status is the authoritative signal.
-                last_runs = current.get("last_runs") or []
-                if last_runs and last_runs[-1].get("status") == "failure":
-                    tasks.attribute_tool_trace_to_last_run(task["id"], guard.tool_trace())
-                    _rate_task_skill(memory, task, "failure")
-                continue
-            _settle_silent_drop(
-                tasks,
-                task,
-                guard,
-                duration_s=(datetime.now() - started).total_seconds(),
-                usage=measure_llm_usage_since(started_utc),
+            tasks.mark_fired(t["id"])
+        except Exception as e:
+            log.error(f"[heartbeat] mark_fired failed for {t['id']}: {e}")
+
+    due_tasks_block = _format_due_tasks(selected_tasks, forced=forced)
+    if playbooks:
+        due_tasks_block += "\n\n" + "\n\n".join(playbooks)
+    prompt = HEARTBEAT_PROMPT_TEMPLATE.format(now_iso=now_iso, due_tasks=due_tasks_block)
+    return state_sequence, prompt, build_task_guard(task)
+
+
+def build_task_guard(task: dict[str, Any]) -> TaskGuard:
+    """A TaskGuard scoped to one task: its success_criteria plus the
+    delivered-key ledger that notify_unique consults. Call AFTER _plan_tick
+    has folded the skill's criteria onto the task."""
+    tid = task["id"]
+    return TaskGuard(
+        {tid: task.get("success_criteria") or []},
+        delivered_by_task={tid: {d.get("key", "") for d in (task.get("delivered") or [])}},
+    )
+
+
+def settle_task_failure(
+    tasks: TaskStore,
+    task: dict[str, Any],
+    guard: TaskGuard,
+    err: str,
+    *,
+    due_at_before: str | None,
+    duration_s: float,
+    started_utc: datetime,
+) -> None:
+    """Record the outcome when a task's agent loop RAISED.
+
+    Notifies that went out before the crash are ground truth → record their
+    delivery keys first. A loop that raised after complete_task already
+    advanced due_at is left alone (the delivery happened). Infrastructure
+    trouble (provider/network) is a partial — retry in ~10 min, no
+    consecutive_failures bump, due_at unchanged; a real error is a recorded
+    failure. Control flow after recording (re-raise for backoff vs. stream an
+    error) stays with the caller.
+    """
+    task_id = task["id"]
+    _record_delivery_keys(tasks, guard, [task])
+    try:
+        current = tasks.get(task_id)
+        if current and current.get("due_at") != due_at_before:
+            log.info(
+                f"[heartbeat] {task_id} due_at advanced — task was completed; "
+                f"skipping record_failure",
             )
+            return
+        usage = measure_llm_usage_since(started_utc)
+        if _is_infra_error(err):
+            log.info(
+                f"[heartbeat] {task_id} provider-exhaustion — marking partial, "
+                f"will retry shortly",
+            )
+            tasks.mark_partial(task_id, err, duration_s=duration_s, usage=usage)
+            events.emit(
+                "task_partial",
+                name=task_id,
+                text=events.truncate_preview(err),
+                result="provider_exhaustion · retry in ~10 min",
+            )
+        else:
+            updated = tasks.record_failure(task_id, err, duration_s=duration_s, usage=usage)
+            events.emit(
+                "task_failure",
+                name=task_id,
+                text=events.truncate_preview(err),
+                result=(
+                    f"consecutive_failures={updated.get('consecutive_failures', '?')} "
+                    f"status={updated.get('status', '?')}"
+                ),
+            )
+    except Exception as inner:
+        log.error(f"[heartbeat] settle_task_failure failed for {task_id}: {inner}")
+
+
+def settle_task_outcome(
+    memory: Memory,
+    tasks: TaskStore,
+    task: dict[str, Any],
+    guard: TaskGuard,
+    *,
+    due_at_before: str | None,
+    started: datetime,
+    started_utc: datetime,
+    fire_escalation_notify: bool = True,
+) -> None:
+    """Deterministic close-out after a task's agent loop RETURNS normally.
+
+    Decides from the machine-checked criteria the guard tracked:
+      - delivered (due_at advanced) → success: attribute usage/text/trace,
+        settle quiz, rate skill success.
+      - agent explicitly closed it (record_failure/cancel/continue) → respect
+        that; rate skill failure only if the recorded run failed.
+      - silent drop → _settle_silent_drop, which auto-completes when every
+        criterion passed (agent merely skipped complete_task) or marks partial.
+
+    Sent notifies are recorded as delivered regardless of how the lifecycle
+    ended, so no later run re-sends the same content. `fire_escalation_notify`
+    is False for run-now (operator is watching the stream).
+    """
+    task_id = task["id"]
+    silently_dropped = task_id in set(guard.expected_remaining())
+    _record_delivery_keys(tasks, guard, [task])
+    usage = measure_llm_usage_since(started_utc)
+    try:
+        current = tasks.get(task_id)
+        if current is None:
+            return
+        if current.get("due_at") != due_at_before:
+            # complete_task ran, due_at advanced. Retrofit usage and the
+            # delivered text onto the success run the tool layer appended
+            # (the latter feeds the reflection's quality self-critique).
+            tasks.attribute_usage_to_last_run(task_id, usage)
+            tasks.attribute_delivered_text_to_last_run(task_id, guard.combined_notify_text())
+            tasks.attribute_tool_trace_to_last_run(task_id, guard.tool_trace())
+            _settle_quiz_pending(task, delivered=True)
+            _rate_task_skill(memory, task, "success")
+            return
+        if not silently_dropped:
+            # Agent explicitly closed the task (record_failure / cancel_task /
+            # continue_task) — respect its decision. A non-delivered run drops
+            # any quiz pending so the CHAT badge never lights for a question
+            # the user never received. Rate the skill a failure only when the
+            # recorded run is an actual failure (not a cancel / deferral).
             _settle_quiz_pending(task, delivered=False)
-        except Exception as inner:
-            log.error(f"[heartbeat] post-tick check failed for {task['id']}: {inner}")
+            last_runs = current.get("last_runs") or []
+            if last_runs and last_runs[-1].get("status") == "failure":
+                tasks.attribute_tool_trace_to_last_run(task_id, guard.tool_trace())
+                _rate_task_skill(memory, task, "failure")
+            return
+        _settle_silent_drop(
+            tasks,
+            task,
+            guard,
+            duration_s=(datetime.now() - started).total_seconds(),
+            usage=usage,
+            fire_escalation_notify=fire_escalation_notify,
+        )
+        _settle_quiz_pending(task, delivered=False)
+    except Exception as inner:
+        log.error(f"[heartbeat] settle_task_outcome failed for {task_id}: {inner}")
 
 
 def _known_tool_names() -> set[str] | None:
@@ -1092,6 +1147,7 @@ def _settle_silent_drop(
     guard: TaskGuard,
     duration_s: float,
     usage: dict[str, Any],
+    fire_escalation_notify: bool = True,
 ) -> None:
     """Close out a due task the agent finished without an explicit
     lifecycle call (no complete_task / record_failure / cancel_task /
@@ -1169,7 +1225,12 @@ def _settle_silent_drop(
     # partials are routine continuation state, not user-actionable, so
     # notifying on each would spam the user every 10 min. Refresh from
     # disk because mark_partial mutated the task.
-    if task.get("notify"):
+    #
+    # Suppressed for a manual run-now (fire_escalation_notify=False): the
+    # operator triggered it and is watching the stream, so an "I tried this
+    # multiple times" push would be wrong — that message is for unattended
+    # scheduled retries.
+    if fire_escalation_notify and task.get("notify"):
         refreshed = tasks.get(task_id) or {}
         escalated = int(refreshed.get("consecutive_failures", 0)) > 0
         if not escalated:
