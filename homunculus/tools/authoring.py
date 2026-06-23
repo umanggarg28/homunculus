@@ -170,6 +170,18 @@ def propose_skill(
         task_spec=stored_task,
         validation=result.as_dict(),
     )
+    if proposal.get("_deduped"):
+        return json.dumps({
+            "ok": True,
+            "proposal_id": proposal["id"],
+            "kind": kind,
+            "status": "pending",
+            "message": (
+                f"A pending {kind} proposal for {name} already exists "
+                f"({proposal['id']}) — this duplicate was skipped. Do not file "
+                "another; the operator will review the existing one. Move on."
+            ),
+        }, indent=2)
     return json.dumps({
         "ok": True,
         "proposal_id": proposal["id"],

@@ -85,6 +85,25 @@ class ProposalStore:
         if kind not in (KIND_NEW_SKILL, KIND_SKILL_EDIT):
             raise ValueError(f"unknown proposal kind: {kind!r}")
         data = self._load()
+
+        # One pending proposal per (skill, kind). A reflection tick can file
+        # several near-identical edits for the same skill in one run; the queue
+        # must hold only the first so the operator reviews one change, not a
+        # pile of variants. Deterministic guard at the storage boundary, not
+        # left to the model. The returned copy is flagged so the caller can
+        # tell the agent the duplicate was skipped.
+        existing = next(
+            (
+                p for p in data
+                if p.get("status") == "pending"
+                and p.get("skill_name") == skill_name
+                and p.get("kind") == kind
+            ),
+            None,
+        )
+        if existing is not None:
+            return {**existing, "_deduped": True}
+
         proposal = {
             "id": self._next_id(data),
             "kind": kind,
