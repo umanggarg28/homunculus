@@ -1,14 +1,30 @@
-# Homunculus
+```text
+██╗  ██╗ ██████╗ ███╗   ███╗██╗   ██╗███╗   ██╗ ██████╗██╗   ██╗██╗     ██╗   ██╗███████╗
+██║  ██║██╔═══██╗████╗ ████║██║   ██║████╗  ██║██╔════╝██║   ██║██║     ██║   ██║██╔════╝
+███████║██║   ██║██╔████╔██║██║   ██║██╔██╗ ██║██║     ██║   ██║██║     ██║   ██║███████╗
+██╔══██║██║   ██║██║╚██╔╝██║██║   ██║██║╚██╗██║██║     ██║   ██║██║     ██║   ██║╚════██║
+██║  ██║╚██████╔╝██║ ╚═╝ ██║╚██████╔╝██║ ╚████║╚██████╗╚██████╔╝███████╗╚██████╔╝███████║
+╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚══════╝ ╚═════╝ ╚══════╝
+```
 
-A minimal autonomous personal assistant, built from scratch — no agent
-frameworks. One small Python package wraps a tool-calling LLM in the pieces
-that make it useful unattended: durable memory, scheduled tasks, a background
-autonomy loop, self-authored skills, and chat over the web, Telegram, and
-Discord. It runs on an open-weight model (`openai/gpt-oss-120b` via OpenRouter)
-on a deliberately tight budget.
+> **A minimal autonomous personal assistant — built from scratch, no agent frameworks.**
 
-> The design study behind each subsystem — and a full "build it yourself"
-> walkthrough — lives in `LEARN.md` (kept local, not published).
+![CI](https://github.com/umanggarg28/homunculus/actions/workflows/ci.yml/badge.svg)
+&nbsp;![Python](https://img.shields.io/badge/python-3.12-blue)
+&nbsp;![Model](https://img.shields.io/badge/model-gpt--oss--120b-6e56cf)
+
+One small Python package wraps a tool-calling LLM in the pieces that make it
+useful unattended: durable memory, scheduled tasks, a background autonomy loop,
+self-authored skills, and chat over the web, Telegram, and Discord. It runs on
+an open-weight model (`openai/gpt-oss-120b` via OpenRouter) on a deliberately
+tight budget.
+
+<p align="center">
+  <img src="docs/screenshots/02-overview.png" alt="Overview — live dashboard: next-heartbeat countdown, activity and failure counters" width="49%">
+  &nbsp;
+  <img src="docs/screenshots/03-traces.png" alt="Traces — every tool call and result, auditable" width="49%">
+</p>
+<p align="center"><sub>Live dashboard (left) and the auditable trace of every tool call (right).</sub></p>
 
 ## What it does
 
@@ -25,25 +41,53 @@ on a deliberately tight budget.
 
 ## Architecture
 
-```
-                  ┌─────────────── transports ───────────────┐
-   web console ──▶│  web_api   repl   telegram   discord      │
-   Telegram   ──▶ └──────────────────┬────────────────────────┘
-   Discord    ──▶                    │
-                              ┌───────▼────────┐      ┌──────────────┐
-   heartbeat daemon ────────▶ │  core.Agent    │◀────▶│  tools/ (MCP) │
-   (autonomy loop)            │  the LLM loop  │      │  fs, web,     │
-                              └───┬────────┬───┘      │  memory, …    │
-                                  │        │          └──────────────┘
-                           ┌──────▼──┐ ┌───▼─────┐
-                           │ memory  │ │ tasks   │  scheduled work +
-                           │ (vault) │ │ + skills│  per-task run history
-                           └─────────┘ └─────────┘
+```mermaid
+flowchart TB
+    subgraph interactive["Interactive"]
+        SPA["Web console<br/>(React SPA)"]
+        TG["Telegram"]
+        DC["Discord"]
+        REPL["REPL"]
+    end
+    subgraph autonomy["Autonomy"]
+        HB["Heartbeat daemon<br/>wakes · finds due work · self-prompts"]
+    end
+
+    AGENT["<b>core.Agent</b> — the LLM loop<br/>per-tick budget · one isolated run per task"]
+    GUARD{{"Delivery guard<br/>checks success_criteria<br/>before output goes out"}}
+    OR["LLM providers<br/>gpt-oss-120b → fallback chain"]
+
+    subgraph proc["Tool server · MCP subprocess"]
+        TOOLS["fs · web · python · notify<br/>memory · tasks · skills"]
+    end
+    subgraph vol["workspace/ — mounted volume"]
+        MEM[("Memory vault<br/>markdown + frontmatter")]
+        TASKS[("Tasks +<br/>run history")]
+        SKILLS[("Skills +<br/>proposals")]
+    end
+
+    SPA --> AGENT
+    TG --> AGENT
+    DC --> AGENT
+    REPL --> AGENT
+    HB -->|scheduled tick| AGENT
+
+    AGENT <-->|completions| OR
+    AGENT <-->|MCP| TOOLS
+    AGENT -.->|autonomous output| GUARD
+    GUARD -.->|verified delivery| TOOLS
+    TOOLS --> MEM
+    TOOLS --> TASKS
+    TOOLS --> SKILLS
+    SKILLS -.->|reflection proposes,<br/>human approves on Overview| AGENT
 ```
 
-Everything is one importable package, `homunculus/`. The agent loop (`core.py`)
-is provider-agnostic and talks to tools over the MCP protocol; the transports
-are thin entry points around the same `Agent`.
+Read it top-down: any transport (or the heartbeat) drives **one** provider-
+agnostic agent loop; the loop talks to its tools over MCP in a **separate
+process**, and every autonomous delivery passes a guard that verifies it
+against what the tools actually did. All durable state lives in a mounted
+`workspace/` volume, and skill changes only ever reach the registry through a
+human-approved proposal. Everything is one importable package, `homunculus/`.
 
 ## Quickstart
 
@@ -103,7 +147,6 @@ container-only dependencies (MCP) so the pure logic is testable in isolation.
 
 - **[`AGENTS.md`](AGENTS.md)** — the agent's identity layer (persona, rules,
   tool catalogue), loaded into the system prompt on every turn. Edit freely.
-- **`LEARN.md`** — the in-depth, build-from-scratch learning guide (local only).
 - **`PLAN.md`, `IDEAS.md`** — the working backlog and consciously-deferred ideas.
 - **`docs/`** — dated design notes and roadmaps. These are point-in-time
   records of how the project was reasoned through; they are historical, not
