@@ -19,12 +19,18 @@ self-authored skills, and chat over the web, Telegram, and Discord. It runs on
 an open-weight model (`openai/gpt-oss-120b` via OpenRouter) on a deliberately
 tight budget.
 
-<p align="center">
-  <img src="docs/screenshots/02-overview.png" alt="Overview — live dashboard: next-heartbeat countdown, activity and failure counters" width="49%">
-  &nbsp;
-  <img src="docs/screenshots/03-traces.png" alt="Traces — every tool call and result, auditable" width="49%">
-</p>
-<p align="center"><sub>Live dashboard (left) and the auditable trace of every tool call (right).</sub></p>
+<div align="center">
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/02-overview.png" alt="Overview dashboard"><br><sub><b>Overview</b> — live status: next-heartbeat countdown, activity &amp; failures</sub></td>
+<td width="50%"><img src="docs/screenshots/04-tasks.png" alt="Tasks"><br><sub><b>Tasks</b> — scheduled &amp; recurring autonomous work</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/03-traces.png" alt="Traces"><br><sub><b>Traces</b> — every tool call and result, auditable</sub></td>
+<td width="50%"><img src="docs/screenshots/05-tools.png" alt="Tools"><br><sub><b>Tools</b> — MCP tool usage and run controls</sub></td>
+</tr>
+</table>
+</div>
 
 ## What it does
 
