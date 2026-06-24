@@ -1,13 +1,8 @@
-```text
-██╗  ██╗ ██████╗ ███╗   ███╗██╗   ██╗███╗   ██╗ ██████╗██╗   ██╗██╗     ██╗   ██╗███████╗
-██║  ██║██╔═══██╗████╗ ████║██║   ██║████╗  ██║██╔════╝██║   ██║██║     ██║   ██║██╔════╝
-███████║██║   ██║██╔████╔██║██║   ██║██╔██╗ ██║██║     ██║   ██║██║     ██║   ██║███████╗
-██╔══██║██║   ██║██║╚██╔╝██║██║   ██║██║╚██╗██║██║     ██║   ██║██║     ██║   ██║╚════██║
-██║  ██║╚██████╔╝██║ ╚═╝ ██║╚██████╔╝██║ ╚████║╚██████╗╚██████╔╝███████╗╚██████╔╝███████║
-╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚══════╝ ╚═════╝ ╚══════╝
-```
+<p align="center">
+  <img src="docs/banner.png" alt="HOMUNCULUS" width="760">
+</p>
 
-> **A minimal autonomous personal assistant — built from scratch, no agent frameworks.**
+<p align="center"><b>A minimal autonomous personal assistant — built from scratch, no agent frameworks.</b></p>
 
 ![CI](https://github.com/umanggarg28/homunculus/actions/workflows/ci.yml/badge.svg)
 &nbsp;![Python](https://img.shields.io/badge/python-3.12-blue)
