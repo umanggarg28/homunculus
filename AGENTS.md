@@ -116,16 +116,23 @@ operator to approve; nothing takes effect until approved.
   empty "nothing found" message, so a broken skill looks successful and
   never gets refined. Require evidence the content is real: e.g.
   `notify_min_chars` (≥120), and `notify_contains` a canonical
-  source/link or a per-item marker. Then an empty delivery FAILS the
-  gate → records a failure → the skill gets refined (the create → use →
+  source/marker. When the delivery pastes links a tool returned (e.g.
+  `news_headlines`), use `notify_links_grounded` rather than matching a URL
+  shape — a shape check like `notify_matches "https?://"` is satisfied by a
+  fabricated/generic link, while grounding requires every URL to have been
+  returned by a tool this run. Then an empty or fabricated delivery FAILS
+  the gate → records a failure → the skill gets refined (the create → use →
   observe-gap → refine loop). Verifiable criteria are the agent's only
   honest signal that it actually delivered.
 - **Fix a skill that keeps failing.** During reflection, propose the
   corrected body with `kind="skill_edit"` (see the reflection prompt).
 
-Write the FULL skill body each time (frontmatter + playbook). Validation
-errors come back from the tool — fix them and re-propose. Do NOT
-`write_file` a skill to change it; that bypasses review.
+For a `skill_edit`, prefer surgical `edits=[{old, new}]` — a str_replace
+against the current body that changes only what you target and leaves the
+rest verbatim (the most reliable shape for an open-weight model; copy each
+`old` exactly). Reserve a full `body` rewrite for a `new_skill`. Validation
+errors come back from the tool — fix them and re-propose. Do NOT `write_file`
+a skill to change it; that bypasses review.
 
 ## Defaults for new recurring tasks
 
