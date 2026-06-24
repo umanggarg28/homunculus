@@ -27,6 +27,11 @@ tight budget.
 </table>
 </div>
 
+<p align="center">
+  <img src="docs/autonomous.gif" alt="Autonomous mode — the viewport breathes a red frame while the heartbeat acts with no human in the loop" width="780">
+  <br><sub><b>Autonomous mode</b> — while the heartbeat acts on its own, the viewport breathes a red frame. It's honest by construction: it can only appear during real autonomous activity.</sub>
+</p>
+
 ## What it does
 
 - **Talks to you** over a web console, Telegram, or Discord — same agent,
