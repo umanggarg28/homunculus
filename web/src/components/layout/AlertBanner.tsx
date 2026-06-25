@@ -23,6 +23,23 @@ export function markTracesSeen(): void {
 }
 
 
+// Tool errors where the AGENT mis-called the tool — bad/missing arguments,
+// an invalid regex, a target that doesn't exist — then immediately retries.
+// These are self-correcting, not infrastructure failures, so they must not
+// raise the "check traces" alarm (they still appear in Traces). Genuine
+// failures — HTTP errors, timeouts, provider/network trouble — do NOT match
+// here and still alert.
+const RECOVERABLE_TOOL_ERROR = [
+  "invalid arguments for '",
+  "invalid regex '",
+  "to record a failure against",
+  "does not exist",
+];
+function isRecoverableToolError(result: string): boolean {
+  const s = result.toLowerCase();
+  return RECOVERABLE_TOOL_ERROR.some((p) => s.includes(p));
+}
+
 /** Contextual alert strip — surfaces hard failures (recent tool
  *  errors, missing API keys, failed task runs, stuck loops, budget overrun)
  *  at the top of every page. Hairline border in danger/amber, hides itself when clean. */
@@ -77,6 +94,7 @@ export function AlertBanner() {
         e.event === "tool_result" &&
         typeof e.result === "string" &&
         e.result.startsWith("ERROR") &&
+        !isRecoverableToolError(e.result) &&
         new Date(e.ts).getTime() > ackCutoff,
     );
     if (recentErr.length > 0) {
