@@ -88,15 +88,12 @@ EDIT  heartbeat.py                          call record_failure on tick error
 2. **Live page** — real-time "agent's computer" pane. Tools running,
    model thinking, tokens streaming, memory loading. Currently a
    placeholder.
-3. **Traces page** — reframe `/traces` from flat event list into
-   grouped turn cards with expandable timelines. One card per user
-   turn / heartbeat tick.
-4. **End-user tutorial** — `USAGE.md` (or in-app onboarding) covering:
+3. **End-user tutorial** — `USAGE.md` (or in-app onboarding) covering:
    how to talk to the agent, what to trust it with, how to set
    recurring tasks, how to inspect memory, how the dashboard surfaces
    reliability. Written for the user, not the builder (LEARN.md is for
    the builder).
-5. **Gateway daemon.** Long-running WebSocket router. Transports
+4. **Gateway daemon.** Long-running WebSocket router. Transports
    become thin clients. Sessions key on (user, channel) — fixes the
    Telegram + Web session interleaving bug.
 
@@ -122,6 +119,14 @@ When making any change, check these don't regress:
 
 ## Done
 
+- **Useful extension pass** — branch adds three budget-safe usefulness
+  upgrades: deterministic memory consolidation proposals (duplicates /
+  stale project memories file human-gated `memory_delete` proposals,
+  never direct deletes), grouped run cards on Traces backed by the
+  existing replay/event log builder, and skill contract tests for live
+  registry validation (filename/name matching + missing tool refs).
+  Stale docs preserved under `docs/archive/`; root `IDEAS.md` is now
+  the live budget-first idea list.
 - **MCP end-state architecture** — replaced direct tool dispatch with
   a multi-server MCP manager. `homunculus.yaml` declares servers; the
   manager (`tools/mcp_manager.py`) launches each as a subprocess over
