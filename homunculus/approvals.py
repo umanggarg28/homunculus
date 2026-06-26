@@ -206,6 +206,47 @@ def parse_approval_command(text: str) -> tuple[str, str, str] | None:
     return m.group(1).lower(), m.group(2).lower(), m.group(3).strip()
 
 
+# ── surfacing a newly-filed proposal ──────────────────────────────────────
+# A proposal exists to be approved, so the user must learn it's waiting — the
+# moment it's filed, from whatever source (autonomous tick, the Memory-page scan
+# button, chat "teach it a skill"). Letta emits its ApprovalRequestMessage when
+# the approval is created, not from a scheduler; we surface here, called from the
+# creation funnels (propose_skill / propose_consolidation), so it can never be
+# path-dependent. The agent never narrates this itself — it's harness-owned and
+# structured.
+
+_KIND_LABELS = {
+    "new_skill": "NEW SKILL",
+    "skill_edit": "EDIT SKILL",
+    "memory_delete": "DELETE MEMORY",
+}
+
+
+def format_approval_notice(p: dict[str, Any]) -> str:
+    label = _KIND_LABELS.get(str(p.get("kind", "")), "PROPOSAL")
+    target = str(p.get("skill_name", "")).strip()
+    pid = str(p.get("id", ""))
+    first_line = (str(p.get("rationale", "")).strip().splitlines() or [""])[0]
+    lines = [f"🔔 Approval needed — {label}: {target}"]
+    if first_line:
+        lines.append(first_line[:200])
+    lines.append(f"Review in Overview · reply `approve {pid}` or `reject {pid} <reason>`")
+    return "\n".join(lines)
+
+
+def announce_proposal(proposal: dict[str, Any]) -> None:
+    """Surface a newly-filed proposal to the user's chat channels so they can
+    approve it remotely. Best-effort: a delivery failure must never fail the
+    proposal-creation it follows. Skips deduped re-files (already pending)."""
+    if not proposal or proposal.get("_deduped"):
+        return
+    try:
+        from homunculus.tools.notify import deliver
+        deliver(format_approval_notice(proposal))
+    except Exception:
+        pass
+
+
 def try_resolve_from_chat(text: str) -> str | None:
     """If ``text`` is an approve/reject command, resolve the proposal and return
     a reply string; otherwise None so the caller routes the message to the
