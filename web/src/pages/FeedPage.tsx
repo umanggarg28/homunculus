@@ -4,14 +4,12 @@ import { useEventStream } from "@/hooks/useEventStream";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
 import { TracesTimeline } from "@/components/traces/TracesTimeline";
+import { TraceRunCards } from "@/components/traces/TraceRunCards";
 import { FeedStream } from "@/components/feed/FeedStream";
 import { markTracesSeen } from "@/components/layout/AlertBanner";
 
-/** Traces — the agent's activity stream rendered as a Gantt-style
- *  timeline. Horizontal time axis, 5 swimlanes (USER / LLM / TOOL /
- *  MEMORY / REPLY), each event a hairline-bordered block sized by
- *  duration. Click any block for the full record. Below the timeline,
- *  the raw event log persists for reference. */
+/** Traces — live event density grid first, with grouped run cards and raw
+ *  JSONL feed as secondary forensic surfaces. */
 export function FeedPage() {
   const { events } = useEventStream(160);
   const [now, setNow] = useState(() => Date.now());
@@ -51,6 +49,7 @@ export function FeedPage() {
       />
 
       <TracesTimeline focusTs={focusTs} />
+      <TraceRunCards />
 
       {/* Counts are owned by FeedStream's filter bar so they reflect the
           current toggle state (sys on/off, event-type chips, search) —
