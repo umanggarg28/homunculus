@@ -46,6 +46,7 @@ from homunculus import REPO_ROOT
 from homunculus.logging_config import configure_logging
 import threading
 from homunculus import tools
+from homunculus.approvals import try_resolve_from_chat
 from homunculus.core import Agent, SYSTEM_PROMPT
 from homunculus.memory import Memory
 
@@ -146,6 +147,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     user_text = update.message.text or ""
     if not user_text.strip():
+        return
+
+    # Owner-gated proposal command ("approve prop-0021" / "reject prop-0021
+    # <reason>"). Resolved directly by the shared resolver — no LLM, no budget.
+    # Safe here: only the configured user reaches this point.
+    approval_reply = try_resolve_from_chat(user_text)
+    if approval_reply is not None:
+        await update.message.reply_text(approval_reply)
         return
 
     global _agent, _paused_until_ts

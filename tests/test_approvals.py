@@ -9,7 +9,13 @@ from __future__ import annotations
 
 import pytest
 
-from homunculus.approvals import ProposalError, ResolveResult, resolve_proposal
+from homunculus.approvals import (
+    ProposalError,
+    ResolveResult,
+    parse_approval_command,
+    resolve_proposal,
+    try_resolve_from_chat,
+)
 from homunculus.proposals import KIND_MEMORY_DELETE, KIND_NEW_SKILL, KIND_SKILL_EDIT, ProposalStore
 
 _VALID_SKILL = """---
@@ -166,3 +172,54 @@ def test_unknown_action_raises_400(env):
     with pytest.raises(ProposalError) as ei:
         _resolve(env, p["id"], "mutate")
     assert ei.value.code == 400
+
+
+# --- chat command surface (approve/reject from Telegram/Discord) ----------
+
+def test_parse_approval_command_variants():
+    assert parse_approval_command("approve prop-0021") == ("approve", "prop-0021", "")
+    assert parse_approval_command("reject prop-0021 not useful") == ("reject", "prop-0021", "not useful")
+    assert parse_approval_command("Approve PROP-0021") == ("approve", "prop-0021", "")
+    assert parse_approval_command("  reject   prop-7  too risky  ") == ("reject", "prop-7", "too risky")
+    # Not commands → None, so the transport routes them to the agent instead.
+    assert parse_approval_command("what proposals are pending?") is None
+    assert parse_approval_command("please approve prop-1") is None  # must start with the verb
+    assert parse_approval_command("approveprop-1") is None
+    assert parse_approval_command("") is None
+
+
+@pytest.fixture()
+def chat_env(tmp_path, monkeypatch):
+    """Point the chat resolver's env-derived dirs at tmp_path."""
+    monkeypatch.setenv("HOMUNCULUS_MEMORY_DIR", str(tmp_path / "memory"))
+    monkeypatch.setenv("HOMUNCULUS_TASKS_DIR", str(tmp_path / "tasks"))
+    monkeypatch.setenv("HOMUNCULUS_PROPOSALS_FILE", str(tmp_path / "proposals.json"))
+    (tmp_path / "memory").mkdir()
+    (tmp_path / "tasks").mkdir()
+    return ProposalStore(tmp_path / "proposals.json")
+
+
+def test_chat_reject_resolves_and_replies(chat_env):
+    p = chat_env.create(kind=KIND_SKILL_EDIT, skill_name="skill_a", body="x")
+    reply = try_resolve_from_chat(f"reject {p['id']} not now")
+    assert reply.startswith("✅") and "Rejected" in reply and "not now" in reply
+    assert chat_env.get(p["id"])["status"] == "rejected"
+
+
+def test_chat_approve_memory_delete(chat_env, tmp_path):
+    (tmp_path / "memory" / "project_x.md").write_text(
+        "---\nname: X\ndescription: d\ntype: project\n---\n\nx\n", encoding="utf-8")
+    p = chat_env.create(kind=KIND_MEMORY_DELETE, skill_name="project_x.md", body="",
+                        validation={"target": "project_x.md"})
+    reply = try_resolve_from_chat(f"approve {p['id']}")
+    assert reply.startswith("✅") and "Deleted memory project_x.md" in reply
+    assert not (tmp_path / "memory" / "project_x.md").exists()
+
+
+def test_chat_non_command_returns_none(chat_env):
+    assert try_resolve_from_chat("hey what's pending?") is None
+
+
+def test_chat_unknown_proposal_replies_gracefully(chat_env):
+    reply = try_resolve_from_chat("approve prop-9999")
+    assert reply.startswith("⚠️") and "not found" in reply

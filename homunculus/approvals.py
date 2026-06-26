@@ -15,6 +15,8 @@ raised ProposalError, into its own response shape.
 
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -181,3 +183,46 @@ def resolve_proposal(
         detail={"ok": True, "skill": p["skill_name"], "version": version,
                 "task": created_task, "warning": warning},
     )
+
+
+# ── chat command surface ──────────────────────────────────────────────────
+# Resolving a proposal from a chat reply ("approve prop-0021") is the same
+# by-id operation as the dashboard button — OpenClaw routes such a command to
+# an authorized-sender handler that bypasses the model. The transports MUST
+# call this only AFTER their owner check (single configured user), so a group
+# member can never approve. No LLM, no budget.
+
+_APPROVAL_CMD = re.compile(r"^\s*(approve|reject)\s+(prop-\d+)\b\s*(.*)$",
+                           re.IGNORECASE | re.DOTALL)
+
+
+def parse_approval_command(text: str) -> tuple[str, str, str] | None:
+    """Parse 'approve prop-0021' / 'reject prop-0021 <reason>'. Returns
+    (action, proposal_id, reason) with a lowercased id, or None if the text is
+    not an approval command (so the caller routes it to the agent instead)."""
+    m = _APPROVAL_CMD.match(text or "")
+    if not m:
+        return None
+    return m.group(1).lower(), m.group(2).lower(), m.group(3).strip()
+
+
+def try_resolve_from_chat(text: str) -> str | None:
+    """If ``text`` is an approve/reject command, resolve the proposal and return
+    a reply string; otherwise None so the caller routes the message to the
+    agent. Callers MUST gate this behind the transport's owner check."""
+    parsed = parse_approval_command(text)
+    if parsed is None:
+        return None
+    action, proposal_id, reason = parsed
+    memory_dir = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
+    tasks_dir = Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks"))
+    try:
+        res = resolve_proposal(
+            proposal_id, action, memory_dir=memory_dir, tasks_dir=tasks_dir, reason=reason
+        )
+    except ProposalError as e:
+        return f"⚠️ {e.message}"
+    reply = f"✅ {res.summary}"
+    if res.detail.get("warning"):
+        reply += f"\n⚠️ {res.detail['warning']}"
+    return reply

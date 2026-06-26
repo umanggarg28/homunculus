@@ -42,6 +42,7 @@ from dotenv import load_dotenv
 import homunculus.events as _events
 from homunculus import REPO_ROOT
 from homunculus import tools
+from homunculus.approvals import try_resolve_from_chat
 from homunculus.core import Agent, SYSTEM_PROMPT
 from homunculus.memory import Memory
 from homunculus.logging_config import configure_logging
@@ -155,6 +156,14 @@ def main() -> None:
 
         if message.author.id != _allowed_user_id():
             return  # silently ignore others (single-user assistant)
+
+        # Owner-gated proposal command ("approve prop-0021" / "reject prop-0021
+        # <reason>"). Resolved directly by the shared resolver — no LLM, no
+        # budget. Safe here: only the configured user reaches this point.
+        approval_reply = try_resolve_from_chat(user_text)
+        if approval_reply is not None:
+            await message.channel.send(approval_reply)
+            return
 
         _drain_notifications_into_history(agent)
         try:
