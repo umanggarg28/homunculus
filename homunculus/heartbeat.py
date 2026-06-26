@@ -30,6 +30,7 @@ from homunculus import agent_controls, REPO_ROOT
 from homunculus import events
 from homunculus import tools
 from homunculus.core import Agent, measure_llm_usage_since
+from homunculus.failures import is_transient_failure
 from homunculus.memory import Memory
 from homunculus.tasks import TaskStore, clear_scratchpad
 from homunculus.tools.notify import deliver
@@ -1432,6 +1433,13 @@ def _format_recent_deliveries(tasks: TaskStore, text_cap: int = 1200) -> str:
             continue
         last = runs[-1]
         status = last.get("status", "?")
+        # Route platform/transient failures away from skill review — they have
+        # no skill fix, and handing them to the "diagnose + propose an edit"
+        # loop makes a weak model thrash on an unfixable error. Learn only from
+        # genuine failures (Reflexion); classify infra as platform-level and
+        # route it elsewhere — retry + the dashboard alert (Temporal/LangGraph).
+        if status != "success" and is_transient_failure(last.get("result")):
+            continue
         header = (
             f"### task: {task.get('id')}  (skill: {skill})\n"
             f"last run: {status}"
