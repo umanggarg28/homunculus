@@ -483,6 +483,28 @@ def test_approve_revalidates_against_live_tools(client, web_api):
     assert "don't exist" in resp.text
 
 
+def test_approve_memory_delete_proposal_forgets_memory(client, web_api):
+    memory_file = web_api.MEMORY_DIR / "project_old_context.md"
+    memory_file.write_text(
+        "---\nname: Old Context\ndescription: stale\ntype: project\n---\n\nOld context.\n",
+        encoding="utf-8",
+    )
+    p = _file_proposal(
+        web_api,
+        kind="memory_delete",
+        skill_name="project_old_context.md",
+        body="",
+        validation={"target": "project_old_context.md"},
+    )
+
+    resp = client.post(f"/api/proposals/{p['id']}/approve")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["action"] == "deleted"
+    assert not memory_file.exists()
+    assert client.get("/api/proposals?status=approved").json()[0]["kind"] == "memory_delete"
+
+
 def test_reject_marks_rejected(client, web_api):
     p = _file_proposal(web_api)
     resp = client.post(f"/api/proposals/{p['id']}/reject", json={"reason": "not useful"})

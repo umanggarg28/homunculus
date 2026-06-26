@@ -11,7 +11,12 @@ from __future__ import annotations
 
 import pytest
 
-from homunculus.proposals import ProposalStore, KIND_NEW_SKILL, KIND_SKILL_EDIT
+from homunculus.proposals import (
+    ProposalStore,
+    KIND_MEMORY_DELETE,
+    KIND_NEW_SKILL,
+    KIND_SKILL_EDIT,
+)
 
 
 @pytest.fixture()
@@ -32,6 +37,19 @@ def test_create_starts_pending_with_sequential_ids(store):
 def test_unknown_kind_rejected(store):
     with pytest.raises(ValueError):
         store.create(kind="mutate_everything", skill_name="skill_a", body="...")
+
+
+def test_memory_delete_proposal_is_supported(store):
+    p = store.create(
+        kind=KIND_MEMORY_DELETE,
+        skill_name="project_old_context.md",
+        body="",
+        rationale="stale project memory",
+        validation={"target": "project_old_context.md"},
+    )
+
+    assert p["kind"] == KIND_MEMORY_DELETE
+    assert p["skill_name"] == "project_old_context.md"
 
 
 def test_approve_is_terminal(store):

@@ -139,6 +139,15 @@ export const api = {
       return r.json() as Promise<{ ok: boolean; message: string }>;
     }),
 
+  memoryConsolidationPropose: (limit = 5) =>
+    fetch(`${API_BASE}/memory/consolidation/propose?limit=${limit}`, {
+      method: "POST",
+      headers: authHeaders(),
+    }).then(async (r) => {
+      if (!r.ok) throw new Error(`Memory consolidation failed: ${r.status}`);
+      return r.json() as Promise<{ ok: boolean; created: Proposal[] }>;
+    }),
+
   chaptersList: () => jsonGet<Chapter[]>("/chapters"),
 
   skillsList: () => jsonGet<Skill[]>("/skills"),

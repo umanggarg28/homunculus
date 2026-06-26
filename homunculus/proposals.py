@@ -28,6 +28,8 @@ from typing import Any
 # kind: what the proposal does on approval.
 KIND_NEW_SKILL = "new_skill"    # create skill (+ optional task) — chat "teach it a job"
 KIND_SKILL_EDIT = "skill_edit"  # replace an existing skill body — failure-driven refinement
+KIND_MEMORY_DELETE = "memory_delete"  # delete one stale/duplicate memory after human approval
+ALLOWED_KINDS = {KIND_NEW_SKILL, KIND_SKILL_EDIT, KIND_MEMORY_DELETE}
 
 _STATUSES = {"pending", "approved", "rejected"}
 
@@ -82,12 +84,12 @@ class ProposalStore:
         task_spec: dict | None = None,
         validation: dict | None = None,
     ) -> dict[str, Any]:
-        if kind not in (KIND_NEW_SKILL, KIND_SKILL_EDIT):
+        if kind not in ALLOWED_KINDS:
             raise ValueError(f"unknown proposal kind: {kind!r}")
         data = self._load()
 
-        # One pending proposal per (skill, kind). A reflection tick can file
-        # several near-identical edits for the same skill in one run; the queue
+        # One pending proposal per (target, kind). A reflection tick can file
+        # several near-identical edits for the same skill/memory in one run; the queue
         # must hold only the first so the operator reviews one change, not a
         # pile of variants. Deterministic guard at the storage boundary, not
         # left to the model. The returned copy is flagged so the caller can
@@ -161,5 +163,10 @@ class ProposalStore:
         return len(self.list("pending"))
 
 
+def proposals_path() -> Path:
+    """Single source of truth for the proposal ledger location."""
+    return Path(os.environ.get("HOMUNCULUS_PROPOSALS_FILE", "./proposals.json"))
+
+
 def _store() -> ProposalStore:
-    return ProposalStore(Path(os.environ.get("HOMUNCULUS_PROPOSALS_FILE", "./proposals.json")))
+    return ProposalStore(proposals_path())

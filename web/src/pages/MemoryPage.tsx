@@ -10,6 +10,7 @@ import type { MemoryEntry } from "@/lib/types";
 
 export function MemoryPage() {
   const [entries, setEntries] = useState<MemoryEntry[] | null>(null);
+  const [scanState, setScanState] = useState<string>("");
 
   useEffect(() => {
     api.memoryList().then(setEntries).catch(() => setEntries([]));
@@ -21,6 +22,40 @@ export function MemoryPage() {
         title="Memory"
         subtitle={entries ? `${entries.length} entries · grouped by type` : ""}
       />
+      {entries && entries.length > 0 && (
+        <div className="instrument-panel hm-panel-scan hm-panel-secondary mb-4 px-4 py-3 flex items-center justify-between gap-3" style={{ fontFamily: "var(--font-mono)" }}>
+          <div className="min-w-0">
+            <div className="brut-label" style={{ color: "var(--color-text)" }}>memory hygiene</div>
+            <div className="brut-meta mt-1" style={{ color: "var(--color-text-muted)" }}>
+              scan for stale project notes and near-duplicates; changes go to review, never apply directly
+            </div>
+          </div>
+          <button
+            className="brut-label shrink-0"
+            onClick={async () => {
+              setScanState("scanning...");
+              try {
+                const res = await api.memoryConsolidationPropose(5);
+                setScanState(`${res.created.length} proposal${res.created.length === 1 ? "" : "s"} filed`);
+                window.dispatchEvent(new CustomEvent("hm:proposals-changed"));
+              } catch (e) {
+                setScanState(e instanceof Error ? e.message : String(e));
+              }
+            }}
+            style={{
+              border: "1px solid var(--color-accent)",
+              color: "var(--color-accent)",
+              background: "transparent",
+              padding: "6px 10px",
+              letterSpacing: "0.1em",
+              cursor: "pointer",
+            }}
+          >
+            scan
+          </button>
+          {scanState && <div className="brut-meta shrink-0" style={{ color: "var(--color-text-muted)" }}>{scanState}</div>}
+        </div>
+      )}
       {entries && entries.length > 0 && <MemoryHero entries={entries} />}
       {entries && entries.length > 0 && <MemoryConstellation entries={entries} />}
       {entries === null ? null

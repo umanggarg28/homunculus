@@ -373,6 +373,24 @@ def memory_entry_delete(filename: str) -> JSONResponse:
     return JSONResponse({"ok": True, "message": result})
 
 
+@app.post("/api/memory/consolidation/propose", dependencies=[Depends(require_web_auth)])
+def memory_consolidation_propose(limit: int = 5) -> JSONResponse:
+    """File human-gated memory hygiene proposals.
+
+    Deterministic scan only: no LLM call, no embedding call, no direct memory
+    mutation. The operator still approves/rejects every proposed deletion.
+    """
+    from homunculus.memory_consolidation import propose_consolidation
+    from homunculus.proposals import proposals_path
+
+    proposals = propose_consolidation(
+        memory_root=MEMORY_DIR,
+        proposals_path=proposals_path(),
+        limit=max(1, min(int(limit or 5), 20)),
+    )
+    return JSONResponse({"ok": True, "created": proposals})
+
+
 # --- API: chapters --------------------------------------------------------
 
 CHAPTERS_DIR = MEMORY_DIR / "_chapters"
@@ -694,80 +712,37 @@ def input_expected() -> JSONResponse:
 @app.post("/api/proposals/{proposal_id}/approve", dependencies=[Depends(require_web_auth)])
 def proposals_approve(proposal_id: str) -> JSONResponse:
     """Approve a pending proposal: re-validate against the live tool
-    catalogue, commit the skill (versioned), and create any bundled task."""
-    from homunculus.skills import Skills
-    from homunculus.skill_validation import validate_skill_body
+    catalogue, commit the skill (versioned), and create any bundled task.
+    Delegates to the shared resolver so the dashboard and chat commands apply
+    proposals through one validated path."""
+    from homunculus.approvals import ProposalError, resolve_proposal
 
-    store = _proposal_store()
-    p = store.get(proposal_id)
-    if p is None:
-        raise HTTPException(404, f"proposal {proposal_id} not found")
-    if p.get("status") != "pending":
-        raise HTTPException(409, f"proposal is already {p.get('status')}")
-
-    # Authoritative re-validation: tools must exist NOW, at apply time.
-    result = validate_skill_body(
-        p["body"],
-        expected_name=p["skill_name"],
-        known_tools=_known_tool_names(),
-    )
-    if not result.ok:
-        raise HTTPException(422, "proposal no longer valid: " + "; ".join(result.errors))
-
-    skills = Skills(MEMORY_DIR)
-    version = skills.save(
-        p["skill_name"], p["body"],
-        source="proposal-approved",
-        rationale=p.get("rationale", "")[:500],
-    )
-
-    created_task = None
-    spec = p.get("task_spec")
-    if p["kind"] == "new_skill" and spec:
-        try:
-            created_task = _task_store().create(
-                title=spec["title"],
-                description=spec.get("description", f"Runs {p['skill_name']} — see the skill playbook."),
-                due_at=spec.get("due_at"),
-                recurrence=spec.get("recurrence", "none"),
-                notify=spec.get("notify", True),
-                success_criteria=spec.get("success_criteria"),
-                skill=p["skill_name"],
-            )
-        except (ValueError, KeyError) as e:
-            raise HTTPException(400, f"skill saved (v{version}) but task creation failed: {e}") from e
-
-    store.mark_approved(proposal_id, note=f"applied as v{version}")
-
-    # Orphan check: an approved skill that no task runs is a no-op (the task
-    # has skill=None). Warn so the operator links it (PATCH /api/tasks/<id> {skill}).
-    warning = None
-    if created_task is None:
-        linked = any((t.get("skill") == p["skill_name"]) for t in _task_store().all())
-        if not linked:
-            warning = (
-                f"Skill {p['skill_name']} is approved but NO task is linked to it — "
-                f"it won't run until you link a task (set its skill to "
-                f"{p['skill_name']})."
-            )
-
-    return JSONResponse({
-        "ok": True, "skill": p["skill_name"], "version": version,
-        "task": created_task, "warning": warning,
-    })
+    try:
+        res = resolve_proposal(
+            proposal_id, "approve",
+            memory_dir=MEMORY_DIR, tasks_dir=TASKS_DIR,
+            store=_proposal_store(), known_tools=_known_tool_names(),
+        )
+    except ProposalError as e:
+        raise HTTPException(e.code, e.message) from None
+    return JSONResponse(res.detail)
 
 
 @app.post("/api/proposals/{proposal_id}/reject", dependencies=[Depends(require_web_auth)])
 async def proposals_reject(proposal_id: str, request: Request) -> JSONResponse:
     """Reject a pending proposal. Body: {reason}."""
+    from homunculus.approvals import ProposalError, resolve_proposal
+
     body = await request.json() if await request.body() else {}
     try:
-        p = _proposal_store().mark_rejected(proposal_id, note=(body or {}).get("reason", ""))
-    except KeyError:
-        raise HTTPException(404, f"proposal {proposal_id} not found") from None
-    except ValueError as e:
-        raise HTTPException(409, str(e)) from e
-    return JSONResponse({"ok": True, "id": p["id"], "status": "rejected"})
+        res = resolve_proposal(
+            proposal_id, "reject",
+            memory_dir=MEMORY_DIR, tasks_dir=TASKS_DIR,
+            store=_proposal_store(), reason=(body or {}).get("reason", ""),
+        )
+    except ProposalError as e:
+        raise HTTPException(e.code, e.message) from None
+    return JSONResponse(res.detail)
 
 
 @app.get("/api/tasks", dependencies=[Depends(require_web_auth)])
