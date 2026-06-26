@@ -48,7 +48,7 @@ def env(tmp_path):
 
 def _resolve(env, proposal_id, action, **over):
     memory, tasks, store = env
-    kwargs = dict(memory_dir=memory, tasks_dir=tasks, store=store, known_tools=_TOOLS)
+    kwargs = {"memory_dir": memory, "tasks_dir": tasks, "store": store, "known_tools": _TOOLS}
     kwargs.update(over)
     return resolve_proposal(proposal_id, action, **kwargs)
 
