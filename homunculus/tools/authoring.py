@@ -21,7 +21,8 @@ import json
 import os
 from pathlib import Path
 
-from homunculus.proposals import KIND_NEW_SKILL, KIND_SKILL_EDIT, _store
+from homunculus.proposals import KIND_NEW_SKILL, KIND_SKILL_EDIT, _store, proposals_path
+from homunculus.memory_consolidation import propose_consolidation, proposals_json
 from homunculus.skill_validation import normalize_criteria, validate_skill_body, validate_task_spec
 
 
@@ -198,7 +199,7 @@ def propose_skill(
 
 
 def list_proposals(status: str = "pending") -> str:
-    """List skill proposals (default: pending). Read-only."""
+    """List review proposals (default: pending). Read-only."""
     items = _store().list(status)
     return json.dumps([
         {
@@ -207,3 +208,18 @@ def list_proposals(status: str = "pending") -> str:
         }
         for p in items
     ], indent=2)
+
+
+def propose_memory_consolidation(limit: int = 5) -> str:
+    """Scan memory for duplicate/stale entries and file review proposals.
+
+    Pure deterministic filesystem work; no LLM or embedding call.
+    """
+    memory_root = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
+    limit = max(1, min(int(limit or 5), 20))
+    proposals = propose_consolidation(
+        memory_root=memory_root,
+        proposals_path=proposals_path(),
+        limit=limit,
+    )
+    return proposals_json(proposals)

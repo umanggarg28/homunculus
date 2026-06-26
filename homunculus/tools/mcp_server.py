@@ -552,8 +552,18 @@ def propose_skill(
 def list_proposals(
     status: Annotated[str, Field(description="pending | approved | rejected | all")] = "pending",
 ) -> str:
-    """List skill proposals and their review status."""
+    """List review proposals and their status."""
     return authoring.list_proposals(status)
+
+
+@mcp.tool(annotations={"readOnlyHint": False})
+def propose_memory_consolidation(
+    limit: Annotated[int, Field(description="Maximum proposals to file, 1-20.")] = 5,
+) -> str:
+    """Scan memory for obvious duplicate/stale entries and file HUMAN REVIEW
+    proposals. Does not change memory directly; approvals are handled in the
+    dashboard. Cheap/deterministic: no extra model call."""
+    return authoring.propose_memory_consolidation(limit)
 
 
 # ── sandbox ───────────────────────────────────────────────────────────

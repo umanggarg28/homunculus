@@ -127,7 +127,7 @@ export interface AgentControls {
  *  go live. Created via propose_skill; resolved via the proposals API. */
 export interface Proposal {
   id: string;
-  kind: "new_skill" | "skill_edit";
+  kind: "new_skill" | "skill_edit" | "memory_delete";
   skill_name: string;
   body: string;
   rationale: string;

@@ -373,6 +373,24 @@ def memory_entry_delete(filename: str) -> JSONResponse:
     return JSONResponse({"ok": True, "message": result})
 
 
+@app.post("/api/memory/consolidation/propose", dependencies=[Depends(require_web_auth)])
+def memory_consolidation_propose(limit: int = 5) -> JSONResponse:
+    """File human-gated memory hygiene proposals.
+
+    Deterministic scan only: no LLM call, no embedding call, no direct memory
+    mutation. The operator still approves/rejects every proposed deletion.
+    """
+    from homunculus.memory_consolidation import propose_consolidation
+    from homunculus.proposals import proposals_path
+
+    proposals = propose_consolidation(
+        memory_root=MEMORY_DIR,
+        proposals_path=proposals_path(),
+        limit=max(1, min(int(limit or 5), 20)),
+    )
+    return JSONResponse({"ok": True, "created": proposals})
+
+
 # --- API: chapters --------------------------------------------------------
 
 CHAPTERS_DIR = MEMORY_DIR / "_chapters"
@@ -695,6 +713,7 @@ def input_expected() -> JSONResponse:
 def proposals_approve(proposal_id: str) -> JSONResponse:
     """Approve a pending proposal: re-validate against the live tool
     catalogue, commit the skill (versioned), and create any bundled task."""
+    from homunculus.proposals import KIND_MEMORY_DELETE, KIND_NEW_SKILL
     from homunculus.skills import Skills
     from homunculus.skill_validation import validate_skill_body
 
@@ -704,6 +723,21 @@ def proposals_approve(proposal_id: str) -> JSONResponse:
         raise HTTPException(404, f"proposal {proposal_id} not found")
     if p.get("status") != "pending":
         raise HTTPException(409, f"proposal is already {p.get('status')}")
+
+    if p.get("kind") == KIND_MEMORY_DELETE:
+        filename = str((p.get("validation") or {}).get("target") or p.get("skill_name") or "")
+        safe = _safe_subpath(filename, MEMORY_DIR)
+        if safe is None or safe.suffix != ".md" or safe.name in {"MEMORY.md", "README.md"}:
+            raise HTTPException(400, f"invalid memory proposal target: {filename!r}")
+        result = Memory(MEMORY_DIR).forget(safe.name)
+        store.mark_approved(proposal_id, note=result[:500])
+        return JSONResponse({
+            "ok": True,
+            "kind": p["kind"],
+            "memory": safe.name,
+            "action": "deleted",
+            "message": result,
+        })
 
     # Authoritative re-validation: tools must exist NOW, at apply time.
     result = validate_skill_body(
@@ -723,7 +757,7 @@ def proposals_approve(proposal_id: str) -> JSONResponse:
 
     created_task = None
     spec = p.get("task_spec")
-    if p["kind"] == "new_skill" and spec:
+    if p["kind"] == KIND_NEW_SKILL and spec:
         try:
             created_task = _task_store().create(
                 title=spec["title"],

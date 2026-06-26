@@ -7,11 +7,10 @@ import type { Proposal } from "@/lib/types";
  *  instead of waiting for the next 30s poll. Mirrors broadcastPaused. */
 export const PROPOSALS_CHANGED_EVENT = "hm:proposals-changed";
 
-/** Proposed skill evolution — the agent's self-authored skills awaiting
- *  the operator's authorization. The most dangerous thing an autonomous
- *  agent does is rewrite itself, so it can't: every new or edited skill
- *  lands here and stays inert until a human approves it. Worn like an
- *  authorization console — but the gate is real, not theatre.
+/** Proposed evolution — self-authored skills and memory hygiene changes
+ *  awaiting operator authorization. The most dangerous thing an autonomous
+ *  agent does is rewrite itself or erase context, so it can't: every change
+ *  lands here and stays inert until a human approves it.
  */
 export function SkillProposals() {
   const [items, setItems] = useState<Proposal[]>([]);
@@ -58,7 +57,7 @@ export function SkillProposals() {
         className="brut-meta px-4 py-3 flex justify-between"
         style={{ color: "var(--color-text-muted)", borderBottom: "1px solid var(--color-border)" }}
       >
-        <span>── proposed skill evolution · awaiting authorization</span>
+        <span>── proposed evolution · awaiting authorization</span>
         <span style={{ color: accent, textShadow: `0 0 8px ${accent}`, letterSpacing: "0.14em" }}>
           {items.length} PENDING
         </span>
@@ -75,7 +74,7 @@ export function SkillProposals() {
           <div className="px-4 py-3 flex items-baseline justify-between gap-3" style={{ fontFamily: "var(--font-mono)" }}>
             <div className="min-w-0">
               <span className="brut-label" style={{ color: accent, letterSpacing: "0.12em" }}>
-                {p.kind === "new_skill" ? "NEW" : "EDIT"}
+                {kindLabel(p.kind)}
               </span>{" "}
               <span className="brut-label" style={{ color: "var(--color-text)" }}>{p.skill_name}</span>
               <div className="brut-meta mt-1" style={{ color: "var(--color-text-muted)" }}>
@@ -94,7 +93,7 @@ export function SkillProposals() {
                 onClick={() => setOpen(open === p.id ? null : p.id)}
                 style={btnStyle("var(--color-text-muted)")}
               >
-                {open === p.id ? "hide" : "diff"}
+                {open === p.id ? "hide" : p.kind.startsWith("memory_") ? "body" : "diff"}
               </button>
               <button
                 className="brut-label"
@@ -149,4 +148,11 @@ function btnStyle(color: string): React.CSSProperties {
     letterSpacing: "0.1em",
     cursor: "pointer",
   };
+}
+
+function kindLabel(kind: Proposal["kind"]): string {
+  if (kind === "new_skill") return "NEW SKILL";
+  if (kind === "skill_edit") return "EDIT SKILL";
+  if (kind === "memory_delete") return "DELETE MEMORY";
+  return "PROPOSAL";
 }
