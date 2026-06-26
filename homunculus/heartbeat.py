@@ -584,6 +584,94 @@ def _yesterday_iso_and_path() -> tuple[str, str]:
     return iso, path_form
 
 
+# ── pending-approval surfacing ────────────────────────────────────────────
+# When an autonomous tick files a proposal, the user needs to know there's
+# something to approve in Overview — but the AGENT must not narrate that
+# itself (that's how the spurious "Updated skill X" pings happened). So the
+# harness diffs pending proposals across a tick and emits one structured,
+# id-deduped approval notice per newly-filed proposal. Pattern: approval
+# surfacing is a structured, system-owned message, never model free-text
+# (Letta's ApprovalRequestMessage).
+
+_KIND_LABELS = {
+    "new_skill": "NEW SKILL",
+    "skill_edit": "EDIT SKILL",
+    "memory_delete": "DELETE MEMORY",
+}
+
+
+def _pending_proposal_ids() -> set[str]:
+    """IDs of proposals currently awaiting approval. Best-effort: a read error
+    must never interrupt a tick."""
+    try:
+        from homunculus.proposals import ProposalStore, proposals_path
+        return {p.get("id") for p in ProposalStore(proposals_path()).list("pending")}
+    except Exception as e:
+        log.error(f"[heartbeat] could not read pending proposals: {e}")
+        return set()
+
+
+def _format_approval_notice(p: dict[str, Any]) -> str:
+    label = _KIND_LABELS.get(str(p.get("kind", "")), "PROPOSAL")
+    target = str(p.get("skill_name", "")).strip()
+    pid = str(p.get("id", ""))
+    first_line = (str(p.get("rationale", "")).strip().splitlines() or [""])[0]
+    lines = [f"🔔 Approval needed — {label}: {target}"]
+    if first_line:
+        lines.append(first_line[:200])
+    lines.append(f"Review in Overview · reply `approve {pid}` or `reject {pid} <reason>`")
+    return "\n".join(lines)
+
+
+def _notify_new_proposals(before: set[str]) -> None:
+    """Surface proposals filed since ``before`` — one structured approval notice
+    each, deduped by id. Best-effort: a delivery error never fails the tick."""
+    try:
+        from homunculus.proposals import ProposalStore, proposals_path
+        pending = ProposalStore(proposals_path()).list("pending")
+    except Exception as e:
+        log.error(f"[heartbeat] could not read proposals for notice: {e}")
+        return
+    for p in pending:
+        if p.get("id") in before:
+            continue
+        try:
+            deliver(_format_approval_notice(p))
+            log.info(f"[heartbeat] approval notice sent for {p.get('id')}")
+        except Exception as e:
+            log.error(f"[heartbeat] approval notice failed for {p.get('id')}: {e}")
+
+
+# Tools the daily reflection tick must never call. The reflection prompt states
+# these rules ("no notify(), no shell_exec, no writing workspace files"), but a
+# weak model ignores prose — a reflection tick once fired a false "Updated skill
+# X" notification straight to the user's phone because notify() ran unguarded.
+# Unlike task ticks, reflection installed no pre-execute hook at all. This guard
+# enforces the rules structurally: reflection reviews skills (propose_skill) and
+# edits memory (remember/forget), nothing else reaches a side effect.
+_REFLECTION_FORBIDDEN = {
+    "notify": "Reflection ticks don't message the user. State what you changed "
+              "in your final reply instead — the harness surfaces any filed "
+              "proposals to the user automatically.",
+    "complete_task": "Reflection doesn't run tasks. Skip task-lifecycle calls.",
+    "continue_task": "Reflection doesn't run tasks. Skip task-lifecycle calls.",
+    "record_failure": "Reflection doesn't run tasks. Skip task-lifecycle calls.",
+    "write_file": "Reflection must not write workspace files. Use propose_skill, "
+                  "remember, or forget.",
+    "append_file": "Reflection must not write workspace files. Use propose_skill, "
+                   "remember, or forget.",
+    "shell_exec": "Reflection must not run shell commands.",
+}
+
+
+def _reflection_tool_guard(name: str, arguments: dict) -> str | None:
+    """Pre-execute hook for the reflection tick: refuse a forbidden tool by
+    returning a string (surfaced to the agent as that tool's result), else None
+    to allow. Mirrors how task ticks install guard.on_tool_call."""
+    refusal = _REFLECTION_FORBIDDEN.get(name)
+    return f"BLOCKED: {refusal}" if refusal else None
+
+
 def tick(memory: Memory, model: str | None) -> None:
     """One heartbeat iteration — fresh agent, one prompt, then discard.
 
@@ -644,6 +732,10 @@ def tick(memory: Memory, model: str | None) -> None:
     due_tasks = tasks.due()
     events.emit("service_ping", name="heartbeat", text="alive")
 
+    # Snapshot proposals awaiting approval so any the agent files THIS tick can
+    # be surfaced as a structured approval notice (not agent self-narration).
+    proposals_before = _pending_proposal_ids()
+
     if due_tasks:
         # Tasks take priority — fall through to the task-execution block below.
         pass
@@ -666,9 +758,17 @@ def tick(memory: Memory, model: str | None) -> None:
                 .replace("{yesterday_path}", yesterday_path)
                 .replace("{recent_deliveries}", _format_recent_deliveries(tasks))
             )
-            response = agent.chat(prompt, source="heartbeat")
+            # Enforce the reflection prompt's "no notify / no shell / no writes"
+            # rules at the harness level — reflection ran unguarded before, so a
+            # weak model could (and did) message the user from inside reflection.
+            tools.set_pre_execute_hook(_reflection_tool_guard)
+            try:
+                response = agent.chat(prompt, source="heartbeat")
+            finally:
+                tools.set_pre_execute_hook(None)
             memory.reflection.mark(today)
             log.info(f"[agent] {response}")
+            _notify_new_proposals(proposals_before)
             return
 
         log.info(f"\n[heartbeat] tick at {now_iso}: no due tasks; skipping LLM")
@@ -703,6 +803,8 @@ def tick(memory: Memory, model: str | None) -> None:
                 f"[heartbeat] task {task.get('id')!r} failed; "
                 f"continuing with remaining due task(s): {e}",
             )
+
+    _notify_new_proposals(proposals_before)
 
 
 def _run_task_isolated(
