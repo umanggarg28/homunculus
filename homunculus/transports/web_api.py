@@ -684,12 +684,6 @@ def _known_tool_names() -> set[str]:
     return names
 
 
-@app.get("/api/proposals", dependencies=[Depends(require_web_auth)])
-def proposals_list(status: str = "pending") -> JSONResponse:
-    """List skill proposals. status = pending | approved | rejected | all."""
-    return JSONResponse(_proposal_store().list(status))
-
-
 @app.get("/api/input-expected", dependencies=[Depends(require_web_auth)])
 def input_expected() -> JSONResponse:
     """Whether the agent is waiting on input from the user — drives the CHAT
@@ -707,42 +701,6 @@ def input_expected() -> JSONResponse:
     if pending:
         return JSONResponse({"expected": True, "reason": "quiz", "detail": pending})
     return JSONResponse({"expected": False, "reason": None, "detail": None})
-
-
-@app.post("/api/proposals/{proposal_id}/approve", dependencies=[Depends(require_web_auth)])
-def proposals_approve(proposal_id: str) -> JSONResponse:
-    """Approve a pending proposal: re-validate against the live tool
-    catalogue, commit the skill (versioned), and create any bundled task.
-    Delegates to the shared resolver so the dashboard and chat commands apply
-    proposals through one validated path."""
-    from homunculus.approvals import ProposalError, resolve_proposal
-
-    try:
-        res = resolve_proposal(
-            proposal_id, "approve",
-            memory_dir=MEMORY_DIR, tasks_dir=TASKS_DIR,
-            store=_proposal_store(), known_tools=_known_tool_names(),
-        )
-    except ProposalError as e:
-        raise HTTPException(e.code, e.message) from None
-    return JSONResponse(res.detail)
-
-
-@app.post("/api/proposals/{proposal_id}/reject", dependencies=[Depends(require_web_auth)])
-async def proposals_reject(proposal_id: str, request: Request) -> JSONResponse:
-    """Reject a pending proposal. Body: {reason}."""
-    from homunculus.approvals import ProposalError, resolve_proposal
-
-    body = await request.json() if await request.body() else {}
-    try:
-        res = resolve_proposal(
-            proposal_id, "reject",
-            memory_dir=MEMORY_DIR, tasks_dir=TASKS_DIR,
-            store=_proposal_store(), reason=(body or {}).get("reason", ""),
-        )
-    except ProposalError as e:
-        raise HTTPException(e.code, e.message) from None
-    return JSONResponse(res.detail)
 
 
 @app.get("/api/tasks", dependencies=[Depends(require_web_auth)])
@@ -1985,6 +1943,14 @@ def _safe_subpath(rel: str, root: Path) -> Path | None:
     except ValueError:
         return None
     return candidate
+
+
+# --- Domain routers (included before the SPA catch-all so /api/* wins) ----
+# Imported here, at the bottom, so `web_api` is fully defined when a router does
+# `from homunculus.transports import web_api as wa` — breaks the import cycle.
+from homunculus.transports.web import proposals as _proposals_routes  # noqa: E402
+
+app.include_router(_proposals_routes.router)
 
 
 # --- Static SPA hosting (mounted last so /api/* takes precedence) --------
