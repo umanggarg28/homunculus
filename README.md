@@ -27,6 +27,24 @@ tight budget.
 </table>
 </div>
 
+## The problem
+
+Homunculus runs a small, open-weight model (`gpt-oss-120b`) unattended on a tight
+budget. A model that size drifts off task, claims work it didn't do, and
+sometimes invents data — so reliability is treated as a property of the harness,
+not the model:
+
+- **Deliveries are verified against tool output** — a result with no work behind
+  it, or a fabricated link, is refused rather than sent.
+- **Self-improvement is human-gated** — the agent proposes skill changes from its
+  own execution traces; none take effect until approved.
+- **Infrastructure failures are kept separate from genuine ones** — transient
+  outages are retried and alerted, while only real failures feed the reflection
+  loop, so the agent doesn't try to fix problems that aren't its own.
+
+Every tool call, cost, and guard decision is recorded, so the system is auditable
+end to end.
+
 ## What it does
 
 - **Talks to you** over a web console, Telegram, or Discord — same agent,
