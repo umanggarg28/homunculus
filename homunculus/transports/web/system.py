@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
+from homunculus.core import API_URL, MODEL
 from homunculus.transports import web_api as wa
 
 router = APIRouter()
@@ -26,12 +27,12 @@ def model_info() -> JSONResponse:
     rather than always showing the configured primary.
     Falls back to the configured primary if no events exist yet.
     """
-    last_model = wa.MODEL
+    last_model = MODEL
     last_host = ""
     try:
-        last_host = urlparse(wa.API_URL).netloc
+        last_host = urlparse(API_URL).netloc
     except Exception:
-        last_host = wa.API_URL
+        last_host = API_URL
 
     if wa.EVENTS_PATH.exists():
         try:
@@ -55,8 +56,8 @@ def model_info() -> JSONResponse:
     return JSONResponse({
         "model": last_model,
         "host": last_host,
-        "primary": wa.MODEL,
-        "is_fallback": last_model != wa.MODEL,
+        "primary": MODEL,
+        "is_fallback": last_model != MODEL,
     })
 
 
