@@ -29,27 +29,21 @@ tight budget.
 
 ## The problem
 
-Most autonomous-agent demos lean on a frontier model with a human watching every
-step. Homunculus takes the inverse bet: a small, open-weight model
-(`gpt-oss-120b`) running **unattended** on a few dollars a month. At that size and
-price the model will drift off task, over-claim work it never did, and
-occasionally hallucinate. So reliability here is an engineering property of the
-**harness, not the model**:
+Homunculus runs a small, open-weight model (`gpt-oss-120b`) unattended on a tight
+budget. A model that size drifts off task, claims work it didn't do, and
+sometimes invents data — so reliability is treated as a property of the harness,
+not the model:
 
-- **Verify, don't trust.** Deliveries are checked against what the tools actually
-  did — a "done" with no work behind it, or a fabricated link, is refused rather
-  than shipped.
-- **Gate the autonomy.** The agent refines its own skills from its execution
-  traces, but every change waits for a human's approval — from the dashboard or a
-  chat reply — before it takes effect.
-- **Separate infrastructure from intelligence.** Transient outages (a cooled
-  provider, a full disk) are retried and alerted; only genuine failures feed the
-  agent's self-improvement, so it never tries to "fix" a problem that was never
-  its own.
+- **Deliveries are verified against tool output** — a result with no work behind
+  it, or a fabricated link, is refused rather than sent.
+- **Self-improvement is human-gated** — the agent proposes skill changes from its
+  own execution traces; none take effect until approved.
+- **Infrastructure failures are kept separate from genuine ones** — transient
+  outages are retried and alerted, while only real failures feed the reflection
+  loop, so the agent doesn't try to fix problems that aren't its own.
 
-The aim is an assistant that earns trust through design — cheap, private,
-auditable, and yours — and grows more dependable through use, instead of
-requiring a bigger model.
+Every tool call, cost, and guard decision is recorded, so the system is auditable
+end to end.
 
 ## What it does
 
