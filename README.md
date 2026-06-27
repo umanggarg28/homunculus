@@ -27,6 +27,30 @@ tight budget.
 </table>
 </div>
 
+## The problem
+
+Most autonomous-agent demos lean on a frontier model with a human watching every
+step. Homunculus takes the inverse bet: a small, open-weight model
+(`gpt-oss-120b`) running **unattended** on a few dollars a month. At that size and
+price the model will drift off task, over-claim work it never did, and
+occasionally hallucinate. So reliability here is an engineering property of the
+**harness, not the model**:
+
+- **Verify, don't trust.** Deliveries are checked against what the tools actually
+  did — a "done" with no work behind it, or a fabricated link, is refused rather
+  than shipped.
+- **Gate the autonomy.** The agent refines its own skills from its execution
+  traces, but every change waits for a human's approval — from the dashboard or a
+  chat reply — before it takes effect.
+- **Separate infrastructure from intelligence.** Transient outages (a cooled
+  provider, a full disk) are retried and alerted; only genuine failures feed the
+  agent's self-improvement, so it never tries to "fix" a problem that was never
+  its own.
+
+The aim is an assistant that earns trust through design — cheap, private,
+auditable, and yours — and grows more dependable through use, instead of
+requiring a bigger model.
+
 ## What it does
 
 - **Talks to you** over a web console, Telegram, or Discord — same agent,
