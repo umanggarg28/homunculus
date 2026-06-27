@@ -25,9 +25,9 @@ export function MemoryPage() {
       {entries && entries.length > 0 && (
         <div className="instrument-panel hm-panel-scan hm-panel-secondary mb-4 px-4 py-3 flex items-center justify-between gap-3" style={{ fontFamily: "var(--font-mono)" }}>
           <div className="min-w-0">
-            <div className="brut-label" style={{ color: "var(--color-text)" }}>memory hygiene</div>
+            <div className="brut-label" style={{ color: "var(--color-text)" }}>memory consolidation</div>
             <div className="brut-meta mt-1" style={{ color: "var(--color-text-muted)" }}>
-              scan for stale project notes and near-duplicates; changes go to review, never apply directly
+              find duplicate &amp; stale notes to review
             </div>
           </div>
           <button
