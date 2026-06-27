@@ -1,27 +1,22 @@
-"""The heartbeat surfaces newly-filed proposals as a structured approval notice.
+"""A newly-filed proposal is surfaced to the user the moment it's created.
 
-This is the harness-owned replacement for the agent narrating its own pending
-changes: after an autonomous tick, any proposal filed this tick is announced
-once, by id, pointing the user at Overview (and the chat approve/reject command).
+The notice fires from the creation funnels (propose_skill / propose_consolidation)
+via approvals.announce_proposal, so it is path-independent — an autonomous tick,
+the Memory-page scan button, and a chat "teach it a skill" all surface the same
+way. The agent never narrates this itself; it's harness-owned and structured.
 """
 
 from __future__ import annotations
 
-import pytest
+import os
+import time
 
-from homunculus import heartbeat
-from homunculus.proposals import KIND_MEMORY_DELETE, KIND_SKILL_EDIT, ProposalStore
-
-
-@pytest.fixture()
-def store(tmp_path, monkeypatch):
-    path = tmp_path / "proposals.json"
-    monkeypatch.setenv("HOMUNCULUS_PROPOSALS_FILE", str(path))
-    return ProposalStore(path)
+import homunculus.tools.notify as notify_mod
+from homunculus import approvals
 
 
 def test_format_notice_has_label_target_id_and_review_hint():
-    notice = heartbeat._format_approval_notice({
+    notice = approvals.format_approval_notice({
         "id": "prop-0021", "kind": "skill_edit",
         "skill_name": "skill_hn_ai_summary",
         "rationale": "add web_search fallback\nsecond line ignored",
@@ -33,41 +28,53 @@ def test_format_notice_has_label_target_id_and_review_hint():
     assert "approve prop-0021" in notice and "reject prop-0021" in notice
 
 
-def test_notify_only_proposals_filed_since_snapshot(store, monkeypatch):
+def test_announce_delivers_for_a_new_proposal(monkeypatch):
     sent: list[str] = []
-    monkeypatch.setattr(heartbeat, "deliver", lambda text: sent.append(text))
+    monkeypatch.setattr(notify_mod, "deliver", lambda text: sent.append(text))
 
-    old = store.create(kind=KIND_SKILL_EDIT, skill_name="skill_a", body="x")
-    before = heartbeat._pending_proposal_ids()  # snapshot includes `old`
-    new = store.create(
-        kind=KIND_MEMORY_DELETE, skill_name="project_b.md", body="",
-        validation={"target": "project_b.md"},
-    )
+    approvals.announce_proposal({
+        "id": "prop-1", "kind": "memory_delete",
+        "skill_name": "project_x.md", "rationale": "duplicate",
+    })
 
-    heartbeat._notify_new_proposals(before)
-
-    assert len(sent) == 1, "exactly one notice — only the new proposal"
-    assert new["id"] in sent[0]
-    assert old["id"] not in sent[0]
+    assert len(sent) == 1 and "prop-1" in sent[0]
 
 
-def test_notify_nothing_when_no_new_proposals(store, monkeypatch):
+def test_announce_skips_a_deduped_refile(monkeypatch):
     sent: list[str] = []
-    monkeypatch.setattr(heartbeat, "deliver", lambda text: sent.append(text))
-    store.create(kind=KIND_SKILL_EDIT, skill_name="skill_a", body="x")
-    before = heartbeat._pending_proposal_ids()
+    monkeypatch.setattr(notify_mod, "deliver", lambda text: sent.append(text))
 
-    heartbeat._notify_new_proposals(before)
+    approvals.announce_proposal({"id": "prop-1", "kind": "skill_edit", "_deduped": True})
 
-    assert sent == []
+    assert sent == []  # already pending — don't ping twice
 
 
-def test_delivery_error_never_propagates(store, monkeypatch):
+def test_announce_is_best_effort(monkeypatch):
     def boom(_text):
         raise RuntimeError("channel down")
 
-    monkeypatch.setattr(heartbeat, "deliver", boom)
-    store.create(kind=KIND_SKILL_EDIT, skill_name="skill_a", body="x")
+    monkeypatch.setattr(notify_mod, "deliver", boom)
+    # Must not raise — a delivery failure can never fail proposal creation.
+    approvals.announce_proposal({"id": "prop-1", "kind": "skill_edit", "skill_name": "x"})
 
-    # Must not raise — a notify failure can never break a tick.
-    heartbeat._notify_new_proposals(set())
+
+def test_scan_funnel_announces_each_filed_proposal(tmp_path, monkeypatch):
+    """The Memory-page scan path (propose_consolidation) surfaces every proposal
+    it files — the gap that left a manual scan silent before."""
+    sent: list[str] = []
+    monkeypatch.setattr(notify_mod, "deliver", lambda text: sent.append(text))
+
+    mem = tmp_path / "memory"
+    mem.mkdir()
+    body = "weather task health top links grounded citations digest morning brief\n"
+    for name in ("project_a.md", "project_b.md"):
+        (mem / name).write_text(
+            f"---\nname: {name}\ndescription: d\ntype: project\n---\n\n{body}", encoding="utf-8")
+    os.utime(mem / "project_a.md", (time.time() - 10, time.time() - 10))  # older → proposed for delete
+
+    from homunculus.memory_consolidation import propose_consolidation
+    created = propose_consolidation(memory_root=mem, proposals_path=tmp_path / "proposals.json")
+
+    assert len(created) >= 1
+    assert len(sent) == len(created)  # one notice per filed proposal
+    assert all("Approval needed" in s for s in sent)

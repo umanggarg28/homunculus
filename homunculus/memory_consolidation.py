@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from homunculus.approvals import announce_proposal
 from homunculus.proposals import KIND_MEMORY_DELETE, ProposalStore
 
 
@@ -92,6 +93,7 @@ def propose_consolidation(
             validation={"target": old.filename, "reason": "near_duplicate", "other": new.filename},
         )
         if not p.get("_deduped"):
+            announce_proposal(p)
             created.append(p)
 
     cutoff = time.time() - stale_days * 86400
@@ -113,6 +115,7 @@ def propose_consolidation(
             validation={"target": doc.filename, "reason": "stale_project", "age_days": age},
         )
         if not p.get("_deduped"):
+            announce_proposal(p)
             created.append(p)
 
     return created

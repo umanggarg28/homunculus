@@ -21,6 +21,7 @@ import json
 import os
 from pathlib import Path
 
+from homunculus.approvals import announce_proposal
 from homunculus.proposals import KIND_NEW_SKILL, KIND_SKILL_EDIT, _store, proposals_path
 from homunculus.memory_consolidation import propose_consolidation, proposals_json
 from homunculus.skill_validation import normalize_criteria, validate_skill_body, validate_task_spec
@@ -183,6 +184,7 @@ def propose_skill(
                 "another; the operator will review the existing one. Move on."
             ),
         }, indent=2)
+    announce_proposal(proposal)  # surface to the user's chat so they can approve remotely
     return json.dumps({
         "ok": True,
         "proposal_id": proposal["id"],
