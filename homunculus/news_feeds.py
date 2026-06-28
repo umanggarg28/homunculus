@@ -25,6 +25,12 @@ from pathlib import Path
 # no key. The user edits workspace/news_feeds.txt to change this set.
 DEFAULT_FEEDS: list[tuple[str, str]] = [
     ("hackernews", "https://hnrss.org/frontpage?points=100"),
+    # AI stories from HN, pre-filtered server-side: q=AI gates the topic,
+    # points=50 gates popularity, link=comments makes each entry's link the
+    # news.ycombinator.com/item?id=... discussion URL. Lets news_headlines
+    # serve "popular AI HN stories with real discussion links" without the
+    # model hand-building any Algolia query.
+    ("hn-ai", "https://hnrss.org/newest?q=AI&points=50&link=comments"),
     ("tech", "https://techcrunch.com/feed/"),
     ("ai-research", "http://export.arxiv.org/rss/cs.AI"),
     ("world", "https://feeds.bbci.co.uk/news/world/rss.xml"),
