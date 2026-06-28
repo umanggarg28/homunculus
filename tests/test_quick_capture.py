@@ -29,6 +29,11 @@ def _load_app():
     return web_api
 
 
+def _capture_mod():
+    """The quick-capture rate bucket/constants live on the capture router."""
+    return importlib.import_module("homunculus.transports.web.capture")
+
+
 def test_quick_capture_refuses_without_token_configured():
     web_api = _load_app()
     with patch.object(web_api, "QUICK_CAPTURE_TOKEN", ""):
@@ -80,13 +85,13 @@ def test_quick_capture_rejects_oversized_text():
 def test_quick_capture_rate_limit():
     web_api = _load_app()
     # Reset the shared rate bucket before exercising it.
-    web_api._QUICK_CAPTURE_RATE.clear()
+    _capture_mod()._QUICK_CAPTURE_RATE.clear()
     with patch.object(web_api, "QUICK_CAPTURE_TOKEN", "real-token"), \
          patch.object(web_api, "Agent") as MockAgent:
         # Stub the LLM round-trip — we're testing the gate, not the agent.
         MockAgent.return_value.chat.return_value = "ok"
         client = TestClient(web_api.app)
-        for _ in range(web_api._QUICK_CAPTURE_RATE_MAX):
+        for _ in range(_capture_mod()._QUICK_CAPTURE_RATE_MAX):
             r = client.post(
                 "/api/quick-capture",
                 headers={"X-Capture-Token": "real-token"},
@@ -103,7 +108,7 @@ def test_quick_capture_rate_limit():
 
 def test_quick_capture_returns_agent_reply():
     web_api = _load_app()
-    web_api._QUICK_CAPTURE_RATE.clear()
+    _capture_mod()._QUICK_CAPTURE_RATE.clear()
     with patch.object(web_api, "QUICK_CAPTURE_TOKEN", "real-token"), \
          patch.object(web_api, "Agent") as MockAgent:
         MockAgent.return_value.chat.return_value = "Created task: Call dentist Fri 15:00 IST."
