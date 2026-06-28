@@ -34,6 +34,14 @@ from .web import _url_block_reason
 _TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0)
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Homunculus AI assistant)"}
 
+# Feed hosts (notably hnrss.org) return the occasional transient 5xx that
+# clears within a second or two. A topic-scoped call may resolve to a single
+# feed, so one blip would empty the whole result. Retry a few times on 5xx /
+# transport errors before giving up — a cheap fix that makes single-feed runs
+# (the weekly HN AI summary) and the morning brief reliable.
+_FETCH_ATTEMPTS = 3
+_RETRY_BACKOFF_S = 1.0
+
 # Items older than this are dropped from a "top headlines" view — a two-day-old
 # article isn't a headline. HN items are exempt: a high-point story stays
 # relevant past 48h, and the points filter already gates quality.
@@ -77,13 +85,32 @@ def news_headlines(topic: str = "", limit: int = 5) -> str:
     return "\n".join(f"- [{it['title']}]({it['link']})" for it in chosen)
 
 
+def _get_feed(url: str) -> httpx.Response | None:
+    """GET a feed, retrying on transient 5xx / transport errors. Returns the
+    successful response, or None once the attempts are exhausted. 4xx is not
+    retried — a bad request won't fix itself."""
+    import time
+    for attempt in range(_FETCH_ATTEMPTS):
+        try:
+            r = httpx.get(url, timeout=_TIMEOUT, headers=_HEADERS, follow_redirects=True)
+            if r.status_code < 500:
+                r.raise_for_status()  # raises on 4xx → caller skips this source
+                return r
+            # 5xx: transient upstream error, fall through to retry.
+        except httpx.HTTPStatusError:
+            return None  # 4xx — not retryable
+        except httpx.HTTPError:
+            pass  # connect/read/transport error — retry
+        if attempt < _FETCH_ATTEMPTS - 1:
+            time.sleep(_RETRY_BACKOFF_S)
+    return None
+
+
 def _fetch_feed(label: str, url: str) -> list[dict]:
     """Fetch one feed and return scored item dicts with real http links.
     Returns [] on any failure so the caller skips this source."""
-    try:
-        r = httpx.get(url, timeout=_TIMEOUT, headers=_HEADERS, follow_redirects=True)
-        r.raise_for_status()
-    except httpx.HTTPError:
+    r = _get_feed(url)
+    if r is None:
         return []
     out: list[dict] = []
     for e in rss.parse_feed_entries(r.text) or []:

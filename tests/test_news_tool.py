@@ -152,3 +152,61 @@ def test_drops_entries_without_http_link(tmp_path, monkeypatch):
                _item("Good", "https://news.example/ok", hours_ago=1))
     monkeypatch.setattr(httpx, "get", lambda url, *a, **k: _resp(url, doc))
     assert news.news_headlines(limit=5) == "- [Good](https://news.example/ok)"
+
+
+def _status_resp(url, status, text=""):
+    return httpx.Response(status, text=text, request=httpx.Request("GET", url))
+
+
+def test_retries_on_transient_5xx_then_succeeds(tmp_path, monkeypatch):
+    """A single feed that 5xxes once then recovers must still return its items —
+    a topic-scoped call can resolve to one feed, so one blip can't empty it."""
+    _feeds(tmp_path, monkeypatch, ("hn-ai", "https://hnrss.test/ai"))
+    monkeypatch.setattr("time.sleep", lambda *_: None)  # no real backoff in tests
+    doc = _rss(_item("Real story", "https://news.ycombinator.com/item?id=123456",
+                     points=80, hours_ago=1))
+    calls = {"n": 0}
+
+    def flaky_get(url, *a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _status_resp(url, 502)  # transient
+        return _resp(url, doc)
+
+    monkeypatch.setattr(httpx, "get", flaky_get)
+    out = news.news_headlines(topic="hn-ai", limit=5)
+    assert out == "- [Real story](https://news.ycombinator.com/item?id=123456)"
+    assert calls["n"] == 2, "should have retried once after the 502"
+
+
+def test_gives_up_after_attempts_on_persistent_5xx(tmp_path, monkeypatch):
+    """Persistent 5xx exhausts the retries and degrades to NEWS_UNAVAILABLE —
+    a clean signal to omit the section, never a thrash."""
+    _feeds(tmp_path, monkeypatch, ("hn-ai", "https://hnrss.test/ai"))
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    calls = {"n": 0}
+
+    def always_500(url, *a, **k):
+        calls["n"] += 1
+        return _status_resp(url, 503)
+
+    monkeypatch.setattr(httpx, "get", always_500)
+    out = news.news_headlines(topic="hn-ai", limit=5)
+    assert out.startswith("NEWS_UNAVAILABLE")
+    assert calls["n"] == news._FETCH_ATTEMPTS, "should retry up to the attempt cap"
+
+
+def test_4xx_is_not_retried(tmp_path, monkeypatch):
+    """A 4xx is the caller's fault and won't fix itself — fetch once, skip."""
+    _feeds(tmp_path, monkeypatch, ("hn-ai", "https://hnrss.test/ai"))
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    calls = {"n": 0}
+
+    def bad_request(url, *a, **k):
+        calls["n"] += 1
+        return _status_resp(url, 400)
+
+    monkeypatch.setattr(httpx, "get", bad_request)
+    out = news.news_headlines(topic="hn-ai", limit=5)
+    assert out.startswith("NEWS_UNAVAILABLE")
+    assert calls["n"] == 1, "4xx must not be retried"
