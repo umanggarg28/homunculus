@@ -223,3 +223,23 @@ def test_chat_non_command_returns_none(chat_env):
 def test_chat_unknown_proposal_replies_gracefully(chat_env):
     reply = try_resolve_from_chat("approve prop-9999")
     assert reply.startswith("⚠️") and "not found" in reply
+
+
+def test_resolve_emits_proposal_resolved_event(env, monkeypatch):
+    """Resolving emits a `proposal_resolved` event so the web Overview refetches
+    its queue immediately — the fix for the panel staying stale after an
+    approve from Discord/Telegram (it otherwise waited for the 30s poll)."""
+    import homunculus.events as events
+
+    captured: list[tuple[str, dict]] = []
+    monkeypatch.setattr(events, "emit", lambda event, **fields: captured.append((event, fields)))
+
+    _memory, _tasks, store = env
+    approved = store.create(kind=KIND_SKILL_EDIT, skill_name="skill_demo_job", body=_VALID_SKILL)
+    rejected = store.create(kind=KIND_SKILL_EDIT, skill_name="skill_other", body=_VALID_SKILL)
+
+    _resolve(env, approved["id"], "approve")
+    _resolve(env, rejected["id"], "reject", reason="not now")
+
+    resolved = {f["name"]: f["result"] for ev, f in captured if ev == "proposal_resolved"}
+    assert resolved == {approved["id"]: "approved", rejected["id"]: "rejected"}

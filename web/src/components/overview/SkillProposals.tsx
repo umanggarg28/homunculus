@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { useEventStream } from "@/hooks/useEventStream";
 import type { Proposal } from "@/lib/types";
 
 /** Fired when a proposal is approved/rejected so other views (the
@@ -29,6 +30,22 @@ export function SkillProposals() {
     const t = setInterval(load, 30_000);
     return () => clearInterval(t);
   }, [load]);
+
+  // Refetch the instant a proposal is resolved on ANY channel — approving
+  // from Discord/Telegram emits `proposal_resolved`, so the panel clears
+  // without waiting for the 30s poll (and without a manual page refresh).
+  const { events } = useEventStream(200);
+  const lastResolvedTs = useRef<string>("");
+  useEffect(() => {
+    const resolved = events.filter((e) => e.event === "proposal_resolved");
+    if (resolved.length === 0) return;
+    const latest = resolved[resolved.length - 1];
+    if (latest.ts && latest.ts !== lastResolvedTs.current) {
+      lastResolvedTs.current = latest.ts;
+      load();
+      window.dispatchEvent(new CustomEvent(PROPOSALS_CHANGED_EVENT));
+    }
+  }, [events, load]);
 
   const act = async (id: string, kind: "approve" | "reject") => {
     setBusy(id);

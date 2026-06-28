@@ -107,8 +107,19 @@ def resolve_proposal(
 
     kind = str(p.get("kind", ""))
 
+    def _emit_resolved(status: str) -> None:
+        # Push a lifecycle event so the web Overview refetches its proposal
+        # queue immediately — without it, a resolution from another channel
+        # (Discord/Telegram approve) only shows up on the panel's 30s poll.
+        try:
+            import homunculus.events as _events
+            _events.emit("proposal_resolved", name=proposal_id, result=status, text=kind)
+        except Exception:
+            pass
+
     if action == "reject":
         store.mark_rejected(proposal_id, note=reason)
+        _emit_resolved("rejected")
         return ResolveResult(
             ok=True, proposal_id=proposal_id, kind=kind, action="rejected",
             summary=f"Rejected {proposal_id}" + (f" — {reason}" if reason else ""),
@@ -125,6 +136,7 @@ def resolve_proposal(
             raise ProposalError(f"invalid memory proposal target: {target!r}", code=400)
         result = Memory(memory_dir).forget(safe.name)
         store.mark_approved(proposal_id, note=result[:500])
+        _emit_resolved("approved")
         return ResolveResult(
             ok=True, proposal_id=proposal_id, kind=kind, action="deleted",
             summary=f"Deleted memory {safe.name}",
@@ -167,6 +179,7 @@ def resolve_proposal(
             ) from e
 
     store.mark_approved(proposal_id, note=f"applied as v{version}")
+    _emit_resolved("approved")
 
     warning = None
     if created_task is None:
