@@ -305,7 +305,10 @@ def test_run_stream_passes_expected_completions():
     the model called record_failure on the just-completed task, flipping a
     real success to a failure (observed 2026-06-15)."""
     from pathlib import Path
-    src = (Path(__file__).parent.parent / "homunculus" / "transports" / "web_api.py").read_text()
+    src = (
+        Path(__file__).parent.parent
+        / "homunculus" / "transports" / "web" / "tasks.py"
+    ).read_text()
     assert "expected_completions=1" in src, (
         "run-stream must pass expected_completions=1 to chat_stream so the "
         "loop exits the moment the single task is closed."
