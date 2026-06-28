@@ -21,14 +21,12 @@ import threading
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from datetime import datetime, UTC
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import (
     FileResponse,
     JSONResponse,
-    PlainTextResponse,
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
@@ -38,9 +36,9 @@ from homunculus.core import Agent, MODEL
 from homunculus.memory import Memory
 from homunculus.transcript import Transcript
 from homunculus.tasks import TaskStore
-# Pricing + event counting live in stats.py — shared with the agent's own
-# week_in_review tool so both surfaces report identical numbers.
-from homunculus.stats import model_cost_cents as _model_cost_cents, summarize_events
+# Pricing lives in stats.py — shared with the agent's own week_in_review
+# tool so both surfaces report identical per-model cost numbers.
+from homunculus.stats import model_cost_cents as _model_cost_cents
 from homunculus.logging_config import configure_logging
 
 configure_logging()
@@ -200,9 +198,7 @@ def input_expected() -> JSONResponse:
     return JSONResponse({"expected": False, "reason": None, "detail": None})
 
 
-# --- API: stats -----------------------------------------------------------
-# Pricing + event counting live in stats.py — shared with the agent's
-# own week_in_review tool so both surfaces report identical numbers.
+# --- Agent run-replay builders (shared by the agent router) ---------------
 
 
 def _build_agent_replay(limit: int = 12) -> list[dict]:
@@ -378,141 +374,6 @@ def _autonomous_replay_label(service: str, event: str | None, rec: dict) -> str:
         name = rec.get("name") or "provider"
         return f"{service}: {event.replace('_', ' ')} · {name}"
     return f"{service}: autonomous {event or 'event'}"
-
-
-@app.get("/api/stats/today", dependencies=[Depends(require_web_auth)])
-def stats_today() -> JSONResponse:
-    """Return activity counts since the user's local midnight today.
-
-    Windows on the *user's* timezone (not UTC) so the budget visibly
-    resets when the user's calendar day flips, not at 05:30 IST.
-    Falls back to UTC if user_tz isn't set yet.
-    """
-    try:
-        from homunculus.user_tz import get_user_tz_name
-        from zoneinfo import ZoneInfo
-        tz = ZoneInfo(get_user_tz_name())
-        local_midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        cutoff = local_midnight.astimezone(UTC)
-    except Exception:
-        cutoff = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-
-    s = summarize_events(cutoff)
-    budget_usd = float(os.environ.get("HOMUNCULUS_DAILY_BUDGET_USD", "0") or "0")
-    return JSONResponse({
-        "since": s["since"],
-        "events": s["events"],
-        "unique_tools": len(s["unique_tools"]),
-        "tasks_fired": s["tasks_fired"],
-        "memory_writes": s["memory_writes"],
-        "memory_forgets": s["memory_forgets"],
-        "input_tokens": s["input_tokens"],
-        "output_tokens": s["output_tokens"],
-        "cached_tokens": s["cached_tokens"],
-        "cost_cents": round(s["cost_cents"], 2),
-        "budget_cents": round(budget_usd * 100, 2),
-    })
-
-
-# --- API: context window gauge --------------------------------------------
-
-# Known context limits for common model IDs (tokens).
-_CONTEXT_LIMITS: dict[str, int] = {
-    # Gemini
-    "gemini-2.5-flash":              1_048_576,
-    "gemini-2.5-pro":                1_048_576,
-    "gemini-2.0-flash":              1_048_576,
-    "gemini-1.5-flash":              1_048_576,
-    "gemini-1.5-pro":                2_097_152,
-    # OpenAI
-    "gpt-4o":                          128_000,
-    "gpt-4o-mini":                     128_000,
-    "gpt-4-turbo":                     128_000,
-    "gpt-4":                            32_768,
-    "gpt-oss-120b":                    128_000,
-    # Groq / Meta Llama
-    "llama-3.3-70b-versatile":         128_000,
-    "llama-3.3-70b-instruct":          131_072,
-    "llama-3.2-3b-instruct":           131_072,
-    # OpenRouter free fallbacks (verified June 2026)
-    "kimi-k2":                         262_144,   # moonshotai/kimi-k2.6:free
-    "qwen3-coder":                   1_048_576,   # qwen/qwen3-coder:free
-    "qwen3-next":                      262_144,   # qwen/qwen3-next-80b-a3b-instruct:free
-    "hermes-3":                        131_072,   # nousresearch/hermes-3-llama-3.1-405b:free
-    "gemma-4":                         262_144,   # google/gemma-4-31b-it:free
-    # DeepSeek / Anthropic
-    "deepseek":                        163_840,
-    "claude-haiku":                    200_000,
-    "claude-sonnet":                   200_000,
-}
-
-def _context_limit_for(model: str) -> int:
-    """Return the context window size for a model ID, falling back to 128k."""
-    for key, limit in _CONTEXT_LIMITS.items():
-        if key in model:
-            return limit
-    return 128_000
-
-
-@app.get("/api/context", dependencies=[Depends(require_web_auth)])
-def context_gauge() -> JSONResponse:
-    """Return the latest prompt token count and model context limit.
-
-    Scans _events.jsonl from the end for the most recent llm_call event
-    that has input_tokens. The prompt_tokens value from the API response
-    IS the full current context size (cumulative, not incremental).
-    """
-    events_path = Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
-    last_input_tokens: int = 0
-    last_model: str = os.environ.get("HOMUNCULUS_MODEL", "gemini-2.5-flash")
-
-    if events_path.exists():
-        try:
-            with events_path.open("r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-            for line in reversed(lines):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if rec.get("event") == "llm_call" and rec.get("input_tokens"):
-                    last_input_tokens = rec["input_tokens"]
-                    if rec.get("model"):
-                        last_model = rec["model"]
-                    break
-        except OSError:
-            pass
-
-    limit = _context_limit_for(last_model)
-    return JSONResponse({
-        "used_tokens": last_input_tokens,
-        "limit_tokens": limit,
-        "model": last_model,
-        "pct": round(last_input_tokens / limit * 100, 1) if limit else 0,
-    })
-
-
-# --- API: logs ------------------------------------------------------------
-
-@app.get("/api/logs", dependencies=[Depends(require_web_auth)])
-def logs_list() -> JSONResponse:
-    return JSONResponse(_list_log_files())
-
-
-@app.get(
-    "/api/logs/{rel:path}/raw",
-    response_class=PlainTextResponse,
-    dependencies=[Depends(require_web_auth)],
-)
-def log_entry_raw(rel: str) -> PlainTextResponse:
-    logs_root = MEMORY_DIR / "logs"
-    safe = _safe_subpath(rel, logs_root)
-    if safe is None or not safe.exists() or not safe.is_file():
-        raise HTTPException(404, "Log not found")
-    return PlainTextResponse(safe.read_text(encoding="utf-8"))
 
 
 # --- API: chat ------------------------------------------------------------
@@ -1037,6 +898,7 @@ def _safe_subpath(rel: str, root: Path) -> Path | None:
 # `from homunculus.transports import web_api as wa` — breaks the import cycle.
 from homunculus.transports.web import agent as _agent_routes  # noqa: E402
 from homunculus.transports.web import capture as _capture_routes  # noqa: E402
+from homunculus.transports.web import dashboard as _dashboard_routes  # noqa: E402
 from homunculus.transports.web import memory as _memory_routes  # noqa: E402
 from homunculus.transports.web import prefs as _prefs_routes  # noqa: E402
 from homunculus.transports.web import proposals as _proposals_routes  # noqa: E402
@@ -1052,6 +914,7 @@ app.include_router(_agent_routes.router)
 app.include_router(_skills_routes.router)
 app.include_router(_tasks_routes.router)
 app.include_router(_capture_routes.router)
+app.include_router(_dashboard_routes.router)
 
 
 # --- Static SPA hosting (mounted last so /api/* takes precedence) --------

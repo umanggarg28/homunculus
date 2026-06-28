@@ -4,8 +4,8 @@ import json
 from datetime import datetime
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from homunculus.core import API_URL, MODEL
 from homunculus.transports import web_api as wa
@@ -101,3 +101,21 @@ def status() -> JSONResponse:
             state = "stale"
         result[svc] = {"state": state, "last_seen": int(t), "age_s": age}
     return JSONResponse(result)
+
+
+@router.get("/api/logs", dependencies=[Depends(wa.require_web_auth)])
+def logs_list() -> JSONResponse:
+    return JSONResponse(wa._list_log_files())
+
+
+@router.get(
+    "/api/logs/{rel:path}/raw",
+    response_class=PlainTextResponse,
+    dependencies=[Depends(wa.require_web_auth)],
+)
+def log_entry_raw(rel: str) -> PlainTextResponse:
+    logs_root = wa.MEMORY_DIR / "logs"
+    safe = wa._safe_subpath(rel, logs_root)
+    if safe is None or not safe.exists() or not safe.is_file():
+        raise HTTPException(404, "Log not found")
+    return PlainTextResponse(safe.read_text(encoding="utf-8"))
