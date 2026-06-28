@@ -1,12 +1,16 @@
-"""Agent routes — runtime controls, the run-replay feed, and containment status."""
+"""Agent routes — runtime controls, the run-replay feed, containment, schedule."""
 
 import json
 import os
+from datetime import datetime, timedelta
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from homunculus import agent_controls, tools
+from homunculus.memory import Memory
+from homunculus.tasks import TaskStore
 from homunculus.transports import web_api as wa
 
 router = APIRouter()
@@ -85,4 +89,62 @@ def containment_status() -> JSONResponse:
         "mode": tools.get_mode(),
         "delivery_gate": True,  # TaskGuard is unconditionally installed on heartbeat ticks
         "blocked_recent": blocked_recent,
+    })
+
+
+@router.get("/api/agent/upcoming", dependencies=[Depends(wa.require_web_auth)])
+def agent_upcoming() -> JSONResponse:
+    """What the agent is set to do next.
+
+    Returns:
+      - next_tick: ISO datetime the heartbeat will fire (one-shot if
+        scheduled, otherwise default-interval estimate from last tick),
+      - default_interval_min: the heartbeat's fallback cadence,
+      - next_task: earliest-due active task (id, title, due_at), if any.
+    """
+    mem = wa._chat_memory or Memory(wa.MEMORY_DIR)
+    interval_min = int(os.environ.get("HEARTBEAT_INTERVAL_MINUTES", "60"))
+    explicit_tick = mem.next_tick.peek()
+
+    # When no explicit tick is scheduled, fall back to estimate from last heartbeat event + interval.
+    # The heartbeat now also writes its wake time to memory/_next_tick.txt while sleeping, so
+    # explicit_tick covers both agent-scheduled and heartbeat-scheduled wakes.
+    estimated_tick: str | None = explicit_tick
+    if not estimated_tick and wa.EVENTS_PATH.exists():
+        last_hb_ts: float | None = None
+        try:
+            with wa.EVENTS_PATH.open("r", encoding="utf-8", errors="replace") as f:
+                for line in f.readlines()[-500:]:
+                    try:
+                        rec = json.loads(line)
+                        if rec.get("service") == "heartbeat":
+                            t = datetime.fromisoformat(rec["ts"]).timestamp()
+                            if last_hb_ts is None or t > last_hb_ts:
+                                last_hb_ts = t
+                    except (json.JSONDecodeError, KeyError, ValueError):
+                        continue
+        except OSError:
+            pass
+        if last_hb_ts is not None:
+            estimated = datetime.fromtimestamp(last_hb_ts) + timedelta(minutes=interval_min)
+            if estimated > datetime.now():
+                estimated_tick = estimated.isoformat(timespec="seconds")
+
+    # Earliest active task by due_at.
+    store = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
+    next_task = None
+    earliest_iso: str | None = None
+    for t in store.list("active"):
+        due = t.get("due_at")
+        if not due:
+            continue
+        if earliest_iso is None or due < earliest_iso:
+            earliest_iso = due
+            next_task = {"id": t["id"], "title": t["title"], "due_at": due,
+                          "recurrence": t.get("recurrence", "none")}
+
+    return JSONResponse({
+        "next_tick": estimated_tick,
+        "default_interval_min": interval_min,
+        "next_task": next_task,
     })

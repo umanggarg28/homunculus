@@ -21,7 +21,7 @@ import threading
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, UTC
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -198,194 +198,6 @@ def input_expected() -> JSONResponse:
     if pending:
         return JSONResponse({"expected": True, "reason": "quiz", "detail": pending})
     return JSONResponse({"expected": False, "reason": None, "detail": None})
-
-
-# --- iOS Shortcuts quick-capture -------------------------------------------
-# Lowest-latency way to add a task or note from a phone. The Shortcut
-# (see docs/ios_shortcut.md) POSTs the user's spoken text here; the
-# server feeds it to a one-shot agent with a narrow tool set and
-# returns a short confirmation that Siri reads back.
-
-_QUICK_CAPTURE_RATE: dict[str, list[float]] = defaultdict(list)
-_QUICK_CAPTURE_RATE_WINDOW = 60.0
-_QUICK_CAPTURE_RATE_MAX = 5
-
-_QUICK_CAPTURE_PROMPT = """\
-You received this message via the iOS Shortcut quick-capture endpoint:
-
-> {text}
-
-Kind hint from caller: {kind}
-
-Decide between two actions:
-- "task" → call create_task(title=..., description=..., due_at=...,
-  recurrence="none|daily|weekly"). Parse natural-language times like
-  "Friday at 3pm" into ISO using get_current_time() if needed.
-- "note" → call archival_memory_insert(content=...) to save it as a
-  searchable archival entry.
-
-After the tool call, reply with EXACTLY ONE short line (≤ 80 chars)
-confirming what you did — this is what Siri reads back to the user.
-Examples:
-  "Created task: Call dentist, Friday 15:00 IST."
-  "Saved note about the book recommendation."
-"""
-
-
-def require_quick_capture_token(
-    x_capture_token: str = Header(default=""),
-) -> None:
-    if not QUICK_CAPTURE_TOKEN:
-        raise HTTPException(503, "quick-capture is not configured on this server")
-    if not secrets.compare_digest(x_capture_token, QUICK_CAPTURE_TOKEN):
-        raise HTTPException(401, "Invalid or missing X-Capture-Token")
-
-
-def _check_quick_capture_rate(request: Request) -> None:
-    ip = request.client.host if request.client else "unknown"
-    now = time.monotonic()
-    bucket = _QUICK_CAPTURE_RATE[ip]
-    _QUICK_CAPTURE_RATE[ip] = [t for t in bucket if now - t < _QUICK_CAPTURE_RATE_WINDOW]
-    if len(_QUICK_CAPTURE_RATE[ip]) >= _QUICK_CAPTURE_RATE_MAX:
-        raise HTTPException(429, "quick-capture rate limit exceeded — max 5/min")
-    _QUICK_CAPTURE_RATE[ip].append(now)
-
-
-@app.post("/api/quick-capture", dependencies=[Depends(require_quick_capture_token)])
-async def quick_capture(request: Request) -> JSONResponse:
-    """Single-turn agent call to create a task or note from a phone."""
-    _check_quick_capture_rate(request)
-    payload = await request.json()
-    text = (payload or {}).get("text", "").strip()
-    kind = ((payload or {}).get("kind") or "auto").strip()
-    if not text:
-        raise HTTPException(400, "missing 'text'")
-    if len(text) > 2000:
-        raise HTTPException(400, "text too long (max 2000 chars)")
-
-    # Fresh agent — must NOT share history with the chat session.
-    agent = Agent(memory=_chat_memory)
-    prompt = _QUICK_CAPTURE_PROMPT.format(text=text, kind=kind)
-    try:
-        reply = agent.chat(prompt, source="ios-shortcut")
-    except Exception as e:
-        return JSONResponse(
-            {"ok": False, "reply": f"Quick capture failed: {type(e).__name__}"},
-            status_code=500,
-        )
-    return JSONResponse({"ok": True, "reply": reply.strip()})
-
-
-# --- Webhooks ---------------------------------------------------------------
-# External services (GitHub, Gmail, IFTTT, cron jobs, etc.) POST here to
-# trigger the agent. Two modes:
-#   task   — creates a task that fires on the next heartbeat tick (default)
-#   inject — queues a message that the Telegram/web bot drains before the
-#            next user turn (use for time-sensitive events that need
-#            immediate context in conversation)
-#
-# Auth: if HOMUNCULUS_WEBHOOK_SECRET is set, the caller must pass it as
-# the X-Webhook-Secret header. Leave unset for localhost-only use.
-
-_WEBHOOK_SECRET = os.environ.get("HOMUNCULUS_WEBHOOK_SECRET", "").strip()
-
-
-@app.post("/api/webhook")
-async def webhook(request: Request) -> JSONResponse:
-    """Receive an external event and create a task or inject a message."""
-    secret_header = request.headers.get("x-webhook-secret", "")
-    if _WEBHOOK_SECRET and not secrets.compare_digest(secret_header, _WEBHOOK_SECRET):
-        raise HTTPException(401, "Invalid or missing X-Webhook-Secret header")
-
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(400, "Request body must be valid JSON") from None
-
-    mode = body.get("mode", "task")
-    source = str(body.get("source", "webhook"))[:40]
-    message = str(body.get("message", "")).strip()
-    task_title = str(body.get("task_title", "")).strip() or f"[{source}] incoming event"
-    task_description = message or str(body.get("description", "")).strip()
-
-    if mode == "inject":
-        # Drop straight into the notification queue so the next conversation
-        # turn picks it up as context, without creating a persistent task.
-        if not message:
-            raise HTTPException(400, "'message' is required for mode=inject")
-        _chat_memory.notifications.queue(f"[{source}] {message}")
-        return JSONResponse({"ok": True, "mode": "inject", "source": source})
-
-    # Default: create a task due immediately so the heartbeat fires it.
-    now_iso = datetime.now().isoformat(timespec="seconds")
-    task = _task_store().create(
-        title=task_title,
-        description=task_description,
-        due_at=now_iso,
-        recurrence="none",
-        notify=True,
-    )
-    import homunculus.events as _events
-    _events.emit("webhook_received", name=source, text=task_title, result=task["id"])
-    return JSONResponse({"ok": True, "mode": "task", "task_id": task["id"], "source": source})
-
-
-@app.get("/api/agent/upcoming", dependencies=[Depends(require_web_auth)])
-def agent_upcoming() -> JSONResponse:
-    """What the agent is set to do next.
-
-    Returns:
-      - next_tick: ISO datetime the heartbeat will fire (one-shot if
-        scheduled, otherwise default-interval estimate from last tick),
-      - default_interval_min: the heartbeat's fallback cadence,
-      - next_task: earliest-due active task (id, title, due_at), if any.
-    """
-    mem = _chat_memory or Memory(MEMORY_DIR)
-    interval_min = int(os.environ.get("HEARTBEAT_INTERVAL_MINUTES", "60"))
-    explicit_tick = mem.next_tick.peek()
-
-    # When no explicit tick is scheduled, fall back to estimate from last heartbeat event + interval.
-    # The heartbeat now also writes its wake time to memory/_next_tick.txt while sleeping, so
-    # explicit_tick covers both agent-scheduled and heartbeat-scheduled wakes.
-    estimated_tick: str | None = explicit_tick
-    if not estimated_tick and EVENTS_PATH.exists():
-        last_hb_ts: float | None = None
-        try:
-            with EVENTS_PATH.open("r", encoding="utf-8", errors="replace") as f:
-                for line in f.readlines()[-500:]:
-                    try:
-                        rec = json.loads(line)
-                        if rec.get("service") == "heartbeat":
-                            t = datetime.fromisoformat(rec["ts"]).timestamp()
-                            if last_hb_ts is None or t > last_hb_ts:
-                                last_hb_ts = t
-                    except (json.JSONDecodeError, KeyError, ValueError):
-                        continue
-        except OSError:
-            pass
-        if last_hb_ts is not None:
-            estimated = datetime.fromtimestamp(last_hb_ts) + timedelta(minutes=interval_min)
-            if estimated > datetime.now():
-                estimated_tick = estimated.isoformat(timespec="seconds")
-
-    # Earliest active task by due_at.
-    store = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
-    next_task = None
-    earliest_iso: str | None = None
-    for t in store.list("active"):
-        due = t.get("due_at")
-        if not due:
-            continue
-        if earliest_iso is None or due < earliest_iso:
-            earliest_iso = due
-            next_task = {"id": t["id"], "title": t["title"], "due_at": due,
-                          "recurrence": t.get("recurrence", "none")}
-
-    return JSONResponse({
-        "next_tick": estimated_tick,
-        "default_interval_min": interval_min,
-        "next_task": next_task,
-    })
 
 
 # --- API: stats -----------------------------------------------------------
@@ -1224,6 +1036,7 @@ def _safe_subpath(rel: str, root: Path) -> Path | None:
 # Imported here, at the bottom, so `web_api` is fully defined when a router does
 # `from homunculus.transports import web_api as wa` — breaks the import cycle.
 from homunculus.transports.web import agent as _agent_routes  # noqa: E402
+from homunculus.transports.web import capture as _capture_routes  # noqa: E402
 from homunculus.transports.web import memory as _memory_routes  # noqa: E402
 from homunculus.transports.web import prefs as _prefs_routes  # noqa: E402
 from homunculus.transports.web import proposals as _proposals_routes  # noqa: E402
@@ -1238,6 +1051,7 @@ app.include_router(_memory_routes.router)
 app.include_router(_agent_routes.router)
 app.include_router(_skills_routes.router)
 app.include_router(_tasks_routes.router)
+app.include_router(_capture_routes.router)
 
 
 # --- Static SPA hosting (mounted last so /api/* takes precedence) --------
