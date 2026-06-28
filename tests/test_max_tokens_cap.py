@@ -15,12 +15,12 @@ Groq, Cerebras) don't reserve credit and can stay at their defaults.
 
 from __future__ import annotations
 
-from homunculus import core
+from homunculus import llm
 
 
 def test_openrouter_gets_max_tokens_cap() -> None:
     payload: dict = {}
-    core._apply_max_tokens(
+    llm._apply_max_tokens(
         payload, "https://openrouter.ai/api/v1/chat/completions",
         "anthropic/claude-haiku-4-5",
     )
@@ -31,7 +31,7 @@ def test_openrouter_preserves_explicit_max_tokens() -> None:
     """If a caller already set max_tokens (e.g. summarisation paths
     that intentionally want a shorter reply), don't clobber it."""
     payload: dict = {"max_tokens": 200}
-    core._apply_max_tokens(
+    llm._apply_max_tokens(
         payload, "https://openrouter.ai/api/v1/chat/completions",
         "anthropic/claude-haiku-4-5",
     )
@@ -47,7 +47,7 @@ def test_non_openrouter_urls_unchanged() -> None:
         "https://api.cerebras.ai/v1/chat/completions",
     ):
         payload: dict = {}
-        core._apply_max_tokens(payload, url, "any-model")
+        llm._apply_max_tokens(payload, url, "any-model")
         assert "max_tokens" not in payload, (
             f"non-openrouter URL {url} should not get a max_tokens cap"
         )

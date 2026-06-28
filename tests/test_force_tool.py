@@ -19,7 +19,7 @@ from __future__ import annotations
 import inspect
 from unittest.mock import MagicMock, patch
 
-from homunculus import core
+from homunculus import core, llm
 
 
 # ---- payload passthrough ---------------------------------------------
@@ -53,7 +53,7 @@ def test_dict_tool_choice_passed_through_to_payload(monkeypatch):
     monkeypatch.setenv("HOMUNCULUS_API_KEY", "test-key")
     forced = {"type": "function", "function": {"name": "recall"}}
 
-    with patch.object(core.httpx, "post", return_value=_ok_response()) as mock_post:
+    with patch.object(llm.httpx, "post", return_value=_ok_response()) as mock_post:
         core.call_llm(
             messages=[{"role": "user", "content": "x"}],
             tool_schemas=[{"type": "function", "function": {"name": "recall"}}],
@@ -71,7 +71,7 @@ def test_string_tool_choice_still_passed_through(monkeypatch):
     """Regression: widening the parameter type to str|dict must not
     break the existing string contract."""
     monkeypatch.setenv("HOMUNCULUS_API_KEY", "test-key")
-    with patch.object(core.httpx, "post", return_value=_ok_response()) as mock_post:
+    with patch.object(llm.httpx, "post", return_value=_ok_response()) as mock_post:
         core.call_llm(
             messages=[{"role": "user", "content": "x"}],
             tool_schemas=[{"type": "function", "function": {"name": "notify"}}],
@@ -104,7 +104,7 @@ def test_dict_tool_choice_passed_through_in_stream(monkeypatch):
         captured["json"] = kwargs.get("json")
         return _FakeStreamCtx()
 
-    with patch.object(core.httpx, "stream", side_effect=fake_stream):
+    with patch.object(llm.httpx, "stream", side_effect=fake_stream):
         # Drain the generator. We don't care about chunks for this test.
         for _ in core.call_llm_stream(
             messages=[{"role": "user", "content": "x"}],

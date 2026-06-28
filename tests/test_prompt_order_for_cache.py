@@ -64,8 +64,8 @@ def test_rate_limit_heads_up_is_last_when_present(monkeypatch):
     """Rate-limit signal is sporadic; when present it must be the
     final piece so its absence/presence doesn't shift the cache key
     of everything before it."""
-    from homunculus import core
-    monkeypatch.setattr(core, "_PROVIDER_LAST_COOLED_AT", core.time.time())
+    from homunculus import core, llm
+    monkeypatch.setattr(llm, "_PROVIDER_LAST_COOLED_AT", core.time.time())
     monkeypatch.setenv("HOMUNCULUS_AGENTS_MD", "/nope")
     agent = core.Agent()
     prompt = agent._current_system_prompt()

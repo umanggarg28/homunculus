@@ -196,21 +196,21 @@ def test_concurrent_mark_fired_does_not_corrupt(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_user_agent_constant_exists():
-    from homunculus import core
-    assert hasattr(core, "_HTTP_HEADERS_BASE"), "_HTTP_HEADERS_BASE missing from core.py"
-    assert "User-Agent" in core._HTTP_HEADERS_BASE
+    from homunculus import llm
+    assert hasattr(llm, "_HTTP_HEADERS_BASE"), "_HTTP_HEADERS_BASE missing from llm.py"
+    assert "User-Agent" in llm._HTTP_HEADERS_BASE
 
 
 def test_user_agent_value_not_empty():
-    from homunculus import core
-    assert core._HTTP_HEADERS_BASE["User-Agent"].strip()
+    from homunculus import llm
+    assert llm._HTTP_HEADERS_BASE["User-Agent"].strip()
 
 
 def test_all_httpx_calls_use_header_base():
-    """Every httpx.post call in core.py must spread _HTTP_HEADERS_BASE into headers."""
+    """Every httpx.post call in llm.py must spread _HTTP_HEADERS_BASE into headers."""
     import ast
     import pathlib
-    src = pathlib.Path("homunculus/core.py").read_text()
+    src = pathlib.Path("homunculus/llm.py").read_text()
     tree = ast.parse(src)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -234,22 +234,22 @@ def test_all_httpx_calls_use_header_base():
 # ---------------------------------------------------------------------------
 
 def test_model_fallback_excludes_hermes():
-    from homunculus import core
-    assert "hermes" not in core.MODEL_FALLBACK.lower(), (
+    from homunculus import llm
+    assert "hermes" not in llm.MODEL_FALLBACK.lower(), (
         "hermes-3-405b:free does not support tool calling — remove from MODEL_FALLBACK"
     )
 
 
 def test_model_fallback_contains_verified_models():
-    from homunculus import core
+    from homunculus import llm
     verified = [
         "meta-llama/llama-3.3-70b-instruct",
         "openai/gpt-oss-120b",
         "moonshotai/kimi-k2.6",
         "qwen/qwen3-coder",
     ]
-    assert any(m in core.MODEL_FALLBACK for m in verified), (
-        f"MODEL_FALLBACK '{core.MODEL_FALLBACK}' has none of the verified tool-calling models"
+    assert any(m in llm.MODEL_FALLBACK for m in verified), (
+        f"MODEL_FALLBACK '{llm.MODEL_FALLBACK}' has none of the verified tool-calling models"
     )
 
 

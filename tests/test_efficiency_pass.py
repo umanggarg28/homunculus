@@ -16,20 +16,20 @@ import pytest
 
 
 @pytest.fixture
-def core_mod():
-    """Import core fresh-enough for the helpers. core itself is never
-    stubbed by other tests (they stub `tools`, `mcp`, etc.) so importing
-    it directly is safe even after other suites have run."""
-    from homunculus import core
-    return core
+def llm_mod():
+    """The LLM-layer helpers live in homunculus/llm.py (Phase 2). It is
+    never stubbed by other tests (they stub `tools`, `mcp`, etc.), so
+    importing it directly is safe even after other suites have run."""
+    from homunculus import llm
+    return llm
 
 
-def test_cache_control_added_for_openrouter(core_mod):
+def test_cache_control_added_for_openrouter(llm_mod):
     msgs = [
         {"role": "system", "content": "you are an agent"},
         {"role": "user", "content": "hi"},
     ]
-    out = core_mod._maybe_add_cache_control(
+    out = llm_mod._maybe_add_cache_control(
         msgs, "https://openrouter.ai/api/v1/chat/completions",
     )
     assert isinstance(out[0]["content"], list)
@@ -40,15 +40,15 @@ def test_cache_control_added_for_openrouter(core_mod):
     assert out[1] == {"role": "user", "content": "hi"}
 
 
-def test_cache_control_added_for_anthropic(core_mod):
+def test_cache_control_added_for_anthropic(llm_mod):
     msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "u"}]
-    out = core_mod._maybe_add_cache_control(msgs, "https://api.anthropic.com/v1/messages")
+    out = llm_mod._maybe_add_cache_control(msgs, "https://api.anthropic.com/v1/messages")
     assert isinstance(out[0]["content"], list)
 
 
-def test_cache_control_no_op_for_gemini(core_mod):
+def test_cache_control_no_op_for_gemini(llm_mod):
     msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "u"}]
-    out = core_mod._maybe_add_cache_control(
+    out = llm_mod._maybe_add_cache_control(
         msgs,
         "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
     )
@@ -58,21 +58,21 @@ def test_cache_control_no_op_for_gemini(core_mod):
     assert out[0] == {"role": "system", "content": "sys"}
 
 
-def test_cache_control_no_op_without_system_message(core_mod):
+def test_cache_control_no_op_without_system_message(llm_mod):
     msgs = [{"role": "user", "content": "hi"}]
-    out = core_mod._maybe_add_cache_control(msgs, "https://openrouter.ai/...")
+    out = llm_mod._maybe_add_cache_control(msgs, "https://openrouter.ai/...")
     assert out == msgs
 
 
 # ── rate-limit awareness ────────────────────────────────────────────
 
 
-def test_cool_provider_updates_recent_signal(core_mod, monkeypatch):
+def test_cool_provider_updates_recent_signal(llm_mod, monkeypatch):
     # Reset module state — other tests may have cooled providers.
-    monkeypatch.setattr(core_mod, "_PROVIDER_LAST_COOLED_AT", 0.0)
-    assert core_mod._recent_provider_cool_seconds() is None
-    core_mod._cool_provider("https://x/y", "model-a", seconds=30)
-    age = core_mod._recent_provider_cool_seconds()
+    monkeypatch.setattr(llm_mod, "_PROVIDER_LAST_COOLED_AT", 0.0)
+    assert llm_mod._recent_provider_cool_seconds() is None
+    llm_mod._cool_provider("https://x/y", "model-a", seconds=30)
+    age = llm_mod._recent_provider_cool_seconds()
     assert age is not None
     assert age < 2  # just happened
 
