@@ -28,7 +28,7 @@ if "homunculus.tools.notify" not in sys.modules:
     _stub._telegram_calls = _telegram_calls
     sys.modules["homunculus.tools.notify"] = _stub
 
-from homunculus.core import _is_transient_provider_error  # noqa: E402
+from homunculus.llm import _is_transient_provider_error  # noqa: E402
 from homunculus.heartbeat import _is_infra_error  # noqa: E402
 
 

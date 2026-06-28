@@ -2,7 +2,7 @@
 messages go on the wire to the LLM provider. Some providers reject
 unknown keys outright; the rest just waste tokens."""
 
-from homunculus.core import _strip_internal_fields
+from homunculus.llm import _strip_internal_fields
 
 
 def test_strips_source_field():

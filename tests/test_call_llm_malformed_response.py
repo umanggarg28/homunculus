@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from homunculus import core
-from homunculus.core import _extract_assistant_message
+from homunculus import llm
+from homunculus.llm import _extract_assistant_message
 
 
 def test_extract_helper_returns_message_on_valid_shape():
@@ -78,9 +78,9 @@ def test_call_llm_falls_through_on_missing_choices(monkeypatch):
             ("https://prov2.example/v1/chat/completions", "k2", "model-b"),
         ]
 
-    with patch.object(core, "_providers", side_effect=fake_providers), \
-         patch.object(core.httpx, "post", side_effect=fake_post):
-        msg = core.call_llm(
+    with patch.object(llm, "_providers", side_effect=fake_providers), \
+         patch.object(llm.httpx, "post", side_effect=fake_post):
+        msg = llm.call_llm(
             messages=[{"role": "user", "content": "x"}],
             tool_schemas=None,
         )
@@ -105,9 +105,9 @@ def test_call_llm_falls_through_on_non_json_200(monkeypatch):
             ("https://prov2.example/v1/chat/completions", "k2", "model-b"),
         ]
 
-    with patch.object(core, "_providers", side_effect=fake_providers), \
-         patch.object(core.httpx, "post", side_effect=fake_post):
-        msg = core.call_llm(
+    with patch.object(llm, "_providers", side_effect=fake_providers), \
+         patch.object(llm.httpx, "post", side_effect=fake_post):
+        msg = llm.call_llm(
             messages=[{"role": "user", "content": "x"}],
             tool_schemas=None,
         )
