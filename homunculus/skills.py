@@ -51,7 +51,7 @@ from homunculus.locking import file_lock
 
 # Sources of a skill save. Tracked in the manifest so a future
 # refinement run can avoid clobbering a skill the user just hand-edited.
-SaveSource = Literal["manual", "refinement-tick", "user-edit", "bootstrap"]
+SaveSource = Literal["manual", "refinement-tick", "user-edit", "bootstrap", "proposal-approved"]
 
 
 class Skills:

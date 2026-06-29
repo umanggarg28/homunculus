@@ -228,7 +228,7 @@ def _drain_notifications_into_history(agent: Agent) -> None:
         ts = entry.get("ts")
         try:
             from datetime import datetime
-            when = datetime.fromtimestamp(float(ts)).strftime("%H:%M")
+            when = datetime.fromtimestamp(float(ts or 0)).strftime("%H:%M")
         except Exception:
             when = "earlier"
         # Marker prefix tells the LLM this is a notification we

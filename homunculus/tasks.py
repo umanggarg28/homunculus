@@ -528,7 +528,7 @@ class TaskStore:
             input_tokens, output_tokens, cached_tokens, cost_cents,
             calls (number of LLM round-trips during this run)
         """
-        run = {
+        run: dict[str, Any] = {
             "ts": ts.isoformat(timespec="seconds"),
             "status": status,
             "result": (result or "").strip()[:500],

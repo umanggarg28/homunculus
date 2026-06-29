@@ -395,7 +395,7 @@ class TaskGuard:
         glance. Empty if no tools ran."""
         if not self._tool_trace:
             return ""
-        parts: list[str] = []
+        parts: list[tuple[str, int]] = []
         for name in self._tool_trace:
             if parts and parts[-1][0] == name:
                 parts[-1] = (name, parts[-1][1] + 1)

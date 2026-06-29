@@ -1290,22 +1290,22 @@ class Agent:
             # guard check the complete reply and self-correct if needed
             # before anything reaches the client.
             assistant_msg = None
-            stream_chunks: list[str] = []
             active_schemas = (
                 tools.SCHEMAS
                 if self._active_tool_names is None
                 or not hasattr(tools, "schemas_for")
                 else tools.schemas_for(self._active_tool_names)
             )
+            # call_llm_stream assembles the full reply and yields it as the
+            # "done" payload; incremental "content" events are not surfaced to
+            # the client here (the guard runs on the complete reply first).
             for kind, payload in call_llm_stream(
                 self.history, active_schemas, model=self.model,
                 tool_choice=turn_tool_choice,
                 reasoning_effort=reasoning_effort,
                 provider_constraints=provider_constraints,
             ):
-                if kind == "content":
-                    stream_chunks.append(payload)
-                elif kind == "done":
+                if kind == "done":
                     assistant_msg = payload
             if assistant_msg is None:
                 return None, state_idx, turn_tool_choice

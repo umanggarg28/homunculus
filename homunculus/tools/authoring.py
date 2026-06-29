@@ -137,9 +137,10 @@ def propose_skill(
                 "ok": False,
                 "errors": ["provide either a full body OR edits, not both"],
             })
-        body, edit_errors = _apply_edits(current, edits)
+        edited_body, edit_errors = _apply_edits(current or "", edits)
         if edit_errors:
             return json.dumps({"ok": False, "errors": edit_errors}, indent=2)
+        body = edited_body or ""
     elif not body:
         return json.dumps({
             "ok": False,

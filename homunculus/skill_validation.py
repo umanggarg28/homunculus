@@ -90,8 +90,8 @@ def validate_skill_body(
     warnings: list[str] = []
 
     fm, body_text, fm_err = _split_frontmatter(body or "")
-    if fm_err is not None:
-        return ValidationResult(ok=False, errors=[fm_err])
+    if fm is None:
+        return ValidationResult(ok=False, errors=[fm_err or "invalid frontmatter"])
 
     name = fm.get("name")
     if not isinstance(name, str) or not name.strip():

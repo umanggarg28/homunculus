@@ -34,5 +34,8 @@ jobs:
       - name: Lint (ruff)
         run: uv run ruff check homunculus tests scripts
 
+      - name: Type check (pyright)
+        run: uv run pyright homunculus
+
       - name: Tests (pytest)
         run: uv run python -m pytest -q

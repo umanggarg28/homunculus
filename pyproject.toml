@@ -21,6 +21,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "pyright>=1.1.411",
     "pytest>=9.0.3",
     "ruff>=0.8",
 ]
@@ -46,3 +47,14 @@ ignore = [
 # imports legitimately sit below other statements.
 "tests/*" = ["E402"]
 "scripts/*" = ["E402"]
+
+[tool.pyright]
+# Static type checking on the application package. "basic" mode (not strict)
+# is the deliberate floor: it catches the bugs that matter — None access,
+# wrong argument types, unreachable narrowing — without demanding a full
+# annotation of every legacy function. The package is kept at zero errors;
+# tests/ and scripts/ are excluded because their stub/sys.path gymnastics
+# produce noise that isn't worth annotating around.
+include = ["homunculus"]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"

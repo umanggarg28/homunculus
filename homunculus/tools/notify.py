@@ -19,6 +19,7 @@ import os
 import re
 import time
 from collections import deque
+from collections.abc import Callable
 from pathlib import Path
 from threading import Lock
 
@@ -169,11 +170,11 @@ def _recently_delivered(text: str) -> bool:
     return False
 
 
-def _channel_senders() -> list[tuple[str, callable]]:
+def _channel_senders() -> list[tuple[str, Callable[[str], str | None]]]:
     """Configured push channels, in order. Additive: a channel is included only
     when its credentials are present, so enabling or disabling a channel needs no
     code change — just env vars."""
-    senders: list[tuple[str, callable]] = []
+    senders: list[tuple[str, Callable[[str], str | None]]] = []
     if os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_ALLOWED_USER_ID"):
         senders.append(("telegram", _send_to_telegram))
     if os.environ.get("DISCORD_BOT_TOKEN") and os.environ.get("DISCORD_CHANNEL_ID"):
@@ -228,7 +229,7 @@ _NOTIFY_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=5.0)
 
 def _post_with_retry(
     url: str, json_payload: dict, headers: dict | None = None
-) -> tuple[object | None, str | None]:
+) -> tuple[httpx.Response | None, str | None]:
     """POST JSON, retrying transient transport errors (timeout, connect reset)
     with short backoff. Returns (response, None) once a request completes (any
     HTTP status), or (None, error) if every attempt hit a transport error. Used
@@ -244,7 +245,7 @@ def _post_with_retry(
     return None, last_err
 
 
-def _post_telegram(token: str, payload: dict) -> tuple[object | None, str | None]:
+def _post_telegram(token: str, payload: dict) -> tuple[httpx.Response | None, str | None]:
     """Telegram sendMessage with retry (delegates to _post_with_retry)."""
     return _post_with_retry(f"https://api.telegram.org/bot{token}/sendMessage", payload)
 
@@ -261,7 +262,7 @@ def _send_to_telegram(text: str) -> str | None:
         token,
         {"chat_id": chat_id, "text": body, "parse_mode": "HTML", "disable_web_page_preview": True},
     )
-    if err is not None:
+    if err is not None or response is None:
         return f"ERROR: Telegram request failed after {NOTIFY_SEND_ATTEMPTS} attempts: {err}"
 
     if response.status_code != 200:
@@ -270,7 +271,7 @@ def _send_to_telegram(text: str) -> str | None:
             token,
             {"chat_id": chat_id, "text": plain, "disable_web_page_preview": True},
         )
-        if ferr is not None:
+        if ferr is not None or fallback is None:
             return f"ERROR: Telegram HTML send failed ({response.status_code}) and fallback also failed: {ferr}"
         if fallback.status_code != 200:
             return f"ERROR: Telegram send failed ({response.status_code}); fallback {fallback.status_code}"
@@ -301,7 +302,7 @@ def _send_to_discord(text: str) -> str | None:
         json_payload={"content": body},
         headers={"Authorization": f"Bot {token}"},
     )
-    if err is not None:
+    if err is not None or resp is None:
         return f"ERROR: Discord request failed after {NOTIFY_SEND_ATTEMPTS} attempts: {err}"
     if resp.status_code not in (200, 201):
         return f"ERROR: Discord send failed (HTTP {resp.status_code}): {resp.text[:200]}"

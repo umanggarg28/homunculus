@@ -88,7 +88,7 @@ def _drain_notifications_into_history(agent: Agent) -> None:
     for entry in fresh:
         text = entry.get("text", "")
         try:
-            when = datetime.fromtimestamp(float(entry.get("ts"))).strftime("%H:%M")
+            when = datetime.fromtimestamp(float(entry.get("ts") or 0)).strftime("%H:%M")
         except Exception:
             when = "earlier"
         agent.history.append({
