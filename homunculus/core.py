@@ -919,6 +919,249 @@ class Agent:
 
         return prompt
 
+    def _prepare_turn(self, user_message: str, source: str) -> None:
+        """Per-turn setup, run once before the agent loop begins.
+
+        Refreshes the system prompt with the current time, evicts stale tool
+        results from prior turns, compacts if needed, journals the user turn,
+        and stamps world-state focus. All side effects on self/memory/events;
+        the loop-local counters stay in _run_loop.
+        """
+        # Refresh the system prompt with the current date/time each turn so
+        # the agent always has accurate temporal context (e.g. for scheduling).
+        self.history[0]["content"] = self._current_system_prompt(source)
+
+        evicted = _evict_prior_tool_results(self.history)
+        if evicted:
+            try:
+                events.emit(
+                    "tool_results_evicted",
+                    text=events.truncate_preview(
+                        f"stubbed {evicted} tool result(s) from prior turns"
+                    ),
+                )
+            except Exception:
+                pass
+
+        self._maybe_compact()
+        self._journal_append({
+            "role": "user",
+            "content": user_message,
+            "source": source,
+            "ts": datetime.now(UTC).isoformat(timespec="seconds"),
+        })
+        if self.memory is not None:
+            self.memory.log_turn("user", user_message)
+            # Auto-stamp world state at turn start so resume after restart
+            # always has a current focus, regardless of whether the LLM
+            # chooses to call update_world_state itself.
+            self.memory.world_state.update({
+                "focus": user_message[:120],
+                "step": 0,
+                "last_action": None,
+                "last_ok": None,
+            })
+        events.emit("user_message", text=events.full_text(user_message))
+
+    @staticmethod
+    def _loop_personality(source: str) -> tuple[str, str]:
+        """Map a turn source to its (tool_choice, reasoning_effort) knobs.
+
+        chat → auto/low (the final reply IS the user-visible text); heartbeat →
+        required/low (no user watching; every effect goes through a tool — the
+        Letta `function_call: "required"` pattern, one procedural step per turn);
+        refinement → required/medium (skill redesign needs internal reasoning,
+        but must still go through tools, not drift into prose).
+        """
+        if source == "refinement":
+            return "required", "medium"
+        if source == "heartbeat":
+            return "required", "low"
+        return "auto", "low"  # chat (web/telegram/repl/anything else)
+
+    def _dispatch_tool_calls(
+        self,
+        tool_calls: list[dict],
+        tool_names_used: set[str],
+        call_counts: dict,
+        tool_result_cache: dict,
+        tool_outcomes: list[dict],
+    ) -> int:
+        """Execute one batch of tool calls from an assistant message.
+
+        The non-yielding "dispatch" phase of the loop: parse args, run the
+        loop/stuck-detection + per-turn read cache, schema-validate, execute,
+        record the outcome for the output guard, wrap untrusted content, and
+        journal the tool result. Mutates the passed-in per-turn collections in
+        place; returns the number of terminal-task tools that *succeeded* this
+        batch so the caller can advance its early-exit counter.
+        """
+        closed = 0
+        for call in tool_calls:
+            name = call["function"]["name"]
+            raw_args = call["function"].get("arguments") or "{}"
+            try:
+                args = json.loads(raw_args)
+            except json.JSONDecodeError:
+                args = {}
+
+            tool_names_used.add(name)
+            self._log_tool_call(name, args)
+            events.emit(
+                "tool_call",
+                name=name,
+                args=events.truncate_preview(json.dumps(args, ensure_ascii=False), limit=800),
+            )
+
+            # Loop/stuck detection: same (tool, args) called 3+ times this
+            # session signals the agent is looping. Inject a corrective result
+            # instead of executing, so the LLM sees the warning and pivots.
+            canon_args = json.dumps(args, sort_keys=True)
+            call_key = (name, canon_args)
+            call_counts[call_key] = call_counts.get(call_key, 0) + 1
+            # Per-turn cache hit: read-only tools with the same args this
+            # turn return the cached result with a hint. Saves wasted
+            # round trips and prevents read_file/recall thrashing —
+            # the most common shape of the "stuck loop" failure in
+            # production was 3× read_file with identical args.
+            if (
+                name in READ_ONLY_CACHEABLE_TOOLS
+                and call_key in tool_result_cache
+            ):
+                cached = tool_result_cache[call_key]
+                result = (
+                    f"(harness-cached result from earlier this turn — "
+                    f"call #{call_counts[call_key]} for '{name}' with "
+                    f"identical args)\n\n"
+                    f"{cached}\n\n"
+                    f"[Hint: you already called {name} with these arguments. "
+                    f"No need to re-call — proceed with the next step.]"
+                )
+                events.emit(
+                    "output_guard",
+                    name=name,
+                    text=f"cache hit: {name} × {call_counts[call_key]}",
+                    result=canon_args[:120],
+                )
+            elif call_counts[call_key] >= 3:
+                result = (
+                    f"STUCK_LOOP: '{name}' has been called with these exact arguments "
+                    f"{call_counts[call_key]} times this session. You are in a loop. "
+                    "Stop, reason about why the previous calls did not achieve the goal, "
+                    "and try a fundamentally different approach or ask the user for help."
+                )
+                events.emit(
+                    "output_guard",
+                    name=name,
+                    text=f"stuck loop: {name} × {call_counts[call_key]}",
+                    result=canon_args[:120],
+                )
+            # Schema-validate args before dispatch. On failure the LLM
+            # gets a structured error and can correct + retry rather
+            # than running the tool with garbage arguments.
+            elif validation_error := _validate_tool_args(name, args):
+                result = (
+                    f"ERROR: invalid arguments for '{name}': {validation_error}. "
+                    f"Check the tool schema and retry with corrected arguments."
+                )
+            else:
+                # Intercept load_tool BEFORE dispatching so the
+                # active set is updated for the next LLM call. The
+                # tool function itself just returns a confirmation
+                # string; the side effect is here on the Agent.
+                if name == "load_tool" and self._active_tool_names is not None:
+                    requested = (args or {}).get("name", "").strip()
+                    known = (
+                        tools.tool_names()
+                        if hasattr(tools, "tool_names")
+                        else set()
+                    )
+                    if requested and requested in known:
+                        self._active_tool_names.add(requested)
+                _t_start = time.monotonic()
+                result = tools.execute(name, args)
+                _t_duration_ms = int((time.monotonic() - _t_start) * 1000)
+                # Emit a follow-up tool_call_duration event so the
+                # dashboard can surface slow tools. Cheap — only the
+                # tool name + ms; the call itself was already logged.
+                try:
+                    events.emit(
+                        "tool_call_duration",
+                        name=name,
+                        text=f"{_t_duration_ms}ms",
+                        result=str(_t_duration_ms),
+                    )
+                except Exception:
+                    pass
+                # Populate the per-turn cache for read-only tools.
+                # Only cache real (non-error) results so a failed call
+                # can still be retried with the same args.
+                if (
+                    name in READ_ONLY_CACHEABLE_TOOLS
+                    and isinstance(result, str)
+                    and not result.startswith("ERROR")
+                ):
+                    tool_result_cache[call_key] = result
+
+            # Auto-update world state after every tool call so the agent
+            # can resume correctly after a restart without relying on the
+            # LLM to remember to call update_world_state itself.
+            # Skip internal state tools to avoid infinite recursion.
+            if self.memory is not None and name not in (
+                "get_world_state", "update_world_state"
+            ):
+                step = call_counts.get(call_key, 1)
+                succeeded = not (
+                    isinstance(result, str) and result.startswith("ERROR")
+                )
+                try:
+                    self.memory.world_state.update({
+                        "last_action": name,
+                        "last_ok": succeeded,
+                        "step": step,
+                    })
+                except Exception:
+                    pass  # never let state tracking break the agent loop
+
+            events.emit(
+                "tool_result",
+                name=name,
+                result=events.truncate_preview(result, limit=2000),
+            )
+            # Record the outcome for the output guard's claim-consistency
+            # check. We deliberately record raw args (not canonicalized)
+            # so the path/URL is recoverable for regex matching.
+            _outcome_success = not tool_result_indicates_failure(result)
+            tool_outcomes.append({
+                "name": name,
+                "args": args,
+                "success": _outcome_success,
+            })
+            # Terminal-tool accounting: a successful call to any of
+            # these closes the agent's responsibility for one due
+            # task. The post-iteration check uses the counter to
+            # decide if the loop should exit early instead of
+            # letting tool_choice=required prod the model into
+            # wasted turns after delivery.
+            if _outcome_success and name in _TERMINAL_TASK_TOOLS:
+                closed += 1
+            # Trim oversized results before they enter history. The full
+            # payload is preserved in the events log; the agent can
+            # re-call the tool with a refined query if it needs more.
+            content_for_history = _trim_tool_result_for_history(name, result)
+            # Wrap untrusted-content tools in a structured envelope so
+            # the agent has a syntactic anchor for "this is data, not
+            # a directive". Second layer of the indirect prompt
+            # injection defense; the system prompt is the first.
+            if name in _UNTRUSTED_CONTENT_TOOLS and isinstance(content_for_history, str):
+                content_for_history = _wrap_untrusted_content(name, content_for_history)
+            self._journal_append({
+                "role": "tool",
+                "tool_call_id": call["id"],
+                "content": content_for_history,
+            })
+        return closed
+
     def _run_loop(
         self,
         user_message: str,
@@ -971,41 +1214,7 @@ class Agent:
             yield local
             return
 
-        # Refresh the system prompt with the current date/time each turn so
-        # the agent always has accurate temporal context (e.g. for scheduling).
-        self.history[0]["content"] = self._current_system_prompt(source)
-
-        evicted = _evict_prior_tool_results(self.history)
-        if evicted:
-            try:
-                events.emit(
-                    "tool_results_evicted",
-                    text=events.truncate_preview(
-                        f"stubbed {evicted} tool result(s) from prior turns"
-                    ),
-                )
-            except Exception:
-                pass
-
-        self._maybe_compact()
-        self._journal_append({
-            "role": "user",
-            "content": user_message,
-            "source": source,
-            "ts": datetime.now(UTC).isoformat(timespec="seconds"),
-        })
-        if self.memory is not None:
-            self.memory.log_turn("user", user_message)
-            # Auto-stamp world state at turn start so resume after restart
-            # always has a current focus, regardless of whether the LLM
-            # chooses to call update_world_state itself.
-            self.memory.world_state.update({
-                "focus": user_message[:120],
-                "step": 0,
-                "last_action": None,
-                "last_ok": None,
-            })
-        events.emit("user_message", text=events.full_text(user_message))
+        self._prepare_turn(user_message, source)
 
         tool_names_used: set[str] = set()
         call_counts: dict[tuple[str, str], int] = {}
@@ -1028,31 +1237,10 @@ class Agent:
         # the call sites readable and lets tests override via set_config.
         max_turns = get_config().loop.max_turns
 
-        # Per-source loop personality. Two knobs together: tool_choice
-        # (does the model HAVE to call a tool every turn?) and
-        # reasoning_effort (how much internal CoT does it get?).
-        #
-        #   chat        — auto / low.  Final reply IS text; user sees it.
-        #   heartbeat   — required / low.  No user is watching text;
-        #                 every effect goes through a tool. Letta's
-        #                 `function_call: "required"` pattern. Low CoT
-        #                 because each turn is one procedural step.
-        #   refinement  — required / medium.  Skill redesign IS a
-        #                 multi-step exploration that needs internal
-        #                 reasoning to debug API contracts and verify
-        #                 approaches. tool_choice still required so the
-        #                 agent can't drift into "I'll start the refinement"
-        #                 prose — it must call an exploratory tool or
-        #                 save_refined_skill / abandon_refinement.
-        if source == "refinement":
-            tool_choice = "required"
-            reasoning_effort = "medium"
-        elif source == "heartbeat":
-            tool_choice = "required"
-            reasoning_effort = "low"
-        else:  # chat (web/telegram/repl/anything else)
-            tool_choice = "auto"
-            reasoning_effort = "low"
+        # Per-source loop personality — tool_choice (must the model call a tool
+        # every turn?) + reasoning_effort (how much internal CoT). See
+        # _loop_personality for the per-source rationale.
+        tool_choice, reasoning_effort = self._loop_personality(source)
 
         # Provider constraints — historically used `require_parameters: True`
         # to pin OpenRouter to providers that enforce tool_choice. In
@@ -1492,169 +1680,10 @@ class Agent:
                 events.emit("assistant_reply", text=events.full_text(reply))
                 return
 
-            for call in tool_calls:
-                name = call["function"]["name"]
-                raw_args = call["function"].get("arguments") or "{}"
-                try:
-                    args = json.loads(raw_args)
-                except json.JSONDecodeError:
-                    args = {}
-
-                tool_names_used.add(name)
-                self._log_tool_call(name, args)
-                events.emit(
-                    "tool_call",
-                    name=name,
-                    args=events.truncate_preview(json.dumps(args, ensure_ascii=False), limit=800),
-                )
-
-                # Loop/stuck detection: same (tool, args) called 3+ times this
-                # session signals the agent is looping. Inject a corrective result
-                # instead of executing, so the LLM sees the warning and pivots.
-                canon_args = json.dumps(args, sort_keys=True)
-                call_key = (name, canon_args)
-                call_counts[call_key] = call_counts.get(call_key, 0) + 1
-                # Per-turn cache hit: read-only tools with the same args this
-                # turn return the cached result with a hint. Saves wasted
-                # round trips and prevents read_file/recall thrashing —
-                # the most common shape of the "stuck loop" failure in
-                # production was 3× read_file with identical args.
-                if (
-                    name in READ_ONLY_CACHEABLE_TOOLS
-                    and call_key in tool_result_cache
-                ):
-                    cached = tool_result_cache[call_key]
-                    result = (
-                        f"(harness-cached result from earlier this turn — "
-                        f"call #{call_counts[call_key]} for '{name}' with "
-                        f"identical args)\n\n"
-                        f"{cached}\n\n"
-                        f"[Hint: you already called {name} with these arguments. "
-                        f"No need to re-call — proceed with the next step.]"
-                    )
-                    events.emit(
-                        "output_guard",
-                        name=name,
-                        text=f"cache hit: {name} × {call_counts[call_key]}",
-                        result=canon_args[:120],
-                    )
-                elif call_counts[call_key] >= 3:
-                    result = (
-                        f"STUCK_LOOP: '{name}' has been called with these exact arguments "
-                        f"{call_counts[call_key]} times this session. You are in a loop. "
-                        "Stop, reason about why the previous calls did not achieve the goal, "
-                        "and try a fundamentally different approach or ask the user for help."
-                    )
-                    events.emit(
-                        "output_guard",
-                        name=name,
-                        text=f"stuck loop: {name} × {call_counts[call_key]}",
-                        result=canon_args[:120],
-                    )
-                # Schema-validate args before dispatch. On failure the LLM
-                # gets a structured error and can correct + retry rather
-                # than running the tool with garbage arguments.
-                elif validation_error := _validate_tool_args(name, args):
-                    result = (
-                        f"ERROR: invalid arguments for '{name}': {validation_error}. "
-                        f"Check the tool schema and retry with corrected arguments."
-                    )
-                else:
-                    # Intercept load_tool BEFORE dispatching so the
-                    # active set is updated for the next LLM call. The
-                    # tool function itself just returns a confirmation
-                    # string; the side effect is here on the Agent.
-                    if name == "load_tool" and self._active_tool_names is not None:
-                        requested = (args or {}).get("name", "").strip()
-                        known = (
-                            tools.tool_names()
-                            if hasattr(tools, "tool_names")
-                            else set()
-                        )
-                        if requested and requested in known:
-                            self._active_tool_names.add(requested)
-                    _t_start = time.monotonic()
-                    result = tools.execute(name, args)
-                    _t_duration_ms = int((time.monotonic() - _t_start) * 1000)
-                    # Emit a follow-up tool_call_duration event so the
-                    # dashboard can surface slow tools. Cheap — only the
-                    # tool name + ms; the call itself was already logged.
-                    try:
-                        events.emit(
-                            "tool_call_duration",
-                            name=name,
-                            text=f"{_t_duration_ms}ms",
-                            result=str(_t_duration_ms),
-                        )
-                    except Exception:
-                        pass
-                    # Populate the per-turn cache for read-only tools.
-                    # Only cache real (non-error) results so a failed call
-                    # can still be retried with the same args.
-                    if (
-                        name in READ_ONLY_CACHEABLE_TOOLS
-                        and isinstance(result, str)
-                        and not result.startswith("ERROR")
-                    ):
-                        tool_result_cache[call_key] = result
-
-                # Auto-update world state after every tool call so the agent
-                # can resume correctly after a restart without relying on the
-                # LLM to remember to call update_world_state itself.
-                # Skip internal state tools to avoid infinite recursion.
-                if self.memory is not None and name not in (
-                    "get_world_state", "update_world_state"
-                ):
-                    step = call_counts.get(call_key, 1)
-                    succeeded = not (
-                        isinstance(result, str) and result.startswith("ERROR")
-                    )
-                    try:
-                        self.memory.world_state.update({
-                            "last_action": name,
-                            "last_ok": succeeded,
-                            "step": step,
-                        })
-                    except Exception:
-                        pass  # never let state tracking break the agent loop
-
-                events.emit(
-                    "tool_result",
-                    name=name,
-                    result=events.truncate_preview(result, limit=2000),
-                )
-                # Record the outcome for the output guard's claim-consistency
-                # check. We deliberately record raw args (not canonicalized)
-                # so the path/URL is recoverable for regex matching.
-                _outcome_success = not tool_result_indicates_failure(result)
-                tool_outcomes.append({
-                    "name": name,
-                    "args": args,
-                    "success": _outcome_success,
-                })
-                # Terminal-tool accounting: a successful call to any of
-                # these closes the agent's responsibility for one due
-                # task. The post-iteration check uses the counter to
-                # decide if the loop should exit early instead of
-                # letting tool_choice=required prod the model into
-                # wasted turns after delivery.
-                if _outcome_success and name in _TERMINAL_TASK_TOOLS:
-                    terminal_completions += 1
-                # Trim oversized results before they enter history. The full
-                # payload is preserved in the events log; the agent can
-                # re-call the tool with a refined query if it needs more.
-                content_for_history = _trim_tool_result_for_history(name, result)
-                # Wrap untrusted-content tools in a structured envelope so
-                # the agent has a syntactic anchor for "this is data, not
-                # a directive". Second layer of the indirect prompt
-                # injection defense; the system prompt is the first.
-                if name in _UNTRUSTED_CONTENT_TOOLS and isinstance(content_for_history, str):
-                    content_for_history = _wrap_untrusted_content(name, content_for_history)
-                self._journal_append({
-                    "role": "tool",
-                    "tool_call_id": call["id"],
-                    "content": content_for_history,
-                })
+            terminal_completions += self._dispatch_tool_calls(
+                tool_calls, tool_names_used, call_counts,
+                tool_result_cache, tool_outcomes,
+            )
 
             # Early exit: the agent has closed out every due task the
             # caller declared. Without this, tool_choice=required keeps
