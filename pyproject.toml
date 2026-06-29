@@ -23,6 +23,7 @@ dependencies = [
 dev = [
     "pyright>=1.1.411",
     "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
     "ruff>=0.8",
 ]
 
@@ -58,3 +59,18 @@ ignore = [
 include = ["homunculus"]
 pythonVersion = "3.12"
 typeCheckingMode = "basic"
+
+[tool.pytest.ini_options]
+# Measure coverage on every run and enforce a floor so the suite can't silently
+# rot as code is added. The floor is set just below current (~61%) — it's a
+# ratchet against regression, not a target; raise it as coverage grows.
+addopts = "--cov=homunculus --cov-report=term-missing --cov-fail-under=60"
+
+[tool.coverage.run]
+# Entry-point modules and the MCP transport are exercised by running the
+# services, not the unit suite; excluding them keeps the floor honest about
+# what the deterministic tests actually cover.
+omit = [
+    "homunculus/transports/repl.py",
+    "homunculus/tools/mcp_server.py",
+]

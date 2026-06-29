@@ -513,7 +513,9 @@ class Memory:
             con.commit()
             con.close()
         except Exception:
-            pass
+            # Vector DB is optional — recall falls back to keyword search — but
+            # a silent failure here means semantic recall is quietly off.
+            log.debug("memory: embeddings DB init failed", exc_info=True)
 
     def _migrate_vec_sidecars(self) -> None:
         """One-time migration: move .vec sidecar files into memory.db."""
@@ -525,7 +527,7 @@ class Memory:
                 vp.unlink()
                 migrated += 1
             except Exception:
-                pass
+                log.debug("memory: failed to migrate vec sidecar %s", vp.name, exc_info=True)
         if migrated:
             log.info(f"[memory] migrated {migrated} .vec sidecars → memory.db")
 
@@ -553,7 +555,7 @@ class Memory:
             con.commit()
             con.close()
         except Exception:
-            pass
+            log.debug("memory: failed to save embedding for %s", filename, exc_info=True)
 
     def _db_delete_vec(self, filename: str) -> None:
         import sqlite3
@@ -563,7 +565,7 @@ class Memory:
             con.commit()
             con.close()
         except Exception:
-            pass
+            log.debug("memory: failed to delete embedding for %s", filename, exc_info=True)
 
     def _db_all_vecs(self) -> list[tuple[str, list[float]]]:
         """Return all (filename, vec) rows from memory.db."""

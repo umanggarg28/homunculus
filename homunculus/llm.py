@@ -197,12 +197,35 @@ def _is_known_paid_model(model_id: str) -> bool:
     return model_id in _MODEL_PRICING_CENTS
 
 
+#: Emit the "budget accounting degraded" alarm at most once per process so a
+#: persistently-corrupt log doesn't spam the event stream every tick.
+_budget_degraded_warned = False
+
+
+def _warn_budget_degraded(reason: str) -> None:
+    """Surface a corrupted/unreadable events log — the budget ceiling silently
+    relies on it. Without this, accounting fails open (spend reads as 0 = "full
+    budget") and the one hard cost guarantee evaporates with no breadcrumb."""
+    global _budget_degraded_warned
+    if _budget_degraded_warned:
+        return
+    _budget_degraded_warned = True
+    log.warning("budget accounting degraded: %s — spend will under-count", reason)
+    try:
+        events.emit("budget_accounting_degraded", reason=reason)
+    except Exception:
+        pass
+
+
 def _today_spend_cents() -> float:
     """Estimate today's spend from llm_call events.
 
     This mirrors the dashboard's accounting. It is intentionally conservative
     and best-effort: if the log is missing or malformed, return 0 so the agent
-    does not brick itself because observability failed.
+    does not brick itself because observability failed. But a genuinely
+    *corrupt* log (present, non-empty, yet unparseable) is reported via
+    _warn_budget_degraded — silently failing open on the budget ceiling is the
+    one accounting failure worth shouting about.
     """
     events_path = Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
     if not events_path.exists():
@@ -220,13 +243,16 @@ def _today_spend_cents() -> float:
     total = 0.0
     try:
         lines = events_path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
+    except OSError as e:
+        _warn_budget_degraded(f"events log unreadable ({e.__class__.__name__})")
         return 0.0
+    parsed_any = False
     for line in reversed(lines):
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
             continue
+        parsed_any = True
         ts_raw = rec.get("ts", "")
         try:
             ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
@@ -247,6 +273,10 @@ def _today_spend_cents() -> float:
         price_in, price_out = _MODEL_PRICING_CENTS[model]
         uncached = max(0, input_tok - cached_tok)
         total += (uncached * price_in + cached_tok * price_in * 0.1 + output_tok * price_out) / 1_000_000
+    # A non-empty log where not one line parsed as JSON is corruption, not a
+    # quiet day — and it would silently zero out the budget ceiling.
+    if lines and not parsed_any:
+        _warn_budget_degraded("events log present but no records parsed")
     return total
 
 
