@@ -919,6 +919,66 @@ class Agent:
 
         return prompt
 
+    def _prepare_turn(self, user_message: str, source: str) -> None:
+        """Per-turn setup, run once before the agent loop begins.
+
+        Refreshes the system prompt with the current time, evicts stale tool
+        results from prior turns, compacts if needed, journals the user turn,
+        and stamps world-state focus. All side effects on self/memory/events;
+        the loop-local counters stay in _run_loop.
+        """
+        # Refresh the system prompt with the current date/time each turn so
+        # the agent always has accurate temporal context (e.g. for scheduling).
+        self.history[0]["content"] = self._current_system_prompt(source)
+
+        evicted = _evict_prior_tool_results(self.history)
+        if evicted:
+            try:
+                events.emit(
+                    "tool_results_evicted",
+                    text=events.truncate_preview(
+                        f"stubbed {evicted} tool result(s) from prior turns"
+                    ),
+                )
+            except Exception:
+                pass
+
+        self._maybe_compact()
+        self._journal_append({
+            "role": "user",
+            "content": user_message,
+            "source": source,
+            "ts": datetime.now(UTC).isoformat(timespec="seconds"),
+        })
+        if self.memory is not None:
+            self.memory.log_turn("user", user_message)
+            # Auto-stamp world state at turn start so resume after restart
+            # always has a current focus, regardless of whether the LLM
+            # chooses to call update_world_state itself.
+            self.memory.world_state.update({
+                "focus": user_message[:120],
+                "step": 0,
+                "last_action": None,
+                "last_ok": None,
+            })
+        events.emit("user_message", text=events.full_text(user_message))
+
+    @staticmethod
+    def _loop_personality(source: str) -> tuple[str, str]:
+        """Map a turn source to its (tool_choice, reasoning_effort) knobs.
+
+        chat → auto/low (the final reply IS the user-visible text); heartbeat →
+        required/low (no user watching; every effect goes through a tool — the
+        Letta `function_call: "required"` pattern, one procedural step per turn);
+        refinement → required/medium (skill redesign needs internal reasoning,
+        but must still go through tools, not drift into prose).
+        """
+        if source == "refinement":
+            return "required", "medium"
+        if source == "heartbeat":
+            return "required", "low"
+        return "auto", "low"  # chat (web/telegram/repl/anything else)
+
     def _run_loop(
         self,
         user_message: str,
@@ -971,41 +1031,7 @@ class Agent:
             yield local
             return
 
-        # Refresh the system prompt with the current date/time each turn so
-        # the agent always has accurate temporal context (e.g. for scheduling).
-        self.history[0]["content"] = self._current_system_prompt(source)
-
-        evicted = _evict_prior_tool_results(self.history)
-        if evicted:
-            try:
-                events.emit(
-                    "tool_results_evicted",
-                    text=events.truncate_preview(
-                        f"stubbed {evicted} tool result(s) from prior turns"
-                    ),
-                )
-            except Exception:
-                pass
-
-        self._maybe_compact()
-        self._journal_append({
-            "role": "user",
-            "content": user_message,
-            "source": source,
-            "ts": datetime.now(UTC).isoformat(timespec="seconds"),
-        })
-        if self.memory is not None:
-            self.memory.log_turn("user", user_message)
-            # Auto-stamp world state at turn start so resume after restart
-            # always has a current focus, regardless of whether the LLM
-            # chooses to call update_world_state itself.
-            self.memory.world_state.update({
-                "focus": user_message[:120],
-                "step": 0,
-                "last_action": None,
-                "last_ok": None,
-            })
-        events.emit("user_message", text=events.full_text(user_message))
+        self._prepare_turn(user_message, source)
 
         tool_names_used: set[str] = set()
         call_counts: dict[tuple[str, str], int] = {}
@@ -1028,31 +1054,10 @@ class Agent:
         # the call sites readable and lets tests override via set_config.
         max_turns = get_config().loop.max_turns
 
-        # Per-source loop personality. Two knobs together: tool_choice
-        # (does the model HAVE to call a tool every turn?) and
-        # reasoning_effort (how much internal CoT does it get?).
-        #
-        #   chat        — auto / low.  Final reply IS text; user sees it.
-        #   heartbeat   — required / low.  No user is watching text;
-        #                 every effect goes through a tool. Letta's
-        #                 `function_call: "required"` pattern. Low CoT
-        #                 because each turn is one procedural step.
-        #   refinement  — required / medium.  Skill redesign IS a
-        #                 multi-step exploration that needs internal
-        #                 reasoning to debug API contracts and verify
-        #                 approaches. tool_choice still required so the
-        #                 agent can't drift into "I'll start the refinement"
-        #                 prose — it must call an exploratory tool or
-        #                 save_refined_skill / abandon_refinement.
-        if source == "refinement":
-            tool_choice = "required"
-            reasoning_effort = "medium"
-        elif source == "heartbeat":
-            tool_choice = "required"
-            reasoning_effort = "low"
-        else:  # chat (web/telegram/repl/anything else)
-            tool_choice = "auto"
-            reasoning_effort = "low"
+        # Per-source loop personality — tool_choice (must the model call a tool
+        # every turn?) + reasoning_effort (how much internal CoT). See
+        # _loop_personality for the per-source rationale.
+        tool_choice, reasoning_effort = self._loop_personality(source)
 
         # Provider constraints — historically used `require_parameters: True`
         # to pin OpenRouter to providers that enforce tool_choice. In
