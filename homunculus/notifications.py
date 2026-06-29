@@ -29,13 +29,13 @@ File layout (all under `root/`):
 
 from __future__ import annotations
 
-import errno
-import fcntl
 import json
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from collections.abc import Iterator
+
+from homunculus.locking import file_lock
 
 
 class NotificationQueue:
@@ -63,27 +63,13 @@ class NotificationQueue:
 
     @contextmanager
     def _flock(self) -> Iterator[None]:
-        """Exclusive fcntl flock on the lock sidecar.
+        """Exclusive lock around the drain-pointer update.
 
-        Same shape as memory._file_lock — duplicated here rather than
-        imported so this module has no upward dependency on Memory.
+        Thin wrapper over the canonical ``locking.file_lock`` so existing
+        ``self._flock()`` call sites are unchanged.
         """
-        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.lock_path.open("a") as f:
-            for _ in range(50):
-                try:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except OSError as e:
-                    if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
-                        raise
-                    time.sleep(0.1)
-            else:
-                raise RuntimeError(f"could not acquire {self.lock_path.name} after 5s")
-            try:
-                yield
-            finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        with file_lock(self.lock_path):
+            yield
 
     def queue(self, text: str) -> None:
         """Append a notification. Safe from any process."""

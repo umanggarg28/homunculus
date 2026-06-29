@@ -19,6 +19,10 @@ workspace/*
 !workspace/.gitkeep
 workspace/tasks/
 cache/
+# Stray runtime dirs created when code runs outside the container with its
+# default relative paths (./memory, ./tasks). Real state lives under workspace/.
+/memory/
+/tasks/
 
 # Obsidian per-user state — if you open workspace/memory as a vault,
 # Obsidian creates these. Already covered by `workspace/*` but listed

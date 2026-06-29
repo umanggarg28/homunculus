@@ -13,6 +13,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from homunculus.locking import file_lock
+
 
 DEFAULT_MAX_STEPS = int(os.environ.get("HOMUNCULUS_MAX_TURNS", "20"))
 DEFAULT_CONTROLS_PATH = Path(
@@ -81,16 +83,19 @@ def load_controls(path: Path | None = None) -> AgentControls:
 
 
 def save_controls(updates: dict[str, Any], path: Path | None = None) -> AgentControls:
-    current = load_controls(path)
-    data = current.to_dict()
-    for key in _FIELDS:
-        if key in updates:
-            data[key] = updates[key]
-    next_controls = _from_dict(data)
     path = path or controls_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(next_controls.to_dict(), indent=2) + "\n", encoding="utf-8")
-    return next_controls
+    # Lock the load→merge→write so a concurrent toggle from another process
+    # (web UI vs. an agent self-control call) can't drop the other's update.
+    with file_lock(path.with_suffix(".json.lock")):
+        current = load_controls(path)
+        data = current.to_dict()
+        for key in _FIELDS:
+            if key in updates:
+                data[key] = updates[key]
+        next_controls = _from_dict(data)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(next_controls.to_dict(), indent=2) + "\n", encoding="utf-8")
+        return next_controls
 
 
 def tool_block_reason(tool_name: str, *, is_mutating: bool, controls: AgentControls | None = None) -> str | None:

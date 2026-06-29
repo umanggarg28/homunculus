@@ -35,14 +35,13 @@ us ~1M turns per agent before we'd need to widen — plenty of headroom.
 
 from __future__ import annotations
 
-import errno
-import fcntl
 import json
-import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from collections.abc import Iterator
+
+from homunculus.locking import file_lock
 
 
 class Transcript:
@@ -95,23 +94,11 @@ class Transcript:
 
     @contextmanager
     def _flock(self) -> Iterator[None]:
-        """Exclusive lock around the file. Same pattern as memory._file_lock."""
-        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock_path.open("a") as f:
-            for _ in range(50):
-                try:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except OSError as e:
-                    if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
-                        raise
-                    time.sleep(0.1)
-            else:
-                raise RuntimeError(f"could not acquire {self._lock_path.name} after 5s")
-            try:
-                yield
-            finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        """Exclusive lock around an append. Thin wrapper over the canonical
+        ``locking.file_lock`` so existing ``self._flock()`` call sites are
+        unchanged."""
+        with file_lock(self._lock_path):
+            yield
 
     # ---- writes -------------------------------------------------------
 

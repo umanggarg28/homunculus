@@ -23,41 +23,11 @@ single store without booting the rest of Memory.
 
 from __future__ import annotations
 
-import errno
-import fcntl
 import json
-import time
-from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from collections.abc import Iterator
 
-
-# ---- shared lock helper -----------------------------------------------
-
-@contextmanager
-def _flock(lock_path: Path) -> Iterator[None]:
-    """Exclusive fcntl flock on a sidecar lock file.
-
-    Same shape as memory._file_lock — duplicated here so this module
-    has no upward dependency on Memory.
-    """
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a") as f:
-        for _ in range(50):
-            try:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except OSError as e:
-                if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
-                    raise
-                time.sleep(0.1)
-        else:
-            raise RuntimeError(f"could not acquire {lock_path.name} after 5s")
-        try:
-            yield
-        finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+from homunculus.locking import file_lock as _flock
 
 
 # ---- world state -------------------------------------------------------
