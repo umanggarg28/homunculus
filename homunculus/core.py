@@ -1324,6 +1324,226 @@ class Agent:
             )
         return assistant_msg, state_idx, turn_tool_choice
 
+    def _pre_iteration_injections(
+        self,
+        turn_idx: int,
+        max_turns: int,
+        user_message: str,
+        tool_names_used: set[str],
+    ) -> None:
+        """Per-iteration context maintenance, run before each LLM call.
+
+        Pure side effects on history/journal — no control flow — so it lifts
+        cleanly out of the loop body:
+          1. Mid-loop eviction: stub all but the two most recent tool results
+             so per-call input doesn't grow linearly with iteration count.
+          2. pre_turn_hook: lets a caller (heartbeat TaskGuard, tests) inject a
+             synthetic message at the start of any iteration.
+          3. Goal re-injection at the halfway mark (mem0's instruction-dilution
+             fix): the original task has drifted toward mid-context where
+             attention is lowest; restate it as a fresh high-attention note.
+          4. Budget nudge two iterations before the cap: remind the model to
+             wrap up (call complete_task / record_failure) before max_turns
+             silently bails and leaves a task stuck executing.
+        """
+        # 1. Mid-loop eviction (skip the very first iteration — nothing to evict).
+        if turn_idx > 0:
+            # keep_recent=2 floor + a ~20K char budget so a multi-source task
+            # keeps all its small results to compose, while large web_fetch
+            # payloads still cap.
+            in_loop_evicted = _evict_prior_tool_results(
+                self.history, keep_recent=2, keep_recent_chars=20000
+            )
+            if in_loop_evicted:
+                try:
+                    events.emit(
+                        "tool_results_evicted",
+                        text=events.truncate_preview(
+                            f"in-loop: stubbed {in_loop_evicted} older "
+                            f"tool result(s) at iter {turn_idx + 1}"
+                        ),
+                    )
+                except Exception:
+                    pass
+
+        # 2. Pre-turn hook (TaskGuard / tests).
+        if tools._pre_turn_hook is not None:
+            try:
+                injected = tools._pre_turn_hook(turn_idx, self.history)
+            except Exception as _hook_err:
+                injected = None
+                events.emit(
+                    "self_correction",
+                    text=f"pre_turn_hook raised at iter {turn_idx}: {_hook_err}",
+                    result="hook ignored",
+                )
+            if injected is not None:
+                # Harness-injected, not typed by the user — tag it so the
+                # chat-history endpoint can exclude it from the UI.
+                injected.setdefault("source", "harness")
+                self._journal_append(injected)
+                events.emit(
+                    "self_correction",
+                    text=f"pre_turn_hook injection at iter {turn_idx + 1}/{max_turns}",
+                    result=str(injected.get("content", ""))[:100],
+                )
+
+        # 3. Goal re-injection at the halfway point.
+        if turn_idx == max_turns // 2 and user_message:
+            used_summary = (
+                f" Tools used so far: {', '.join(sorted(tool_names_used))}."
+                if tool_names_used
+                else " No tools called yet."
+            )
+            # First 500 chars of the original task — enough for the framing,
+            # not so much that we re-bloat the context.
+            task_snippet = user_message[:500]
+            if len(user_message) > 500:
+                task_snippet += "…"
+            self._journal_append({
+                "role": "system",
+                "content": (
+                    f"# Reminder of the current goal\n\n"
+                    f"You are still working on this request:\n\n"
+                    f"> {task_snippet}\n\n"
+                    f"{used_summary} You have {max_turns - turn_idx} "
+                    f"iterations left."
+                ),
+            })
+            events.emit(
+                "self_correction",
+                text=f"goal re-injection at iter {turn_idx + 1}/{max_turns}",
+                result=task_snippet[:80],
+            )
+
+        # 4. Budget nudge two iterations before the hard cap.
+        if turn_idx == max_turns - 2:
+            self._journal_append({
+                "role": "user",
+                "source": "harness",
+                "content": (
+                    "Heads-up from the harness: you have 2 iterations left "
+                    f"of a {max_turns}-step budget. If a task is still "
+                    "active, call complete_task() now with what you have "
+                    "(it's better to deliver a partial answer than nothing). "
+                    "If the task cannot be completed, briefly explain why "
+                    "and stop calling tools — the harness will record a "
+                    "failure with your reasoning."
+                ),
+            })
+            events.emit(
+                "self_correction",
+                text=f"harness budget nudge at iter {turn_idx + 1}/{max_turns}",
+                result="injected wrap-up reminder",
+            )
+
+    def _handle_tool_choice_violation(
+        self,
+        tool_calls: list | None,
+        turn_tool_choice: str | dict,
+        assistant_msg: dict,
+        state_sequence: list[dict] | None,
+        state_idx: int,
+        required_tool_violations: int,
+    ) -> tuple[bool, int, int]:
+        """Defense-in-depth for the two ways a provider can ignore tool_choice.
+
+        Returns ``(should_retry, state_idx, required_tool_violations)``. When
+        ``should_retry`` is True the caller injects nothing further and
+        ``continue``s the loop; the returned counters carry the (incremented)
+        violation count and the (possibly rolled-back) state cursor.
+
+        Two violations are caught, both capped at 2 retries/run so a model that
+        genuinely cannot comply doesn't spin forever:
+          - Wrong forced tool: tool_choice pinned a SPECIFIC tool (dict shape)
+            but the model called a different one (some providers pass the pin
+            through without enforcing it).
+          - No tool call: tool_choice demanded a call ("required" or a dict) but
+            the response carried none.
+        A state-machine turn rolls state_idx back one so the retry re-runs the
+        SAME forced state rather than skipping ahead and breaking the chain.
+        """
+        # A dict tool_choice (forced-named tool) is strictly stricter than
+        # "required" — both demand a tool call, so both trip the detector.
+        tool_call_demanded = (
+            turn_tool_choice == "required" or isinstance(turn_tool_choice, dict)
+        )
+        forced_tool_name: str | None = None
+        if isinstance(turn_tool_choice, dict):
+            forced_tool_name = turn_tool_choice.get("function", {}).get("name")
+
+        # Wrong-forced-tool detector.
+        if (
+            tool_calls
+            and forced_tool_name is not None
+            and required_tool_violations < 2
+        ):
+            actual_name = tool_calls[0].get("function", {}).get("name")
+            if actual_name != forced_tool_name:
+                required_tool_violations += 1
+                if state_sequence is not None and state_idx > 0:
+                    state_idx -= 1
+                events.emit(
+                    "wrong_forced_tool",
+                    text=(
+                        f"forced tool was {forced_tool_name!r} but "
+                        f"model called {actual_name!r} (retry "
+                        f"{required_tool_violations}/2)"
+                    ),
+                    result=(
+                        tool_calls[0].get("function", {}).get("arguments", "")[:200]
+                    ),
+                )
+                self._journal_append({
+                    "role": "user",
+                    "source": "harness",
+                    "content": (
+                        f"Your last reply called the tool '{actual_name}' "
+                        f"but the harness required '{forced_tool_name}' "
+                        f"for this turn. Call '{forced_tool_name}' "
+                        f"specifically — that's the only tool that will "
+                        f"make progress on the current step. The previous "
+                        f"call's result was not used."
+                    ),
+                })
+                return True, state_idx, required_tool_violations
+
+        # No-tool-call detector.
+        if (
+            not tool_calls
+            and tool_call_demanded
+            and required_tool_violations < 2
+        ):
+            required_tool_violations += 1
+            # When a state-machine turn fired the violation, roll back state_idx
+            # so the next iteration re-runs the SAME state (the forced tool we
+            # wanted) rather than advancing and breaking the dependency chain.
+            if state_sequence is not None and state_idx > 0:
+                state_idx -= 1
+            events.emit(
+                "required_tool_violation",
+                text=(
+                    f"provider returned no tool_call despite "
+                    f"tool_choice=required (retry "
+                    f"{required_tool_violations}/2)"
+                ),
+                result=(assistant_msg.get("content") or "")[:200],
+            )
+            self._journal_append({
+                "role": "user",
+                "source": "harness",
+                "content": (
+                    "Your last reply did not include a tool call. In this "
+                    "mode every turn must end in exactly one tool call — "
+                    "no plain-text replies. Pick any tool from the catalogue "
+                    "and call it, or call record_failure / abandon_refinement "
+                    "if you genuinely cannot proceed."
+                ),
+            })
+            return True, state_idx, required_tool_violations
+
+        return False, state_idx, required_tool_violations
+
     def _run_loop(
         self,
         user_message: str,
@@ -1456,119 +1676,12 @@ class Agent:
         terminal_completions = 0
 
         for _turn_idx in range(max_turns):
-            # Mid-loop eviction: keep only the two most recent tool results
-            # full-fidelity; stub everything older. Without this, per-call
-            # input grows linearly with iteration count — a 15-iter task
-            # that does several web_fetches can balloon to 90K+ of stale
-            # payloads on every LLM call, hitting free-tier TPM caps. The
-            # last two are enough for the agent to reason over the call(s)
-            # it just made; anything older has already been condensed into
-            # the assistant's prior decision.
-            if _turn_idx > 0:
-                # keep_recent=2 floor + a ~20K char budget so a multi-source
-                # task (brief: commitments + weather + HN) keeps all its small
-                # results to compose, while large web_fetch payloads still cap.
-                in_loop_evicted = _evict_prior_tool_results(
-                    self.history, keep_recent=2, keep_recent_chars=20000
-                )
-                if in_loop_evicted:
-                    try:
-                        events.emit(
-                            "tool_results_evicted",
-                            text=events.truncate_preview(
-                                f"in-loop: stubbed {in_loop_evicted} older "
-                                f"tool result(s) at iter {_turn_idx + 1}"
-                            ),
-                        )
-                    except Exception:
-                        pass
-
-            # Item 5: pre-turn hook. Lets a caller (heartbeat TaskGuard, tests)
-            # inject a synthetic user message at the start of any iteration.
-            # The TaskGuard uses this at iter MAX_TURNS-1 to force a forced
-            # complete_task call when any due task is still unfinished —
-            # complementing the iter-(MAX_TURNS-2) budget nudge below.
-            if tools._pre_turn_hook is not None:
-                try:
-                    injected = tools._pre_turn_hook(_turn_idx, self.history)
-                except Exception as _hook_err:
-                    injected = None
-                    events.emit(
-                        "self_correction",
-                        text=f"pre_turn_hook raised at iter {_turn_idx}: {_hook_err}",
-                        result="hook ignored",
-                    )
-                if injected is not None:
-                    # Harness-injected, not typed by the user — tag it so
-                    # the chat-history endpoint can exclude it from the UI.
-                    injected.setdefault("source", "harness")
-                    self._journal_append(injected)
-                    events.emit(
-                        "self_correction",
-                        text=f"pre_turn_hook injection at iter {_turn_idx + 1}/{max_turns}",
-                        result=str(injected.get("content", ""))[:100],
-                    )
-
-            # Mid-loop modifier re-injection (mem0's instruction-dilution fix).
-            # At the halfway point the original user message is buried under
-            # ~10 messages of tool calls + results — attention weight on the
-            # original task drops as it moves toward the middle of context.
-            # Restating it as a fresh system note brings it back to high-
-            # attention position. We also list which tools have been used so
-            # the agent doesn't re-do work already completed.
-            if _turn_idx == max_turns // 2 and user_message:
-                used_summary = (
-                    f" Tools used so far: {', '.join(sorted(tool_names_used))}."
-                    if tool_names_used
-                    else " No tools called yet."
-                )
-                # First 500 chars of the original task — enough for the
-                # framing, not so much that we re-bloat the context.
-                task_snippet = user_message[:500]
-                if len(user_message) > 500:
-                    task_snippet += "…"
-                self._journal_append({
-                    "role": "system",
-                    "content": (
-                        f"# Reminder of the current goal\n\n"
-                        f"You are still working on this request:\n\n"
-                        f"> {task_snippet}\n\n"
-                        f"{used_summary} You have {max_turns - _turn_idx} "
-                        f"iterations left."
-                    ),
-                })
-                events.emit(
-                    "self_correction",
-                    text=f"goal re-injection at iter {_turn_idx + 1}/{max_turns}",
-                    result=task_snippet[:80],
-                )
-
-            # Budget nudge: 2 iterations before the hard cap, inject a synthetic
-            # harness message reminding the model to wrap up. Without this the
-            # loop silently hits MAX_TURNS and bails with a fallback string,
-            # leaving any due heartbeat task stuck in `executing=True` (see the
-            # post-success check in heartbeat.py:tick which then has to clean
-            # up after the fact). The nudge gives the model a chance to call
-            # complete_task / record_failure before the hard cap fires.
-            if _turn_idx == max_turns - 2:
-                self._journal_append({
-                    "role": "user",
-                    "source": "harness",
-                    "content": (
-                        "Heads-up from the harness: you have 2 iterations left "
-                        f"of a {max_turns}-step budget. If a task is still "
-                        "active, call complete_task() now with what you have "
-                        "(it's better to deliver a partial answer than nothing). "
-                        "If the task cannot be completed, briefly explain why "
-                        "and stop calling tools — the harness will record a "
-                        "failure with your reasoning."
-                    ),
-                })
-                events.emit(
-                    "self_correction",
-                    text=f"harness budget nudge at iter {_turn_idx + 1}/{max_turns}",
-                    result="injected wrap-up reminder",
-                )
+            # Per-iteration context maintenance (eviction, pre-turn hook, goal
+            # re-injection, budget nudge) — all pure side effects, no control
+            # flow. See _pre_iteration_injections.
+            self._pre_iteration_injections(
+                _turn_idx, max_turns, user_message, tool_names_used
+            )
 
             # State-machine per-turn override. Two shapes:
             #  - {"tool", "args"} → deterministic: synthesize the
@@ -1603,104 +1716,17 @@ class Agent:
             self._journal_append(cleaned)
 
             tool_calls = assistant_msg.get("tool_calls")
-            # Defense-in-depth: if tool_choice=required was set but the
-            # response has no tool_calls, the provider failed to enforce
-            # the contract (despite PR #124's require_parameters pin —
-            # which is itself best-effort across OpenRouter's provider
-            # pool). Inject a synthetic system message demanding a tool
-            # call and retry. Capped at 2 retries per run to avoid an
-            # infinite loop if the model genuinely cannot comply.
-            # A dict tool_choice (forced-named tool) is strictly stricter
-            # than "required" — it pins one specific function. Both shapes
-            # demand a tool call, so both trip the detector. Use the
-            # per-turn override so state-machine forced tools count too.
-            tool_call_demanded = (
-                turn_tool_choice == "required" or isinstance(turn_tool_choice, dict)
+            # Defense-in-depth: catch a provider that ignored tool_choice (no
+            # tool call when one was demanded, or the wrong forced tool). On a
+            # violation the helper injects a correction and signals a retry;
+            # capped at 2/run. See _handle_tool_choice_violation.
+            should_retry, state_idx, required_tool_violations = (
+                self._handle_tool_choice_violation(
+                    tool_calls, turn_tool_choice, assistant_msg,
+                    state_sequence, state_idx, required_tool_violations,
+                )
             )
-            # Wrong-forced-tool detector. When tool_choice is a dict
-            # ({"type":"function","function":{"name":"X"}}) we're
-            # asking the provider to constrain the model to a SPECIFIC
-            # tool. Some providers honor this (Anthropic, OpenAI
-            # direct); others (e.g. gpt-oss-120b on DeepInfra) pass
-            # tool_choice through but don't actually constrain — the
-            # model is free to call any
-            # tool from the catalogue. Catch the mismatch and retry
-            # with the same correction shape as the no-tool-call path.
-            forced_tool_name: str | None = None
-            if isinstance(turn_tool_choice, dict):
-                forced_tool_name = (
-                    turn_tool_choice.get("function", {}).get("name")
-                )
-            if (
-                tool_calls
-                and forced_tool_name is not None
-                and required_tool_violations < 2
-            ):
-                actual_name = tool_calls[0].get("function", {}).get("name")
-                if actual_name != forced_tool_name:
-                    required_tool_violations += 1
-                    if state_sequence is not None and state_idx > 0:
-                        state_idx -= 1
-                    events.emit(
-                        "wrong_forced_tool",
-                        text=(
-                            f"forced tool was {forced_tool_name!r} but "
-                            f"model called {actual_name!r} (retry "
-                            f"{required_tool_violations}/2)"
-                        ),
-                        result=(
-                            tool_calls[0].get("function", {}).get("arguments", "")[:200]
-                        ),
-                    )
-                    self._journal_append({
-                        "role": "user",
-                        "source": "harness",
-                        "content": (
-                            f"Your last reply called the tool '{actual_name}' "
-                            f"but the harness required '{forced_tool_name}' "
-                            f"for this turn. Call '{forced_tool_name}' "
-                            f"specifically — that's the only tool that will "
-                            f"make progress on the current step. The previous "
-                            f"call's result was not used."
-                        ),
-                    })
-                    continue  # re-enter the loop, force another LLM call
-
-            if (
-                not tool_calls
-                and tool_call_demanded
-                and required_tool_violations < 2
-            ):
-                required_tool_violations += 1
-                # When a state-machine turn fired the violation, roll
-                # back state_idx so the next iteration re-runs the
-                # SAME state (the forced tool we wanted). Without this
-                # rollback, the retry would advance to the next state
-                # (e.g. state 2 forces web_post, the model returns prose,
-                # and the retry fires state 3 instead of state 2 again),
-                # breaking the sequence's dependency chain.
-                if state_sequence is not None and state_idx > 0:
-                    state_idx -= 1
-                events.emit(
-                    "required_tool_violation",
-                    text=(
-                        f"provider returned no tool_call despite "
-                        f"tool_choice=required (retry "
-                        f"{required_tool_violations}/2)"
-                    ),
-                    result=(assistant_msg.get("content") or "")[:200],
-                )
-                self._journal_append({
-                    "role": "user",
-                    "source": "harness",
-                    "content": (
-                        "Your last reply did not include a tool call. In this "
-                        "mode every turn must end in exactly one tool call — "
-                        "no plain-text replies. Pick any tool from the catalogue "
-                        "and call it, or call record_failure / abandon_refinement "
-                        "if you genuinely cannot proceed."
-                    ),
-                })
+            if should_retry:
                 continue  # re-enter the loop, force another LLM call
             if not tool_calls:
                 reply = self._finalize_reply(
