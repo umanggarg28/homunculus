@@ -1162,6 +1162,68 @@ class Agent:
             })
         return closed
 
+    def _finalize_reply(
+        self, assistant_msg: dict, tool_names_used: set[str],
+        tool_outcomes: list[dict],
+    ) -> str | None:
+        """Turn a no-tool-call assistant message into the user-facing reply.
+
+        The non-yielding "finalize" phase: recover empty content with a nudge,
+        block prompt-leaks (terminal — canned refusal, never self-corrected),
+        then run the output guard. Returns the final reply string, or None to
+        signal the caller to `continue` the loop (an action-claim correction was
+        injected so the model can actually call the tool next iteration).
+        """
+        raw_reply = assistant_msg.get("content") or ""
+        if not raw_reply:
+            # LLM returned empty content with no tool calls — nudge
+            # it once (Letta empty-response recovery pattern).
+            raw_reply = self._nudge_for_reply()
+        raw_reply = raw_reply or "(I'm not sure how to respond — could you rephrase?)"
+
+        # System-prompt leak check BEFORE the regular output guard.
+        # A leak detection is terminal — the reply gets replaced
+        # with a canned refusal rather than self-corrected. We
+        # don't want to feed the leaking text back through the
+        # correction loop where it could re-leak in the next pass.
+        leak_kind = _detect_prompt_leak(raw_reply, self._turn_canary or "")
+        if leak_kind is not None:
+            try:
+                events.emit(
+                    "prompt_leak_blocked",
+                    text=f"kind={leak_kind}",
+                    result=raw_reply[:120].replace("\n", " "),
+                )
+            except Exception:
+                pass
+            raw_reply = _CANARY_RESPONSE
+
+        clean, violations = self._output_guard(raw_reply, tool_names_used, tool_outcomes)
+
+        if clean is None:
+            # Guard fired — self-correct (AutoGen/Letta pattern).
+            events.emit(
+                "self_correction",
+                text=f"violations: {', '.join(violations)}",
+                result=raw_reply[:80].replace("\n", " "),
+            )
+            if "action_claim_without_tool_call" in violations:
+                # Model claimed to do something without calling tools.
+                # Re-enter the loop with a correction injected so the
+                # model can actually call the tool this time.
+                self._journal_append({
+                    "role": "user",
+                    "source": "harness",
+                    "content": self._ACTION_CLAIM_CORRECTION_PROMPT,
+                })
+                return None  # correction injected — re-enter the loop
+            reply = self._self_correct(tool_names_used, violations, tool_outcomes)
+            self._journal_replace_last_content(reply)
+        else:
+            reply = clean
+            self._journal_replace_last_content(reply)
+        return reply
+
     def _run_loop(
         self,
         user_message: str,
@@ -1620,61 +1682,12 @@ class Agent:
                 })
                 continue  # re-enter the loop, force another LLM call
             if not tool_calls:
-                raw_reply = assistant_msg.get("content") or ""
-                if not raw_reply:
-                    # LLM returned empty content with no tool calls — nudge
-                    # it once (Letta empty-response recovery pattern).
-                    raw_reply = self._nudge_for_reply()
-                raw_reply = raw_reply or "(I'm not sure how to respond — could you rephrase?)"
-
-                # System-prompt leak check BEFORE the regular output guard.
-                # A leak detection is terminal — the reply gets replaced
-                # with a canned refusal rather than self-corrected. We
-                # don't want to feed the leaking text back through the
-                # correction loop where it could re-leak in the next pass.
-                leak_kind = _detect_prompt_leak(raw_reply, self._turn_canary or "")
-                if leak_kind is not None:
-                    try:
-                        events.emit(
-                            "prompt_leak_blocked",
-                            text=f"kind={leak_kind}",
-                            result=raw_reply[:120].replace("\n", " "),
-                        )
-                    except Exception:
-                        pass
-                    raw_reply = _CANARY_RESPONSE
-
-                clean, violations = self._output_guard(raw_reply, tool_names_used, tool_outcomes)
-
-                if clean is None:
-                    # Guard fired — self-correct (AutoGen/Letta pattern).
-                    events.emit(
-                        "self_correction",
-                        text=f"violations: {', '.join(violations)}",
-                        result=raw_reply[:80].replace("\n", " "),
-                    )
-                    if "action_claim_without_tool_call" in violations:
-                        # Model claimed to do something without calling tools.
-                        # Re-enter the loop with a correction injected so the
-                        # model can actually call the tool this time.
-                        self._journal_append({
-                            "role": "user",
-                            "source": "harness",
-                            "content": self._ACTION_CLAIM_CORRECTION_PROMPT,
-                        })
-                        continue  # next iteration picks up the correction
-                    reply = self._self_correct(tool_names_used, violations, tool_outcomes)
-                    self._journal_replace_last_content(reply)
-                else:
-                    reply = clean
-                    self._journal_replace_last_content(reply)
-
-                if streaming:
-                    # Stream was buffered — now flush the final reply.
-                    yield reply
-                else:
-                    yield reply
-
+                reply = self._finalize_reply(
+                    assistant_msg, tool_names_used, tool_outcomes,
+                )
+                if reply is None:
+                    continue  # action-claim correction injected; re-enter loop
+                yield reply
                 if self.memory is not None:
                     self.memory.log_turn("assistant", reply)
                 events.emit("assistant_reply", text=events.full_text(reply))
