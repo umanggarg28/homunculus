@@ -78,7 +78,7 @@ async def user_location_set(request: Request) -> JSONResponse:
         if not geo:
             return JSONResponse({"ok": False, "reason": f"could not geocode {city!r}"}, status_code=404)
         lat, lon, label = geo["lat"], geo["lon"], geo["label"]
-    stored = set_user_location(lat, lon, label or "")
+    stored = set_user_location(lat, lon, str(label or ""))
     if not stored:
         return JSONResponse({"ok": False, "reason": "invalid coordinates"}, status_code=400)
     return JSONResponse({"ok": True, "stored": stored})

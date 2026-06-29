@@ -138,6 +138,8 @@ def github_profile(user: str = "") -> str:
     if not _USER_RE.match(user):
         return "ERROR: invalid GitHub username."
     summary = _build_summary(user)
+    if summary is None:
+        return "ERROR: could not build GitHub profile summary."
     if summary.startswith(("ERROR:", "BLOCKED:")):
         return summary
     return snapshot_or_diff(user, summary)

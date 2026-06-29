@@ -53,7 +53,9 @@ def parse_feed_entries(text: str) -> list[dict[str, str]] | None:
         if link_el is None:
             link = ""
         elif link_el.get("href"):  # Atom: <link href="...">
-            link = link_el.get("href", "")
+            href = link_el.get("href", "")
+            # bs4 types a multi-valued attribute as list[str]; href is single.
+            link = " ".join(href) if isinstance(href, list) else (href or "")
         else:  # RSS: <link>text</link>
             link = link_el.get_text(strip=True)
 

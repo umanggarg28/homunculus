@@ -15,6 +15,8 @@ Agent installs (see core.py:_install_tool_loader).
 
 from __future__ import annotations
 
+from typing import cast
+
 from . import _state
 
 
@@ -26,7 +28,11 @@ def load_tool(name: str) -> str:
     pre_execute_hook which intercepts the call BEFORE this function
     runs — so the side-effect lands before this string is returned.
     """
-    available = _state.get_known_tool_names() if hasattr(_state, "get_known_tool_names") else set()
+    # Forward-compat hook: if a tool registry is ever injected on _state, use it
+    # to validate the name; otherwise this stays a no-op (the Agent's hook owns
+    # the real active-set mutation).
+    _known = getattr(_state, "get_known_tool_names", None)
+    available: set[str] = cast("set[str]", _known()) if callable(_known) else set()
     if available and name not in available:
         return (
             f"ERROR: no tool named '{name}'. Available tools are listed "

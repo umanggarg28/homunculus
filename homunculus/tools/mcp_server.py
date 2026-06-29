@@ -25,6 +25,7 @@ import json as _json
 from typing import Annotated, Literal
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from . import (
@@ -40,7 +41,7 @@ mcp = FastMCP("homunculus-builtin")
 # ── filesystem ────────────────────────────────────────────────────────
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def read_file(
     path: Annotated[str, Field(description="Path to the file.")],
 ) -> str:
@@ -48,7 +49,7 @@ def read_file(
     return filesystem.read_file(path)
 
 
-@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
 def write_file(
     path: Annotated[str, Field(description="Path to write.")],
     content: Annotated[str, Field(description="Text content.")],
@@ -57,7 +58,7 @@ def write_file(
     return filesystem.write_file(path, content)
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def append_file(
     path: Annotated[str, Field(description="Path to append to. Created if it doesn't exist.")],
     content: Annotated[str, Field(description="Text to append.")],
@@ -66,7 +67,7 @@ def append_file(
     return filesystem.append_file(path, content)
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def list_files(
     path: Annotated[str, Field(description="Directory to list. Defaults to workspace root '.'.")] = ".",
 ) -> str:
@@ -78,7 +79,7 @@ def list_files(
     return filesystem.list_files(path)
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def search_files(
     query: Annotated[str, Field(description="Text or regex to search for.")],
     path: Annotated[str, Field(description="Directory to search under. Defaults to workspace root '.'.")] = ".",
@@ -95,7 +96,7 @@ def search_files(
 # ── memory ────────────────────────────────────────────────────────────
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def remember(
     name: Annotated[str, Field(description="Short title for the memory.")],
     description: Annotated[str, Field(description="One-line summary used in the index.")],
@@ -122,7 +123,7 @@ def remember(
     return memory_tools.remember(name=name, description=description, type=type, body=body, related=related)
 
 
-@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
 def forget(
     name: Annotated[str, Field(description="Memory name or filename (with or without .md).")],
 ) -> str:
@@ -130,7 +131,7 @@ def forget(
     return memory_tools.forget(name)
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def recall(
     query: Annotated[
         str,
@@ -153,7 +154,7 @@ def recall(
     return memory_tools.search_memory(query)
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def conversation_search(
     query: Annotated[
         str,
@@ -216,7 +217,7 @@ def conversation_search(
 # ── archival memory (item 6 of robustness plan) ──────────────────────
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def archival_memory_insert(
     content: Annotated[str, Field(description="Full text to persist to archival memory. No size limit; long content stays out of conversation.")],
     tags: Annotated[
@@ -238,7 +239,7 @@ def archival_memory_insert(
     return mem.archival.insert(content, tags)
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def archival_memory_search(
     query: Annotated[str, Field(description="Search query — semantic similarity over the archival store.")],
     k: Annotated[int, Field(description="Number of top results to return. Default 5, max 20.", ge=1, le=20)] = 5,
@@ -257,7 +258,7 @@ def archival_memory_search(
     return mem.archival.search(query, k)
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def get_world_state() -> str:
     """Read the current session world state.
 
@@ -272,7 +273,7 @@ def get_world_state() -> str:
     return _json.dumps(state, indent=2)
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def update_world_state(
     updates: Annotated[
         dict,
@@ -296,7 +297,7 @@ def update_world_state(
     return "World state updated: " + _json.dumps(state)
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def rate_skill(
     name: Annotated[str, Field(description="Name of the skill memory to rate (partial match ok).")],
     outcome: Annotated[
@@ -336,7 +337,7 @@ def _resolve_tz(timezone: str):
         )
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def get_current_time(
     timezones: Annotated[
         list[str] | None,
@@ -386,7 +387,7 @@ def get_current_time(
 # ── web ───────────────────────────────────────────────────────────────
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def web_search(
     query: Annotated[str, Field(description="Search query.")],
 ) -> str:
@@ -394,7 +395,7 @@ def web_search(
     return web.web_search(query)
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def web_fetch(
     url: Annotated[str, Field(description="URL to fetch.")],
 ) -> str:
@@ -402,13 +403,13 @@ def web_fetch(
     return web.web_fetch(url)
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def get_weather() -> str:
     """Today's weather (condition, high/low °C) for the user's configured home location. Takes NO arguments — the location is read from config, never supplied by you. If it returns 'WEATHER UNAVAILABLE', omit weather rather than inventing a forecast."""
     return weather_mod.get_weather()
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def news_headlines(
     topic: Annotated[str, Field(description="Optional topic to prefer feeds by label, e.g. 'tech', 'ai', 'world', 'hackernews'. Empty = all sources.")] = "",
     limit: Annotated[int, Field(description="How many headlines total (1-15).")] = 5,
@@ -417,7 +418,7 @@ def news_headlines(
     return news_mod.news_headlines(topic=topic, limit=limit)
 
 
-@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
 def web_post(
     url: Annotated[str, Field(description="URL to POST to.")],
     json_body: Annotated[
@@ -443,7 +444,7 @@ def web_post(
     return web.web_post(url, json_body=json_body, headers=headers, raw_body=raw_body)
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def watch_url(
     name: Annotated[str, Field(description="Stable slug identifying this watch (e.g. 'gh-stars-homunculus'). Reuse the EXACT same name on every run — the diff is against the previous call with this name.")],
     url: Annotated[str, Field(description="URL to watch. Use a URL the user gave you or one you verified via web_search — never invent or guess a URL.")],
@@ -459,7 +460,7 @@ def watch_url(
     return watch.watch_url(name, url)
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def github_profile(
     user: Annotated[str, Field(description="Leave EMPTY for the operator's own profile (the configured handle) — this is the normal case. Only set it to look up a DIFFERENT person by their exact handle. NEVER guess the operator's username from their name.")] = "",
 ) -> str:
@@ -473,7 +474,7 @@ def github_profile(
     return github.github_profile(user)
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def rss_feed(
     name: Annotated[str, Field(description="Stable slug for this feed (e.g. 'tldr-newsletter'). Reuse it every run — new entries are detected by diffing against the previous call with this name.")],
     url: Annotated[str, Field(description="RSS or Atom feed URL. Use a feed URL the user gave you or one you verified via web_search — never guess a feed address.")],
@@ -486,7 +487,7 @@ def rss_feed(
     return rss.rss_feed(name, url)
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def quiz_pick(
     topic: Annotated[
         str,
@@ -506,7 +507,7 @@ def quiz_pick(
     return coach.quiz_pick(topic)
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def quiz_grade(
     outcome: Annotated[
         Literal["correct", "partial", "wrong"],
@@ -522,7 +523,7 @@ def quiz_grade(
 # ── self-authoring (propose skills for human review) ──────────────────
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def propose_skill(
     name: Annotated[str, Field(description="Skill name, skill_<slug> (e.g. 'skill_summarize_hn').")],
     body: Annotated[str, Field(description="The COMPLETE skill markdown — '---' frontmatter (name, description, type: skill, optional states:) then the full playbook body. The body REPLACES the file, so it must be self-contained: never write 'unchanged', 'as before', or a diff. Required for a new_skill; for a skill_edit prefer `edits` instead.")] = "",
@@ -548,7 +549,7 @@ def propose_skill(
     return authoring.propose_skill(name, body, rationale, kind, task, edits)
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def list_proposals(
     status: Annotated[str, Field(description="pending | approved | rejected | all")] = "pending",
 ) -> str:
@@ -556,7 +557,7 @@ def list_proposals(
     return authoring.list_proposals(status)
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def propose_memory_consolidation(
     limit: Annotated[int, Field(description="Maximum proposals to file, 1-20.")] = 5,
 ) -> str:
@@ -569,7 +570,7 @@ def propose_memory_consolidation(
 # ── sandbox ───────────────────────────────────────────────────────────
 
 
-@mcp.tool(name="python", annotations={"readOnlyHint": False})
+@mcp.tool(name="python", annotations=ToolAnnotations(readOnlyHint=False))
 def python_tool(
     code: Annotated[str, Field(description="Python source to execute. Must print results to stdout — return values are not captured.")],
 ) -> str:
@@ -582,7 +583,7 @@ def python_tool(
     return sandbox.python_exec(code)
 
 
-@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
 def shell_exec(
     command: Annotated[str, Field(description="Shell command to run.")],
 ) -> str:
@@ -593,7 +594,7 @@ def shell_exec(
 # ── scheduling ────────────────────────────────────────────────────────
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def schedule_next_tick(
     iso_datetime: Annotated[str, Field(description="Target wake time, ISO 8601, local timezone.")],
 ) -> str:
@@ -601,7 +602,7 @@ def schedule_next_tick(
     return scheduling.schedule_next_tick(iso_datetime)
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def create_task(
     title: Annotated[str, Field(description="Short title for the task.")],
     description: Annotated[str, Field(description="Optional detail.")] = "",
@@ -621,7 +622,7 @@ def create_task(
     return scheduling.create_task(title, description, due_at, recurrence, notify)
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def list_tasks(
     status: Annotated[
         Literal["active", "completed", "cancelled", "all"],
@@ -632,7 +633,7 @@ def list_tasks(
     return scheduling.list_tasks(status)
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def task_health_summary() -> str:
     """Deterministic snapshot for the morning brief: today's commitments,
     real alerts (only tasks whose most recent run failed), and recovered
@@ -642,7 +643,7 @@ def task_health_summary() -> str:
     return scheduling.task_health_summary()
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def week_in_review() -> str:
     """Deterministic 7-day self-report: cost vs budget (per day),
     LLM/token usage, notifications sent, task outcomes, guard blocks,
@@ -652,7 +653,7 @@ def week_in_review() -> str:
     return report.week_in_review()
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def complete_task(
     task_id: Annotated[str, Field(description="Task id to complete.")],
     result: Annotated[str, Field(description="Optional result note.")] = "",
@@ -661,7 +662,7 @@ def complete_task(
     return scheduling.complete_task(task_id, result)
 
 
-@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
 def cancel_task(
     task_id: Annotated[str, Field(description="Task id to cancel.")],
     reason: Annotated[str, Field(description="Optional reason.")] = "",
@@ -670,7 +671,7 @@ def cancel_task(
     return scheduling.cancel_task(task_id, reason)
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def record_failure(
     task_id: Annotated[str, Field(description="Task id you genuinely could not deliver.")],
     reason: Annotated[str, Field(description="One-line reason (broken source, missing data, repeated errors).")] = "",
@@ -682,7 +683,7 @@ def record_failure(
     return scheduling.record_failure(task_id, reason)
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def schedule_task(
     task_id: Annotated[str, Field(description="Task id to schedule.")],
     due_at: Annotated[str, Field(description="ISO local datetime.")],
@@ -695,7 +696,7 @@ def schedule_task(
     return scheduling.schedule_task(task_id, due_at, recurrence)
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def continue_task(
     task_id: Annotated[str, Field(description="Task id of the task you're partway through.")],
     reason: Annotated[
@@ -723,7 +724,7 @@ def continue_task(
     return scheduling.continue_task(task_id, reason, scratchpad_update)
 
 
-@mcp.tool(annotations={"readOnlyHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def load_tool(
     name: Annotated[str, Field(description="Name of the tool to load (from the 'Loadable tools' list in your system prompt).")],
 ) -> str:
@@ -740,7 +741,7 @@ def load_tool(
     return _meta.load_tool(name)
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def task_scratchpad(
     task_id: Annotated[str, Field(description="Task id whose scratchpad to read or write.")],
     content: Annotated[
@@ -765,7 +766,7 @@ def task_scratchpad(
 # ── notify ────────────────────────────────────────────────────────────
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def notify(
     text: Annotated[
         str,
@@ -803,7 +804,7 @@ def notify(
 # in for the duration of the refinement Agent call.
 
 
-@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
 def save_refined_skill(
     skill_name: Annotated[
         str,
@@ -829,7 +830,7 @@ def save_refined_skill(
     return skill_refinement_mod.save_refined_skill(skill_name, new_body, rationale)
 
 
-@mcp.tool(annotations={"readOnlyHint": False})
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def abandon_refinement(
     reason: Annotated[
         str,

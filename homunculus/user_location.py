@@ -76,7 +76,9 @@ def _parse(raw: str) -> dict[str, float | str] | None:
     return {"lat": lat, "lon": lon, "label": label}
 
 
-def set_user_location(lat: float, lon: float, label: str = "") -> dict[str, float | str] | None:
+def set_user_location(
+    lat: float | str, lon: float | str, label: str = ""
+) -> dict[str, float | str] | None:
     """Persist a new home location. Called from the web API when the browser
     reports geolocation, or after geocoding a typed city. Validates ranges so
     we never store garbage; returns the stored dict or None if invalid."""

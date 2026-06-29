@@ -83,7 +83,8 @@ def status() -> JSONResponse:
                 t = datetime.fromisoformat(ts).timestamp()
             except ValueError:
                 continue
-            if last_seen[svc] is None or t > last_seen[svc]:
+            prev = last_seen[svc]
+            if prev is None or t > prev:
                 last_seen[svc] = t
 
     now = datetime.now().timestamp()
