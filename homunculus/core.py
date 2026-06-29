@@ -1162,6 +1162,168 @@ class Agent:
             })
         return closed
 
+    def _finalize_reply(
+        self, assistant_msg: dict, tool_names_used: set[str],
+        tool_outcomes: list[dict],
+    ) -> str | None:
+        """Turn a no-tool-call assistant message into the user-facing reply.
+
+        The non-yielding "finalize" phase: recover empty content with a nudge,
+        block prompt-leaks (terminal — canned refusal, never self-corrected),
+        then run the output guard. Returns the final reply string, or None to
+        signal the caller to `continue` the loop (an action-claim correction was
+        injected so the model can actually call the tool next iteration).
+        """
+        raw_reply = assistant_msg.get("content") or ""
+        if not raw_reply:
+            # LLM returned empty content with no tool calls — nudge
+            # it once (Letta empty-response recovery pattern).
+            raw_reply = self._nudge_for_reply()
+        raw_reply = raw_reply or "(I'm not sure how to respond — could you rephrase?)"
+
+        # System-prompt leak check BEFORE the regular output guard.
+        # A leak detection is terminal — the reply gets replaced
+        # with a canned refusal rather than self-corrected. We
+        # don't want to feed the leaking text back through the
+        # correction loop where it could re-leak in the next pass.
+        leak_kind = _detect_prompt_leak(raw_reply, self._turn_canary or "")
+        if leak_kind is not None:
+            try:
+                events.emit(
+                    "prompt_leak_blocked",
+                    text=f"kind={leak_kind}",
+                    result=raw_reply[:120].replace("\n", " "),
+                )
+            except Exception:
+                pass
+            raw_reply = _CANARY_RESPONSE
+
+        clean, violations = self._output_guard(raw_reply, tool_names_used, tool_outcomes)
+
+        if clean is None:
+            # Guard fired — self-correct (AutoGen/Letta pattern).
+            events.emit(
+                "self_correction",
+                text=f"violations: {', '.join(violations)}",
+                result=raw_reply[:80].replace("\n", " "),
+            )
+            if "action_claim_without_tool_call" in violations:
+                # Model claimed to do something without calling tools.
+                # Re-enter the loop with a correction injected so the
+                # model can actually call the tool this time.
+                self._journal_append({
+                    "role": "user",
+                    "source": "harness",
+                    "content": self._ACTION_CLAIM_CORRECTION_PROMPT,
+                })
+                return None  # correction injected — re-enter the loop
+            reply = self._self_correct(tool_names_used, violations, tool_outcomes)
+            self._journal_replace_last_content(reply)
+        else:
+            reply = clean
+            self._journal_replace_last_content(reply)
+        return reply
+
+    def _call_model(
+        self, state_sequence, state_idx, tool_choice, streaming,
+        reasoning_effort, provider_constraints,
+    ):
+        """The "call" phase: produce one assistant message for this turn.
+
+        Honours the optional Pi-style state machine — a deterministic
+        {tool,args} state synthesizes the assistant tool_call locally (no LLM
+        round-trip); a {tool} state pins tool_choice for this turn only. Streamed
+        content is buffered (not yielded) so the output guard sees the complete
+        reply. Returns (assistant_msg, state_idx, turn_tool_choice); assistant_msg
+        is None to signal an empty stream (the caller ends the turn).
+        """
+        turn_tool_choice = tool_choice
+        synthesized_assistant_msg: dict | None = None
+        if state_sequence is not None and state_idx < len(state_sequence):
+            state = state_sequence[state_idx]
+            state_tool = state.get("tool")
+            state_args = state.get("args")
+            if state_tool is None:
+                raise RuntimeError(
+                    f"state_sequence[{state_idx}] missing required 'tool' field"
+                )
+            if state_args is not None:
+                synthesized_assistant_msg = {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": f"state-{state_idx}",
+                        "type": "function",
+                        "function": {
+                            "name": state_tool,
+                            "arguments": json.dumps(state_args),
+                        },
+                    }],
+                }
+                events.emit(
+                    "state_machine_step",
+                    text=(
+                        f"state {state_idx + 1}/{len(state_sequence)}: "
+                        f"deterministic {state_tool}"
+                    ),
+                )
+            else:
+                turn_tool_choice = {
+                    "type": "function",
+                    "function": {"name": state_tool},
+                }
+                events.emit(
+                    "state_machine_step",
+                    text=(
+                        f"state {state_idx + 1}/{len(state_sequence)}: "
+                        f"forcing tool {state_tool}"
+                    ),
+                )
+            state_idx += 1
+
+        if synthesized_assistant_msg is not None:
+            # Deterministic state: bypass the LLM entirely. The dispatch
+            # path below treats this exactly as a normal model reply.
+            assistant_msg = synthesized_assistant_msg
+        elif streaming:
+            # Buffer the full stream before yielding — lets the output
+            # guard check the complete reply and self-correct if needed
+            # before anything reaches the client.
+            assistant_msg = None
+            stream_chunks: list[str] = []
+            active_schemas = (
+                tools.SCHEMAS
+                if self._active_tool_names is None
+                or not hasattr(tools, "schemas_for")
+                else tools.schemas_for(self._active_tool_names)
+            )
+            for kind, payload in call_llm_stream(
+                self.history, active_schemas, model=self.model,
+                tool_choice=turn_tool_choice,
+                reasoning_effort=reasoning_effort,
+                provider_constraints=provider_constraints,
+            ):
+                if kind == "content":
+                    stream_chunks.append(payload)
+                elif kind == "done":
+                    assistant_msg = payload
+            if assistant_msg is None:
+                return None, state_idx, turn_tool_choice
+        else:
+            active_schemas = (
+                tools.SCHEMAS
+                if self._active_tool_names is None
+                or not hasattr(tools, "schemas_for")
+                else tools.schemas_for(self._active_tool_names)
+            )
+            assistant_msg = call_llm(
+                self.history, active_schemas, model=self.model,
+                tool_choice=turn_tool_choice,
+                reasoning_effort=reasoning_effort,
+                provider_constraints=provider_constraints,
+            )
+        return assistant_msg, state_idx, turn_tool_choice
+
     def _run_loop(
         self,
         user_message: str,
@@ -1417,92 +1579,13 @@ class Agent:
             #  - {"tool"}         → model-driven: pin tool_choice to the
             #    dict form for this turn only; reset next iteration.
             # Either way, advance state_idx so the next turn moves on.
-            turn_tool_choice = tool_choice
-            synthesized_assistant_msg: dict | None = None
-            if state_sequence is not None and state_idx < len(state_sequence):
-                state = state_sequence[state_idx]
-                state_tool = state.get("tool")
-                state_args = state.get("args")
-                if state_tool is None:
-                    raise RuntimeError(
-                        f"state_sequence[{state_idx}] missing required 'tool' field"
-                    )
-                if state_args is not None:
-                    synthesized_assistant_msg = {
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": [{
-                            "id": f"state-{state_idx}",
-                            "type": "function",
-                            "function": {
-                                "name": state_tool,
-                                "arguments": json.dumps(state_args),
-                            },
-                        }],
-                    }
-                    events.emit(
-                        "state_machine_step",
-                        text=(
-                            f"state {state_idx + 1}/{len(state_sequence)}: "
-                            f"deterministic {state_tool}"
-                        ),
-                    )
-                else:
-                    turn_tool_choice = {
-                        "type": "function",
-                        "function": {"name": state_tool},
-                    }
-                    events.emit(
-                        "state_machine_step",
-                        text=(
-                            f"state {state_idx + 1}/{len(state_sequence)}: "
-                            f"forcing tool {state_tool}"
-                        ),
-                    )
-                state_idx += 1
-
-            if synthesized_assistant_msg is not None:
-                # Deterministic state: bypass the LLM entirely. The dispatch
-                # path below treats this exactly as a normal model reply.
-                assistant_msg = synthesized_assistant_msg
-            elif streaming:
-                # Buffer the full stream before yielding — lets the output
-                # guard check the complete reply and self-correct if needed
-                # before anything reaches the client.
-                assistant_msg = None
-                stream_chunks: list[str] = []
-                active_schemas = (
-                    tools.SCHEMAS
-                    if self._active_tool_names is None
-                    or not hasattr(tools, "schemas_for")
-                    else tools.schemas_for(self._active_tool_names)
-                )
-                for kind, payload in call_llm_stream(
-                    self.history, active_schemas, model=self.model,
-                    tool_choice=turn_tool_choice,
-                    reasoning_effort=reasoning_effort,
-                    provider_constraints=provider_constraints,
-                ):
-                    if kind == "content":
-                        stream_chunks.append(payload)
-                    elif kind == "done":
-                        assistant_msg = payload
-                if assistant_msg is None:
-                    yield "\n(empty stream)\n"
-                    return
-            else:
-                active_schemas = (
-                    tools.SCHEMAS
-                    if self._active_tool_names is None
-                    or not hasattr(tools, "schemas_for")
-                    else tools.schemas_for(self._active_tool_names)
-                )
-                assistant_msg = call_llm(
-                    self.history, active_schemas, model=self.model,
-                    tool_choice=turn_tool_choice,
-                    reasoning_effort=reasoning_effort,
-                    provider_constraints=provider_constraints,
-                )
+            assistant_msg, state_idx, turn_tool_choice = self._call_model(
+                state_sequence, state_idx, tool_choice, streaming,
+                reasoning_effort, provider_constraints,
+            )
+            if assistant_msg is None:
+                yield "\n(empty stream)\n"
+                return
 
             # Strip provider-specific extras (reasoning, null fields) that
             # the API rejects when replayed as part of the next request.
@@ -1620,61 +1703,12 @@ class Agent:
                 })
                 continue  # re-enter the loop, force another LLM call
             if not tool_calls:
-                raw_reply = assistant_msg.get("content") or ""
-                if not raw_reply:
-                    # LLM returned empty content with no tool calls — nudge
-                    # it once (Letta empty-response recovery pattern).
-                    raw_reply = self._nudge_for_reply()
-                raw_reply = raw_reply or "(I'm not sure how to respond — could you rephrase?)"
-
-                # System-prompt leak check BEFORE the regular output guard.
-                # A leak detection is terminal — the reply gets replaced
-                # with a canned refusal rather than self-corrected. We
-                # don't want to feed the leaking text back through the
-                # correction loop where it could re-leak in the next pass.
-                leak_kind = _detect_prompt_leak(raw_reply, self._turn_canary or "")
-                if leak_kind is not None:
-                    try:
-                        events.emit(
-                            "prompt_leak_blocked",
-                            text=f"kind={leak_kind}",
-                            result=raw_reply[:120].replace("\n", " "),
-                        )
-                    except Exception:
-                        pass
-                    raw_reply = _CANARY_RESPONSE
-
-                clean, violations = self._output_guard(raw_reply, tool_names_used, tool_outcomes)
-
-                if clean is None:
-                    # Guard fired — self-correct (AutoGen/Letta pattern).
-                    events.emit(
-                        "self_correction",
-                        text=f"violations: {', '.join(violations)}",
-                        result=raw_reply[:80].replace("\n", " "),
-                    )
-                    if "action_claim_without_tool_call" in violations:
-                        # Model claimed to do something without calling tools.
-                        # Re-enter the loop with a correction injected so the
-                        # model can actually call the tool this time.
-                        self._journal_append({
-                            "role": "user",
-                            "source": "harness",
-                            "content": self._ACTION_CLAIM_CORRECTION_PROMPT,
-                        })
-                        continue  # next iteration picks up the correction
-                    reply = self._self_correct(tool_names_used, violations, tool_outcomes)
-                    self._journal_replace_last_content(reply)
-                else:
-                    reply = clean
-                    self._journal_replace_last_content(reply)
-
-                if streaming:
-                    # Stream was buffered — now flush the final reply.
-                    yield reply
-                else:
-                    yield reply
-
+                reply = self._finalize_reply(
+                    assistant_msg, tool_names_used, tool_outcomes,
+                )
+                if reply is None:
+                    continue  # action-claim correction injected; re-enter loop
+                yield reply
                 if self.memory is not None:
                     self.memory.log_turn("assistant", reply)
                 events.emit("assistant_reply", text=events.full_text(reply))
