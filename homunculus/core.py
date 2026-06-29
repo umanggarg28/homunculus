@@ -1224,6 +1224,106 @@ class Agent:
             self._journal_replace_last_content(reply)
         return reply
 
+    def _call_model(
+        self, state_sequence, state_idx, tool_choice, streaming,
+        reasoning_effort, provider_constraints,
+    ):
+        """The "call" phase: produce one assistant message for this turn.
+
+        Honours the optional Pi-style state machine — a deterministic
+        {tool,args} state synthesizes the assistant tool_call locally (no LLM
+        round-trip); a {tool} state pins tool_choice for this turn only. Streamed
+        content is buffered (not yielded) so the output guard sees the complete
+        reply. Returns (assistant_msg, state_idx, turn_tool_choice); assistant_msg
+        is None to signal an empty stream (the caller ends the turn).
+        """
+        turn_tool_choice = tool_choice
+        synthesized_assistant_msg: dict | None = None
+        if state_sequence is not None and state_idx < len(state_sequence):
+            state = state_sequence[state_idx]
+            state_tool = state.get("tool")
+            state_args = state.get("args")
+            if state_tool is None:
+                raise RuntimeError(
+                    f"state_sequence[{state_idx}] missing required 'tool' field"
+                )
+            if state_args is not None:
+                synthesized_assistant_msg = {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": f"state-{state_idx}",
+                        "type": "function",
+                        "function": {
+                            "name": state_tool,
+                            "arguments": json.dumps(state_args),
+                        },
+                    }],
+                }
+                events.emit(
+                    "state_machine_step",
+                    text=(
+                        f"state {state_idx + 1}/{len(state_sequence)}: "
+                        f"deterministic {state_tool}"
+                    ),
+                )
+            else:
+                turn_tool_choice = {
+                    "type": "function",
+                    "function": {"name": state_tool},
+                }
+                events.emit(
+                    "state_machine_step",
+                    text=(
+                        f"state {state_idx + 1}/{len(state_sequence)}: "
+                        f"forcing tool {state_tool}"
+                    ),
+                )
+            state_idx += 1
+
+        if synthesized_assistant_msg is not None:
+            # Deterministic state: bypass the LLM entirely. The dispatch
+            # path below treats this exactly as a normal model reply.
+            assistant_msg = synthesized_assistant_msg
+        elif streaming:
+            # Buffer the full stream before yielding — lets the output
+            # guard check the complete reply and self-correct if needed
+            # before anything reaches the client.
+            assistant_msg = None
+            stream_chunks: list[str] = []
+            active_schemas = (
+                tools.SCHEMAS
+                if self._active_tool_names is None
+                or not hasattr(tools, "schemas_for")
+                else tools.schemas_for(self._active_tool_names)
+            )
+            for kind, payload in call_llm_stream(
+                self.history, active_schemas, model=self.model,
+                tool_choice=turn_tool_choice,
+                reasoning_effort=reasoning_effort,
+                provider_constraints=provider_constraints,
+            ):
+                if kind == "content":
+                    stream_chunks.append(payload)
+                elif kind == "done":
+                    assistant_msg = payload
+            if assistant_msg is None:
+                return None, state_idx, turn_tool_choice
+        else:
+            active_schemas = (
+                tools.SCHEMAS
+                if self._active_tool_names is None
+                or not hasattr(tools, "schemas_for")
+                else tools.schemas_for(self._active_tool_names)
+            )
+            assistant_msg = call_llm(
+                self.history, active_schemas, model=self.model,
+                tool_choice=turn_tool_choice,
+                reasoning_effort=reasoning_effort,
+                provider_constraints=provider_constraints,
+            )
+        return assistant_msg, state_idx, turn_tool_choice
+
     def _run_loop(
         self,
         user_message: str,
@@ -1479,92 +1579,13 @@ class Agent:
             #  - {"tool"}         → model-driven: pin tool_choice to the
             #    dict form for this turn only; reset next iteration.
             # Either way, advance state_idx so the next turn moves on.
-            turn_tool_choice = tool_choice
-            synthesized_assistant_msg: dict | None = None
-            if state_sequence is not None and state_idx < len(state_sequence):
-                state = state_sequence[state_idx]
-                state_tool = state.get("tool")
-                state_args = state.get("args")
-                if state_tool is None:
-                    raise RuntimeError(
-                        f"state_sequence[{state_idx}] missing required 'tool' field"
-                    )
-                if state_args is not None:
-                    synthesized_assistant_msg = {
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": [{
-                            "id": f"state-{state_idx}",
-                            "type": "function",
-                            "function": {
-                                "name": state_tool,
-                                "arguments": json.dumps(state_args),
-                            },
-                        }],
-                    }
-                    events.emit(
-                        "state_machine_step",
-                        text=(
-                            f"state {state_idx + 1}/{len(state_sequence)}: "
-                            f"deterministic {state_tool}"
-                        ),
-                    )
-                else:
-                    turn_tool_choice = {
-                        "type": "function",
-                        "function": {"name": state_tool},
-                    }
-                    events.emit(
-                        "state_machine_step",
-                        text=(
-                            f"state {state_idx + 1}/{len(state_sequence)}: "
-                            f"forcing tool {state_tool}"
-                        ),
-                    )
-                state_idx += 1
-
-            if synthesized_assistant_msg is not None:
-                # Deterministic state: bypass the LLM entirely. The dispatch
-                # path below treats this exactly as a normal model reply.
-                assistant_msg = synthesized_assistant_msg
-            elif streaming:
-                # Buffer the full stream before yielding — lets the output
-                # guard check the complete reply and self-correct if needed
-                # before anything reaches the client.
-                assistant_msg = None
-                stream_chunks: list[str] = []
-                active_schemas = (
-                    tools.SCHEMAS
-                    if self._active_tool_names is None
-                    or not hasattr(tools, "schemas_for")
-                    else tools.schemas_for(self._active_tool_names)
-                )
-                for kind, payload in call_llm_stream(
-                    self.history, active_schemas, model=self.model,
-                    tool_choice=turn_tool_choice,
-                    reasoning_effort=reasoning_effort,
-                    provider_constraints=provider_constraints,
-                ):
-                    if kind == "content":
-                        stream_chunks.append(payload)
-                    elif kind == "done":
-                        assistant_msg = payload
-                if assistant_msg is None:
-                    yield "\n(empty stream)\n"
-                    return
-            else:
-                active_schemas = (
-                    tools.SCHEMAS
-                    if self._active_tool_names is None
-                    or not hasattr(tools, "schemas_for")
-                    else tools.schemas_for(self._active_tool_names)
-                )
-                assistant_msg = call_llm(
-                    self.history, active_schemas, model=self.model,
-                    tool_choice=turn_tool_choice,
-                    reasoning_effort=reasoning_effort,
-                    provider_constraints=provider_constraints,
-                )
+            assistant_msg, state_idx, turn_tool_choice = self._call_model(
+                state_sequence, state_idx, tool_choice, streaming,
+                reasoning_effort, provider_constraints,
+            )
+            if assistant_msg is None:
+                yield "\n(empty stream)\n"
+                return
 
             # Strip provider-specific extras (reasoning, null fields) that
             # the API rejects when replayed as part of the next request.
