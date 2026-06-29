@@ -27,20 +27,19 @@ existing read_file tool) when the agent decides a specific memory is
 relevant. This keeps context usage tiny even as memory grows.
 """
 
-import errno
-import fcntl
 import json
 import logging
 import math
 import os
 import re
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from collections.abc import Iterator
 
 from homunculus.archival import ArchivalMemory
+from homunculus.locking import file_lock
 from homunculus.notifications import NotificationQueue
 from homunculus.stores import NextTickStore, ReflectionStore, SkillStatsStore, WorldStateStore
 
@@ -267,28 +266,13 @@ class Memory:
 
     @contextmanager
     def _file_lock(self, lock_path: Path) -> Iterator[None]:
-        """Exclusive fcntl flock on `lock_path` (sidecar).
+        """Exclusive cross-process lock around a read-modify-write sequence.
 
-        Used around read-modify-write sequences so that two writers
-        (e.g., Telegram and Web both saving session) don't clobber
-        each other. Blocks up to 5s before raising.
+        Thin instance-method wrapper over the canonical ``locking.file_lock``
+        so existing ``self._file_lock(...)`` call sites are unchanged.
         """
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a") as f:
-            for _ in range(50):
-                try:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except OSError as e:
-                    if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
-                        raise
-                    time.sleep(0.1)
-            else:
-                raise RuntimeError(f"could not acquire {lock_path.name} after 5s")
-            try:
-                yield
-            finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        with file_lock(lock_path):
+            yield
 
     def save_session(self, history: list[dict]) -> None:
         """Persist the conversation history (excluding system prompt and
@@ -902,19 +886,24 @@ class Memory:
             except Exception:
                 pass
 
-        path.write_text(content, encoding="utf-8")
-        # Re-embed: delete existing row so _embed_entry will recompute.
-        self._db_delete_vec(path.name)
-        self._embed_entry(path, content)
-        # Dedup hint: if the new embedding is very similar to an existing entry,
-        # append a note so the agent knows it may have created a near-duplicate.
-        dedup_note = ""
-        new_vec = self._db_load_vec(path.name)
-        if new_vec:
-            warn = self._dedup_check(path.name, new_vec)
-            if warn:
-                dedup_note = f"\n\n{warn}"
-        self._upsert_index_entry(name, description, filename)
+        # Body file and the MEMORY.md index must move together. Hold one
+        # memory-wide lock across both writes so a concurrent remember()/forget()
+        # in another process can't interleave and desync index ↔ body.
+        with file_lock(self.root / "_memory.lock"):
+            path.write_text(content, encoding="utf-8")
+            # Re-embed: delete existing row so _embed_entry will recompute.
+            self._db_delete_vec(path.name)
+            self._embed_entry(path, content)
+            # Dedup hint: if the new embedding is very similar to an existing
+            # entry, append a note so the agent knows it may have created a
+            # near-duplicate.
+            dedup_note = ""
+            new_vec = self._db_load_vec(path.name)
+            if new_vec:
+                warn = self._dedup_check(path.name, new_vec)
+                if warn:
+                    dedup_note = f"\n\n{warn}"
+            self._upsert_index_entry(name, description, filename)
 
         action = "updated" if old_body_preview is not None else "created"
         if _events:
@@ -944,13 +933,14 @@ class Memory:
             return f"Memory '{identifier}' not found (already gone?)"
 
         removed: list[str] = []
-        for filename in candidates:
-            path = self.root / filename
-            if path.exists():
-                path.unlink()
-            self._db_delete_vec(filename)
-            self._remove_index_entry(filename)
-            removed.append(filename)
+        with file_lock(self.root / "_memory.lock"):
+            for filename in candidates:
+                path = self.root / filename
+                if path.exists():
+                    path.unlink()
+                self._db_delete_vec(filename)
+                self._remove_index_entry(filename)
+                removed.append(filename)
         if _events and removed:
             _events.emit("memory_forget", name=removed[0],
                          text=f"forgot: {', '.join(removed)}")

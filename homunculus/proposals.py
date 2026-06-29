@@ -25,6 +25,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from homunculus.locking import file_lock
+
 # kind: what the proposal does on approval.
 KIND_NEW_SKILL = "new_skill"    # create skill (+ optional task) — chat "teach it a job"
 KIND_SKILL_EDIT = "skill_edit"  # replace an existing skill body — failure-driven refinement
@@ -42,6 +44,7 @@ def _now() -> str:
 class ProposalStore:
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
+        self.lock_path = self.path.with_suffix(".json.lock")
 
     # --- persistence -----------------------------------------------------
 
@@ -86,60 +89,68 @@ class ProposalStore:
     ) -> dict[str, Any]:
         if kind not in ALLOWED_KINDS:
             raise ValueError(f"unknown proposal kind: {kind!r}")
-        data = self._load()
 
-        # One pending proposal per (target, kind). A reflection tick can file
-        # several near-identical edits for the same skill/memory in one run; the queue
-        # must hold only the first so the operator reviews one change, not a
-        # pile of variants. Deterministic guard at the storage boundary, not
-        # left to the model. The returned copy is flagged so the caller can
-        # tell the agent the duplicate was skipped.
-        existing = next(
-            (
-                p for p in data
-                if p.get("status") == "pending"
-                and p.get("skill_name") == skill_name
-                and p.get("kind") == kind
-            ),
-            None,
-        )
-        if existing is not None:
-            return {**existing, "_deduped": True}
+        # Hold the lock across the whole load→dedup→append→save so a concurrent
+        # filing (e.g. a reflection tick) in another process can't clobber this
+        # write or slip a duplicate past the dedup check.
+        with file_lock(self.lock_path):
+            data = self._load()
 
-        proposal = {
-            "id": self._next_id(data),
-            "kind": kind,
-            "skill_name": skill_name,
-            "body": body,
-            "rationale": (rationale or "").strip()[:1000],
-            "source": source,
-            "task_spec": task_spec,
-            "validation": validation or {},
-            "status": "pending",
-            "created_at": _now(),
-            "resolved_at": None,
-            "resolution_note": "",
-        }
-        data.append(proposal)
-        self._save(data)
-        return proposal
+            # One pending proposal per (target, kind). A reflection tick can file
+            # several near-identical edits for the same skill/memory in one run; the queue
+            # must hold only the first so the operator reviews one change, not a
+            # pile of variants. Deterministic guard at the storage boundary, not
+            # left to the model. The returned copy is flagged so the caller can
+            # tell the agent the duplicate was skipped.
+            existing = next(
+                (
+                    p for p in data
+                    if p.get("status") == "pending"
+                    and p.get("skill_name") == skill_name
+                    and p.get("kind") == kind
+                ),
+                None,
+            )
+            if existing is not None:
+                return {**existing, "_deduped": True}
+
+            proposal = {
+                "id": self._next_id(data),
+                "kind": kind,
+                "skill_name": skill_name,
+                "body": body,
+                "rationale": (rationale or "").strip()[:1000],
+                "source": source,
+                "task_spec": task_spec,
+                "validation": validation or {},
+                "status": "pending",
+                "created_at": _now(),
+                "resolved_at": None,
+                "resolution_note": "",
+            }
+            data.append(proposal)
+            self._save(data)
+            return proposal
 
     def _set_status(self, proposal_id: str, status: str, note: str = "") -> dict[str, Any]:
         if status not in _STATUSES:
             raise ValueError(f"unknown status: {status!r}")
-        data = self._load()
-        for p in data:
-            if p.get("id") == proposal_id:
-                if p.get("status") != "pending":
-                    raise ValueError(
-                        f"proposal {proposal_id} is already {p['status']}; "
-                        "only pending proposals can be resolved"
-                    )
-                p["status"] = status
-                p["resolved_at"] = _now()
-                p["resolution_note"] = (note or "").strip()[:500]
-                self._save(data)
-                return p
+        # Lock the resolve so two approvals (web + Telegram) can't both flip the
+        # same pending proposal or race a concurrent create().
+        with file_lock(self.lock_path):
+            data = self._load()
+            for p in data:
+                if p.get("id") == proposal_id:
+                    if p.get("status") != "pending":
+                        raise ValueError(
+                            f"proposal {proposal_id} is already {p['status']}; "
+                            "only pending proposals can be resolved"
+                        )
+                    p["status"] = status
+                    p["resolved_at"] = _now()
+                    p["resolution_note"] = (note or "").strip()[:500]
+                    self._save(data)
+                    return p
         raise KeyError(f"proposal {proposal_id} not found")
 
     def mark_approved(self, proposal_id: str, note: str = "") -> dict[str, Any]:

@@ -41,11 +41,13 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
-from collections.abc import Iterator
+
+from homunculus.locking import file_lock
 
 # Sources of a skill save. Tracked in the manifest so a future
 # refinement run can avoid clobbering a skill the user just hand-edited.
@@ -233,31 +235,8 @@ class Skills:
         functionally; we hold the lock around manifest read-modify-write
         so two refinement runs on the same skill can't collide.
         """
-        # Reuse memory.py's _file_lock primitive via a fresh tiny impl —
-        # we don't want skills.py importing memory.py and pulling in the
-        # markdown-search subsystem.
-        import errno
-        import fcntl
-        import time
-        lock_path = self._history_dir(name) / ".lock"
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a") as f:
-            for _ in range(50):
-                try:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except OSError as e:
-                    if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
-                        raise
-                    time.sleep(0.1)
-            else:
-                raise RuntimeError(
-                    f"could not acquire skill manifest lock for {name} after 5s"
-                )
-            try:
-                yield
-            finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        with file_lock(self._history_dir(name) / ".lock"):
+            yield
 
 
 # ---- skill loader for the heartbeat state-machine path --------------
