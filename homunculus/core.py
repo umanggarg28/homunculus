@@ -77,6 +77,7 @@ from homunculus.output_guard import (
     _strip_citation_artifacts,
     _claim_target_inconsistencies,
     tool_result_indicates_failure,
+    ungrounded_urls,
 )
 
 log = logging.getLogger(__name__)
@@ -1136,6 +1137,9 @@ class Agent:
                 "name": name,
                 "args": args,
                 "success": _outcome_success,
+                # Result text lets the output guard verify that URLs the reply
+                # cites actually came from a tool (ungrounded-URL check).
+                "result": result if isinstance(result, str) else str(result),
             })
             # Terminal-tool accounting: a successful call to any of
             # these closes the agent's responsibility for one due
@@ -1796,6 +1800,11 @@ class Agent:
         violations: list[str] = []
         tool_outcomes = tool_outcomes or []
 
+        # Strip leaked citation markers (【1†url】) so they never reach the user
+        # and every check below runs on the cleaned text. The per-iteration strip
+        # at 1707 only cleans the journaled copy, not this returned reply.
+        reply = _strip_citation_artifacts(reply)
+
         # File-path guards are intentionally bypassed when the agent explicitly
         # searched or listed files — those results belong in the reply.
         file_search_active = bool(tool_names_used & {"search_files", "list_files"})
@@ -1892,6 +1901,12 @@ class Agent:
         # filename" with no further tool call.
         if _GUARD_FUTURE_PROMISE_RE.search(reply):
             violations.append("false_future_promise")
+
+        # Ungrounded URLs — only when a web tool ran this turn. A research reply
+        # must cite links from its own results, never invented ones (baseline
+        # probe #1). Pure-knowledge Q&A is not gated.
+        if ungrounded_urls(reply, tool_outcomes, tool_names_used):
+            violations.append("ungrounded_url")
 
         # Forward-tense mutation promise with no mutating tool called this turn.
         # "I'll edit the daily-LeetCode skill to add explanations." with zero
@@ -2006,6 +2021,16 @@ class Agent:
         "not promise an edit you won't make."
     )
 
+    _UNGROUNDED_URL_CORRECTION_PROMPT = (
+        "Your previous reply cited one or more web links that did NOT come from "
+        "your tool results this turn — you invented or guessed them. Never "
+        "fabricate URLs. Restate your answer citing ONLY links that appear "
+        "verbatim in your web_search / web_fetch results. For any claim or "
+        "number you cannot back with a real fetched source, either drop it or "
+        "say plainly that you couldn't verify it. Do not present unverified "
+        "figures as fact."
+    )
+
     def _self_correct(self, tool_names_used: set[str], violations: list[str] | None = None, tool_outcomes: list[dict] | None = None) -> str:
         """Inject a correction prompt and re-call the LLM once (non-streaming).
 
@@ -2030,6 +2055,8 @@ class Agent:
             correction = self._FUTURE_PROMISE_CORRECTION_PROMPT
         elif violations and "false_mutation_promise" in violations:
             correction = self._MUTATION_PROMISE_CORRECTION_PROMPT
+        elif violations and "ungrounded_url" in violations:
+            correction = self._UNGROUNDED_URL_CORRECTION_PROMPT
         else:
             correction = self._SELF_CORRECTION_PROMPT
         self.history.append({
@@ -2056,6 +2083,14 @@ class Agent:
 
         # Second attempt also failed — return a neutral fallback rather than
         # looping. The system prompt rule should prevent getting here in practice.
+        if violations and "ungrounded_url" in violations:
+            # Honest about the real failure: it researched but kept citing
+            # sources it couldn't verify. Don't pretend the user was vague.
+            return (
+                "I looked this up but couldn't confirm reliable source links for "
+                "some of the details, so I'd rather not state figures I can't "
+                "verify. Want me to try again or narrow the question?"
+            )
         return "I can help with that — could you give me a bit more context?"
 
     @staticmethod

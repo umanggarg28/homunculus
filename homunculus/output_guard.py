@@ -27,6 +27,49 @@ def _strip_citation_artifacts(content: str) -> str:
     if not content or "†" not in content:
         return content
     return _CITATION_ARTIFACT_RE.sub("", content)
+
+
+# Ungrounded-URL guard. A reply that cites web links the model did NOT obtain
+# from a tool this turn is fabricating sources (baseline probe #1: ran
+# web_search yet cited invented URLs like star-history.com/langchain-ai/open-swe).
+# Gated to turns where a web tool actually ran, so pure-knowledge Q&A — where the
+# model may legitimately cite a URL it knows — is never touched. Mirrors the
+# heartbeat delivery gate's "must appear verbatim in a tool result" rule.
+_WEB_GROUNDING_TOOLS = frozenset({"web_search", "web_fetch", "news_headlines", "rss_feed"})
+_URL_IN_REPLY_RE = re.compile(r"https?://[^\s<>()\[\]'\"`]+")
+
+
+def _normalize_url(u: str) -> str:
+    return u.rstrip("/.,;:)]}>\"'`").lower()
+
+
+def ungrounded_urls(reply: str, tool_outcomes: list[dict], tool_names_used) -> list[str]:
+    """Reply URLs absent from this turn's successful tool results.
+
+    Returns [] when no web tool ran this turn (the gate is research-scoped:
+    only when the model fetched/searched must its links come from results).
+    A cited URL is grounded if it appears verbatim in any successful tool
+    result text or was the URL argument of a successful web tool call.
+    """
+    if not (set(tool_names_used) & _WEB_GROUNDING_TOOLS):
+        return []
+    cited = _URL_IN_REPLY_RE.findall(reply)
+    if not cited:
+        return []
+
+    grounded_parts: list[str] = []
+    for o in tool_outcomes:
+        if not o.get("success"):
+            continue
+        grounded_parts.append(str(o.get("result", "")))
+        args = o.get("args")
+        if isinstance(args, dict):
+            grounded_parts.extend(
+                v for v in args.values() if isinstance(v, str) and v.startswith("http")
+            )
+    grounded_blob = "\n".join(grounded_parts).lower()
+
+    return [u for u in cited if _normalize_url(u) not in grounded_blob]
 _GUARD_ERROR_PREFIXES = ("ERROR:", "ERROR running ")
 _GUARD_CONFABULATION_TERMS = ("example.com", "example domain")
 
