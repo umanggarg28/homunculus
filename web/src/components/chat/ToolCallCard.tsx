@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
+import { PlanChecklist } from "./PlanChecklist";
 
 export interface ToolCallEntry {
   name: string;
@@ -13,6 +14,8 @@ interface Props {
   entry: ToolCallEntry;
 }
 
+const PLAN_TOOLS = new Set(["plan_steps", "complete_step"]);
+
 /** A single tool call rendered inline in the assistant turn.
  *
  * Collapsed by default: shows the tool name, a one-line preview of
@@ -20,6 +23,11 @@ interface Props {
 export function ToolCallCard({ entry }: Props) {
   const [expanded, setExpanded] = useState(false);
   const inFlight = entry.result === undefined;
+
+  // Plan tools render as a first-class themed checklist, not a generic card.
+  if (PLAN_TOOLS.has(entry.name) && entry.result) {
+    return <PlanChecklist source={entry.result} />;
+  }
 
   const previewArgs = compactPreview(entry.args, 60);
   const previewResult = compactPreview(entry.result ?? "", 60);

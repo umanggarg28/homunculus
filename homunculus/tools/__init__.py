@@ -163,6 +163,9 @@ ALWAYS_LOADED: frozenset[str] = frozenset({
     # Communication & time: needed almost universally.
     "notify",
     "get_current_time",
+    # Planning: visible checklist for multi-step tasks (plan-first scaffold).
+    "plan_steps",
+    "complete_step",
     # The meta-tool itself — agent must always be able to load others.
     "load_tool",
 })
