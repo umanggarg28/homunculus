@@ -30,6 +30,7 @@ from pydantic import Field
 
 from . import (
     _meta, authoring, coach, filesystem, github,
+    leetcode as leetcode_mod,
     memory_tools, news as news_mod, notify as notify_mod, report, rss, sandbox, scheduling,
     skill_refinement as skill_refinement_mod, watch, weather as weather_mod, web,
 )
@@ -416,6 +417,14 @@ def news_headlines(
 ) -> str:
     """Top headlines from the user's configured news feeds as a ready-to-use markdown list of REAL links. Covers every source the user has listed (HN, tech, arXiv, world). Use the returned lines verbatim — never invent links. If it returns 'NEWS_UNAVAILABLE', omit the news section."""
     return news_mod.news_headlines(topic=topic, limit=limit)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def leetcode_next_problem(
+    task_id: Annotated[str, Field(description="Optional task id (e.g. the daily-leetcode task). Empty = auto-detect the LeetCode task.")] = "",
+) -> str:
+    """The next undelivered LeetCode Top Interview 150 problem, picked deterministically from the official plan order and the task's delivery ledger. Returns its title and REAL canonical leetcode.com/problems/<slug>/ URL — use the URL verbatim. Then write the intuition, a Python solution, and complexity yourself. Returns 'LEETCODE_NEXT_UNAVAILABLE' (skip + record failure) or 'LEETCODE_ALL_DELIVERED' on edge cases."""
+    return leetcode_mod.leetcode_next_problem(task_id=task_id)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
