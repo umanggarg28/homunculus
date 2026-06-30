@@ -615,6 +615,88 @@ def _reflection_tool_guard(name: str, arguments: dict) -> str | None:
     return f"BLOCKED: {refusal}" if refusal else None
 
 
+#: A task still flagged ``executing`` after this long has lost its agent without
+#: calling complete_task/record_failure; clear it so the next tick re-fires it.
+_STALE_EXECUTING_SEC = 10 * 60
+
+
+def _recover_stale_executing_flags(tasks: TaskStore) -> None:
+    """Force-clear executing flags older than the stale window.
+
+    main()'s startup cleanup only runs on container restart; if an agent finishes
+    without complete_task/record_failure (e.g. a provider-exhaustion limp-along
+    that returns a fallback string instead of raising), the flag stays True
+    forever and the task is filtered out of due(). Clearing it lets the next tick
+    re-fire the task.
+
+    Uses user-local naive now() because ``last_fired_at`` is written by tasks.py
+    in the user's wall-clock TZ — mixing container UTC here would treat
+    recently-fired tasks as stale on UTC containers in non-UTC zones.
+    """
+    now_dt = _now_user_naive()
+    for t in tasks.all():
+        if not t.get("executing"):
+            continue
+        last_fired = t.get("last_fired_at")
+        if not last_fired:
+            continue
+        try:
+            age = (now_dt - datetime.fromisoformat(last_fired)).total_seconds()
+        except ValueError:
+            continue
+        if age > _STALE_EXECUTING_SEC:
+            try:
+                tasks.record_failure(
+                    t["id"],
+                    f"executing flag stale ({int(age)}s old) — auto-cleared",
+                    increment_failures=False,
+                )
+                log.info(
+                    f"[heartbeat] auto-cleared stale executing flag on {t['id']!r} "
+                    f"(age={int(age)}s)",
+                )
+            except Exception as _e:
+                log.error(f"[heartbeat] auto-clear failed for {t['id']}: {_e}")
+
+
+def _run_reflection_or_idle(
+    memory: Memory, model: str | None, tasks: TaskStore, now_iso: str
+) -> None:
+    """No due tasks this tick: run the once-per-day reflection, or log idle.
+
+    Reflection is gated to once per calendar day (ReflectionStore) and runs under
+    a tool guard that blocks notify/shell/writes — it reviews yesterday and may
+    file skill proposals, but must never message the user or mutate state (it ran
+    unguarded before, and a weak model did message the user from inside it).
+    """
+    today = _today_str()
+    last = memory.reflection.last_date()
+    if not (last is None or last < today):
+        log.info(f"\n[heartbeat] tick at {now_iso}: no due tasks; skipping LLM")
+        return
+
+    agent = Agent(memory=memory, model=model)
+    yesterday_iso, yesterday_path = _yesterday_iso_and_path()
+    log.info(f"\n[heartbeat] REFLECTION tick at {now_iso} "
+             f"(reviewing {yesterday_iso}, model={agent.model})")
+    # Substitute by explicit replace, not str.format: the template embeds literal
+    # JSON braces in its skill-edit examples (edits=[{"old": ...}]) that
+    # str.format would misread as fields.
+    prompt = (
+        REFLECTION_PROMPT_TEMPLATE
+        .replace("{today}", today)
+        .replace("{yesterday_path}", yesterday_path)
+        .replace("{recent_deliveries}", _format_recent_deliveries(tasks))
+    )
+    tools.set_pre_execute_hook(_reflection_tool_guard)
+    try:
+        response = agent.chat(prompt, source="heartbeat")
+    finally:
+        tools.set_pre_execute_hook(None)
+    memory.reflection.mark(today)
+    log.info(f"[agent] {response}")
+
+
 def tick(memory: Memory, model: str | None) -> None:
     """One heartbeat iteration — fresh agent, one prompt, then discard.
 
@@ -636,80 +718,18 @@ def tick(memory: Memory, model: str | None) -> None:
     now_iso = _now_user_tz().isoformat(timespec="seconds")
     tasks = TaskStore(Path(os.environ.get("HOMUNCULUS_TASKS_DIR", "./tasks")))
 
-    # Auto-recover stale executing flags before computing due_tasks. The
-    # main() startup cleanup only runs on container restart; if the agent
-    # finishes without calling complete_task or record_failure (e.g.,
-    # provider-exhaustion limp-along where the loop returns a fallback
-    # string instead of raising), the flag stays True forever and the
-    # task is filtered from due(). Anything older than the stale window
-    # is forcibly cleared so the next tick can re-fire it.
-    STALE_EXECUTING_SEC = 10 * 60
-    # Use user-local naive — last_fired_at is written by tasks.py in the
-    # user's wall-clock TZ. Mixing container UTC here would treat
-    # recently-fired tasks as stale on UTC containers in non-UTC zones.
-    now_dt = _now_user_naive()
-    for t in tasks.all():
-        if not t.get("executing"):
-            continue
-        last_fired = t.get("last_fired_at")
-        if not last_fired:
-            continue
-        try:
-            age = (now_dt - datetime.fromisoformat(last_fired)).total_seconds()
-        except ValueError:
-            continue
-        if age > STALE_EXECUTING_SEC:
-            try:
-                tasks.record_failure(
-                    t["id"],
-                    f"executing flag stale ({int(age)}s old) — auto-cleared",
-                    increment_failures=False,
-                )
-                log.info(
-                    f"[heartbeat] auto-cleared stale executing flag on {t['id']!r} "
-                    f"(age={int(age)}s)",
-                )
-            except Exception as _e:
-                log.error(f"[heartbeat] auto-clear failed for {t['id']}: {_e}")
+    # Recover stale executing flags before computing due tasks, or a task that
+    # lost its agent mid-run would stay flagged and never re-fire.
+    _recover_stale_executing_flags(tasks)
 
     due_tasks = tasks.due()
     events.emit("service_ping", name="heartbeat", text="alive")
 
-    if due_tasks:
-        # Tasks take priority — fall through to the task-execution block below.
-        pass
-    else:
-        # No due tasks — consider running the daily reflection instead.
-        today = _today_str()
-        last = memory.reflection.last_date()
-        do_reflection = last is None or last < today
-        if do_reflection:
-            agent = Agent(memory=memory, model=model)
-            yesterday_iso, yesterday_path = _yesterday_iso_and_path()
-            log.info(f"\n[heartbeat] REFLECTION tick at {now_iso} "
-                  f"(reviewing {yesterday_iso}, model={agent.model})")
-            # Substitute by explicit replace, not str.format: the template
-            # embeds literal JSON braces in its skill-edit examples
-            # (edits=[{"old": ...}]) that str.format would misread as fields.
-            prompt = (
-                REFLECTION_PROMPT_TEMPLATE
-                .replace("{today}", today)
-                .replace("{yesterday_path}", yesterday_path)
-                .replace("{recent_deliveries}", _format_recent_deliveries(tasks))
-            )
-            # Enforce the reflection prompt's "no notify / no shell / no writes"
-            # rules at the harness level — reflection ran unguarded before, so a
-            # weak model could (and did) message the user from inside reflection.
-            tools.set_pre_execute_hook(_reflection_tool_guard)
-            try:
-                response = agent.chat(prompt, source="heartbeat")
-            finally:
-                tools.set_pre_execute_hook(None)
-            memory.reflection.mark(today)
-            log.info(f"[agent] {response}")
-            return
-
-        log.info(f"\n[heartbeat] tick at {now_iso}: no due tasks; skipping LLM")
+    # No due tasks → daily reflection (once/day) or idle, then we're done.
+    # Due tasks take priority over reflection so a new day's first tick can't
+    # starve an overdue task.
+    if not due_tasks:
+        _run_reflection_or_idle(memory, model, tasks, now_iso)
         return
 
     log.info(
