@@ -134,13 +134,15 @@ the chat bridges, and the heartbeat interval.
 
 ```
 homunculus/            # the application package
-  core.py              # the Agent loop + LLM client + provider fallback
+  core.py              # the Agent class + the tool-calling loop (the heart)
+  llm.py               # LLM client: provider fallback chain, budget gate, cooldown
   memory.py            # markdown-frontmatter memory vault (+ archival, transcript)
   tasks.py             # structured tasks with per-run history
+  locking.py           # the one cross-process file_lock() every store uses
   heartbeat.py         # autonomy daemon: wakes, finds due work, self-prompts
   skills.py            # learned procedures the agent can author and refine
   tools/               # tool registry + implementations, exposed over MCP
-  transports/          # repl, telegram, discord, web_api entry points
+  transports/          # repl, telegram, discord, web_api + per-domain web routers
 scripts/               # one-off operational scripts (bootstraps, migrations)
 tests/                 # pytest suite
 web/                   # React + Vite single-page app for the web console
@@ -155,15 +157,20 @@ Services run as modules: `python -m homunculus.transports.repl`,
 Uses [`uv`](https://docs.astral.sh/uv/) for dependency management.
 
 ```bash
-uv run python -m pytest      # run the test suite
-uv run ruff check            # lint
+uv run ruff check homunculus   # lint
+uv run pyright homunculus      # static type check (basic, kept at zero errors)
+uv run python -m pytest        # test suite (under a 60% coverage floor)
 ```
 
-Tests run locally without Docker — `tests/conftest.py` stubs the
-container-only dependencies (MCP) so the pure logic is testable in isolation.
+CI runs all three on every push and PR. Tests run locally without Docker —
+`tests/conftest.py` stubs the container-only dependencies (MCP) so the pure
+logic is testable in isolation.
 
 ## Documentation
 
+- **[`ARCHITECTURE.md`](ARCHITECTURE.md)** — how the system is put together: the
+  runtime topology, package map, the agent loop, and the reliability harness.
+  Start here to understand the code.
 - **[`AGENTS.md`](AGENTS.md)** — the agent's identity layer (persona, rules,
   tool catalogue), loaded into the system prompt on every turn. Edit freely.
 - **`PLAN.md`, `IDEAS.md`** — the working backlog and consciously-deferred ideas.

@@ -50,6 +50,7 @@ homunculus/
 ├── memory.py            # markdown memory vault (MEMORY.md index + typed entry files)
 ├── stores.py            # small single-file stores (world state, next-tick, reflection, skill stats)
 ├── tasks.py             # structured task state (schedule, status, run history) — fcntl-locked
+├── locking.py           # the one cross-process file_lock() primitive every store uses
 ├── transcript.py        # conversation journal persistence
 ├── stats.py             # cost / usage accounting
 │
@@ -72,14 +73,15 @@ homunculus/
 ├── events.py  notifications.py  messages.py  agent_controls.py
 ├── quiz.py    news_feeds.py     user_location.py  user_tz.py  logging_config.py
 │
-├── tools/               # ~22 tool modules (one concern each); _-prefixed = internal helpers
-│   ├── notify.py  memory_tools.py  scheduling.py  authoring.py  report.py …
+├── tools/               # ~23 tool modules (one concern each); _-prefixed = internal helpers
+│   ├── notify.py  memory_tools.py  scheduling.py  authoring.py  report.py
+│   ├── news.py  leetcode.py  weather.py  github.py …   # deterministic-fetch tools
 │   └── mcp_server.py / mcp_manager.py / mcp_config.py   # MCP integration
 │
 └── transports/
     ├── repl.py  telegram.py  discord.py     # chat channels (thin; delegate to Agent)
     ├── web_api.py                            # FastAPI app + shared web helpers
-    └── web/                                  # 11 domain routers (tasks, chat, feed, proposals, skills, …)
+    └── web/                                  # 12 domain routers (tasks, chat, feed, proposals, skills, …)
 ```
 
 The non-package surface stays at repo root: `tests/`, `scripts/`, `web/` (React
@@ -94,9 +96,11 @@ over five named phases:
 
 1. **`_prepare_turn`** — per-turn setup side effects (history, journaling, system prompt).
 2. **`_loop_personality`** — picks `(tool_choice, reasoning_effort)` from the call source.
-3. **`_call_model`** — one LLM call via `llm.call_llm[_stream]`; returns the assistant message (or signals an empty stream).
-4. **`_dispatch_tool_calls`** — executes each requested tool, caches results, records outcomes, counts terminal completions.
-5. **`_finalize_reply`** — runs the output guard; either yields the verified reply or injects a self-correction and loops again.
+3. **`_pre_iteration_injections`** — per-iteration context maintenance (mid-loop eviction, goal re-injection, budget nudge) — pure side effects, no control flow.
+4. **`_call_model`** — one LLM call via `llm.call_llm[_stream]`; returns the assistant message (or signals an empty stream).
+5. **`_handle_tool_choice_violation`** — defense-in-depth when a provider ignored `tool_choice`; returns a retry signal so the `continue` stays visible in the loop.
+6. **`_dispatch_tool_calls`** — executes each requested tool, caches results, records outcomes, counts terminal completions.
+7. **`_finalize_reply`** — runs the output guard; either yields the verified reply or injects a self-correction and loops again.
 
 The loop repeats call→dispatch until the model returns a plain text answer that
 clears the guard. Tool *I/O* is deterministic code (`tools/`); the model only
@@ -154,27 +158,42 @@ rather than monkeypatching modules. Secrets live in `.env`.
 
 ## 8. Testing & CI
 
-- **103 test files** under `tests/`, run with `pytest`. Container-only deps
+- **~106 test files** under `tests/`, run with `pytest`. Container-only deps
   (MCP) are stubbed via `tests/conftest.py`, so the suite runs without Docker.
-- **CI** (`.github/workflows/ci.yml`): `ruff check` + `pytest` on every push to
-  `main` and every PR, on Python 3.12.
+- **CI** (`.github/workflows/ci.yml`) runs three gates on every push to `main`
+  and every PR (Python 3.12):
+  1. **ruff** — lint + a curated correctness ruleset.
+  2. **pyright** (basic mode) — static type checking on the package, held at
+     **zero errors**.
+  3. **pytest** — under `pytest-cov` with a `--cov-fail-under=60` floor (a
+     ratchet against regression; current coverage ~63%).
 - **Real regressions** beyond the unit suite are the standard for behavioral
-  changes: drive a live `Agent.chat()` / `chat_stream()` turn with the real
-  model and tools against a temp workspace, asserting a real guarded reply.
+  changes: drive a live `Agent.chat()` / `chat_stream()` turn (or a real
+  multi-process run for concurrency) with the real model and tools against a
+  temp workspace, asserting the actual behavior — not a mocked stand-in.
 
 ## 9. Known limitations (honest list for reviewers)
 
-- No static type checker in CI yet; type hints are partial (~630 functions).
-- `core.py` (~2.2k lines) and `heartbeat.py` (~1.6k lines) remain large; the
-  loop decomposition landed in `core.py`, `heartbeat.py` has not had the same pass.
-- ~110 broad `except Exception` sites — partly intentional (an autonomous loop
-  must survive a bad tick) but not yet individually audited/narrowed.
-- No coverage measurement; `E501` (line length) is intentionally unenforced.
+- `core.py` (~2.2k lines) and `heartbeat.py` (~1.6k lines) are still large.
+  Their orchestrators are decomposed — `_run_loop` and `tick()` are thin over
+  named phases — but `_dispatch_tool_calls` (~180 lines) is the next extraction
+  candidate, and neither file has been split into multiple modules.
+- ~110 broad `except Exception` sites. The audit so far added log breadcrumbs to
+  the ones that silently degrade real behavior (e.g. the embedding-DB writes);
+  the remainder are intentional (telemetry-emit guards, an autonomous loop that
+  must survive a bad tick) but haven't each been individually annotated.
+- Type hints are partial (~630 functions); pyright runs in *basic* mode, not
+  strict — it catches None-access and wrong-argument bugs, not full coverage.
+- Test coverage (~63%) is thin on the transports (the Discord channel in
+  particular); the floor guards against regression, it isn't a quality target.
+- `E501` (line length) is intentionally unenforced.
 - Single-host by design: file-based state does not scale horizontally.
 
 ## 10. Where to start reading
 
-1. `homunculus/core.py` — `Agent.chat` → `_run_loop` and its five phases.
+1. `homunculus/core.py` — `Agent.chat` → `_run_loop` and the named phases it
+   orchestrates (`_pre_iteration_injections`, `_call_model`,
+   `_handle_tool_choice_violation`, `_dispatch_tool_calls`, `_finalize_reply`).
 2. `homunculus/heartbeat.py` — `tick()` and `TaskGuard` for the autonomy story.
 3. `homunculus/output_guard.py` + `_output_guard` in core — the reliability thesis.
 4. `homunculus/transports/web/` — how the routers map to the React console.
