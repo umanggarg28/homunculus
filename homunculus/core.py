@@ -1745,13 +1745,11 @@ class Agent:
                 tool_result_cache, tool_outcomes,
             )
 
-            # Early exit: the agent has closed out every due task the
-            # caller declared. Without this, tool_choice=required keeps
-            # the loop spinning past delivery — observed in prod 2026-
-            # 06-09: a successful LeetCode notify+complete_task at iter
-            # 4 was followed by 5 more turns of list_tasks /
-            # get_current_time / detector retries before max_turns
-            # finally yielded the fallback string.
+            # Early exit: the agent has closed out every due task the caller
+            # declared. Without this, tool_choice=required keeps prodding the
+            # model into wasted turns (list_tasks / get_current_time / detector
+            # retries) past delivery until max_turns finally yields the fallback
+            # string — several wasted LLM calls per successful tick.
             if (
                 expected_completions is not None
                 and terminal_completions >= expected_completions
@@ -1767,10 +1765,8 @@ class Agent:
                 if self.memory is not None:
                     self.memory.log_turn("assistant", done_reply)
                 events.emit("assistant_reply", text=events.full_text(done_reply))
-                if not streaming:
-                    yield done_reply
-                else:
-                    yield done_reply
+                # Same short string for both modes — no streaming-specific framing.
+                yield done_reply
                 return
 
         fallback = "(hit max_turns without a final answer)"
