@@ -2,6 +2,9 @@
 
 **Date:** 2026-06-05
 **Supersedes:** `CAPABILITY_ROADMAP.md` (v1, 2026-06-04)
+**See also:** `PROACTIVE_AGENT_PLAN.md` (2026-07-01) carries this forward —
+NEW.1 (calendar/email) and NEW.2 (memory hierarchy) are absorbed into its
+Phase 3 / Phase 1 respectively, reframed around proactivity + a user model.
 **Why a v2:** v1 shipped 11 of 12 items. Research on WhatsApp ban risk in
 2026 (Baileys/WhatsMeow account terminations, ~2.76% appeal success rate,
 ToS violation) made T1.1 untenable for a personal-number deployment.
