@@ -4,9 +4,8 @@ The daily-leetcode skill used to ask the weak model to "select the first problem
 under the Problem order not yet delivered." There was no such ordered list in the
 prompt or workspace, so on a bad day the model invented a search, mangled it into
 an invalid regex, and burned its whole iteration budget looking for a file that
-doesn't exist (observed live 2026-06-30). The mechanical work — *what is the next
-problem* — is exactly the kind of thing a weak model can't do reliably but code
-can.
+doesn't exist. The mechanical work — *what is the next problem* — is exactly the
+kind of thing a weak model can't do reliably but code can.
 
 So this tool owns the selection end to end:
   1. Fetch the canonical ordered "Top Interview 150" list from LeetCode's own

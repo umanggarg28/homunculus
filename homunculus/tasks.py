@@ -781,12 +781,11 @@ class TaskStore:
                     hour=anchor_h, minute=anchor_m, second=anchor_s, microsecond=0,
                 )
                 # Weekly must also land on the original due's WEEKDAY, not
-                # merely the next anchor time-of-day. Without this, a
-                # weekly task whose anchor time is later than `now`
-                # reschedules to TODAY (≤24h out) instead of a week later
-                # on the right day — observed live: a Saturday-night
-                # weekly failing at 00:23 Sunday rescheduled to Sunday,
-                # one day out, not the following Saturday.
+                # merely the next anchor time-of-day. Without this, a weekly
+                # task whose anchor time is later than `now` reschedules to
+                # TODAY (≤24h out) instead of a week later on the right day —
+                # e.g. a weekly that fails just after midnight reschedules one
+                # day out rather than to the following week's anchor weekday.
                 if recurrence == "weekly" and due_at:
                     try:
                         due_wd = datetime.fromisoformat(due_at).weekday()
