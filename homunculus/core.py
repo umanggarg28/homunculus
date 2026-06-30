@@ -17,6 +17,7 @@ No SDK, no framework. Just httpx and JSON.
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, UTC
 from pathlib import Path
@@ -501,6 +502,39 @@ def _validate_tool_args(name: str, arguments: dict) -> str | None:
             errors.append(f"'{key}' must be one of {enum_vals!r}, got {value!r}")
 
     return "; ".join(errors) if errors else None
+
+
+# Ambiguous bare-imperative detector. "Set it up", "handle this", "do that" with
+# no antecedent and no prior conversation is unactionable — left to run, the
+# model invents a task and burns budget (baseline probe #2: "Set it up" → 103s
+# and 8 web calls). Conservative on purpose: fires only on a SHORT imperative
+# whose object is a contentless pronoun AND when there is no prior real turn in
+# this conversation to supply a referent. With any prior context, "set it up"
+# may be perfectly grounded, so we don't touch it.
+_AMBIGUOUS_IMPERATIVE_RE = re.compile(
+    r"^(?:go ahead and |please |just |now |ok |okay )*"
+    r"(?:set|sort|fix|do|handle|make|take care of|get|put|deal with|"
+    r"finish|start|run|sort out)\s+"
+    r"(?:it|this|that|them|those|things|everything)\b"
+    r"(?:\s+(?:up|out|done|together|now))?[.!\s]*$"
+)
+
+
+def _clarify_before_act(user_message: str, history: list[dict]) -> str | None:
+    """Return a clarifying question if the message is an ungrounded ambiguous
+    imperative with no conversational context, else None. Runs BEFORE the tool
+    loop so an unactionable request asks instead of flailing."""
+    msg = user_message.strip().lower()
+    if len(msg.split()) > 5 or not _AMBIGUOUS_IMPERATIVE_RE.match(msg):
+        return None
+    # Any prior real user/assistant turn can supply the referent for "it".
+    if any(m.get("role") in ("user", "assistant") for m in history):
+        return None
+    return (
+        "Happy to help — but I don't have anything in this conversation yet "
+        "that tells me what to act on. What would you like me to set up or "
+        "handle, specifically?"
+    )
 
 
 # --- The agent ------------------------------------------------------------
@@ -1599,6 +1633,19 @@ class Agent:
             events.emit("user_message", text=events.full_text(user_message))
             events.emit("assistant_reply", text=events.full_text(local))
             yield local
+            return
+
+        # Clarify-before-act: an ungrounded ambiguous imperative ("Set it up")
+        # asks instead of entering the tool loop and inventing a task.
+        clarify = _clarify_before_act(user_message, self.history)
+        if clarify is not None:
+            if self.memory is not None:
+                self.memory.log_turn("user", user_message)
+                self.memory.log_turn("assistant", clarify)
+            events.emit("user_message", text=events.full_text(user_message))
+            events.emit("clarify_before_act", text=events.full_text(user_message))
+            events.emit("assistant_reply", text=events.full_text(clarify))
+            yield clarify
             return
 
         self._prepare_turn(user_message, source)
