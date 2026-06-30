@@ -17,25 +17,24 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def _tick_source() -> str:
-    """Return the source text of heartbeat.tick. We read the file
-    directly instead of importing heartbeat, because the conftest
-    `tools` stub doesn't expose tools.notify and importing heartbeat
-    explodes at module load."""
-    text = (Path(__file__).parent.parent / "homunculus" / "heartbeat.py").read_text()
-    # Slice from `def tick(` to the next top-level `def `.
-    start = text.index("\ndef tick(")
-    rest = text[start + 1:]
-    next_def = rest.find("\ndef ")
-    return rest[:next_def] if next_def > 0 else rest
+def _heartbeat_source() -> str:
+    """Return the full source of heartbeat.py. We read the file directly
+    instead of importing it, because the conftest `tools` stub doesn't expose
+    tools.notify and importing heartbeat explodes at module load.
+
+    The check spans the whole module (not just `tick`) because the agent.chat
+    calls live in the helpers `tick` delegates to (`_run_reflection_or_idle`,
+    `_run_task_isolated`) — the source='heartbeat' invariant must hold at every
+    call site no matter how the orchestration is factored."""
+    return (Path(__file__).parent.parent / "homunculus" / "heartbeat.py").read_text()
 
 
 def test_heartbeat_tick_calls_agent_chat_with_source_heartbeat():
-    """Static check on heartbeat.tick: every agent.chat( call inside
-    must pass source='heartbeat'. A textual check is the simplest
-    durable guarantee — mocking the full tick requires too much setup
-    and would drift as task/guard wiring changes."""
-    src = _tick_source()
+    """Static check: every agent.chat( call in heartbeat.py must pass
+    source='heartbeat'. A textual check is the simplest durable guarantee —
+    mocking the full tick requires too much setup and would drift as task/guard
+    wiring changes."""
+    src = _heartbeat_source()
     # Find every agent.chat( occurrence and confirm source="heartbeat"
     # is in the same call. Skip matches that sit on a comment line —
     # references like "# agent.chat() returned without an exception"
@@ -56,7 +55,7 @@ def test_heartbeat_tick_calls_agent_chat_with_source_heartbeat():
         m.start() for m in re.finditer(r"agent\.chat\(", src)
         if not _line_at(m.start()).lstrip().startswith("#")
     ]
-    assert chat_calls, "heartbeat.tick must call agent.chat somewhere"
+    assert chat_calls, "heartbeat.py must call agent.chat somewhere"
     for pos in chat_calls:
         # Window the next ~200 chars to find the matching close paren
         # — covers multi-line call shapes. The literal source="heartbeat"
