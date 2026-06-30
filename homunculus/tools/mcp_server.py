@@ -621,11 +621,13 @@ def create_task(
     ] = None,
     recurrence: Annotated[
         Literal["none", "daily", "weekly"],
-        Field(description="How often to repeat after completion."),
+        Field(description="How often to repeat after completion. ONLY none/daily/weekly are supported — there is NO weekday-only, specific-weekday, every-other, interval, monthly, or holiday/weekend-exclusion option."),
     ] = "none",
     notify: Annotated[bool, Field(description="Whether the due task is expected to notify the user.")] = False,
 ) -> str:
-    """Create a SIMPLE reminder/notification task. You CAN schedule things — never tell the user you can't. Use recurrence='none' (default) for one-shot reminders ('remind me at 8pm'), 'daily'/'weekly' for recurring pings. Set notify=True for reminders. Dedup is automatic (same title overwrites).
+    """Create a SIMPLE reminder/notification task. Don't refuse a basic reminder — you CAN schedule one-shot, daily, and weekly pings. Use recurrence='none' (default) for one-shot reminders ('remind me at 8pm'), 'daily'/'weekly' for recurring pings. Set notify=True for reminders. Dedup is automatic (same title overwrites).
+
+    CADENCE BOUNDARY — be honest about it. Recurrence supports ONLY none/daily/weekly. You CANNOT do weekday-only, specific weekdays, skip-holidays, skip-weekends, every-other-day, intervals, or monthly. If the user asks for a cadence outside none/daily/weekly, set the CLOSEST supported recurrence and tell them plainly which part you can't do (e.g. 'I've set a daily 7am reminder; I can't auto-skip public holidays, so you'll need to pause it on those days'). NEVER claim you did something the tool can't do, and don't create multiple tasks to fake an unsupported cadence.
 
     USE THIS ONLY for reminders that just notify. If the recurring job requires DOING WORK every time — fetching/searching, summarizing, delivering content, calling tools in a sequence (e.g. 'every Monday summarize HN', 'daily LeetCode problem') — do NOT use create_task. Use propose_skill(kind='new_skill', task={...}) instead: it authors a playbook (which tools, what order, message shape) so the job runs reliably. A recurring work-job created here with no skill has no procedure and fails when it fires."""
     return scheduling.create_task(title, description, due_at, recurrence, notify)

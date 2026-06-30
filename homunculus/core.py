@@ -78,6 +78,7 @@ from homunculus.output_guard import (
     _claim_target_inconsistencies,
     tool_result_indicates_failure,
     ungrounded_urls,
+    unsupported_cadence_claim,
 )
 
 log = logging.getLogger(__name__)
@@ -1908,6 +1909,12 @@ class Agent:
         if ungrounded_urls(reply, tool_outcomes, tool_names_used):
             violations.append("ungrounded_url")
 
+        # Unsupported cadence — a scheduling tool ran but the reply promises a
+        # recurrence the system can't express (weekday-only, skip-holidays,
+        # monthly, …). Recurrence is only none/daily/weekly (baseline probe #9).
+        if unsupported_cadence_claim(reply, tool_names_used):
+            violations.append("unsupported_cadence_claim")
+
         # Forward-tense mutation promise with no mutating tool called this turn.
         # "I'll edit the daily-LeetCode skill to add explanations." with zero
         # tool calls is the same lie as a retry promise — the turn ends and the
@@ -2021,6 +2028,17 @@ class Agent:
         "not promise an edit you won't make."
     )
 
+    _UNSUPPORTED_CADENCE_CORRECTION_PROMPT = (
+        "Your previous reply promised a schedule the task system cannot do. "
+        "Recurrence supports ONLY none, daily, or weekly — never weekday-only, "
+        "skip-holidays, skip-weekends, every-other-day, or monthly. Restate "
+        "honestly: tell the user the recurrence you actually set (e.g. 'a daily "
+        "7am reminder') and plainly name the part you can't do plus a workaround "
+        "(e.g. 'I can't auto-skip public holidays — pause it on those days'). "
+        "Do not claim an unsupported cadence, and do not create extra tasks to "
+        "fake one."
+    )
+
     _UNGROUNDED_URL_CORRECTION_PROMPT = (
         "Your previous reply cited one or more web links that did NOT come from "
         "your tool results this turn — you invented or guessed them. Never "
@@ -2057,6 +2075,8 @@ class Agent:
             correction = self._MUTATION_PROMISE_CORRECTION_PROMPT
         elif violations and "ungrounded_url" in violations:
             correction = self._UNGROUNDED_URL_CORRECTION_PROMPT
+        elif violations and "unsupported_cadence_claim" in violations:
+            correction = self._UNSUPPORTED_CADENCE_CORRECTION_PROMPT
         else:
             correction = self._SELF_CORRECTION_PROMPT
         self.history.append({

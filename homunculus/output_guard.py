@@ -70,6 +70,38 @@ def ungrounded_urls(reply: str, tool_outcomes: list[dict], tool_names_used) -> l
     grounded_blob = "\n".join(grounded_parts).lower()
 
     return [u for u in cited if _normalize_url(u) not in grounded_blob]
+
+
+# Unsupported-cadence guard. The task system's recurrence vocabulary is exactly
+# {none, daily, weekly} (tasks.ALLOWED_RECURRENCE). A reply that promises a
+# cadence outside that — after a scheduling tool ran — is over-claiming a
+# capability the tool doesn't have (baseline probe #9: "every weekday … skip
+# public holidays"). The term list enumerates the *finite* gap of a 3-value
+# vocabulary, so it's capability gating, not open-ended phrase whack-a-mole.
+_SCHEDULING_TOOLS = frozenset({"create_task", "schedule_task"})
+_UNSUPPORTED_CADENCE_TERMS = (
+    "weekday", "week day", "monday through friday", "mon-fri", "mon through fri",
+    "monday to friday", "weekend", "holiday", "every other", "alternate day",
+    "alternating", "bi-weekly", "biweekly", "fortnight", "monthly", "every month",
+)
+# Markers that the reply OWNS the limitation — then it's honest, not an
+# over-claim, so we don't flag it.
+_CADENCE_LIMITATION_TERMS = (
+    "can't", "cannot", "can not", "not supported", "doesn't support",
+    "does not support", "unable", "won't be able", "isn't supported",
+    "not able to", "you'll need to", "you will need to", "manually",
+)
+
+
+def unsupported_cadence_claim(reply: str, tool_names_used) -> bool:
+    """A scheduling tool ran and the reply promises a cadence the recurrence
+    vocabulary (none/daily/weekly) cannot express, without owning the limit."""
+    if not (set(tool_names_used) & _SCHEDULING_TOOLS):
+        return False
+    low = reply.lower()
+    if not any(t in low for t in _UNSUPPORTED_CADENCE_TERMS):
+        return False
+    return not any(t in low for t in _CADENCE_LIMITATION_TERMS)
 _GUARD_ERROR_PREFIXES = ("ERROR:", "ERROR running ")
 _GUARD_CONFABULATION_TERMS = ("example.com", "example domain")
 
