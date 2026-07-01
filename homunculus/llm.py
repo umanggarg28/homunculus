@@ -27,6 +27,17 @@ from homunculus.config import get_config
 log = logging.getLogger(__name__)
 
 
+class ProviderExhaustedError(RuntimeError):
+    """Every provider in the fallback chain failed for one request.
+
+    Typed so callers can classify infrastructure trouble exactly
+    (heartbeat marks the task partial and retries) instead of substring-
+    matching a formatted message. The message keeps the historical
+    "All providers exhausted: ..." prefix for log continuity and for
+    call sites that only see the string.
+    """
+
+
 # --- Config ---------------------------------------------------------------
 
 # API endpoint and model are configurable via env vars so you can swap
@@ -191,10 +202,20 @@ def _budget_cents() -> float:
         return 0.0
 
 
-def _is_known_paid_model(model_id: str) -> bool:
+# Pricing assumed for a paid model that is missing from the table. Set at
+# frontier-model rates on purpose: the budget must fail CLOSED on cost, so an
+# unlisted paid model (e.g. swapped in via the chat `/use` command) is counted
+# and blockable at worst-case prices rather than invisibly free. Add real
+# pricing to _MODEL_PRICING_CENTS to cost a new model accurately.
+_DEFAULT_PAID_PRICING_CENTS: tuple[float, float] = (250.0, 1000.0)
+
+
+def _pricing_for(model_id: str) -> tuple[float, float] | None:
+    """(input, output) cents-per-1M for a model, or None when it can't
+    cost money (free-tier route or empty id)."""
     if not model_id or model_id.endswith(":free"):
-        return False
-    return model_id in _MODEL_PRICING_CENTS
+        return None
+    return _MODEL_PRICING_CENTS.get(model_id, _DEFAULT_PAID_PRICING_CENTS)
 
 
 #: Emit the "budget accounting degraded" alarm at most once per process so a
@@ -217,6 +238,45 @@ def _warn_budget_degraded(reason: str) -> None:
         pass
 
 
+def _budget_cutoff_utc() -> datetime:
+    """Start of the budget window: the user's local midnight, in UTC.
+
+    Local midnight, not UTC — otherwise the budget appears to roll over
+    at 05:30 IST for an IST user.
+    """
+    try:
+        from homunculus.user_tz import get_user_tz_name
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(get_user_tz_name())
+        local_midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        return local_midnight.astimezone(UTC)
+    except Exception:
+        return datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _record_cost_cents(rec: dict) -> float:
+    """Cost of one llm_call event record, in cents. 0 for free routes."""
+    model = rec.get("model") or rec.get("name") or ""
+    pricing = _pricing_for(model)
+    if pricing is None:
+        return 0.0
+    input_tok = int(rec.get("input_tokens") or 0)
+    output_tok = int(rec.get("output_tokens") or 0)
+    cached_tok = int(rec.get("cached_tokens") or 0)
+    price_in, price_out = pricing
+    uncached = max(0, input_tok - cached_tok)
+    return (uncached * price_in + cached_tok * price_in * 0.1 + output_tok * price_out) / 1_000_000
+
+
+#: Incremental spend accounting. The events log only ever grows between
+#: rotations, so after one full scan we remember (path, window, byte offset,
+#: subtotal) and each later check parses only the appended bytes — instead of
+#: re-reading a multi-MB file on every paid-model call. Invalidated whenever
+#: the path changes (tests), the file shrinks (rotation), or the budget
+#: window rolls over at local midnight.
+_spend_cache: dict[str, Any] | None = None
+
+
 def _today_spend_cents() -> float:
     """Estimate today's spend from llm_call events.
 
@@ -227,32 +287,85 @@ def _today_spend_cents() -> float:
     _warn_budget_degraded — silently failing open on the budget ceiling is the
     one accounting failure worth shouting about.
     """
+    global _spend_cache
     events_path = Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
     if not events_path.exists():
         return 0.0
-    # Window on the user's local midnight, not UTC — otherwise the
-    # budget appears to roll over at 05:30 IST for an IST user.
+    cutoff = _budget_cutoff_utc()
+
     try:
-        from homunculus.user_tz import get_user_tz_name
-        from zoneinfo import ZoneInfo
-        tz = ZoneInfo(get_user_tz_name())
-        local_midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        cutoff = local_midnight.astimezone(UTC)
-    except Exception:
-        cutoff = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    total = 0.0
-    try:
-        lines = events_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        size = events_path.stat().st_size
     except OSError as e:
         _warn_budget_degraded(f"events log unreadable ({e.__class__.__name__})")
         return 0.0
+
+    cache = _spend_cache
+    if (
+        cache is not None
+        and cache["path"] == str(events_path)
+        and cache["cutoff"] == cutoff
+        and size >= cache["offset"]
+    ):
+        if size == cache["offset"]:
+            return cache["subtotal"]
+        added, new_offset = _scan_spend_bytes(events_path, cache["offset"], cutoff)
+        if new_offset is not None:
+            cache["subtotal"] += added
+            cache["offset"] = new_offset
+            return cache["subtotal"]
+        # Read failed mid-flight — fall through to a full rescan.
+
+    total, offset = _scan_spend_bytes(events_path, 0, cutoff, warn_on_corruption=True)
+    if offset is None:
+        return 0.0
+    _spend_cache = {
+        "path": str(events_path),
+        "cutoff": cutoff,
+        "offset": offset,
+        "subtotal": total,
+    }
+    return total
+
+
+def _scan_spend_bytes(
+    events_path: Path,
+    start_offset: int,
+    cutoff: datetime,
+    warn_on_corruption: bool = False,
+) -> tuple[float, int | None]:
+    """Sum llm_call spend in [start_offset, last complete line], in cents.
+
+    Returns (subtotal, next_offset). next_offset stops at the byte after the
+    last newline so a line another process is mid-append never gets half-
+    counted and then skipped — it's re-read complete on the next check.
+    (subtotal, None) on read failure.
+    """
+    try:
+        with events_path.open("rb") as f:
+            f.seek(start_offset)
+            blob = f.read()
+    except OSError as e:
+        if warn_on_corruption:
+            _warn_budget_degraded(f"events log unreadable ({e.__class__.__name__})")
+        return 0.0, None
+    last_nl = blob.rfind(b"\n")
+    if last_nl == -1:
+        return 0.0, start_offset
+    complete = blob[: last_nl + 1]
+    total = 0.0
     parsed_any = False
-    for line in reversed(lines):
+    saw_line = False
+    for line in complete.decode("utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        saw_line = True
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
             continue
         parsed_any = True
+        if rec.get("event") != "llm_call":
+            continue
         ts_raw = rec.get("ts", "")
         try:
             ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
@@ -261,23 +374,13 @@ def _today_spend_cents() -> float:
         except ValueError:
             continue
         if ts < cutoff:
-            break
-        if rec.get("event") != "llm_call":
             continue
-        model = rec.get("model") or rec.get("name") or ""
-        if not _is_known_paid_model(model):
-            continue
-        input_tok = int(rec.get("input_tokens") or 0)
-        output_tok = int(rec.get("output_tokens") or 0)
-        cached_tok = int(rec.get("cached_tokens") or 0)
-        price_in, price_out = _MODEL_PRICING_CENTS[model]
-        uncached = max(0, input_tok - cached_tok)
-        total += (uncached * price_in + cached_tok * price_in * 0.1 + output_tok * price_out) / 1_000_000
+        total += _record_cost_cents(rec)
     # A non-empty log where not one line parsed as JSON is corruption, not a
     # quiet day — and it would silently zero out the budget ceiling.
-    if lines and not parsed_any:
+    if warn_on_corruption and saw_line and not parsed_any:
         _warn_budget_degraded("events log present but no records parsed")
-    return total
+    return total, start_offset + last_nl + 1
 
 
 def measure_llm_usage_since(
@@ -332,21 +435,31 @@ def measure_llm_usage_since(
         out["output_tokens"] += out_tok
         out["cached_tokens"] += cached_tok
         out["calls"] += 1
-        model = rec.get("model") or rec.get("name") or ""
-        if _is_known_paid_model(model):
-            price_in, price_out = _MODEL_PRICING_CENTS[model]
-            uncached = max(0, in_tok - cached_tok)
-            out["cost_cents"] += (
-                uncached * price_in + cached_tok * price_in * 0.1 + out_tok * price_out
-            ) / 1_000_000
+        out["cost_cents"] += _record_cost_cents(rec)
     return out
 
 
+#: Warn once per process when a paid model runs with enforcement on but no
+#: budget configured — otherwise "the ceiling is off" is invisible until the
+#: bill arrives.
+_budget_disabled_warned = False
+
+
 def _budget_blocks_model(model_id: str) -> bool:
+    global _budget_disabled_warned
     if not get_config().provider.enforce_daily_budget:
         return False
+    if _pricing_for(model_id) is None:
+        return False  # free route — nothing to cap
     budget = _budget_cents()
-    if budget <= 0 or not _is_known_paid_model(model_id):
+    if budget <= 0:
+        if not _budget_disabled_warned:
+            _budget_disabled_warned = True
+            log.warning(
+                "budget enforcement is on but HOMUNCULUS_DAILY_BUDGET_USD is "
+                "unset/0 — paid model %s runs with NO cost ceiling",
+                model_id,
+            )
         return False
     return _today_spend_cents() >= budget
 
@@ -542,6 +655,167 @@ def _maybe_add_cache_control(messages: list[dict], url: str) -> list[dict]:
     return [cached_head, *messages[1:]]
 
 
+def _build_payload(
+    messages: list[dict],
+    tool_schemas: list[dict] | None,
+    url: str,
+    model_id: str,
+    tool_choice: str | dict,
+    reasoning_effort: str,
+    provider_constraints: dict | None,
+    stream: bool = False,
+) -> dict[str, Any]:
+    """Assemble one chat-completions request body for a specific provider.
+
+    Everything provider-shape-aware happens here (cache-control conversion,
+    reasoning effort, routing constraints, the OpenRouter max_tokens cap),
+    so the blocking and streaming callers cannot drift apart.
+    """
+    payload: dict[str, Any] = {
+        "model": model_id,
+        "messages": _maybe_add_cache_control(
+            _strip_internal_fields(messages), url,
+        ),
+    }
+    if stream:
+        payload["stream"] = True
+        payload["stream_options"] = {"include_usage": True}
+    if tool_schemas is not None:
+        payload["tools"] = tool_schemas
+        payload["tool_choice"] = tool_choice
+        payload["parallel_tool_calls"] = False
+    _apply_reasoning_effort(payload, model_id, url, reasoning_effort)
+    _apply_provider_constraints(payload, url, provider_constraints)
+    _apply_max_tokens(payload, url, model_id)
+    return payload
+
+
+def _emit_budget_blocked(model_id: str, url: str, reason: str) -> None:
+    try:
+        events.emit(
+            "budget_blocked",
+            name=model_id,
+            model=model_id,
+            host=_url_host(url),
+            result=reason,
+        )
+    except Exception:
+        pass
+
+
+def _attempt_chain(
+    messages: list[dict],
+    tool_schemas: list[dict] | None,
+    model: str | None,
+    tool_choice: str | dict,
+    reasoning_effort: str,
+    provider_constraints: dict | None,
+    allow_primary_retry: bool,
+) -> tuple[dict | None, str]:
+    """One pass over the provider chain. Returns (assistant_msg, last_err);
+    assistant_msg is None when every provider failed transiently.
+
+    Failure classification per provider:
+      - connection error / 429 / transient status / malformed 200 → cool the
+        provider and move to the next slot;
+      - a hard 4xx (bad key, malformed request) → raise immediately, no
+        fallback can fix our own request;
+      - budget-blocked paid model → skip with a budget_blocked event.
+
+    `allow_primary_retry` gates the wait-and-retry-once on a primary 429
+    (honoured on the first pass; the second pass already slept between
+    passes, so retrying inline again would just double the stall).
+    """
+    last_err = ""
+    for idx, (url, key, model_id) in enumerate(_providers(model)):
+        if _budget_blocks_model(model_id):
+            last_err = f"daily budget exhausted; skipping paid model {model_id}"
+            _emit_budget_blocked(model_id, url, last_err)
+            continue
+        payload = _build_payload(
+            messages, tool_schemas, url, model_id,
+            tool_choice, reasoning_effort, provider_constraints,
+        )
+        headers = {**_HTTP_HEADERS_BASE, "Authorization": f"Bearer {key}"}
+
+        try:
+            response = httpx.post(url, headers=headers, json=payload, timeout=60.0)
+        except httpx.HTTPError as e:
+            last_err = f"{type(e).__name__}: {e}"
+            _cool_provider(url, model_id)
+            continue
+
+        if response.status_code == 429:
+            last_err = response.text
+            retry_after = _parse_retry_after(response)
+            # Primary-provider retry: if this is the first provider we tried
+            # and the retry-after is short (or absent — Gemini often omits it),
+            # wait and retry once before falling to lower-quality fallbacks.
+            wait_for = (
+                retry_after if retry_after is not None
+                else get_config().provider.primary_default_retry_wait
+            )
+            if (
+                allow_primary_retry
+                and idx == 0
+                and wait_for <= get_config().provider.primary_max_retry_wait
+            ):
+                log.warning(f"[call_llm] {model_id} 429, waiting {wait_for:.0f}s — retrying primary")
+                time.sleep(wait_for)
+                try:
+                    retry_resp = httpx.post(url, headers=headers, json=payload, timeout=60.0)
+                    if retry_resp.status_code == 200:
+                        rj = retry_resp.json()
+                        msg = _extract_assistant_message(rj)
+                        if msg is not None:
+                            _emit_llm_call(model_id, url, messages, rj.get("usage"))
+                            return msg, last_err
+                        last_err = f"malformed 200 response: {retry_resp.text[:200]}"
+                    # Retry also failed — fall through to cool + continue.
+                    retry_after = _parse_retry_after(retry_resp)
+                except httpx.HTTPError:
+                    pass
+            cool_for = retry_after if retry_after else get_config().provider.cooldown_seconds
+            _cool_provider(url, model_id, cool_for)
+            log.warning(f"[call_llm] {model_id} 429 → cooling {cool_for:.0f}s, trying next")
+            try:
+                events.emit("provider_cooled", name=model_id, host=_url_host(url), result=f"429 · cooling {cool_for:.0f}s")
+            except Exception:
+                pass
+            continue
+        if _is_transient_provider_error(response):
+            last_err = response.text
+            _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
+            log.info(
+                f"[call_llm] {model_id} unavailable ({response.status_code}) "
+                "→ cooling 10m, trying next",
+            )
+            continue
+        if response.status_code >= 400:
+            raise RuntimeError(f"API error {response.status_code}: {response.text}")
+        try:
+            rj = response.json()
+        except (ValueError, json.JSONDecodeError):
+            last_err = f"non-JSON 200 response: {response.text[:200]}"
+            _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
+            log.warning(f"[call_llm] {model_id} returned non-JSON 200 → cooling, trying next")
+            continue
+        msg = _extract_assistant_message(rj)
+        if msg is None:
+            last_err = f"malformed 200 response (missing choices/message): {response.text[:200]}"
+            _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
+            log.warning(f"[call_llm] {model_id} 200 with no choices → cooling, trying next")
+            try:
+                events.emit("provider_cooled", name=model_id, host=_url_host(url), result="200/no-choices")
+            except Exception:
+                pass
+            continue
+        # Emit which model actually answered, so the live feed shows it.
+        _emit_llm_call(model_id, url, messages, rj.get("usage"))
+        return msg, last_err
+    return None, last_err
+
+
 def call_llm(
     messages: list[dict],
     tool_schemas: list[dict] | None,
@@ -557,10 +831,10 @@ def call_llm(
        "content": str | None,
        "tool_calls": [...] | None}
 
-    On 429 (rate limited) from the primary provider, automatically tries
-    the fallback provider (Gemini by default) if its API key is set in
-    env. If the fallback is unset, sleeps for retry-after and retries
-    primary once. This gives us elastic capacity without paying for it.
+    Walks the provider chain (see _attempt_chain for per-provider failure
+    handling); if the whole chain fails transiently, sleeps briefly and
+    walks it once more — usually one provider's cooldown has expired by
+    then. Raises ProviderExhaustedError when both passes come up empty.
 
     tool_schemas=None makes it a plain-chat call (no tool use).
     model defaults to MODEL; services can override per-call.
@@ -583,115 +857,11 @@ def call_llm(
     if not primary_key:
         raise RuntimeError("HOMUNCULUS_API_KEY is not set.")
 
-    providers = _providers(model)
-    last_err = ""
-
-    for idx, (url, key, model_id) in enumerate(providers):
-        if _budget_blocks_model(model_id):
-            last_err = f"daily budget exhausted; skipping paid model {model_id}"
-            try:
-                events.emit(
-                    "budget_blocked",
-                    name=model_id,
-                    model=model_id,
-                    host=_url_host(url),
-                    result=last_err,
-                )
-            except Exception:
-                pass
-            continue
-        payload: dict[str, Any] = {
-            "model": model_id,
-            "messages": _maybe_add_cache_control(
-                _strip_internal_fields(messages), url,
-            ),
-        }
-        if tool_schemas is not None:
-            payload["tools"] = tool_schemas
-            payload["tool_choice"] = tool_choice
-            payload["parallel_tool_calls"] = False
-        _apply_reasoning_effort(payload, model_id, url, reasoning_effort)
-        _apply_provider_constraints(payload, url, provider_constraints)
-        _apply_max_tokens(payload, url, model_id)
-
-        try:
-            response = httpx.post(
-                url,
-                headers={**_HTTP_HEADERS_BASE, "Authorization": f"Bearer {key}"},
-                json=payload,
-                timeout=60.0,
-            )
-        except httpx.HTTPError as e:
-            last_err = f"{type(e).__name__}: {e}"
-            _cool_provider(url, model_id)
-            continue
-
-        if response.status_code == 429:
-            last_err = response.text
-            retry_after = _parse_retry_after(response)
-            # Primary-provider retry: if this is the first provider we tried
-            # and the retry-after is short (or absent — Gemini often omits it),
-            # wait and retry once before falling to lower-quality fallbacks.
-            wait_for = retry_after if (retry_after is not None) else get_config().provider.primary_default_retry_wait
-            if idx == 0 and wait_for <= get_config().provider.primary_max_retry_wait:
-                log.warning(f"[call_llm] {model_id} 429, waiting {wait_for:.0f}s — retrying primary")
-                time.sleep(wait_for)
-                try:
-                    retry_resp = httpx.post(
-                        url,
-                        headers={**_HTTP_HEADERS_BASE, "Authorization": f"Bearer {key}"},
-                        json=payload,
-                        timeout=60.0,
-                    )
-                    if retry_resp.status_code == 200:
-                        rj = retry_resp.json()
-                        msg = _extract_assistant_message(rj)
-                        if msg is not None:
-                            _emit_llm_call(model_id, url, messages, rj.get("usage"))
-                            return msg
-                        last_err = f"malformed 200 response: {retry_resp.text[:200]}"
-                    # Retry also failed — fall through to cool + continue
-                    response = retry_resp
-                    retry_after = _parse_retry_after(retry_resp)
-                except httpx.HTTPError:
-                    pass
-            cool_for = retry_after if retry_after else get_config().provider.cooldown_seconds
-            _cool_provider(url, model_id, cool_for)
-            log.warning(f"[call_llm] {model_id} 429 → cooling {cool_for:.0f}s, trying next")
-            try:
-                events.emit("provider_cooled", name=model_id, host=_url_host(url), result=f"429 · cooling {cool_for:.0f}s")
-            except Exception:
-                pass
-            continue
-        if _is_transient_provider_error(response):
-            last_err = response.text
-            _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
-            log.info(
-                f"[call_llm] {model_id} unavailable ({response.status_code}) "
-                "→ cooling 10m, trying next",
-            )
-            continue
-        if response.status_code >= 400:
-            raise RuntimeError(f"API error {response.status_code}: {response.text}")
-        # Emit which model actually answered, so the live feed shows it.
-        try:
-            rj = response.json()
-        except (ValueError, json.JSONDecodeError):
-            last_err = f"non-JSON 200 response: {response.text[:200]}"
-            _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
-            log.warning(f"[call_llm] {model_id} returned non-JSON 200 → cooling, trying next")
-            continue
-        msg = _extract_assistant_message(rj)
-        if msg is None:
-            last_err = f"malformed 200 response (missing choices/message): {response.text[:200]}"
-            _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
-            log.warning(f"[call_llm] {model_id} 200 with no choices → cooling, trying next")
-            try:
-                events.emit("provider_cooled", name=model_id, host=_url_host(url), result="200/no-choices")
-            except Exception:
-                pass
-            continue
-        _emit_llm_call(model_id, url, messages, rj.get("usage"))
+    msg, last_err = _attempt_chain(
+        messages, tool_schemas, model, tool_choice,
+        reasoning_effort, provider_constraints, allow_primary_retry=True,
+    )
+    if msg is not None:
         return msg
 
     # All providers in this attempt 429'd or errored. Honor a short sleep
@@ -700,63 +870,14 @@ def call_llm(
     wait = 30.0
     log.warning(f"[call_llm] all providers cooled; sleeping {wait:.0f}s and retrying once")
     time.sleep(wait)
-    for url, key, model_id in _providers(model):
-        if _budget_blocks_model(model_id):
-            last_err = f"daily budget exhausted; skipping paid model {model_id}"
-            try:
-                events.emit(
-                    "budget_blocked",
-                    name=model_id,
-                    model=model_id,
-                    host=_url_host(url),
-                    result=last_err,
-                )
-            except Exception:
-                pass
-            continue
-        payload = {
-            "model": model_id,
-            "messages": _maybe_add_cache_control(
-                _strip_internal_fields(messages), url,
-            ),
-        }
-        if tool_schemas is not None:
-            payload["tools"] = tool_schemas
-            payload["tool_choice"] = tool_choice
-            payload["parallel_tool_calls"] = False
-        _apply_reasoning_effort(payload, model_id, url, reasoning_effort)
-        _apply_provider_constraints(payload, url, provider_constraints)
-        _apply_max_tokens(payload, url, model_id)
-        response = httpx.post(
-            url,
-            headers={**_HTTP_HEADERS_BASE, "Authorization": f"Bearer {key}"},
-            json=payload,
-            timeout=60.0,
-        )
-        if response.status_code == 429:
-            _cool_provider(url, model_id)
-            continue
-        if _is_transient_provider_error(response):
-            last_err = response.text
-            _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
-            continue
-        if response.status_code >= 400:
-            raise RuntimeError(f"API error {response.status_code}: {response.text}")
-        try:
-            rj = response.json()
-        except (ValueError, json.JSONDecodeError):
-            last_err = f"non-JSON 200 response: {response.text[:200]}"
-            _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
-            continue
-        msg = _extract_assistant_message(rj)
-        if msg is None:
-            last_err = f"malformed 200 response (missing choices/message): {response.text[:200]}"
-            _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
-            continue
-        _emit_llm_call(model_id, url, messages, rj.get("usage"))
+    msg, retry_err = _attempt_chain(
+        messages, tool_schemas, model, tool_choice,
+        reasoning_effort, provider_constraints, allow_primary_retry=False,
+    )
+    if msg is not None:
         return msg
 
-    raise RuntimeError(f"All providers exhausted: {last_err}")
+    raise ProviderExhaustedError(f"All providers exhausted: {retry_err or last_err}")
 
 
 def _extract_assistant_message(rj: dict) -> dict | None:
@@ -902,32 +1023,12 @@ def call_llm_stream(
     for idx, (url, key, model_id) in enumerate(_providers(model)):
         if _budget_blocks_model(model_id):
             last_err = f"daily budget exhausted; skipping paid model {model_id}"
-            try:
-                events.emit(
-                    "budget_blocked",
-                    name=model_id,
-                    model=model_id,
-                    host=_url_host(url),
-                    result=last_err,
-                )
-            except Exception:
-                pass
+            _emit_budget_blocked(model_id, url, last_err)
             continue
-        payload: dict[str, Any] = {
-            "model": model_id,
-            "messages": _maybe_add_cache_control(
-                _strip_internal_fields(messages), url,
-            ),
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-        if tool_schemas is not None:
-            payload["tools"] = tool_schemas
-            payload["tool_choice"] = tool_choice
-            payload["parallel_tool_calls"] = False
-        _apply_reasoning_effort(payload, model_id, url, reasoning_effort)
-        _apply_provider_constraints(payload, url, provider_constraints)
-        _apply_max_tokens(payload, url, model_id)
+        payload = _build_payload(
+            messages, tool_schemas, url, model_id,
+            tool_choice, reasoning_effort, provider_constraints, stream=True,
+        )
         try:
             response_ctx = httpx.stream(
                 "POST",
@@ -1016,7 +1117,7 @@ def call_llm_stream(
         break
 
     if response_ctx is None or response is None:
-        raise RuntimeError(f"All providers exhausted: {last_err}")
+        raise ProviderExhaustedError(f"All providers exhausted: {last_err}")
 
     content_acc: list[str] = []
     tool_calls_acc: dict[int, dict[str, Any]] = {}

@@ -1510,13 +1510,15 @@ def _is_infra_error(err: str) -> bool:
     Infra errors mark the task PARTIAL (retry ~10 min, scratchpad
     survives); everything else records a real failure (advances a
     recurring task to its next occurrence and counts toward
-    auto-cancel). The strings come from core.call_llm's raise sites
-    and httpx exception names.
+    auto-cancel). The error string is `f"{type(e).__name__}: {e}"`, so
+    the typed exception name is the exact anchor; the message markers
+    stay as a fallback for paths that only forward the message text.
     """
     return any(
         marker in err
         for marker in (
-            "All providers exhausted",   # call_llm chain fully cooled
+            "ProviderExhaustedError",    # llm.py's typed chain-exhaustion error
+            "All providers exhausted",   # its message, for message-only paths
             "API error",                 # call_llm non-2xx raise
             "ConnectError",
             "ConnectTimeout",

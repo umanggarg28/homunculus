@@ -129,8 +129,11 @@ judgment lives:
 - **Prompt-injection defense** (`security.py`): canary instructions detect
   prompt-leak attempts; untrusted tool content (web/RSS) is wrapped before it
   reaches the model.
-- **Budget gate** (`llm.py`): a per-tick iteration cap and a hard monthly cost
-  ceiling; a multi-provider fallback chain handles provider failures.
+- **Budget gate** (`llm.py`): a per-tick iteration cap and an opt-in hard
+  **daily** cost ceiling (`HOMUNCULUS_DAILY_BUDGET_USD`; unset = no ceiling,
+  warned once per process). Paid models missing from the pricing table are
+  costed at conservative default rates so the cap fails closed. A
+  multi-provider fallback chain handles provider failures.
 
 ## 6. Persistence model
 

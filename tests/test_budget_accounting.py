@@ -15,9 +15,13 @@ from homunculus import llm
 @pytest.fixture(autouse=True)
 def _reset_warn_flag():
     # The alarm fires at most once per process; reset around each test.
+    # The incremental spend cache is keyed on (path, window, offset) —
+    # reset it too so each test scans its own fixture file from scratch.
     llm._budget_degraded_warned = False
+    llm._spend_cache = None
     yield
     llm._budget_degraded_warned = False
+    llm._spend_cache = None
 
 
 def _capture_events(monkeypatch):
