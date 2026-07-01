@@ -110,6 +110,33 @@ class TestLoadCoreBlock:
         # Should include at most 2 user entries (plus the bolded label prefix).
         assert block.count("**") <= 4  # 2 entries × 1 opening bold each
 
+    def test_excludes_operational_log_feedback(self, mem):
+        # A genuine user rule, then daily-log/reflection memories written AFTER it
+        # (so they're newer and would otherwise crowd the real rule out).
+        _write_entry(mem, "dark_mode_preference", "feedback", "Dark Mode",
+                     "User prefers dark mode everywhere.")
+        _write_entry(mem, "2026-07-01_log", "feedback", "Log 07-01",
+                     "All deliveries succeeded, no corrections.")
+        _write_entry(mem, "reflection_2026-06-30", "feedback", "Reflection",
+                     "Daily tick reflection notes.")
+        _write_entry(mem, "refinement_summary_2026-06-29", "feedback", "Refinement",
+                     "Skill refinements proposed.")
+        block = mem.load_core_block(max_per_type=3).lower()
+        assert "dark mode" in block                    # the real user rule survives
+        assert "deliveries succeeded" not in block     # daily log excluded
+        assert "reflection notes" not in block         # reflection note excluded
+        assert "refinements proposed" not in block     # refinement log excluded
+
+
+def test_is_operational_memory():
+    from homunculus.memory import _is_operational_memory
+    assert _is_operational_memory("feedback_2026-07-01_log")
+    assert _is_operational_memory("reflection_2026-06-30")
+    assert _is_operational_memory("refinement_summary_2026-06-29")
+    assert not _is_operational_memory("dark_mode_preference")
+    assert not _is_operational_memory("exact_instructions")
+    assert not _is_operational_memory("track_recurring_deliveries")
+
 
 # ---------------------------------------------------------------------------
 # Memory.remember / forget round-trip
