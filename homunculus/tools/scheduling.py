@@ -95,23 +95,50 @@ def create_task(
 
 _COMMITMENT_KINDS = {"deadline_check", "event_check_in", "open_loop", "care_check_in"}
 
+# Default lead time between the check-in and the event/deadline, by kind. The
+# agent supplies the EVENT time (a fact it knows); the tool derives WHEN to check
+# in deterministically — so a weak model can't set the check at the event itself
+# (its actual failure mode: it put an interview check-in at 3pm sharp).
+_DEFAULT_LEAD_HOURS = {
+    "deadline_check": 24,   # nudge a day before a due date
+    "event_check_in": 2,    # check in ~2h before an event (prep / good luck)
+    "open_loop": 0,         # follow up at the given time
+    "care_check_in": 0,
+}
 
-def record_commitment(what: str, check_at: str, kind: str = "open_loop") -> str:
+
+def _derive_check_at(event_at: str, kind: str, lead_hours: int | None) -> str:
+    lead = _DEFAULT_LEAD_HOURS.get(kind, 0) if lead_hours is None else max(0, int(lead_hours))
+    if not lead:
+        return event_at
+    try:
+        dt = datetime.fromisoformat(event_at)
+    except ValueError:
+        return event_at  # unparseable — let the store normalize it as-is
+    return (dt - timedelta(hours=lead)).isoformat()
+
+
+def record_commitment(
+    what: str, event_at: str, kind: str = "open_loop", lead_hours: int | None = None
+) -> str:
     """Record a commitment the agent NOTICED (not user-requested) as a check-in.
 
     Stored as an inferred, notifying task so it fires through the normal heartbeat
     — this is how the agent follows up proactively on a deadline the user
-    mentioned, a promise it made, or an open loop, without being asked. `kind` is
-    one of deadline_check / event_check_in / open_loop / care_check_in.
+    mentioned, a promise it made, or an open loop, without being asked. `event_at`
+    is when the thing HAPPENS/is due; the check-in fires a sensible lead before it
+    (a day before a deadline, ~2h before an event) so it arrives in time to be
+    useful. `kind` ∈ deadline_check / event_check_in / open_loop / care_check_in.
     """
     what = (what or "").strip()
-    check_at = (check_at or "").strip()
+    event_at = (event_at or "").strip()
     if not what:
         return "ERROR: 'what' is required — describe the commitment to follow up on."
-    if not check_at:
-        return "ERROR: 'check_at' is required — a commitment with no check time can't fire."
+    if not event_at:
+        return "ERROR: 'event_at' is required — when does the event happen / when is it due?"
     if kind not in _COMMITMENT_KINDS:
         return f"ERROR: kind must be one of {sorted(_COMMITMENT_KINDS)}, got '{kind}'."
+    check_at = _derive_check_at(event_at, kind, lead_hours)
     store = _task_store()
     slug = _slug(what)
     for existing in store.list("all"):
@@ -120,7 +147,10 @@ def record_commitment(what: str, check_at: str, kind: str = "open_loop") -> str:
             return f"Updated existing commitment {existing['id']}: {existing['title']}"
     desc = f"[commitment:{kind}] Proactive check-in the agent inferred, not a user reminder. {what}"
     task = store.create(what, desc, check_at, "none", notify=True, source="inferred")
-    return f"Recorded commitment {task['id']} ({kind}): {task['title']} — check at {task.get('due_at')}"
+    return (
+        f"Recorded commitment {task['id']} ({kind}): {task['title']} — "
+        f"event {event_at}, check-in fires {task.get('due_at')}"
+    )
 
 
 def task_health_summary() -> str:
