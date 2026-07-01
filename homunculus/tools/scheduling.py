@@ -93,6 +93,36 @@ def create_task(
     return f"Created task {task['id']}: {task['title']}"
 
 
+_COMMITMENT_KINDS = {"deadline_check", "event_check_in", "open_loop", "care_check_in"}
+
+
+def record_commitment(what: str, check_at: str, kind: str = "open_loop") -> str:
+    """Record a commitment the agent NOTICED (not user-requested) as a check-in.
+
+    Stored as an inferred, notifying task so it fires through the normal heartbeat
+    — this is how the agent follows up proactively on a deadline the user
+    mentioned, a promise it made, or an open loop, without being asked. `kind` is
+    one of deadline_check / event_check_in / open_loop / care_check_in.
+    """
+    what = (what or "").strip()
+    check_at = (check_at or "").strip()
+    if not what:
+        return "ERROR: 'what' is required — describe the commitment to follow up on."
+    if not check_at:
+        return "ERROR: 'check_at' is required — a commitment with no check time can't fire."
+    if kind not in _COMMITMENT_KINDS:
+        return f"ERROR: kind must be one of {sorted(_COMMITMENT_KINDS)}, got '{kind}'."
+    store = _task_store()
+    slug = _slug(what)
+    for existing in store.list("all"):
+        if _slug(existing["title"]) == slug:
+            store.schedule(existing["id"], check_at or existing.get("due_at") or "", "none")
+            return f"Updated existing commitment {existing['id']}: {existing['title']}"
+    desc = f"[commitment:{kind}] Proactive check-in the agent inferred, not a user reminder. {what}"
+    task = store.create(what, desc, check_at, "none", notify=True, source="inferred")
+    return f"Recorded commitment {task['id']} ({kind}): {task['title']} — check at {task.get('due_at')}"
+
+
 def task_health_summary() -> str:
     """Pre-computed brief snapshot — JSON wrapper around the pure-data
     helper in tasks.py. See tasks.task_health_summary for the schema."""
