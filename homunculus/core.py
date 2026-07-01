@@ -1648,6 +1648,13 @@ class Agent:
             yield clarify
             return
 
+        # Fresh canary per request, minted BEFORE the system prompt is
+        # rendered: _prepare_turn embeds it via _current_system_prompt, and
+        # _finalize_reply checks every final reply against the same token.
+        # The order is load-bearing — minted any later, the prompt would
+        # carry the previous turn's token while the leak check compares
+        # against one the model never saw, and detection could never fire.
+        self._turn_canary = _make_canary()
         self._prepare_turn(user_message, source)
 
         tool_names_used: set[str] = set()
@@ -1660,10 +1667,6 @@ class Agent:
         # tool call so we can answer "did the agent actually succeed at the
         # action it's now claiming to have done?"
         tool_outcomes: list[dict] = []
-        # Fresh canary per request. The token gets embedded in the
-        # system prompt by _current_system_prompt and checked against
-        # every final reply by _detect_prompt_leak.
-        self._turn_canary = _make_canary()
 
         # Snapshot the loop ceiling once per request — it's used in many
         # branches below (nudges, prompts, the for-loop bound). Reading
