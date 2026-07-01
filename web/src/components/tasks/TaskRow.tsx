@@ -148,6 +148,24 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
             {task.title}
           </div>
           <div className="task-row-meta">
+            {task.source === "inferred" && (
+              <span
+                title="A commitment the agent noticed and recorded to follow up on — you didn't ask for it."
+                style={{
+                  fontSize: 9,
+                  letterSpacing: "0.14em",
+                  textTransform: "uppercase",
+                  color: "var(--color-indigo)",
+                  border: "1px solid var(--color-indigo)",
+                  borderRadius: 2,
+                  padding: "1px 5px",
+                  lineHeight: 1.3,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                ◇ proactive
+              </span>
+            )}
             {subtitle && (
               <div style={{ fontSize: 10, letterSpacing: "0.10em", textTransform: "uppercase", color: "var(--color-text-muted)" }}>
                 {subtitle}
