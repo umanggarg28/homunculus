@@ -31,6 +31,7 @@ _TRANSIENT_MARKERS: tuple[str, ...] = (
     "connecterror", "connecttimeout", "readtimeout",
     "connect timeout", "read timeout",
     # Provider / model availability — the fallback chain cooled or rate-limited.
+    "providerexhaustederror",
     "all providers exhausted", "provider_exhaustion", "provider exhaustion",
     "rate limit", "too many requests", "429",
     "service unavailable", "503", "502 bad gateway", "504 gateway timeout",
