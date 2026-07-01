@@ -541,6 +541,35 @@ def _clarify_before_act(user_message: str, history: list[dict]) -> str | None:
     )
 
 
+# Multi-step request detector — decides when to FORCE a visible plan (pin the
+# first turn to plan_steps). A weak model uses plan_steps inconsistently on its
+# own, so the plan-first scaffold only shows up reliably if we trigger it. Tuned
+# for precision on obvious compound/research asks: a miss just means no plan
+# (status quo); a false positive just adds a one-line plan card.
+_MULTISTEP_SIGNALS_RE = re.compile(
+    r"\b(?:step[ -]by[ -]step|and then|"
+    r"(?:summary|summaries|one[ -]?line)\s+(?:of|for)\s+each|"
+    r"for each|each\s+(?:one|of them)|compare)\b",
+    re.IGNORECASE,
+)
+_MULTISTEP_COMPOUND_RE = re.compile(
+    r"\b(?:research|find|search|gather|collect|compile|analy[sz]e|review|"
+    r"look up|investigate)\b.*\band\b.*"
+    r"\b(?:summari[sz]e|give|list|write|send|create|compile|compare|report|"
+    r"email|save|show|draft|explain)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_multistep(user_message: str) -> bool:
+    """True when a request clearly needs several steps, so the agent should
+    plan first. Requires a minimum length so short one-shots never trigger."""
+    msg = user_message.strip()
+    if len(msg.split()) < 6:
+        return False
+    return bool(_MULTISTEP_SIGNALS_RE.search(msg) or _MULTISTEP_COMPOUND_RE.search(msg))
+
+
 # --- The agent ------------------------------------------------------------
 
 class Agent:
@@ -1709,6 +1738,13 @@ class Agent:
         # most one state from this list; when exhausted the loop reverts
         # to source-default behavior.
         state_idx = 0
+
+        # Plan-first for clearly multi-step requests: pin the first turn to
+        # plan_steps (the model fills in the steps) so the user reliably sees
+        # the agent decompose. Only for a free-form chat turn — never override a
+        # caller-supplied state_sequence (e.g. a skill playbook) or the heartbeat.
+        if state_sequence is None and source not in ("heartbeat", "reflection") and _looks_multistep(user_message):
+            state_sequence = [{"tool": "plan_steps"}]
 
         # Pre-load every tool referenced by the state sequence into the
         # active set. Otherwise the first forced tool that isn't in
