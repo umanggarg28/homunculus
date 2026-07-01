@@ -52,6 +52,22 @@ except ImportError:
 
 ALLOWED_TYPES = {"user", "feedback", "project", "reference", "skill"}
 
+# Operational/log memories — daily reflection summaries ("feedback_2026-07-01_log"),
+# refinement logs, reflection notes. They're saved as feedback_* but are the
+# agent's own bookkeeping, not durable user rules; they churn daily and, being
+# newest, crowd genuine user rules out of the always-in-context core block. This
+# pattern identifies them by name so the core block stays a model of the USER
+# (name, prefs, standing rules), not a diary of the agent.
+_OPERATIONAL_MEMORY_RE = re.compile(
+    r"(?:_log$|reflection|refinement|\d{4}[-_]\d{2}[-_]\d{2})",
+    re.IGNORECASE,
+)
+
+
+def _is_operational_memory(name: str) -> bool:
+    """True for the agent's own daily-log/reflection bookkeeping memories."""
+    return bool(_OPERATIONAL_MEMORY_RE.search(name))
+
 _INDEX_HEADER = "# Memory\n\nThis index lists every durable fact I've remembered. Full bodies live in the linked files; use read_file to fetch one when relevant.\n\n"
 
 # Schema doc dropped into memory/README.md on first init. Renders nicely
@@ -145,15 +161,20 @@ class Memory:
         memory vault grows.
 
         Ordered: user_* memories first (newest-first by mtime), then
-        feedback_* memories (newest-first), up to max_per_type each.
+        feedback_* memories (newest-first), up to max_per_type each. Operational
+        log/reflection memories are excluded from the feedback slot so genuine
+        user rules aren't crowded out by the agent's daily bookkeeping.
         """
         pinned: list[str] = []
         for prefix in ("user", "feedback"):
-            paths = sorted(
+            candidates = sorted(
                 (p for p in self.root.glob(f"{prefix}_*.md")),
                 key=lambda p: p.stat().st_mtime,
                 reverse=True,
-            )[:max_per_type]
+            )
+            if prefix == "feedback":
+                candidates = [p for p in candidates if not _is_operational_memory(p.stem)]
+            paths = candidates[:max_per_type]
             for path in paths:
                 text = path.read_text(encoding="utf-8")
                 body = self._strip_frontmatter(text).strip()

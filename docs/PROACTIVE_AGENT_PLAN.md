@@ -96,40 +96,33 @@ defects (A fabrication, B flailing, C over-claim), motivating Phase 0.5.
 
 ---
 
-## Phase 0.5 — Hardening *(production-grade gate; before proactivity)*
+## Phase 0.5 — Hardening *(production-grade gate; before proactivity)* — DONE
 
 The baseline proved proactivity must not be built on an ungrounded, over-claiming
-base — it would amplify the failure. Fix the three confirmed defects first.
+base. All three defects fixed and merged:
 
-- **A. Chat-reply grounding.** Extend the URL-grounding gate (today wired only to
-  the `notify`/delivery boundary) to chat replies: flag/strip ungrounded links,
-  mark unverifiable quantitative claims. Ensure `†`-citation stripping runs on the
-  reply path, not only at transport. Grounded in the Hermes "verify every
-  citation / mark unverifiable" pattern already used for news.
-- **B. Clarify-before-act.** On low-specificity input with no actionable referent,
-  ask one clarifying question instead of launching tool work. The visible
-  **plan/checklist** (below) is the structural enforcement: no execution before a
-  plan exists, and an un-plannable request yields a question.
-- **C. Capability honesty.** Extend Hermes `requires_tools`-style gating to the
-  reply path so the agent declares boundaries rather than over-promising
-  (the "skip public holidays" / restaurant-booking class).
+- **A. Chat-reply grounding** — PR #251. `output_guard.ungrounded_urls()` flags
+  reply URLs absent from this turn's successful tool results (only when a web tool
+  ran); citation-token stripping now runs on the returned reply.
+- **B. Clarify-before-act** — PR #253. `_clarify_before_act()` input rail: an
+  ungrounded ambiguous imperative ("Set it up") returns a question before the tool
+  loop (0s, was 103s/8 calls).
+- **C. Capability honesty** — PR #252. Honest `create_task` contract + a
+  deterministic `unsupported_cadence_claim` guard (weekday-only / skip-holidays /
+  monthly are refused honestly).
 
-**Plan/checklist surface (from `agents/1_foundations/5_extra.ipynb`).** Two tools
-— `plan_steps(steps[])` and `complete_step(index, note)` — let the agent decompose
-a task into a visible todo list and check items off as it works, rendered live in
-the chat UI (strike-through on completion, à la Claude's own task view). Value:
-(1) makes multi-step agent reasoning *visible* — the recruiter-facing "this is a
-real agent" signal; (2) forces plan-before-act, the structural fix for defect B;
-(3) legible progress on long tasks. **Budget guard:** gated to genuinely
-multi-step tasks (a complexity heuristic) — never engaged for "what's the
-weather," or it doubles tool round-trips on a weak model under the $5/mo cap.
-
-**Files:** `core.py`/`output_guard.py` (grounding + clarify gate), new plan tools
-in `tools/`, web UI checklist component, capability-gate in `skill_validation.py`
-+ reply path. **Test:** ungrounded URL in a chat reply is flagged; "Set it up"
-yields a question not 8 web calls; an un-tooled claim is refused; plan tools
-render + gate correctly. Live: re-run the failing baseline probes (#1, #2, #9)
-and confirm corrected behavior.
+**Plan/checklist surface — TRIED AND DROPPED (PRs #254/#256 → reverted in #257).**
+Built `plan_steps`/`complete_step` + a themed checklist card. The standard pattern
+(Claude Code TodoWrite) is model-driven: the model *decides* to plan and tracks
+status via the tool description, no code forcing it. On gpt-oss-120b that
+discipline wasn't there (skipped planning, one-step "plans", didn't track status).
+Making it look reliable required a keyword-regex trigger (hardcoding) or faking
+completion in the UI (faking state) — both rejected. A [model head-to-head]
+(../reference) confirmed no affordable model reliably fixes this without
+hardcoding, so the feature was removed. Lesson: when a clean standard pattern only
+works by hardcoding around a weak model, change the model or drop the feature.
+Model decision: **stay on gpt-oss-120b** (harness-native, capable enough for the
+agentic tool-use these phases need).
 
 ---
 
@@ -137,6 +130,17 @@ and confirm corrected behavior.
 
 Turn the daily REFLECTION tick into a real sleep-time pass that builds a model
 of the user instead of logging itself.
+
+*Status (2026-07-02):* much of this tier already existed — a `user` memory type,
+`Memory.load_core_block()` (Letta always-in-context block, injected at
+core.py:584), reflection hygiene, and `test_memory_consolidation.py`. The real
+gap the baseline pointed at was that the daily reflection's own log/reflection
+memories (saved as `feedback_*`) were, being newest, **crowding genuine user
+rules out of the core block** — so the always-in-context self-model read as "I run
+these schedules." Fixed by `_is_operational_memory()` excluding log/reflection/
+dated feedback from the core-block slot (10 excluded on the live vault; real
+rules surfaced). Remaining Phase-1 items below (richer user-fact extraction,
+mem0 consolidation) are lower-priority given what already exists.
 
 - **User-model tier (Hermes).** New memory `type: user_model` — goals, active
   projects, deadlines, preferences, people. Reflection extracts these from the
