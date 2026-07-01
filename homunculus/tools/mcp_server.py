@@ -28,8 +28,6 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from homunculus import plan as plan_mod
-
 from . import (
     _meta, authoring, coach, filesystem, github,
     leetcode as leetcode_mod,
@@ -633,43 +631,6 @@ def create_task(
 
     USE THIS ONLY for reminders that just notify. If the recurring job requires DOING WORK every time — fetching/searching, summarizing, delivering content, calling tools in a sequence (e.g. 'every Monday summarize HN', 'daily LeetCode problem') — do NOT use create_task. Use propose_skill(kind='new_skill', task={...}) instead: it authors a playbook (which tools, what order, message shape) so the job runs reliably. A recurring work-job created here with no skill has no procedure and fails when it fires."""
     return scheduling.create_task(title, description, due_at, recurrence, notify)
-
-
-# ── planning (visible checklist) ──────────────────────────────────────
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
-def plan_steps(
-    steps: Annotated[
-        list[str],
-        Field(description="Ordered short step descriptions, e.g. ['Search HN for the topic', 'Fetch the top 3 threads', 'Summarise each in one line']."),
-    ],
-) -> str:
-    """Lay out a visible step-by-step plan for a MULTI-STEP task, then work it.
-
-    USE THIS when a request needs several actions in sequence — research +
-    synthesis, multi-tool workflows, anything you'd otherwise do in a long
-    silent burst (3+ steps). Call plan_steps FIRST, then carry out each step,
-    calling complete_step(index) as you finish it. The checklist is shown to the
-    user so they can see your progress.
-
-    DON'T use it for a simple one-shot answer, a single tool call, or a basic
-    reminder — that just adds noise. If a request is too vague to plan (no clear
-    goal), don't invent a plan; ask the user what they want instead."""
-    return plan_mod.render(plan_mod.set_plan(steps))
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
-def complete_step(
-    index: Annotated[int, Field(description="1-based index of the step you just finished.")],
-    note: Annotated[str, Field(description="Optional one-line note on the result, e.g. 'found 3 threads'.")] = "",
-) -> str:
-    """Mark a step of the current plan complete and return the updated checklist.
-    Call this as you finish each step from plan_steps()."""
-    plan = plan_mod.complete(index, note)
-    if plan is None:
-        return f"ERROR: no step at index {index}. Call list via plan_steps or check the index."
-    return plan_mod.render(plan)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
