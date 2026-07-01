@@ -157,6 +157,11 @@ Look for:
 - User corrections → save as "feedback" memory
 - Ongoing goals or project state → save as "project" memory
 - Confirmed good choices → save as "feedback" memory
+- Commitments — a deadline or event the user mentioned (interview, trip,
+  submission) or a promise YOU made that's still open — that ISN'T already a
+  task → record_commitment(what, event_at=<when it happens / is due>, kind) so
+  you can follow up proactively. At most 2. Only REAL commitments from the log;
+  skip anything already tracked. Don't invent them.
 
 ━━ STEP 3 — Save memories + hygiene ━━
 

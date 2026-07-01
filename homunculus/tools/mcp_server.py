@@ -635,21 +635,22 @@ def create_task(
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 def record_commitment(
-    what: Annotated[str, Field(description="The commitment to follow up on, e.g. 'check in before Umang's interview on Friday'.")],
-    check_at: Annotated[str, Field(description="ISO local datetime to fire the check-in, e.g. 2026-07-03T18:00:00+05:30. Pick a time BEFORE the deadline/event.")],
+    what: Annotated[str, Field(description="The commitment to follow up on, e.g. 'wish Umang luck before his job interview'.")],
+    event_at: Annotated[str, Field(description="When the event HAPPENS or the deadline is DUE (not when to check in), ISO local datetime e.g. 2026-07-04T15:00:00+05:30. The tool fires the check-in a sensible lead before this.")],
     kind: Annotated[
         Literal["deadline_check", "event_check_in", "open_loop", "care_check_in"],
-        Field(description="deadline_check (a due date), event_check_in (an event), open_loop (a promise/unfinished thread), care_check_in (personal follow-up)."),
+        Field(description="deadline_check (a due date), event_check_in (an event/appointment), open_loop (a promise/unfinished thread), care_check_in (personal follow-up)."),
     ] = "open_loop",
 ) -> str:
     """Record a commitment you NOTICED — a deadline the user mentioned, a promise
     you made, or an open loop — so you can follow up PROACTIVELY without being
     asked. Use this when the user says something like 'I have an interview Friday'
-    or you say 'I'll look into that': record a check-in so it doesn't get dropped.
-    It fires as a notification at check_at. Only record REAL commitments from the
+    or you say 'I'll look into that'. Pass `event_at` = when the thing HAPPENS/is
+    due; the check-in automatically fires a sensible lead before it (a day before
+    a deadline, ~2h before an event). Only record REAL commitments from the
     conversation — don't invent them, and don't use this for explicit reminders
     (that's create_task)."""
-    return scheduling.record_commitment(what, check_at, kind)
+    return scheduling.record_commitment(what, event_at, kind)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
