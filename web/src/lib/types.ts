@@ -70,6 +70,9 @@ export interface Task {
   due_at: string | null;
   recurrence: Recurrence;
   notify: boolean;
+  /** "user" = explicitly requested; "inferred" = a commitment the agent
+   *  noticed and recorded to follow up on proactively. Older tasks omit it. */
+  source?: "user" | "inferred";
   created_at: string;
   updated_at: string;
   completed_at: string | null;

@@ -41,7 +41,14 @@ export function TraceRunCards() {
 }
 
 function RunCard({ run, open, onToggle }: { run: AgentReplayTurn; open: boolean; onToggle: () => void }) {
-  const failed = run.tools.filter((t) => t.status === "failure").length;
+  // A tool failure only fails the RUN if it wasn't recovered — i.e. no later
+  // call of the same tool succeeded. The agent's self-correction (a tool errors,
+  // it fixes the args and retries successfully) should read as "ok", not
+  // "failure". The per-tool status below still shows the individual error.
+  const failed = run.tools.filter((t, i) =>
+    t.status === "failure" &&
+    !run.tools.slice(i + 1).some((later) => later.name === t.name && later.status === "success"),
+  ).length;
   const blocked = run.tools.filter((t) => t.status === "blocked").length;
   const model = run.models[run.models.length - 1]?.model ?? "no model";
   const cost = run.cost_cents > 0 ? `${run.cost_cents.toFixed(3)}c` : "$0";
