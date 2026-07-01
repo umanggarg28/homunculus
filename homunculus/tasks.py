@@ -155,6 +155,7 @@ class TaskStore:
         notify: bool = False,
         success_criteria: list | None = None,
         skill: str | None = None,
+        source: str = "user",
     ) -> dict[str, Any]:
         recurrence = recurrence or "none"
         if recurrence not in ALLOWED_RECURRENCE:
@@ -189,6 +190,11 @@ class TaskStore:
                 # Resumable-task state — tracks runs that made partial
                 # progress but didn't complete. Reset by complete().
                 "consecutive_partials": 0,
+                # Provenance: "user" = explicitly requested; "inferred" = a
+                # commitment the agent NOTICED (a deadline the user mentioned, a
+                # promise it made, an open loop) and recorded to follow up on.
+                # Lets the UI/agent distinguish proactive check-ins from reminders.
+                "source": source,
                 # Machine-checked before complete_task is accepted.
                 "success_criteria": success_criteria or [],
                 # Optional skill_<name> playbook this task should run

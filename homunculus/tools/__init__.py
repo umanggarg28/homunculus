@@ -160,6 +160,8 @@ ALWAYS_LOADED: frozenset[str] = frozenset({
     "continue_task",
     "cancel_task",
     "list_tasks",
+    # Proactivity: record a commitment the agent noticed, to follow up on later.
+    "record_commitment",
     # Communication & time: needed almost universally.
     "notify",
     "get_current_time",
