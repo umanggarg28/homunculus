@@ -99,10 +99,16 @@ def test_naive_since_rejected(events_file):
 # ---- cost ---------------------------------------------------------------
 
 
-def test_free_and_unknown_models_cost_zero():
+def test_free_models_cost_zero_and_unknown_paid_costs_conservative():
+    """CONTRACT CHANGE (was: unknown models cost 0). The UI number must be
+    the number the budget enforcer counts — llm.py costs an unlisted paid
+    model at conservative default rates (fail closed on cost), so stats
+    must too. An unknown paid model showing ¢0.0 in the UI while the
+    ceiling accrues real spend is exactly the drift this delegation kills.
+    """
     assert stats.model_cost_cents("anything:free", 10_000, 10_000, 0) == 0.0
     assert stats.model_cost_cents("", 10_000, 10_000, 0) == 0.0
-    assert stats.model_cost_cents("unknown/model", 10_000, 10_000, 0) == 0.0
+    assert stats.model_cost_cents("unknown/model", 10_000, 10_000, 0) > 0.0
 
 
 def test_paid_model_cost_includes_cached_discount():
