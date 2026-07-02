@@ -25,9 +25,13 @@ from collections.abc import Callable
 from ._state import get_mode, init as _init_state, set_mode
 from . import mcp_manager as _mgr_mod
 
-# Optional hook installed by the heartbeat guard (or tests). Called before every
-# tool execution. If it returns a non-None string, that string is returned to the
-# agent instead of running the real tool — the guard can block a call and explain why.
+# Module-global hooks — the LEGACY, test-facing path. Production guards are
+# run-scoped: they attach to the one Agent they supervise (Agent(...,
+# pre_execute_hook=...)), so a task's guard can never intercept a concurrent
+# chat turn's tool calls in the same process. These globals remain because
+# tests install lightweight hooks through them; when both are present the
+# Agent-scoped hook runs in the Agent's dispatch and this one runs here in
+# execute() — keep only one installed.
 _pre_execute_hook: Callable[[str, dict], str | None] | None = None
 
 

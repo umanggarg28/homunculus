@@ -197,8 +197,9 @@ def _extract_urls(text: str) -> list[str]:
 class TaskGuard:
     """Pi-style output guard for scheduled task delivery.
 
-    Installed as a pre-execute hook on tools.execute() for the duration of a
-    heartbeat tick. Intercepts two tool calls:
+    Attached as run-scoped hooks to the one Agent that executes the task
+    (pre_execute / post_execute / pre_turn on the Agent constructor), so it
+    supervises exactly that run and nothing else. Intercepts two tool calls:
 
     - notify()        → records the text so criteria can inspect it.
     - complete_task() → checks the task's success_criteria before allowing
@@ -270,7 +271,7 @@ class TaskGuard:
         self._tool_result_text: list[str] = []
 
     def on_tool_call(self, name: str, arguments: dict) -> str | None:
-        """Hook fn passed to tools.set_pre_execute_hook().
+        """The Agent's pre_execute_hook for this run.
 
         Returns None to allow the call, or a non-empty string to block it
         and return that string as the tool result.
@@ -419,11 +420,11 @@ class TaskGuard:
         return [tid for tid in self._criteria if tid not in self._completed_tasks]
 
     def on_pre_turn(self, turn_idx: int, _history: list) -> dict | None:
-        """Pre-turn hook (item 5 of robustness plan).
+        """The Agent's pre_turn_hook for this run.
 
-        Installed via tools.set_pre_turn_hook(). Called at the start of
-        every loop iteration with the 0-indexed turn number. Returns a
-        synthetic user message to inject, or None for a no-op turn.
+        Called at the start of every loop iteration with the 0-indexed
+        turn number. Returns a synthetic user message to inject, or None
+        for a no-op turn.
 
         Currently used for ONE thing: at iter MAX_TURNS-1 (turn 19 of 20),
         if any due task is still unfinished, force a final message demanding
@@ -613,9 +614,9 @@ _REFLECTION_FORBIDDEN = {
 
 
 def _reflection_tool_guard(name: str, arguments: dict) -> str | None:
-    """Pre-execute hook for the reflection tick: refuse a forbidden tool by
+    """The reflection Agent's pre_execute_hook: refuse a forbidden tool by
     returning a string (surfaced to the agent as that tool's result), else None
-    to allow. Mirrors how task ticks install guard.on_tool_call."""
+    to allow. Mirrors how task ticks attach guard.on_tool_call."""
     refusal = _REFLECTION_FORBIDDEN.get(name)
     return f"BLOCKED: {refusal}" if refusal else None
 
@@ -680,7 +681,11 @@ def _run_reflection_or_idle(
         log.info(f"\n[heartbeat] tick at {now_iso}: no due tasks; skipping LLM")
         return
 
-    agent = Agent(memory=memory, model=model)
+    # The reflection tool ban rides this Agent, not a process-global hook —
+    # a rule stated only in the prompt once let a reflection tick notify()
+    # the user a fabricated skill update; run-scoped enforcement can't leak
+    # into (or out of) any other agent in the process.
+    agent = Agent(memory=memory, model=model, pre_execute_hook=_reflection_tool_guard)
     yesterday_iso, yesterday_path = _yesterday_iso_and_path()
     log.info(f"\n[heartbeat] REFLECTION tick at {now_iso} "
              f"(reviewing {yesterday_iso}, model={agent.model})")
@@ -693,11 +698,7 @@ def _run_reflection_or_idle(
         .replace("{yesterday_path}", yesterday_path)
         .replace("{recent_deliveries}", _format_recent_deliveries(tasks))
     )
-    tools.set_pre_execute_hook(_reflection_tool_guard)
-    try:
-        response = agent.chat(prompt, source="heartbeat")
-    finally:
-        tools.set_pre_execute_hook(None)
+    response = agent.chat(prompt, source="heartbeat")
     memory.reflection.mark(today)
     log.info(f"[agent] {response}")
 
@@ -785,27 +786,30 @@ def _run_task_isolated(
     failure is recorded here; transient network errors re-raise so the caller
     can apply its backoff, every other exception is the caller's to isolate.
     """
-    agent = Agent(memory=memory, model=model)
+    prep = prepare_task_run(tasks, task, memory_root, now_iso, forced=False)
+    if prep is None:
+        return  # planning skipped this task (e.g. its skill file vanished)
+    state_sequence, prompt, guard = prep
+
+    # The guard rides the Agent it supervises — run-scoped, so it can never
+    # intercept another Agent's tool calls (a chat turn in the same process,
+    # a sibling task). The pre-turn hook lets it force a completion message
+    # at the last iteration when the task is still unfinished.
+    agent = Agent(
+        memory=memory,
+        model=model,
+        pre_execute_hook=guard.on_tool_call,
+        post_execute_hook=guard.observe_tool_result,
+        pre_turn_hook=guard.on_pre_turn,
+    )
     if task_total > 1:
         log.info(
             f"[heartbeat] task {task_index}/{task_total}: {task.get('id')!r} "
             f"(isolated loop, model={agent.model})",
         )
 
-    prep = prepare_task_run(tasks, task, memory_root, now_iso, forced=False)
-    if prep is None:
-        return  # planning skipped this task (e.g. its skill file vanished)
-    state_sequence, prompt, guard = prep
-
     # Snapshot due_at so we can detect whether complete_task advanced it.
     due_at_before = task.get("due_at")
-
-    tools.set_pre_execute_hook(guard.on_tool_call)
-    tools.set_post_execute_hook(guard.observe_tool_result)
-    # Item 5 (pragmatic slice): install the turn-level hook so the guard
-    # can inject a forced completion message at iter MAX_TURNS-1 when the
-    # task is still unfinished.
-    tools.set_pre_turn_hook(guard.on_pre_turn)
 
     started = datetime.now()
     # Wall-clock UTC for events.jsonl scan; events log timestamps are UTC.
@@ -831,10 +835,6 @@ def _run_task_isolated(
             started_utc=started_utc,
         )
         raise
-    finally:
-        tools.set_pre_execute_hook(None)
-        tools.set_post_execute_hook(None)
-        tools.set_pre_turn_hook(None)
     log.info(f"[agent] {response}")
 
     # Single deterministic settlement — the same close-out run-now uses.
