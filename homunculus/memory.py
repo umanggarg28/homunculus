@@ -1067,11 +1067,17 @@ class Memory:
             existing for existing in current.splitlines()
             if f"({filename})" not in existing
         ]
-        # Reconstruct: keep header + non-blank entry lines + this new line.
         entries = [l for l in kept if l.startswith("- ")]
         entries.append(line)
         entries.sort()  # deterministic order
+        # Preserve whatever non-entry prose the file carries (hand-written
+        # notes survive an upsert exactly as they survive a forget()); only
+        # a file with no header at all gets the canonical one.
+        header_lines = [
+            l for l in kept if not l.startswith("- ") and l.strip()
+        ]
+        header = "\n".join(header_lines) + "\n\n" if header_lines else _INDEX_HEADER
         self.index_path.write_text(
-            _INDEX_HEADER + "\n".join(entries) + "\n",
+            header + "\n".join(entries) + "\n",
             encoding="utf-8",
         )
