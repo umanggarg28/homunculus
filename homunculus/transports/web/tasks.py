@@ -9,7 +9,6 @@ from datetime import datetime, UTC
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from homunculus import tools
 from homunculus.core import Agent
 from homunculus.tasks import ALLOWED_RECURRENCE
 from homunculus.transports import web_api as wa
@@ -143,9 +142,6 @@ async def tasks_run_stream(task_id: str, request: Request):
     )
     from homunculus.user_tz import now_user_tz
 
-    # Fresh agent — task execution must NOT share history with the chat
-    # session (would pollute future chat turns with task-execution noise).
-    fresh_agent = Agent(memory=wa._chat_memory)
     # prepare_task_run also stamps last_fired_at, claiming the task before the
     # agent runs so a concurrent heartbeat tick won't pick it up.
     prep = prepare_task_run(
@@ -156,9 +152,17 @@ async def tasks_run_stream(task_id: str, request: Request):
     if prep is None:
         raise HTTPException(500, f"task '{task_id}' could not be planned (missing skill?)")
     state_sequence, prompt, guard = prep
-    tools.set_pre_execute_hook(guard.on_tool_call)
-    tools.set_post_execute_hook(guard.observe_tool_result)
-    tools.set_pre_turn_hook(guard.on_pre_turn)
+    # Fresh agent — task execution must NOT share history with the chat
+    # session (would pollute future chat turns with task-execution noise).
+    # The guard rides THIS agent as run-scoped hooks: a chat turn served by
+    # the same process mid-run keeps its own tool calls out of the task's
+    # criteria checks and grounding blob.
+    fresh_agent = Agent(
+        memory=wa._chat_memory,
+        pre_execute_hook=guard.on_tool_call,
+        post_execute_hook=guard.observe_tool_result,
+        pre_turn_hook=guard.on_pre_turn,
+    )
     due_at_before = task.get("due_at")
     started = datetime.now()
     started_iso = started.isoformat(timespec="seconds")
@@ -207,9 +211,6 @@ async def tasks_run_stream(task_id: str, request: Request):
             )
             yield wa._format_sse_data("[run-now finished]")
         finally:
-            tools.set_pre_execute_hook(None)
-            tools.set_post_execute_hook(None)
-            tools.set_pre_turn_hook(None)
             yield "event: done\ndata: end\n\n"
 
     return StreamingResponse(

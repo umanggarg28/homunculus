@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import Callable
 from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any
@@ -551,9 +552,28 @@ class Agent:
         memory: Memory | None = None,
         system_prompt: str = SYSTEM_PROMPT,
         model: str | None = None,
+        pre_execute_hook: Callable[[str, dict], str | None] | None = None,
+        post_execute_hook: Callable[[str, str], None] | None = None,
+        pre_turn_hook: Callable[[int, list], dict | None] | None = None,
     ) -> None:
         self.memory = memory
         self.model = model or MODEL
+        # Run-scoped guard hooks. A guard belongs to the run it supervises —
+        # the heartbeat's TaskGuard, the reflection tool guard, and the web
+        # run-now guard each attach to the ONE Agent they drive. Process-
+        # global hooks (tools.set_pre_execute_hook) would let a task's guard
+        # intercept a concurrent chat turn's tool calls in the same web
+        # process; instance scoping makes that cross-talk impossible.
+        #   pre_execute_hook(name, args) -> str | None
+        #       non-None blocks the call; the string becomes the tool result.
+        #   post_execute_hook(name, result) -> None
+        #       observes what an executed tool actually returned (read-only).
+        #   pre_turn_hook(turn_idx, history) -> dict | None
+        #       optional synthetic message to inject before an LLM call.
+        # The module-global setters in tools/ remain as a test-only fallback.
+        self._pre_execute_hook = pre_execute_hook
+        self._post_execute_hook = post_execute_hook
+        self._pre_turn_hook = pre_turn_hook
         # Per-session active tool set. Starts with the always-loaded
         # core; the agent grows it by calling load_tool(name). Lets
         # us send ~1K tokens of schemas per call instead of ~5K when
@@ -1115,7 +1135,35 @@ class Agent:
                     if requested and requested in known:
                         self._active_tool_names.add(requested)
                 _t_start = time.monotonic()
-                result = tools.execute(name, args)
+                # Run-scoped guard: a non-None return blocks the call and
+                # becomes the tool result (the TaskGuard criteria check, the
+                # reflection tool ban). A raising hook must never take the
+                # loop down — treat it as "allow" and leave a breadcrumb.
+                blocked: str | None = None
+                if self._pre_execute_hook is not None:
+                    try:
+                        blocked = self._pre_execute_hook(name, args)
+                    except Exception as _hook_err:
+                        blocked = None
+                        try:
+                            events.emit(
+                                "self_correction",
+                                text=f"pre_execute_hook raised for {name}: {_hook_err}",
+                                result="hook ignored",
+                            )
+                        except Exception:
+                            pass
+                if blocked is not None:
+                    result = blocked
+                else:
+                    result = tools.execute(name, args)
+                    # Observe only real executions — a blocked call produced
+                    # no tool output for a guard to ground against.
+                    if self._post_execute_hook is not None and isinstance(result, str):
+                        try:
+                            self._post_execute_hook(name, result)
+                        except Exception:
+                            pass
                 _t_duration_ms = int((time.monotonic() - _t_start) * 1000)
                 # Emit a follow-up tool_call_duration event so the
                 # dashboard can surface slow tools. Cheap — only the
@@ -1405,10 +1453,16 @@ class Agent:
                 except Exception:
                     pass
 
-        # 2. Pre-turn hook (TaskGuard / tests).
-        if tools._pre_turn_hook is not None:
+        # 2. Pre-turn hook — the Agent's own (TaskGuard) first, then the
+        # module-global fallback some tests still install.
+        pre_turn_hook = (
+            self._pre_turn_hook
+            if self._pre_turn_hook is not None
+            else getattr(tools, "_pre_turn_hook", None)
+        )
+        if pre_turn_hook is not None:
             try:
-                injected = tools._pre_turn_hook(turn_idx, self.history)
+                injected = pre_turn_hook(turn_idx, self.history)
             except Exception as _hook_err:
                 injected = None
                 events.emit(
