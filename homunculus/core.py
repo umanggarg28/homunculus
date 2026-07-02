@@ -597,18 +597,21 @@ class Agent:
         # restart. The cache key is (path, mtime) — re-read only when
         # the file changes on disk.
         self._agents_md_cache: tuple[str, float, str] | None = None
-        if memory is not None:
-            # Pinned core block: user profile + key feedback rules (full bodies,
-            # capped small). Always in context so the agent knows who it's
-            # talking to without needing a recall() call every turn.
-            core_block = memory.load_core_block()
-            if core_block:
-                full_prompt += "\n\n# Pinned facts (user profile + key rules)\n\n" + core_block
-            # Index: one-line-per-entry so the agent knows what memories exist.
-            # Full bodies fetched on demand via recall(query).
-            full_prompt += "\n\n# Memory index\n\n" + memory.load_index(max_entries=8)
+        # The memory sections (pinned core block + index) are NOT baked in
+        # here — _current_system_prompt renders them per turn, cached on
+        # MEMORY.md's mtime, so a remember()/forget() shows up on the next
+        # turn of a long-lived agent (the web chat session) instead of
+        # after a process restart. Same hot-reload contract as AGENTS.md.
+        self._memory_block_cache: tuple[float, str] | None = None
         self._base_system_prompt = full_prompt
-        self.history: list[dict] = [{"role": "system", "content": full_prompt}]
+        # Seeded with the memory block so a pre-turn consumer of history[0]
+        # (tests, transcript readers) sees the full prompt shape; refreshed
+        # by _prepare_turn on every turn.
+        initial_prompt = full_prompt
+        memory_block = self._load_memory_block_cached()
+        if memory_block:
+            initial_prompt += "\n\n" + memory_block
+        self.history: list[dict] = [{"role": "system", "content": initial_prompt}]
         # Letta-pattern transcript + pointer list. The transcript is the
         # canonical append-only record of every non-system message; the
         # pointer list mirrors self.history[1:] (skipping the system
@@ -853,6 +856,38 @@ class Agent:
         self._agents_md_cache = (str(path), mtime, content)
         return content
 
+    def _load_memory_block_cached(self) -> str:
+        """Render the pinned core block + memory index, cached by MEMORY.md
+        mtime. Returns '' when the agent has no memory.
+
+        Every remember()/forget() rewrites the index under the memory lock,
+        so its mtime is the change signal for the whole section — the same
+        contract as the AGENTS.md cache. A direct hand-edit to one memory
+        body without touching the index won't refresh until the next write;
+        that trade keeps this to one stat() per turn.
+        """
+        if self.memory is None:
+            return ""
+        try:
+            mtime = self.memory.index_path.stat().st_mtime
+        except OSError:
+            return self._memory_block_cache[1] if self._memory_block_cache else ""
+        if self._memory_block_cache is not None and self._memory_block_cache[0] == mtime:
+            return self._memory_block_cache[1]
+        parts: list[str] = []
+        # Pinned core block: user profile + key feedback rules (full bodies,
+        # capped small). Always in context so the agent knows who it's
+        # talking to without needing a recall() call every turn.
+        core_block = self.memory.load_core_block()
+        if core_block:
+            parts.append("# Pinned facts (user profile + key rules)\n\n" + core_block)
+        # Index: one-line-per-entry so the agent knows what memories exist.
+        # Full bodies fetched on demand via recall(query).
+        parts.append("# Memory index\n\n" + self.memory.load_index(max_entries=8))
+        block = "\n\n".join(parts)
+        self._memory_block_cache = (mtime, block)
+        return block
+
     def _current_system_prompt(self, source: str = "") -> str:
         """Build the system prompt for this turn.
 
@@ -863,6 +898,7 @@ class Agent:
         invalidates the cache for everything after. So we layer:
 
             [stable]    base system prompt
+            [stable]    memory core block + index (mtime-cached on MEMORY.md)
             [stable]    AGENTS.md (mtime-cached)
             [stable]    loadable tools catalogue
             ──── implicit cache boundary ────
@@ -877,6 +913,13 @@ class Agent:
         """
         # ── STABLE PREFIX (cacheable) ────────────────────────────────
         prompt = self._base_system_prompt
+
+        # Memory sections, hot-reloaded on index change. Changes only when
+        # the agent (or user) writes memory, so it stays in the cacheable
+        # prefix; the mtime cache keeps it to one stat() per turn.
+        memory_block = self._load_memory_block_cached()
+        if memory_block:
+            prompt += "\n\n" + memory_block
 
         # AGENTS.md hot-reload. Lazy + mtime-cached so unchanged files
         # don't hit the disk on every turn. Lets the user edit AGENTS.md
