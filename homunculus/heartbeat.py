@@ -194,6 +194,15 @@ def _extract_urls(text: str) -> list[str]:
     return list(seen)
 
 
+# Tool-failure sentinels. Tools whose data source can fail return these
+# machine tokens so the MODEL knows to omit the section (tools/news.py,
+# tools/weather.py). They are signals on the tool→model channel, never
+# user-facing content: a delivery carrying one means the model pasted a
+# failure token verbatim — or hallucinated the failure branch without
+# calling the tool at all — instead of omitting the section.
+_FAILURE_SENTINELS = ("NEWS_UNAVAILABLE", "WEATHER UNAVAILABLE")
+
+
 class TaskGuard:
     """Pi-style output guard for scheduled task delivery.
 
@@ -201,12 +210,15 @@ class TaskGuard:
     (pre_execute / post_execute / pre_turn on the Agent constructor), so it
     supervises exactly that run and nothing else. Intercepts two tool calls:
 
-    - notify()        → records the text so criteria can inspect it.
-    - complete_task() → checks the task's success_criteria before allowing
-                        the call through. Returns a structured BLOCKED error
-                        if any criterion fails, so the agent can correct its
-                        output and retry rather than silently recording garbage
-                        as a successful delivery.
+    - notify()        → refuses text carrying a tool-failure sentinel, then
+                        records the text so criteria can inspect it.
+    - complete_task() → checks that every tool the skill declares in
+                        `requires_tools` was actually attempted this run,
+                        then checks the task's success_criteria, before
+                        allowing the call through. Returns a structured
+                        BLOCKED error if any check fails, so the agent can
+                        correct its output and retry rather than silently
+                        recording garbage as a successful delivery.
 
     Supported criterion types
     ─────────────────────────
@@ -238,11 +250,20 @@ class TaskGuard:
         self,
         criteria_by_task: dict[str, list[dict[str, Any]]],
         delivered_by_task: dict[str, set[str]] | None = None,
+        required_calls_by_task: dict[str, list[str]] | None = None,
     ) -> None:
         self._criteria = criteria_by_task
         # Lowercased delivery keys each task has already sent (from the
         # task's `delivered` ledger). Consulted by notify_unique.
         self._delivered = delivered_by_task or {}
+        # Tools each task's skill declares in `requires_tools`. The
+        # capability gate (_plan_tick) already guarantees they EXIST; this
+        # guard enforces that they are EXERCISED — complete_task is refused
+        # until every one was at least attempted this run. Closes the gap
+        # where the model skips a declared data source and improvises its
+        # output (e.g. pasting NEWS_UNAVAILABLE without calling
+        # news_headlines).
+        self._required_calls = required_calls_by_task or {}
         # Notify texts seen so far this tick — kept as a tracker only, NOT
         # as a delivery buffer. Every notify() call now sends immediately;
         # this list lets _check() validate criteria pre-send and lets
@@ -279,6 +300,22 @@ class TaskGuard:
         self._tool_trace.append(name)
         if name == "notify":
             text = str(arguments.get("text") or "")
+            # Never deliver a tool-failure sentinel. These tokens instruct
+            # the MODEL to omit a section; in a user-facing message they are
+            # either a verbatim paste of a failure or (the observed case) a
+            # fabricated failure branch — the model wrote the sentinel
+            # without calling the tool at all.
+            leaked = next((s for s in _FAILURE_SENTINELS if s in text), None)
+            if leaked is not None:
+                return (
+                    f"BLOCKED: notify() not sent — the text contains the "
+                    f"tool-failure sentinel {leaked!r}. Sentinels are "
+                    f"machine signals from tool results, never content for "
+                    f"the user. If you have not called the tool that "
+                    f"produces this data, call it now and use its real "
+                    f"output. If the tool itself failed, resend the message "
+                    f"with that section omitted entirely."
+                )
             # Check criteria across ALL due tasks. If any task's criteria
             # would fail with the combined text so far + this proposed
             # message, refuse the send and tell the agent what's missing.
@@ -310,6 +347,22 @@ class TaskGuard:
 
         if name == "complete_task":
             task_id = arguments.get("task_id", "")
+            # Gate completion on the skill's declared data sources having
+            # been exercised. An ATTEMPT is enough — a source that errors
+            # still lets the section degrade gracefully per the playbook;
+            # what's refused is skipping the source and improvising.
+            missing = self.missing_required_calls(task_id)
+            if missing:
+                return (
+                    "ERROR: complete_task blocked — this task's skill "
+                    "requires tool(s) you never called this run: "
+                    + ", ".join(missing)
+                    + ". Call each one and build the delivery from its real "
+                    "output (omit a section only if its tool returns a "
+                    "failure), send the corrected notify(text=...), then "
+                    "call complete_task again. If the task genuinely cannot "
+                    "proceed, call record_failure(task_id, reason) instead."
+                )
             # Gate completion on the task's own criteria. notify()-time
             # checking (above) covers the "bad content" case, but nothing
             # stops the model from calling complete_task WITHOUT ever
@@ -366,6 +419,15 @@ class TaskGuard:
     def _grounded_blob(self) -> str:
         """All tool-result text seen this tick, for link-provenance checks."""
         return "\n".join(self._tool_result_text)
+
+    def missing_required_calls(self, task_id: str) -> list[str]:
+        """Required tools (the skill's `requires_tools`) not yet attempted
+        this run, in declaration order. An attempt is any call — success or
+        failure — so a data source that errors still lets its section
+        degrade gracefully; only skipping the source entirely blocks
+        completion."""
+        attempted = set(self._tool_trace)
+        return [t for t in self._required_calls.get(task_id, []) if t not in attempted]
 
     def criteria_failures(self, task_id: str) -> list[str]:
         """Failure descriptions for ONE task's criteria, checked against
@@ -899,13 +961,15 @@ def prepare_task_run(
 
 
 def build_task_guard(task: dict[str, Any]) -> TaskGuard:
-    """A TaskGuard scoped to one task: its success_criteria plus the
-    delivered-key ledger that notify_unique consults. Call AFTER _plan_tick
-    has folded the skill's criteria onto the task."""
+    """A TaskGuard scoped to one task: its success_criteria, the
+    delivered-key ledger that notify_unique consults, and the skill's
+    requires_tools list that gates complete_task. Call AFTER _plan_tick
+    has folded the skill's criteria and required tools onto the task."""
     tid = task["id"]
     return TaskGuard(
         {tid: task.get("success_criteria") or []},
         delivered_by_task={tid: {d.get("key", "") for d in (task.get("delivered") or [])}},
+        required_calls_by_task={tid: task.get("required_tool_calls") or []},
     )
 
 
@@ -1100,9 +1164,9 @@ def _plan_tick(
         # that made the model fabricate (the morning-brief weather/calendar).
         # Inject a blocker directive instead so the agent records a clean
         # failure rather than improvising a capability it doesn't have.
+        required_tools = load_skill_requires_tools(memory_root, skill_name)
         if known_tools is not None:
-            missing = [tn for tn in load_skill_requires_tools(memory_root, skill_name)
-                       if tn not in known_tools]
+            missing = [tn for tn in required_tools if tn not in known_tools]
             if missing:
                 log.info(
                     f"[heartbeat] {t['id']!r} skill {skill_name!r} requires "
@@ -1131,6 +1195,11 @@ def _plan_tick(
         # so setting it on this ephemeral, freshly-loaded task dict covers
         # both without persisting anything back to tasks.json.
         t["success_criteria"] = effective_success_criteria(t, memory_root)
+        # requires_tools also folds onto the ephemeral task: the existence
+        # gate above proved the tools are registered; the TaskGuard uses
+        # this list to enforce that they were actually CALLED before the
+        # task may complete (build_task_guard → required_calls_by_task).
+        t["required_tool_calls"] = required_tools
         block = (
             f"# Playbook for task '{t['id']}' "
             f"(auto-loaded from {skill_name})\n\n{body.strip()}"

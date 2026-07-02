@@ -108,6 +108,25 @@ projects do, don't invent.
   `_INDEX_HEADER` only when there are none).
 - **PR:** `fix/memory-prompt-hot-refresh`
 
+### A8. Brief delivered a tool-failure sentinel; criteria passed vacuously — HIGH (found live 2026-07-02)
+- **Where:** the 2026-07-02 morning brief shipped `Top headlines: -
+  NEWS_UNAVAILABLE`. The trace shows the model never called
+  `news_headlines` — it hallucinated the playbook's fallback branch and
+  pasted the sentinel as content. Every success criterion passed vacuously
+  (`notify_links_grounded` had zero links to ground), and `requires_tools`
+  only gates tool EXISTENCE (`_plan_tick` capability gate), not usage.
+- **Fix:** two deterministic TaskGuard rules: (1) `notify()` refuses text
+  carrying a tool-failure sentinel (`NEWS_UNAVAILABLE`, `WEATHER
+  UNAVAILABLE`); (2) `requires_tools` folds onto the task
+  (`required_tool_calls`, same pattern as the criteria folding) and
+  `complete_task` is refused until every declared tool was at least
+  attempted this run — attempted, not succeeded, so graceful section
+  degradation is preserved.
+- **OSS shape:** upgrade of the Hermes requires_tools gate from "must
+  exist" to "must be exercised"; same verify-against-reality family as
+  `notify_links_grounded`.
+- **PR:** `fix/brief-sentinel-and-required-calls`
+
 ## B. Design / structure
 
 ### B1. Guard orchestration lives in the god-files — MEDIUM
@@ -191,8 +210,9 @@ registry. Fix the paragraph.
 | 3 | `refactor/llm-provider-chain` | A3, A4, B2, B3, C3 |
 | 4 | `refactor/agent-scoped-hooks` | A2 |
 | 5 | `fix/memory-prompt-hot-refresh` | A5, A7 |
-| 6 | `refactor/extract-guards` | B1, A6, B4 |
-| 7 | `docs/learn-md-rewrite` | C1, C2 |
+| 6 | `fix/brief-sentinel-and-required-calls` | A8 |
+| 7 | `refactor/extract-guards` | B1, A6, B4 |
+| 8 | `docs/learn-md-rewrite` | C1, C2 |
 
 Every code PR updates LEARN.md in the same PR where it changes something the
 tutorial teaches. Exit criteria: three CI gates green, plus one live
