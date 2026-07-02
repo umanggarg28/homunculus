@@ -1,14 +1,20 @@
 """Output guard — deterministic checks on a final reply before it reaches the user.
 
-Extracted from core.py (Phase 3). These are the phrase lists, regexes, and pure
-predicates the agent's output guard runs to catch the failure modes a weak model
-produces: leaked internal paths, fabricated links, "I did X" claims with no
-matching tool call, claim/target mismatches, and citation artifacts. Agent.
-_output_guard (still in core.py) orchestrates them; this module holds the
-primitives, with no Agent dependency.
+The complete guard for the failure modes a weak model produces: leaked
+internal paths, fabricated links, "I did X" claims with no matching tool
+call, claim/target mismatches, and citation artifacts. The phrase lists,
+regexes, and pure predicates come first; `run_output_guard` orchestrates
+them and `correction_prompt_for` picks the retry instruction for whatever
+it caught. Agent delegates here (`Agent._output_guard` / `_self_correct`);
+nothing in this module depends on Agent.
 """
 
+import logging
 import re
+
+from homunculus import events
+
+log = logging.getLogger(__name__)
 
 
 # Output guard — compiled once at module load.
@@ -326,3 +332,298 @@ def tool_result_indicates_failure(result) -> bool:
         return True
     compact = s.replace(" ", "")
     return '"ok":false' in compact
+
+
+# --- Orchestration -----------------------------------------------------------
+# run_output_guard is the full validation pass Agent runs on a final reply;
+# correction_prompt_for picks the retry instruction for whatever it caught.
+# They live here with the primitives so the whole guard — checks, phrase
+# tables, and the coaching that fixes a failure — reads as one unit.
+
+
+def run_output_guard(
+    reply: str,
+    tool_names_used: set,
+    tool_outcomes: list[dict] | None = None,
+    *,
+    tools_available: bool = True,
+) -> tuple[str | None, list[str]]:
+    """Validate a final reply before it reaches the user.
+
+    Catches deterministic failure modes:
+      1. Memory filename leak — internal *.md paths in reply
+      2. Internal path leak — workspace/memory/… strings in reply
+      3. Error echo — LLM forwarded a tool ERROR string verbatim
+      4. Example.com confabulation — placeholder site cited with no
+         web tool active this turn
+      5. Claim/result inconsistency — the reply claims to have read,
+         fetched, written, or saved a specific path/URL, but the
+         matching tool call in this turn returned an error. Catches
+         hallucinated tool success (stress probe #22).
+
+    `tools_available` gates the checks that only make sense when the model
+    COULD have called a tool (action claims, mutation promises) — a
+    Q&A-only session with no registered tools is never flagged for them.
+
+    Returns (reply, []) if clean, or (None, violations) if not.
+    None signals the caller to attempt self-correction before
+    falling back to a static error message.
+    """
+    violations: list[str] = []
+    tool_outcomes = tool_outcomes or []
+
+    # Strip leaked citation markers (【1†url】) so they never reach the user
+    # and every check below runs on the cleaned text. The per-iteration strip
+    # in the loop only cleans the journaled copy, not this returned reply.
+    reply = _strip_citation_artifacts(reply)
+
+    # File-path guards are intentionally bypassed when the agent explicitly
+    # searched or listed files — those results belong in the reply.
+    file_search_active = bool(tool_names_used & {"search_files", "list_files"})
+
+    if not file_search_active and _GUARD_MEMORY_FILENAME_RE.search(reply):
+        violations.append("memory_filename_leak")
+
+    if not file_search_active and any(p in reply for p in _GUARD_INTERNAL_PATHS):
+        violations.append("internal_path_leak")
+
+    if reply.lstrip().startswith("ERROR:") or "ERROR running " in reply:
+        violations.append("error_echo")
+
+    lower_reply = reply.lower().replace("\n", " ")
+    if any(t in lower_reply for t in _GUARD_CONFABULATION_TERMS):
+        if not (tool_names_used & {"web_fetch", "web_search"}):
+            violations.append("example_com_confabulation")
+
+    # Catch hallucinated actions: model claims to have done something
+    # (created a task, sent a notification, etc.) without calling any
+    # tools. Only fires when tools are registered (not a Q&A-only session).
+    claims_action = any(phrase in lower_reply for phrase in _GUARD_ACTION_CLAIM_PHRASES)
+    if not tool_names_used and tools_available:
+        if claims_action:
+            violations.append("action_claim_without_tool_call")
+
+    # Confabulated success: the reply claims an action succeeded, but
+    # tools WERE called this turn and EVERY one failed. The live case:
+    # propose_skill returned {"ok": false} (validation rejected it) and
+    # the agent replied "I've filed a proposal." The all-failed
+    # condition keeps this conservative — a turn that also had a
+    # successful tool call won't trip (the claim may be about that).
+    if claims_action and tool_outcomes and not any(o.get("success") for o in tool_outcomes):
+        violations.append("success_claim_all_tools_failed")
+
+    # Per-tool confabulation: the specific action tool was called this
+    # turn, EVERY call to it failed, and the reply asserts that action
+    # succeeded without owning the failure. Fires even when other tools
+    # succeeded (the all-tools-failed rule above does not). Conservative:
+    # needs the tool actually called + all its calls failed + a matching
+    # success phrase + no failure acknowledgement anywhere in the reply.
+    if tool_outcomes and "success_claim_all_tools_failed" not in violations:
+        acknowledges_failure = any(t in lower_reply for t in _GUARD_FAILURE_ACK_TERMS)
+        if not acknowledges_failure:
+            for tool_name, phrases in _GUARD_TOOL_SUCCESS_PHRASES.items():
+                calls = [o for o in tool_outcomes if o.get("name") == tool_name]
+                if calls and not any(o.get("success") for o in calls):
+                    if any(p in lower_reply for p in phrases):
+                        violations.append("success_claim_tool_failed")
+                        break
+
+    # Artifact-claim verification (the robust, phrasing-independent rule).
+    # propose_skill succeeded this turn → any prop-NNNN it minted is now
+    # in the store, so legit filings pass.
+    proposed_ok = any(
+        o.get("name") == "propose_skill" and o.get("success") for o in tool_outcomes
+    )
+    # (a) The reply cites a concrete proposal ID — verify it actually
+    #     exists. A fabricated "prop-0005" fails against the store. This
+    #     is what caught the live confabulation that every phrase guard
+    #     missed (the agent invented the ID with zero tool calls).
+    cited_ids = {m.lower() for m in _GUARD_PROPOSAL_ID_RE.findall(reply)}
+    if cited_ids:
+        real_ids = _existing_proposal_ids()
+        if real_ids is not None and not cited_ids.issubset(real_ids):
+            violations.append("unverified_artifact_claim")
+    # (b) No ID, but the reply asserts a COMPLETED filing while
+    #     propose_skill did not succeed this turn → fabricated.
+    if (
+        "unverified_artifact_claim" not in violations
+        and not proposed_ok
+        and any(p in lower_reply for p in _GUARD_PROPOSAL_FILED_PHRASES)
+    ):
+        violations.append("unverified_artifact_claim")
+
+    # Claim/result inconsistency — the reply asserts a successful action
+    # against a specific target (file path or URL) but the matching tool
+    # call in this turn errored. Stress probe #22: agent called
+    # read_file three times, all returned ENOENT, then replied "I found
+    # and read /etc/secret_config.yaml". The check is conservative —
+    # only fires when (a) a target is explicitly mentioned and (b) ALL
+    # tool calls in this turn against that target failed.
+    if tool_outcomes:
+        inconsistencies = _claim_target_inconsistencies(reply, tool_outcomes)
+        if inconsistencies:
+            violations.append("claim_inconsistent_with_tool_result")
+
+    # False future-promise: the reply ends the turn but commits to
+    # an imminent next action ("I will try another filename"). The
+    # loop has terminated; that promised action will never run. Same
+    # lie shape as action_claim_without_tool_call but for the future
+    # rather than the past. Stress probe: agent tried 3 paths,
+    # failed all, then said "I will try another configuration
+    # filename" with no further tool call.
+    if _GUARD_FUTURE_PROMISE_RE.search(reply):
+        violations.append("false_future_promise")
+
+    # Ungrounded URLs — only when a web tool ran this turn. A research reply
+    # must cite links from its own results, never invented ones (baseline
+    # probe #1). Pure-knowledge Q&A is not gated.
+    if ungrounded_urls(reply, tool_outcomes, tool_names_used):
+        violations.append("ungrounded_url")
+
+    # Unsupported cadence — a scheduling tool ran but the reply promises a
+    # recurrence the system can't express (weekday-only, skip-holidays,
+    # monthly, …). Recurrence is only none/daily/weekly (baseline probe #9).
+    if unsupported_cadence_claim(reply, tool_names_used):
+        violations.append("unsupported_cadence_claim")
+
+    # Forward-tense mutation promise with no mutating tool called this turn.
+    # "I'll edit the daily-LeetCode skill to add explanations." with zero
+    # tool calls is the same lie as a retry promise — the turn ends and the
+    # edit never happens. Only when tools are available (not Q&A-only) and
+    # the reply isn't a clarifying question (no '?').
+    if (
+        tools_available
+        and "?" not in reply
+        and not (tool_names_used & _MUTATING_TOOLS)
+        and _GUARD_MUTATION_PROMISE_RE.search(reply)
+    ):
+        violations.append("false_mutation_promise")
+
+    if not violations:
+        return reply, []
+
+    try:
+        events.emit(
+            "output_guard",
+            violations=",".join(violations),
+            preview=reply[:100].replace("\n", " "),
+        )
+    except Exception:
+        pass
+    log.warning(f"[output_guard] blocked reply ({violations}): {reply[:80]!r}")
+    return None, violations
+
+
+# --- Correction prompts ------------------------------------------------------
+# One per violation family. Injected as a synthetic user turn by
+# Agent._self_correct, then pruned from history after the retry.
+
+_SELF_CORRECTION_PROMPT = (
+    "Your previous reply mentioned internal file paths or system error strings "
+    "that should not be shown to the user. Please restate your answer using "
+    "plain language only — no filenames, no *.md paths, no ERROR prefixes. "
+    "Describe what you do in terms the user understands."
+)
+
+_ACTION_CLAIM_CORRECTION_PROMPT = (
+    "You just said you performed an action (created a task, sent a notification, etc.) "
+    "but you did NOT call any tools. That is a hallucination — you cannot perform actions "
+    "through text alone. You MUST call the appropriate tool now to actually do what "
+    "the user asked. Do not explain — just call the tool."
+)
+
+_CLAIM_INCONSISTENT_CORRECTION_PROMPT = (
+    "Your previous reply claimed you successfully read, fetched, or wrote a file or URL, "
+    "but the tool calls in this turn against that target ALL returned errors. Do not "
+    "fabricate success. Restate honestly what you tried and what failed, naming the "
+    "actual error. If the user needs the action attempted differently, say so — do not "
+    "pretend it succeeded."
+)
+
+_SUCCESS_CLAIM_CORRECTION_PROMPT = (
+    "Your previous reply claimed an action succeeded (filed/created/sent/saved/"
+    "proposed), but the tool that would have performed it FAILED this turn "
+    '(e.g. propose_skill returned {"ok": false} with errors). Do not pretend '
+    "it worked just because other tool calls succeeded. Read the tool error, "
+    "tell the user plainly what failed and why, and either fix the inputs and "
+    "call the tool again now, or say it didn't go through. Never report success "
+    "for a failed call."
+)
+
+_ARTIFACT_CLAIM_CORRECTION_PROMPT = (
+    "Your previous reply pointed the user at a proposal that does not exist — "
+    "you cited a prop-NNNN ID or said you 'filed it' / it 'awaits approval on "
+    "the Overview page', but propose_skill did not successfully run this turn, "
+    "so there is nothing for the user to approve. NEVER invent a proposal ID or "
+    "claim a filing that didn't happen — the user will go looking and find "
+    "nothing. Either actually call propose_skill now and report the REAL id it "
+    "returns, or tell the user plainly that you have not filed anything yet."
+)
+
+_FUTURE_PROMISE_CORRECTION_PROMPT = (
+    "Your previous reply ended the turn with a promise of immediate next action "
+    "('I will try X next', 'Let me check Y', 'I'll search again'). This is dishonest: "
+    "your turn is over after you reply. If you genuinely intend to take that action, "
+    "DO IT NOW by calling the appropriate tool — don't say 'I will' and then stop. If "
+    "you're declining to continue, say so plainly: 'I tried X, Y, Z and they all "
+    "failed; I'm not going to keep guessing — tell me where to look.' Never promise "
+    "follow-up work you won't perform."
+)
+
+_MUTATION_PROMISE_CORRECTION_PROMPT = (
+    "Your previous reply said you WILL edit/create/update a skill, task, or "
+    "file (e.g. 'I'll edit the skill to add ...'), but you did not call any "
+    "tool that performs that change — and your turn ends after you reply, so "
+    "the change will NEVER happen. The user asked for it, so DO IT NOW: call "
+    "propose_skill (to change a skill), create_task / update_task (for a "
+    "task), or the appropriate tool, and report the REAL result it returns. "
+    "If you genuinely need one detail first, ask that question plainly — do "
+    "not promise an edit you won't make."
+)
+
+_UNSUPPORTED_CADENCE_CORRECTION_PROMPT = (
+    "Your previous reply promised a schedule the task system cannot do. "
+    "Recurrence supports ONLY none, daily, or weekly — never weekday-only, "
+    "skip-holidays, skip-weekends, every-other-day, or monthly. Restate "
+    "honestly: tell the user the recurrence you actually set (e.g. 'a daily "
+    "7am reminder') and plainly name the part you can't do plus a workaround "
+    "(e.g. 'I can't auto-skip public holidays — pause it on those days'). "
+    "Do not claim an unsupported cadence, and do not create extra tasks to "
+    "fake one."
+)
+
+_UNGROUNDED_URL_CORRECTION_PROMPT = (
+    "Your previous reply cited one or more web links that did NOT come from "
+    "your tool results this turn — you invented or guessed them. Never "
+    "fabricate URLs. Restate your answer citing ONLY links that appear "
+    "verbatim in your web_search / web_fetch results. For any claim or "
+    "number you cannot back with a real fetched source, either drop it or "
+    "say plainly that you couldn't verify it. Do not present unverified "
+    "figures as fact."
+)
+
+# Violation → correction prompt, most specific first. Ordering matters where
+# violations co-occur: the action/success families carry tool-calling
+# instructions, so they win over the generic path-leak restatement.
+_CORRECTION_PROMPTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("action_claim_without_tool_call",), _ACTION_CLAIM_CORRECTION_PROMPT),
+    (
+        ("success_claim_all_tools_failed", "success_claim_tool_failed"),
+        _SUCCESS_CLAIM_CORRECTION_PROMPT,
+    ),
+    (("unverified_artifact_claim",), _ARTIFACT_CLAIM_CORRECTION_PROMPT),
+    (("claim_inconsistent_with_tool_result",), _CLAIM_INCONSISTENT_CORRECTION_PROMPT),
+    (("false_future_promise",), _FUTURE_PROMISE_CORRECTION_PROMPT),
+    (("false_mutation_promise",), _MUTATION_PROMISE_CORRECTION_PROMPT),
+    (("ungrounded_url",), _UNGROUNDED_URL_CORRECTION_PROMPT),
+    (("unsupported_cadence_claim",), _UNSUPPORTED_CADENCE_CORRECTION_PROMPT),
+)
+
+
+def correction_prompt_for(violations: list[str] | None) -> str:
+    """The retry instruction matching the first (most specific) violation
+    family present; the generic path-leak restatement when none match."""
+    for family, prompt in _CORRECTION_PROMPTS:
+        if violations and any(v in violations for v in family):
+            return prompt
+    return _SELF_CORRECTION_PROMPT

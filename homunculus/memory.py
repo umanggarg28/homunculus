@@ -275,12 +275,11 @@ class Memory:
     def transcript_path(self) -> Path:
         """Path to the append-only message transcript (Letta pattern).
 
-        Replaces the old _chat_log.jsonl band-aid. The transcript
-        records every non-system message the agent produces — chat
-        turns, tool calls, tool results, compaction summaries. Mid-
-        session compaction rewrites the in-context pointer list inside
-        the Agent (PR #111) but never deletes from this file, so the
-        chat history endpoint and future heartbeat replay can always
+        The transcript records every non-system message the agent
+        produces — chat turns, tool calls, tool results, compaction
+        summaries. Mid-session compaction rewrites the in-context
+        pointer list inside the Agent but never deletes from this file,
+        so the chat history endpoint and heartbeat replay can always
         recover the original turns.
         """
         return self.root / "_transcript.jsonl"

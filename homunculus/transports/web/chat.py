@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from homunculus.core import Agent, MODEL
+from homunculus.llm import ProviderExhaustedError
 from homunculus.memory import Memory
 from homunculus.transcript import Transcript
 from homunculus.transports import web_api as wa
@@ -60,8 +61,8 @@ def chat_history() -> JSONResponse:
     visible user/final-assistant turns here.
 
     Falls back to load_session for sessions that pre-date the transcript
-    (one-time migration after the Agent runs once, restore_session
-    backfills the transcript from session.json — see PR #111).
+    (one-time migration: after the Agent runs once, restore_session
+    backfills the transcript from session.json).
     """
     memory = wa._chat_memory or Memory(wa.MEMORY_DIR)
     transcript = Transcript(memory.transcript_path)
@@ -213,9 +214,9 @@ async def chat_send(request: Request):
                 yield wa._format_sse_data(chunk)
         except Exception as e:
             msg = str(e)
-            if "All providers exhausted" in msg or "token_quota_exceeded" in msg or "Tokens per minute" in msg:
+            if "token_quota_exceeded" in msg or "Tokens per minute" in msg:
                 err_chunk = "[All AI providers are currently rate-limited. Wait a moment and try again.]"
-            elif "All providers exhausted" in type(e).__name__ or "RuntimeError" in type(e).__name__ and "provider" in msg.lower():
+            elif isinstance(e, ProviderExhaustedError):
                 err_chunk = "[All AI providers are currently unavailable. Try again shortly.]"
             else:
                 err_chunk = f"[error: {type(e).__name__}: {e}]"
@@ -230,10 +231,9 @@ async def chat_send(request: Request):
                 yield wa._format_sse_data(cancel_marker)
             if wa._chat_memory is not None:
                 wa._chat_memory.save_session(agent.history)
-                # No longer writes _chat_log.jsonl — the Agent
-                # journaled both turns into _transcript.jsonl as they
-                # happened (PR #111), and /api/chat/history now reads
-                # from there.
+                # No chat log write here: the Agent journals both turns
+                # into _transcript.jsonl as they happen, and
+                # /api/chat/history reads from there.
             wa._chat_agent_lock.release()
             yield "event: done\ndata: end\n\n"
 

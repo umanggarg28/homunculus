@@ -61,26 +61,14 @@ from homunculus.security import (
     _UNTRUSTED_CONTENT_TOOLS,
     _wrap_untrusted_content,
 )
-# The output-guard primitives (phrase lists, regexes, predicates) live in
-# homunculus/output_guard.py (Phase 3); Agent._output_guard orchestrates them:
+# The output guard — checks, phrase tables, and correction prompts — lives in
+# homunculus/output_guard.py; Agent._output_guard/_self_correct delegate to it:
 from homunculus.output_guard import (
-    _GUARD_MEMORY_FILENAME_RE,
-    _GUARD_INTERNAL_PATHS,
-    _GUARD_CONFABULATION_TERMS,
-    _GUARD_ACTION_CLAIM_PHRASES,
-    _GUARD_TOOL_SUCCESS_PHRASES,
-    _GUARD_FAILURE_ACK_TERMS,
-    _GUARD_PROPOSAL_ID_RE,
-    _GUARD_PROPOSAL_FILED_PHRASES,
-    _GUARD_FUTURE_PROMISE_RE,
-    _GUARD_MUTATION_PROMISE_RE,
-    _MUTATING_TOOLS,
-    _existing_proposal_ids,
+    _ACTION_CLAIM_CORRECTION_PROMPT,
     _strip_citation_artifacts,
-    _claim_target_inconsistencies,
+    correction_prompt_for,
+    run_output_guard,
     tool_result_indicates_failure,
-    ungrounded_urls,
-    unsupported_cadence_claim,
 )
 
 log = logging.getLogger(__name__)
@@ -92,9 +80,8 @@ load_dotenv(REPO_ROOT / ".env")
 
 
 
-# Hard cap on tool-use iterations per user turn. Without this, a broken
-# Loop iteration cap moved to HomunculusConfig.loop.max_turns. Callsites
-# below read it via get_config().loop.max_turns so tests can override.
+# The per-turn tool-use iteration cap lives in HomunculusConfig.loop.max_turns;
+# callsites read it via get_config().loop.max_turns so tests can override.
 
 # Read-only tools whose results can be safely cached within a single turn.
 # When the LLM re-calls one of these with the same arguments, the harness
@@ -617,9 +604,8 @@ class Agent:
         # pointer list mirrors self.history[1:] (skipping the system
         # prompt). Compaction rewrites the pointer list and appends a
         # summary, but never deletes from the transcript — so the chat
-        # surface and heartbeat replay always have the original turns
-        # available. PR #112 will cut chat history endpoint reads over;
-        # this PR just journals as a passive observer.
+        # history endpoint (which reads the transcript) and heartbeat
+        # replay always have the original turns available.
         if memory is not None:
             self._transcript: Transcript | None = Transcript(memory.root / "_transcript.jsonl")
         else:
@@ -704,8 +690,8 @@ class Agent:
         tail_start = max(0, cut_at - 1)
         # Defensive: if message_ids drifted (a missed journal callsite),
         # truncate the pointer list to whatever we have rather than
-        # crashing. The dropped IDs stay on disk and resurface in PR #112's
-        # full transcript read.
+        # crashing. The dropped IDs stay on disk and resurface when the
+        # chat history endpoint reads the full transcript.
         kept_ids = self._message_ids[tail_start:tail_start + len(kept_tail)]
         self._message_ids = [summary_id] + kept_ids
 
@@ -743,10 +729,10 @@ class Agent:
         saved = self.memory.load_session()
         self.history.extend(saved)
         # Seed the pointer list. Migration path: if the transcript is
-        # empty but a saved session exists (first run after this PR
-        # lands), backfill the transcript so the canonical record isn't
-        # missing the pre-Transcript history. After PR #112 lands, the
-        # chat history endpoint reads from transcript, so without this
+        # empty but a saved session exists (a workspace that predates
+        # the Transcript), backfill the transcript so the canonical
+        # record isn't missing the pre-Transcript history. The chat
+        # history endpoint reads from the transcript, so without this
         # backfill old conversations would appear blank.
         if self._transcript is not None and saved:
             try:
@@ -1344,7 +1330,7 @@ class Agent:
                 self._journal_append({
                     "role": "user",
                     "source": "harness",
-                    "content": self._ACTION_CLAIM_CORRECTION_PROMPT,
+                    "content": _ACTION_CLAIM_CORRECTION_PROMPT,
                 })
                 return None  # correction injected — re-enter the loop
             reply = self._self_correct(tool_names_used, violations, tool_outcomes)
@@ -1781,11 +1767,10 @@ class Agent:
         # practice that constraint is too strict for our combined
         # payload (tools + reasoning + tool_choice): OpenRouter returns
         # 404 "No endpoints found that can handle the requested parameters"
-        # when no provider matches the full set. Empirically that happened
-        # within minutes of PR #124 shipping.
+        # when no provider matches the full set.
         #
-        # We rely instead on PR #125's defense-in-depth detector: if a
-        # provider returns text without a tool_call when tool_choice was
+        # We rely instead on a defense-in-depth detector: if a provider
+        # returns text without a tool_call when tool_choice was
         # required, the loop injects a synthetic correction and retries.
         # Costs one wasted turn per violation but degrades gracefully
         # instead of hard-erroring.
@@ -1930,171 +1915,17 @@ class Agent:
     def _output_guard(self, reply: str, tool_names_used: set[str], tool_outcomes: list[dict] | None = None) -> tuple[str | None, list[str]]:
         """Validate a final reply before it reaches the user.
 
-        Catches deterministic failure modes:
-          1. Memory filename leak — internal *.md paths in reply
-          2. Internal path leak — workspace/memory/… strings in reply
-          3. Error echo — LLM forwarded a tool ERROR string verbatim
-          4. Example.com confabulation — placeholder site cited with no
-             web tool active this turn
-          5. Claim/result inconsistency — the reply claims to have read,
-             fetched, written, or saved a specific path/URL, but the
-             matching tool call in this turn returned an error. Catches
-             hallucinated tool success (stress probe #22).
-
-        Returns (reply, []) if clean, or (None, violations) if not.
-        None signals the caller to attempt self-correction before
+        Thin delegate: the checks live in output_guard.run_output_guard
+        (see that module). Returns (reply, []) if clean, or
+        (None, violations) — the signal to attempt self-correction before
         falling back to a static error message.
         """
-        violations: list[str] = []
-        tool_outcomes = tool_outcomes or []
-
-        # Strip leaked citation markers (【1†url】) so they never reach the user
-        # and every check below runs on the cleaned text. The per-iteration strip
-        # at 1707 only cleans the journaled copy, not this returned reply.
-        reply = _strip_citation_artifacts(reply)
-
-        # File-path guards are intentionally bypassed when the agent explicitly
-        # searched or listed files — those results belong in the reply.
-        file_search_active = bool(tool_names_used & {"search_files", "list_files"})
-
-        if not file_search_active and _GUARD_MEMORY_FILENAME_RE.search(reply):
-            violations.append("memory_filename_leak")
-
-        if not file_search_active and any(p in reply for p in _GUARD_INTERNAL_PATHS):
-            violations.append("internal_path_leak")
-
-        if reply.lstrip().startswith("ERROR:") or "ERROR running " in reply:
-            violations.append("error_echo")
-
-        lower_reply = reply.lower().replace("\n", " ")
-        if any(t in lower_reply for t in _GUARD_CONFABULATION_TERMS):
-            if not (tool_names_used & {"web_fetch", "web_search"}):
-                violations.append("example_com_confabulation")
-
-        # Catch hallucinated actions: model claims to have done something
-        # (created a task, sent a notification, etc.) without calling any
-        # tools. Only fires when tools are registered (not a Q&A-only session).
-        claims_action = any(phrase in lower_reply for phrase in _GUARD_ACTION_CLAIM_PHRASES)
-        if not tool_names_used and tools.SCHEMAS:
-            if claims_action:
-                violations.append("action_claim_without_tool_call")
-
-        # Confabulated success: the reply claims an action succeeded, but
-        # tools WERE called this turn and EVERY one failed. The live case:
-        # propose_skill returned {"ok": false} (validation rejected it) and
-        # the agent replied "I've filed a proposal." The all-failed
-        # condition keeps this conservative — a turn that also had a
-        # successful tool call won't trip (the claim may be about that).
-        if claims_action and tool_outcomes and not any(o.get("success") for o in tool_outcomes):
-            violations.append("success_claim_all_tools_failed")
-
-        # Per-tool confabulation: the specific action tool was called this
-        # turn, EVERY call to it failed, and the reply asserts that action
-        # succeeded without owning the failure. Fires even when other tools
-        # succeeded (the all-tools-failed rule above does not). Conservative:
-        # needs the tool actually called + all its calls failed + a matching
-        # success phrase + no failure acknowledgement anywhere in the reply.
-        if tool_outcomes and "success_claim_all_tools_failed" not in violations:
-            acknowledges_failure = any(t in lower_reply for t in _GUARD_FAILURE_ACK_TERMS)
-            if not acknowledges_failure:
-                for tool_name, phrases in _GUARD_TOOL_SUCCESS_PHRASES.items():
-                    calls = [o for o in tool_outcomes if o.get("name") == tool_name]
-                    if calls and not any(o.get("success") for o in calls):
-                        if any(p in lower_reply for p in phrases):
-                            violations.append("success_claim_tool_failed")
-                            break
-
-        # Artifact-claim verification (the robust, phrasing-independent rule).
-        # propose_skill succeeded this turn → any prop-NNNN it minted is now
-        # in the store, so legit filings pass.
-        proposed_ok = any(
-            o.get("name") == "propose_skill" and o.get("success") for o in tool_outcomes
+        return run_output_guard(
+            reply,
+            tool_names_used,
+            tool_outcomes,
+            tools_available=bool(tools.SCHEMAS),
         )
-        # (a) The reply cites a concrete proposal ID — verify it actually
-        #     exists. A fabricated "prop-0005" fails against the store. This
-        #     is what caught the live confabulation that every phrase guard
-        #     missed (the agent invented the ID with zero tool calls).
-        cited_ids = {m.lower() for m in _GUARD_PROPOSAL_ID_RE.findall(reply)}
-        if cited_ids:
-            real_ids = _existing_proposal_ids()
-            if real_ids is not None and not cited_ids.issubset(real_ids):
-                violations.append("unverified_artifact_claim")
-        # (b) No ID, but the reply asserts a COMPLETED filing while
-        #     propose_skill did not succeed this turn → fabricated.
-        if (
-            "unverified_artifact_claim" not in violations
-            and not proposed_ok
-            and any(p in lower_reply for p in _GUARD_PROPOSAL_FILED_PHRASES)
-        ):
-            violations.append("unverified_artifact_claim")
-
-        # Claim/result inconsistency — the reply asserts a successful action
-        # against a specific target (file path or URL) but the matching tool
-        # call in this turn errored. Stress probe #22: agent called
-        # read_file three times, all returned ENOENT, then replied "I found
-        # and read /etc/secret_config.yaml". The check is conservative —
-        # only fires when (a) a target is explicitly mentioned and (b) ALL
-        # tool calls in this turn against that target failed.
-        if tool_outcomes:
-            inconsistencies = _claim_target_inconsistencies(reply, tool_outcomes)
-            if inconsistencies:
-                violations.append("claim_inconsistent_with_tool_result")
-
-        # False future-promise: the reply ends the turn but commits to
-        # an imminent next action ("I will try another filename"). The
-        # loop has terminated; that promised action will never run. Same
-        # lie shape as action_claim_without_tool_call but for the future
-        # rather than the past. Stress probe: agent tried 3 paths,
-        # failed all, then said "I will try another configuration
-        # filename" with no further tool call.
-        if _GUARD_FUTURE_PROMISE_RE.search(reply):
-            violations.append("false_future_promise")
-
-        # Ungrounded URLs — only when a web tool ran this turn. A research reply
-        # must cite links from its own results, never invented ones (baseline
-        # probe #1). Pure-knowledge Q&A is not gated.
-        if ungrounded_urls(reply, tool_outcomes, tool_names_used):
-            violations.append("ungrounded_url")
-
-        # Unsupported cadence — a scheduling tool ran but the reply promises a
-        # recurrence the system can't express (weekday-only, skip-holidays,
-        # monthly, …). Recurrence is only none/daily/weekly (baseline probe #9).
-        if unsupported_cadence_claim(reply, tool_names_used):
-            violations.append("unsupported_cadence_claim")
-
-        # Forward-tense mutation promise with no mutating tool called this turn.
-        # "I'll edit the daily-LeetCode skill to add explanations." with zero
-        # tool calls is the same lie as a retry promise — the turn ends and the
-        # edit never happens. Only when tools are available (not Q&A-only) and
-        # the reply isn't a clarifying question (no '?').
-        if (
-            tools.SCHEMAS
-            and "?" not in reply
-            and not (tool_names_used & _MUTATING_TOOLS)
-            and _GUARD_MUTATION_PROMISE_RE.search(reply)
-        ):
-            violations.append("false_mutation_promise")
-
-        if not violations:
-            return reply, []
-
-        try:
-            events.emit(
-                "output_guard",
-                violations=",".join(violations),
-                preview=reply[:100].replace("\n", " "),
-            )
-        except Exception:
-            pass
-        log.warning(f"[output_guard] blocked reply ({violations}): {reply[:80]!r}")
-        return None, violations
-
-    _SELF_CORRECTION_PROMPT = (
-        "Your previous reply mentioned internal file paths or system error strings "
-        "that should not be shown to the user. Please restate your answer using "
-        "plain language only — no filenames, no *.md paths, no ERROR prefixes. "
-        "Describe what you do in terms the user understands."
-    )
 
     _NUDGE_PROMPT = (
         "You haven't replied to the user yet. "
@@ -2119,83 +1950,6 @@ class Agent:
         self.history.pop()  # prune the injected nudge
         return reply
 
-    _ACTION_CLAIM_CORRECTION_PROMPT = (
-        "You just said you performed an action (created a task, sent a notification, etc.) "
-        "but you did NOT call any tools. That is a hallucination — you cannot perform actions "
-        "through text alone. You MUST call the appropriate tool now to actually do what "
-        "the user asked. Do not explain — just call the tool."
-    )
-
-    _CLAIM_INCONSISTENT_CORRECTION_PROMPT = (
-        "Your previous reply claimed you successfully read, fetched, or wrote a file or URL, "
-        "but the tool calls in this turn against that target ALL returned errors. Do not "
-        "fabricate success. Restate honestly what you tried and what failed, naming the "
-        "actual error. If the user needs the action attempted differently, say so — do not "
-        "pretend it succeeded."
-    )
-
-    _SUCCESS_CLAIM_CORRECTION_PROMPT = (
-        "Your previous reply claimed an action succeeded (filed/created/sent/saved/"
-        "proposed), but the tool that would have performed it FAILED this turn "
-        "(e.g. propose_skill returned {\"ok\": false} with errors). Do not pretend "
-        "it worked just because other tool calls succeeded. Read the tool error, "
-        "tell the user plainly what failed and why, and either fix the inputs and "
-        "call the tool again now, or say it didn't go through. Never report success "
-        "for a failed call."
-    )
-
-    _ARTIFACT_CLAIM_CORRECTION_PROMPT = (
-        "Your previous reply pointed the user at a proposal that does not exist — "
-        "you cited a prop-NNNN ID or said you 'filed it' / it 'awaits approval on "
-        "the Overview page', but propose_skill did not successfully run this turn, "
-        "so there is nothing for the user to approve. NEVER invent a proposal ID or "
-        "claim a filing that didn't happen — the user will go looking and find "
-        "nothing. Either actually call propose_skill now and report the REAL id it "
-        "returns, or tell the user plainly that you have not filed anything yet."
-    )
-
-    _FUTURE_PROMISE_CORRECTION_PROMPT = (
-        "Your previous reply ended the turn with a promise of immediate next action "
-        "('I will try X next', 'Let me check Y', 'I'll search again'). This is dishonest: "
-        "your turn is over after you reply. If you genuinely intend to take that action, "
-        "DO IT NOW by calling the appropriate tool — don't say 'I will' and then stop. If "
-        "you're declining to continue, say so plainly: 'I tried X, Y, Z and they all "
-        "failed; I'm not going to keep guessing — tell me where to look.' Never promise "
-        "follow-up work you won't perform."
-    )
-
-    _MUTATION_PROMISE_CORRECTION_PROMPT = (
-        "Your previous reply said you WILL edit/create/update a skill, task, or "
-        "file (e.g. 'I'll edit the skill to add ...'), but you did not call any "
-        "tool that performs that change — and your turn ends after you reply, so "
-        "the change will NEVER happen. The user asked for it, so DO IT NOW: call "
-        "propose_skill (to change a skill), create_task / update_task (for a "
-        "task), or the appropriate tool, and report the REAL result it returns. "
-        "If you genuinely need one detail first, ask that question plainly — do "
-        "not promise an edit you won't make."
-    )
-
-    _UNSUPPORTED_CADENCE_CORRECTION_PROMPT = (
-        "Your previous reply promised a schedule the task system cannot do. "
-        "Recurrence supports ONLY none, daily, or weekly — never weekday-only, "
-        "skip-holidays, skip-weekends, every-other-day, or monthly. Restate "
-        "honestly: tell the user the recurrence you actually set (e.g. 'a daily "
-        "7am reminder') and plainly name the part you can't do plus a workaround "
-        "(e.g. 'I can't auto-skip public holidays — pause it on those days'). "
-        "Do not claim an unsupported cadence, and do not create extra tasks to "
-        "fake one."
-    )
-
-    _UNGROUNDED_URL_CORRECTION_PROMPT = (
-        "Your previous reply cited one or more web links that did NOT come from "
-        "your tool results this turn — you invented or guessed them. Never "
-        "fabricate URLs. Restate your answer citing ONLY links that appear "
-        "verbatim in your web_search / web_fetch results. For any claim or "
-        "number you cannot back with a real fetched source, either drop it or "
-        "say plainly that you couldn't verify it. Do not present unverified "
-        "figures as fact."
-    )
-
     def _self_correct(self, tool_names_used: set[str], violations: list[str] | None = None, tool_outcomes: list[dict] | None = None) -> str:
         """Inject a correction prompt and re-call the LLM once (non-streaming).
 
@@ -2205,30 +1959,9 @@ class Agent:
 
         Returns the corrected reply (or a safe static fallback on second failure).
         """
-        if violations and "action_claim_without_tool_call" in violations:
-            correction = self._ACTION_CLAIM_CORRECTION_PROMPT
-        elif violations and (
-            "success_claim_all_tools_failed" in violations
-            or "success_claim_tool_failed" in violations
-        ):
-            correction = self._SUCCESS_CLAIM_CORRECTION_PROMPT
-        elif violations and "unverified_artifact_claim" in violations:
-            correction = self._ARTIFACT_CLAIM_CORRECTION_PROMPT
-        elif violations and "claim_inconsistent_with_tool_result" in violations:
-            correction = self._CLAIM_INCONSISTENT_CORRECTION_PROMPT
-        elif violations and "false_future_promise" in violations:
-            correction = self._FUTURE_PROMISE_CORRECTION_PROMPT
-        elif violations and "false_mutation_promise" in violations:
-            correction = self._MUTATION_PROMISE_CORRECTION_PROMPT
-        elif violations and "ungrounded_url" in violations:
-            correction = self._UNGROUNDED_URL_CORRECTION_PROMPT
-        elif violations and "unsupported_cadence_claim" in violations:
-            correction = self._UNSUPPORTED_CADENCE_CORRECTION_PROMPT
-        else:
-            correction = self._SELF_CORRECTION_PROMPT
         self.history.append({
             "role": "user",
-            "content": correction,
+            "content": correction_prompt_for(violations),
         })
         try:
             corrected_msg = call_llm(self.history, tools.SCHEMAS, model=self.model)
@@ -2376,8 +2109,8 @@ class Agent:
         self.history = [self.history[0], summary_msg] + kept_tail
         # Mirror the rewrite into the pointer list. The pre-summary
         # message IDs stay on disk in the transcript — that's the whole
-        # point of the split. PR #112's chat history endpoint will read
-        # the full transcript and surface them to the UI.
+        # point of the split. The chat history endpoint reads the full
+        # transcript and surfaces them to the UI.
         self._rebuild_message_ids_after_compaction(summary_msg, kept_tail, cut_at)
         try:
             events.emit(
