@@ -155,11 +155,13 @@ _PROVIDER_COOLDOWN: dict[str, float] = {}
 def _providers(model_override: str | None) -> list[tuple[str, str, str]]:
     """Return ordered (url, api_key, model) chain, skipping cooled providers.
 
-    Slots:
-      0: primary (Groq) — required
-      1: fallback (Gemini by default) — if HOMUNCULUS_API_KEY_FALLBACK
-      2: fallback 2 (OpenRouter by default) — if HOMUNCULUS_API_KEY_FALLBACK_2
-      3: fallback 3 (Cerebras by default) — if HOMUNCULUS_API_KEY_FALLBACK_3
+    Slots (each an env-configured url/key/model triple; defaults:
+    OpenRouter gpt-oss-120b primary, then Gemini, OpenRouter free
+    models, Cerebras):
+      0: primary — required (HOMUNCULUS_API_KEY / _API_URL / _MODEL)
+      1: fallback — if HOMUNCULUS_API_KEY_FALLBACK
+      2: fallback 2 — if HOMUNCULUS_API_KEY_FALLBACK_2
+      3: fallback 3 — if HOMUNCULUS_API_KEY_FALLBACK_3
 
     Empty key = slot skipped. Cooled provider (recent 429) = slot
     skipped until cooldown expires. If ALL providers are cooled we

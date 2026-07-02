@@ -156,13 +156,15 @@ of being single-host and relying on file locks for concurrency.
 ## 7. Configuration
 
 `config.py` is the single typed source of truth for tuning knobs (formerly
-scattered as constants across eight modules). Values come from `homunculus.yaml`
-with env overrides; ranges are validated; tests override the config object
-rather than monkeypatching modules. Secrets live in `.env`.
+scattered as constants across eight modules). Values are typed pydantic
+defaults overridable by environment variables; ranges are validated; tests
+override the config object rather than monkeypatching modules. Secrets live
+in `.env`. `homunculus.yaml` is exclusively the MCP server registry
+(hot-reloaded), not a tuning-config file.
 
 ## 8. Testing & CI
 
-- **~106 test files** under `tests/`, run with `pytest`. Container-only deps
+- **~114 test files** under `tests/`, run with `pytest`. Container-only deps
   (MCP) are stubbed via `tests/conftest.py`, so the suite runs without Docker.
 - **CI** (`.github/workflows/ci.yml`) runs three gates on every push to `main`
   and every PR (Python 3.12):
