@@ -17,31 +17,28 @@ import os
 from datetime import datetime, tzinfo, UTC
 from pathlib import Path
 
-# Cost estimation for paid models. Slugs not listed cost 0 in the UI —
-# so we never overcount; better to undercount than show $2 for free runs.
-_MODEL_PRICING: dict[str, tuple[float, float]] = {
-    # ($/1M input, $/1M output) — updated June 2026
-    "gemini-2.5-flash":                         (0.15,   0.60),
-    "gemini-2.5-pro":                           (1.25,  10.00),
-    "gemini-2.0-flash":                         (0.10,   0.40),
-    "llama-3.3-70b-versatile":                  (0.59,   0.79),
-    "llama-3.1-8b-instant":                     (0.05,   0.08),
-    "openai/gpt-4o":                            (2.50,  10.00),
-    "openai/gpt-4o-mini":                       (0.15,   0.60),
-    "openai/gpt-4.1-mini":                      (0.40,   1.60),
-    "anthropic/claude-sonnet-4-6":              (3.00,  15.00),
-    "anthropic/claude-haiku-4-5":               (1.00,   5.00),
-    "deepseek/deepseek-v3":                     (0.14,   0.28),
-}
-
-
 def model_cost_cents(model: str, input_tok: int, output_tok: int, cached_tok: int) -> float:
-    """Estimated cost in cents for one LLM call. Free models → 0."""
-    if not model or model.endswith(":free"):
+    """Estimated cost in cents for one LLM call. Free models → 0.
+
+    Delegates to the budget enforcer's pricing (llm._pricing_for) so every
+    surface — sidebar budget, Overview spend, per-run trace cost, the
+    week_in_review tool — reports the SAME number the daily ceiling counts.
+    This module once carried its own pricing table; the two copies drifted
+    and the UI showed ¢0.0 for the primary model while the enforcer was
+    accruing real spend. One pricing source, like one lock primitive.
+    """
+    from homunculus.llm import _pricing_for  # deferred: llm loads .env at import
+
+    pricing = _pricing_for(model)
+    if pricing is None:
         return 0.0
-    price_in, price_out = _MODEL_PRICING.get(model, (0.0, 0.0))
+    price_in_cents, price_out_cents = pricing  # cents per 1M tokens
     uncached = max(0, input_tok - cached_tok)
-    return (uncached * price_in + cached_tok * price_in * 0.1 + output_tok * price_out) / 1_000_000 * 100
+    return (
+        uncached * price_in_cents
+        + cached_tok * price_in_cents * 0.1
+        + output_tok * price_out_cents
+    ) / 1_000_000
 
 
 def events_path() -> Path:

@@ -248,8 +248,11 @@ function buildSubtitle(task: Task, dueMs: number | null, nowMs: number, isOverdu
 
 function RunSparkline({ runs }: { runs: import("@/lib/types").TaskRun[] }) {
   const last = runs.slice(-12);
-  const failures = last.filter((r) => r.status === "failure").length;
-  const label = `${last.length - failures}/${last.length} ok`;
+  // "ok" means the run actually delivered (status success) — a partial is a
+  // run where the user received nothing (silent drop / infra retry), so
+  // counting it as ok would overstate reliability.
+  const okCount = last.filter((r) => r.status === "success").length;
+  const label = `${okCount}/${last.length} ok`;
   const [tipIdx, setTipIdx] = useState<number | null>(null);
 
   return (
@@ -300,7 +303,7 @@ function RunSparkline({ runs }: { runs: import("@/lib/types").TaskRun[] }) {
           </div>
         );
       })}
-      <span style={{ fontSize: 9, letterSpacing: "0.08em", color: failures > 0 ? "var(--color-amber)" : "var(--color-text-faint)", marginLeft: 2 }}>
+      <span style={{ fontSize: 9, letterSpacing: "0.08em", color: okCount < last.length ? "var(--color-amber)" : "var(--color-text-faint)", marginLeft: 2 }}>
         {label}
       </span>
     </div>
