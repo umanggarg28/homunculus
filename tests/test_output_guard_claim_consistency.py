@@ -20,7 +20,7 @@ if "homunculus.tools.notify" not in sys.modules:
     sys.modules["homunculus.tools.notify"] = _stub
 
 from homunculus import core  # noqa: E402
-from homunculus.core import _claim_target_inconsistencies  # noqa: E402
+from homunculus.output_guard import _claim_target_inconsistencies  # noqa: E402
 
 
 # ---------------------------------------------------------------------

@@ -19,8 +19,8 @@ list — when compaction fires, only the pointer list is rewritten
 (summary message appended to transcript, ids replaced with [summary_id,
 *tail_ids]). The original turns stay on disk.
 
-This module is the standalone storage layer — no agent integration yet.
-PR #110 wires Agent to use it; PR #111 cuts over reads.
+This module is the standalone storage layer: the Agent journals into it
+as messages happen, and the chat history endpoint reads from it.
 
 Format
 ------

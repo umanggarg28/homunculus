@@ -43,7 +43,8 @@ deployment — see `events.py` and `tasks.py` docstrings.
 homunculus/
 ├── core.py              # the Agent class + the tool-calling loop (the heart)
 ├── llm.py               # provider HTTP layer: call_llm / call_llm_stream, fallback chain, budget gate
-├── heartbeat.py         # autonomous loop: tick(), task firing, TaskGuard, settlement
+├── heartbeat.py         # autonomous loop: tick(), task firing, settlement
+├── task_guard.py        # TaskGuard: delivery criteria enforced at notify/complete time
 ├── config.py            # single typed source of truth for all tuning knobs
 │
 │  ── persistence / state ──
@@ -112,7 +113,7 @@ model never builds URLs/links itself).
 This is what a reviewer should weigh most, because it is where the engineering
 judgment lives:
 
-- **Output guard** (`output_guard.py`, `core.py:_output_guard`): an
+- **Output guard** (`output_guard.py`): an
   action-claim is cross-checked against the turn's tool outcomes. A reply that
   claims work with no tool evidence behind it — or a fabricated link — is
   refused and self-corrected rather than sent.
@@ -197,7 +198,7 @@ rather than monkeypatching modules. Secrets live in `.env`.
 1. `homunculus/core.py` — `Agent.chat` → `_run_loop` and the named phases it
    orchestrates (`_pre_iteration_injections`, `_call_model`,
    `_handle_tool_choice_violation`, `_dispatch_tool_calls`, `_finalize_reply`).
-2. `homunculus/heartbeat.py` — `tick()` and `TaskGuard` for the autonomy story.
-3. `homunculus/output_guard.py` + `_output_guard` in core — the reliability thesis.
+2. `homunculus/heartbeat.py` + `task_guard.py` — `tick()` and `TaskGuard` for the autonomy story.
+3. `homunculus/output_guard.py` — the reliability thesis.
 4. `homunculus/transports/web/` — how the routers map to the React console.
 5. `LEARN.md` — a longer build-from-scratch narrative of the same system.
