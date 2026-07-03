@@ -110,7 +110,7 @@ def remember(
             )
         ),
     ],
-    body: Annotated[str, Field(description="Full content of the memory.")],
+    body: Annotated[str, Field(description="Full content of the memory.")] = "",
     related: Annotated[
         list[str] | None,
         Field(description=(
@@ -119,9 +119,17 @@ def remember(
             "[[wikilinks]] that recall and the memory graph follow."
         )),
     ] = None,
+    content: Annotated[
+        str, Field(description="Alias for `body` — prefer `body`.")
+    ] = "",
 ) -> str:
     """Save a durable fact to long-term memory (persists across sessions). Not for ephemeral state."""
-    return memory_tools.remember(name=name, description=description, type=type, body=body, related=related)
+    # `content` is a tolerated alias for `body` (the model's stable dialect);
+    # memory_tools.remember owns the normalization.
+    return memory_tools.remember(
+        name=name, description=description, type=type, body=body,
+        related=related, content=content,
+    )
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
