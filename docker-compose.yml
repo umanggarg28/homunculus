@@ -40,6 +40,7 @@ services:
       # agent creates are visible in your editor on the host. The agent
       # can only read/write files INSIDE this directory by default.
       - ./workspace:/app/workspace
+      - ./secrets:/app/secrets:ro  # Google OAuth client + token (read-only; outside the workspace so no agent tool can reach it)
 
     command: ["uv", "run", "--project", "/app", "python", "-m", "homunculus.transports.repl"]
 
@@ -54,6 +55,7 @@ services:
     working_dir: /app/workspace
     volumes:
       - ./workspace:/app/workspace  # Same workspace mount → shared memory
+      - ./secrets:/app/secrets:ro  # Google OAuth client + token (read-only; outside the workspace so no agent tool can reach it)
     # Override the default CMD to launch the daemon instead of the REPL.
     command: ["uv", "run", "--project", "/app", "python", "-m", "homunculus.heartbeat"]
     # Auto-restart if the daemon crashes (but not if we explicitly stop it).
@@ -72,6 +74,7 @@ services:
     working_dir: /app/workspace
     volumes:
       - ./workspace:/app/workspace  # Same workspace mount → shared memory
+      - ./secrets:/app/secrets:ro  # Google OAuth client + token (read-only; outside the workspace so no agent tool can reach it)
       - /var/run/docker.sock:/var/run/docker.sock  # for python_exec sandbox
     command: ["uv", "run", "--project", "/app", "python", "-m", "homunculus.transports.telegram"]
     restart: unless-stopped
@@ -93,6 +96,7 @@ services:
     working_dir: /app/workspace
     volumes:
       - ./workspace:/app/workspace  # Same workspace mount → shared memory
+      - ./secrets:/app/secrets:ro  # Google OAuth client + token (read-only; outside the workspace so no agent tool can reach it)
       - /var/run/docker.sock:/var/run/docker.sock  # for python_exec sandbox
     command: ["uv", "run", "--project", "/app", "python", "-m", "homunculus.transports.discord"]
     restart: unless-stopped
@@ -108,6 +112,7 @@ services:
     working_dir: /app/workspace  # so _events.jsonl resolves to workspace/_events.jsonl
     volumes:
       - ./workspace:/app/workspace  # read the shared events file + memory
+      - ./secrets:/app/secrets:ro  # Google OAuth client + token (read-only; outside the workspace so no agent tool can reach it)
     # Bind to 8765 on the host. Open http://localhost:8765 in a browser
     # for the full web UI. (8000 is a popular dev port and tends to
     # collide — 8765 avoids common defaults.)

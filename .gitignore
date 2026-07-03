@@ -38,3 +38,4 @@ cache/
 # Coverage artifacts
 .coverage
 htmlcov/
+secrets/

@@ -95,6 +95,12 @@ _UNTRUSTED_CONTENT_TOOLS = frozenset({
     "search_files",
     "archival_memory_search",
     "conversation_search",
+    # Email and calendar text is authored by third parties — the classic
+    # indirect-injection carrier ("ignore previous instructions" in a
+    # subject line). Wrapped like any other outside-world content.
+    "gmail_unread",
+    "gmail_search",
+    "calendar_events",
 })
 
 
