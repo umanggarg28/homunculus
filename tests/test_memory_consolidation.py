@@ -82,3 +82,59 @@ def test_consolidation_dedupes_pending_proposals(tmp_path, monkeypatch):
 
     assert len(first) == 1
     assert second == []
+
+
+def test_dated_series_keeps_newest_proposes_rest(tmp_path, monkeypatch):
+    """A daily-log diary (same name shape, different date) can't be caught
+    by the pairwise duplicate rule — every entry differs by exactly its
+    date. The series rule keeps the newest and proposes the older ones."""
+    monkeypatch.setenv("HOMUNCULUS_USER_TZ_FILE", str(tmp_path / "tz.txt"))
+    memory = tmp_path / "memory"
+    memory.mkdir()
+    now = time.time()
+    for i, day in enumerate(["2026-06-28", "2026-06-30", "2026-07-02"]):
+        p = _mem(
+            memory,
+            f"feedback_{day}_log.md",
+            f"log {day}",
+            "feedback",
+            f"Log summary for {day}: deliveries fine.",
+        )
+        os.utime(p, (now - (3 - i) * 86400, now - (3 - i) * 86400))
+    # An unrelated dated pair (only 2 members) must NOT be flagged.
+    _mem(memory, "project_release_2026-05-01.md", "rel a", "project", "release notes a")
+    _mem(memory, "project_release_2026-06-01.md", "rel b", "project", "release notes b")
+
+    proposals = propose_consolidation(
+        memory_root=memory,
+        proposals_path=tmp_path / "proposals.json",
+    )
+
+    targets = sorted(p["skill_name"] for p in proposals if p["validation"]["reason"] == "dated_series")
+    assert targets == ["feedback_2026-06-28_log.md", "feedback_2026-06-30_log.md"]
+    for p in proposals:
+        if p["validation"]["reason"] == "dated_series":
+            assert p["validation"]["newest"] == "feedback_2026-07-02_log.md"
+
+
+def test_dated_series_respects_limit(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOMUNCULUS_USER_TZ_FILE", str(tmp_path / "tz.txt"))
+    memory = tmp_path / "memory"
+    memory.mkdir()
+    now = time.time()
+    for i in range(6):
+        p = _mem(
+            memory,
+            f"feedback_2026-06-{10 + i:02d}_log.md",
+            f"log {i}",
+            "feedback",
+            f"Log summary number {i}.",
+        )
+        os.utime(p, (now - (6 - i) * 86400, now - (6 - i) * 86400))
+
+    proposals = propose_consolidation(
+        memory_root=memory,
+        proposals_path=tmp_path / "proposals.json",
+        limit=2,
+    )
+    assert len(proposals) == 2

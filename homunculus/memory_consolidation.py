@@ -77,6 +77,38 @@ def propose_consolidation(
     docs = load_docs(memory_root)
     created: list[dict] = []
 
+    # Dated series first: the agent writing feedback_2026-07-02_log,
+    # feedback_2026-07-01_log, … accumulates a diary the pairwise duplicate
+    # rule can't see (every entry differs by exactly its date). The index
+    # lists all of them in the prompt every turn, so a growing series is a
+    # growing per-turn token tax. Keep the newest; propose the rest.
+    for newest, older in _dated_series(docs):
+        for doc in older:
+            if len(created) >= limit:
+                break
+            p = store.create(
+                kind=KIND_MEMORY_DELETE,
+                skill_name=doc.filename,
+                body="",
+                rationale=(
+                    f"One of {len(older) + 1} '{_DATE_TOKEN_RE.sub('<date>', doc.filename)}' "
+                    f"entries — a dated series (daily log diary). The newest "
+                    f"({newest.filename}) carries the current state; approving "
+                    "clears this older entry from the index the prompt loads "
+                    "every turn."
+                ),
+                source="memory-consolidation",
+                validation={
+                    "target": doc.filename,
+                    "reason": "dated_series",
+                    "newest": newest.filename,
+                    "series_size": len(older) + 1,
+                },
+            )
+            if not p.get("_deduped"):
+                announce_proposal(p)
+                created.append(p)
+
     for old, new, score in _duplicate_pairs(docs, similarity_threshold):
         if len(created) >= limit:
             break
@@ -119,6 +151,31 @@ def propose_consolidation(
             created.append(p)
 
     return created
+
+
+_DATE_TOKEN_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _dated_series(docs: list[MemoryDoc]) -> list[tuple[MemoryDoc, list[MemoryDoc]]]:
+    """Groups of entries identical but for a date token in the filename.
+
+    Returns (newest, older_members) per series with at least 3 members —
+    two dated entries can be legitimate distinct facts; three with the
+    same shape is a diary.
+    """
+    groups: dict[tuple[str, str], list[MemoryDoc]] = {}
+    for d in docs:
+        if not _DATE_TOKEN_RE.search(d.filename):
+            continue
+        key = (d.type, _DATE_TOKEN_RE.sub("<date>", d.filename))
+        groups.setdefault(key, []).append(d)
+    out: list[tuple[MemoryDoc, list[MemoryDoc]]] = []
+    for members in groups.values():
+        if len(members) < 3:
+            continue
+        members.sort(key=lambda d: d.mtime, reverse=True)
+        out.append((members[0], members[1:]))
+    return out
 
 
 def _duplicate_pairs(docs: list[MemoryDoc], threshold: float) -> list[tuple[MemoryDoc, MemoryDoc, float]]:
