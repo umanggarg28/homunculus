@@ -113,3 +113,36 @@ def full_text(text: str) -> str:
         return ""
     # Collapse multi-line into single-line (JSON-safe) but keep full length.
     return " ".join(str(text).split())
+
+
+def read_appended_records(path: Path, start_offset: int) -> tuple[list[dict], int]:
+    """Parse the records appended to an event log since `start_offset`.
+
+    Returns (records, next_offset). Only COMPLETE lines are consumed:
+    next_offset stops at the last newline in the read, so a record another
+    process is mid-append is never half-parsed — the next call picks it up
+    whole. Unparseable lines are skipped (the log is best-effort by design).
+
+    Rotation contract: the caller must detect a shrunken file
+    (path.stat().st_size < start_offset) and restart from offset 0 with a
+    fresh accumulator; this function assumes the log only grew.
+    """
+    try:
+        with path.open("rb") as f:
+            f.seek(start_offset)
+            blob = f.read()
+    except OSError:
+        return [], start_offset
+    last_nl = blob.rfind(b"\n")
+    if last_nl == -1:
+        return [], start_offset
+    records: list[dict] = []
+    for line in blob[: last_nl + 1].decode("utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return records, start_offset + last_nl + 1
