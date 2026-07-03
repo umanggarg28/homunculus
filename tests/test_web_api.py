@@ -578,3 +578,26 @@ def test_input_expected_reflects_pending_quiz(client, tmp_path, monkeypatch):
         "pending": {"topic": "attention", "asked_at": "2026-06-16T20:00:00"},  # legacy orphan, no flag
     }))
     assert client.get("/api/input-expected").json()["expected"] is False
+
+
+def test_stats_activity_bins_real_events(client, web_api):
+    """The pulse strip's endpoint: real counts, correct binning, no
+    synthesis — an empty window is all zeros."""
+    from datetime import datetime, timedelta, UTC
+
+    now = datetime.now(UTC)
+    for mins_ago in (30, 30, 90):
+        _write_event(
+            web_api.EVENTS_PATH, event="tool_call", name="notify",
+            ts=(now - timedelta(minutes=mins_ago)).isoformat(),
+        )
+
+    resp = client.get("/api/stats/activity?hours=2&bins=24")
+    data = resp.json()
+    assert data["total"] == 3
+    assert len(data["bins"]) == 24  # bins floor is 24 (requests below clamp up)
+    assert sum(data["bins"]) == 3
+    # 2h window, 24 bins of 5min: the two 30m-ago events land in the
+    # last quarter of the window; the 90m-ago one in the first half.
+    assert sum(data["bins"][12:]) == 2
+    assert sum(data["bins"][:12]) == 1

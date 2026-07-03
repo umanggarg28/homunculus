@@ -332,3 +332,29 @@
   }
   .hm-glitching, .hm-robot-annoyed, .hm-robot-celebrate { animation: none; }
 }
+
+/* ---------- countdown colon tick ----------
+   The colons in the big countdowns blink at 1Hz with a hard step —
+   a CRT cursor, not a fade. Guarded by prefers-reduced-motion below. */
+.hm-tick-sep { animation: hm-tick 1s steps(1) infinite; }
+@keyframes hm-tick {
+  50% { opacity: 0.3; }
+}
+
+/* ---------- staggered section reveal ----------
+   Overview sections land in reading order: opacity-only (transform
+   would trap the fixed/backdrop layers), linear, fast. Set --i per
+   section. */
+.hm-stagger {
+  opacity: 0;
+  animation: hm-stagger-in 220ms linear forwards;
+  animation-delay: calc(var(--i, 0) * 50ms);
+}
+@keyframes hm-stagger-in {
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hm-tick-sep { animation: none !important; }
+  .hm-stagger { animation: none !important; opacity: 1 !important; }
+}

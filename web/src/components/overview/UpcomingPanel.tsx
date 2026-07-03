@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, parseTaskWallClock } from "@/lib/api";
+import { TickingDigits } from "@/components/ui/TickingDigits";
 
 interface Upcoming {
   next_tick: string | null;
@@ -65,10 +66,12 @@ export function UpcomingPanel() {
               color: "var(--color-accent)",
               fontSize: "clamp(56px, 8vw, 96px)",
               fontVariantNumeric: "tabular-nums",
-              textShadow: "0 0 40px var(--color-accent), 0 0 8px var(--color-accent)",
+              // Crisp phosphor: one tight bloom + a hairline halo. The old
+              // 40px wash smeared the digits into the background.
+              textShadow: "0 0 18px var(--color-accent-glow), 0 0 4px var(--color-accent)",
             }}
           >
-            {formatCountdown(target.ms - now)}
+            <TickingDigits text={formatCountdown(target.ms - now)} />
           </div>
           <div className="mt-3 text-[13px]" style={{ color: "var(--color-text)" }}>
             <span style={{ color: "var(--color-accent)" }}>›</span>{" "}

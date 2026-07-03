@@ -241,6 +241,13 @@ export const api = {
 
   statsToday: () => jsonGet<AgentBudgetStats>("/stats/today"),
 
+  statsActivity: (hours = 24, bins = 288) => jsonGet<{
+    since: string;
+    hours: number;
+    bins: number[];
+    total: number;
+  }>(`/stats/activity?hours=${hours}&bins=${bins}`),
+
   tasksCreate: (body: {
     title: string;
     description?: string;

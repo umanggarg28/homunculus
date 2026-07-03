@@ -1,54 +1,72 @@
 import { useEffect, useMemo, useState } from "react";
+import { api } from "@/lib/api";
 import { useEventStream } from "@/hooks/useEventStream";
 
 /** SIGNATURE HEARTBEAT — the one bespoke viz that earns the product
- *  its name. Edge-to-edge ASCII waveform, full-bleed, breaks the
- *  Overview grid. Renders the last 24h of agent activity as a
- *  continuous mono character strip — one column per 5-minute bin,
- *  taller bars for more activity. Right-most column pulses live with
- *  current second's events.
+ *  its name. Edge-to-edge mono character strip: the last 24h of agent
+ *  activity, one column per 5-minute bin, taller bars for more events.
+ *  The right tip pulses when events are arriving THIS second.
  *
- *  The strip "breathes" when idle (a sine ripple drifts across)
- *  and "spikes" on the right when events arrive. The viz IS the
- *  agent's pulse — it's not decoration, it's data with one job:
- *  proving to you the thing is alive.
+ *  The data is real end to end: bins come from /api/stats/activity
+ *  (a bounded tail read over the event log), and the live stream bumps
+ *  the current bin between polls. An empty bin renders flat — the strip
+ *  earns "alive" by actually being alive, never by a synthetic ripple.
+ *  Hover any column for its time window and count.
  */
 interface SignatureHeartbeatProps {
-  /** Compact mode for use in a constrained cell (e.g. the Overview
-   *  command-status grid). Drops the header strip + footer scale,
-   *  halves the bin density, and shrinks the vertical padding. The
-   *  default full mode bleeds edge-to-edge and is the page's
-   *  signature element. */
+  /** Compact mode for a constrained cell: no header/footer, half the
+   *  bin density, tighter padding. */
   compact?: boolean;
 }
+
+const HOURS = 24;
 
 export function SignatureHeartbeat({ compact = false }: SignatureHeartbeatProps = {}) {
   const { events } = useEventStream(500);
   const [now, setNow] = useState(() => Date.now());
+  const [activity, setActivity] = useState<{ since: string; bins: number[]; total: number } | null>(null);
 
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 500);
+    const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
 
-  // Bin density: 288 (5-min bins for 24h) in full mode, 144 (10-min
-  // bins) in compact mode — half the density so the smaller strip
-  // still reads as a coherent shape, not noise.
   const nBins = compact ? 144 : 288;
-  const bins = useMemo(() => buildBins(events, nBins, now), [events, now, nBins]);
+
+  useEffect(() => {
+    const fetchOnce = () =>
+      api.statsActivity(HOURS, nBins).then(setActivity).catch(() => undefined);
+    fetchOnce();
+    const t = setInterval(fetchOnce, 60_000);
+    return () => clearInterval(t);
+  }, [nBins]);
+
+  // Server bins + live top-up: events that streamed in since the last
+  // poll land in the current (rightmost) bin so "now" never lags.
+  const bins = useMemo(() => {
+    const counts = activity ? [...activity.bins] : new Array(nBins).fill(0);
+    if (activity) {
+      const sinceMs = new Date(activity.since).getTime();
+      const spanMs = HOURS * 3600 * 1000;
+      const polledUpTo = sinceMs + spanMs; // ≈ poll time
+      for (const e of events) {
+        const t = new Date(e.ts).getTime();
+        if (t > polledUpTo && t <= now) counts[counts.length - 1] += 1;
+      }
+    }
+    return counts;
+  }, [activity, events, now, nBins]);
+
+  const maxCount = Math.max(1, ...bins);
+  const total = activity?.total ?? 0;
   const lastEvent = events[events.length - 1];
   const live = lastEvent && now - new Date(lastEvent.ts).getTime() < 5000;
-
-  // Phase for the idle ripple.
-  const phase = (now / 1000) % (2 * Math.PI * 4);
 
   return (
     <div className="relative overflow-hidden" style={{ marginBottom: compact ? 0 : 48 }}>
       <RibbonGradient />
 
       {!compact && (
-        // Header strip above the waveform (full mode only — the
-        // compact panel uses its own container header).
         <div
           className="flex items-baseline justify-between mb-2 px-10"
           style={{ fontFamily: "var(--font-mono)" }}
@@ -57,22 +75,20 @@ export function SignatureHeartbeat({ compact = false }: SignatureHeartbeatProps 
             className="text-[10px] uppercase tracking-[0.32em]"
             style={{ color: "var(--color-text-muted)" }}
           >
-            ── pulse · last 24h
+            ── pulse · last 24h · 5-min bins
           </span>
           <span
             className="text-[10px] uppercase tracking-[0.18em]"
             style={{ color: live ? "var(--color-accent)" : "var(--color-text-faint)" }}
           >
-            {live ? "● spiking" : "● steady"} · {events.length} events in window
+            {live ? "● spiking" : "● steady"} · {total} events · peak {maxCount}/bin
           </span>
         </div>
       )}
 
-      {/* The waveform — bleeds full width, breaks the page grid */}
-      <Strip bins={bins} phase={phase} live={!!live} compact={compact} />
+      <Strip bins={bins} maxCount={maxCount} live={!!live} compact={compact} now={now} />
 
       {!compact && (
-        // Footer timeline scale (full mode only).
         <div
           className="flex justify-between mt-2 px-10 text-[9px] uppercase tracking-[0.18em]"
           style={{ color: "var(--color-text-faint)", fontFamily: "var(--font-mono)" }}
@@ -105,18 +121,47 @@ function RibbonGradient() {
 
 const BAR_GLYPHS = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
+function glyphFor(count: number, maxCount: number, boost = 0): string {
+  if (count <= 0 && boost <= 0) return BAR_GLYPHS[0];
+  const v = Math.min(1, count / maxCount);
+  // Non-zero bins always show at least ▁ — one event is still an event.
+  const idx = Math.max(count > 0 ? 1 : 0,
+    Math.min(BAR_GLYPHS.length - 1, Math.round(v * (BAR_GLYPHS.length - 1)) + boost));
+  return BAR_GLYPHS[Math.min(BAR_GLYPHS.length - 1, idx)];
+}
+
 function Strip({
-  bins, phase, live, compact = false,
+  bins, maxCount, live, compact = false, now,
 }: {
-  bins: number[]; // 0..1 normalized
-  phase: number;
+  bins: number[];
+  maxCount: number;
   live: boolean;
   compact?: boolean;
+  now: number;
 }) {
-  // Render two stacked ASCII rows + a center hairline. Each row is
-  // right-anchored — when the strip is wider than the container, the
-  // OLD end (left) overflows; "now" stays glued to the right edge.
   const N = bins.length;
+  const binMs = (HOURS * 3600 * 1000) / N;
+
+  // Top row: one span per bin so each column can carry a native
+  // tooltip (time window + count). Bottom row mirrors as a single
+  // string — it's the reflection, not a second hover target.
+  const boost = live ? Math.round(((Math.sin(now / 120) + 1) / 2) * 3) : 0;
+  const topSpans = bins.map((c, i) => {
+    const isTip = i >= N - 3 && live;
+    const g = glyphFor(c, maxCount, isTip ? boost : 0);
+    const from = new Date(now - (N - i) * binMs);
+    const hh = String(from.getHours()).padStart(2, "0");
+    const mm = String(from.getMinutes()).padStart(2, "0");
+    return (
+      <span key={i} title={`${hh}:${mm} · ${c} event${c === 1 ? "" : "s"}`}>
+        {g}
+      </span>
+    );
+  });
+  const bottomText = bins
+    .map((c, i) => glyphFor(c, maxCount, i >= N - 3 && live ? boost : 0))
+    .join("");
+
   return (
     <div
       className="relative w-full overflow-hidden"
@@ -128,23 +173,34 @@ function Strip({
         zIndex: 1,
       }}
     >
-      <Row
-        text={renderRow(bins, phase, "top", live, N)}
-        color="var(--color-accent)"
-        glow
-      />
-      <Row text={centerLine(N)} color="var(--color-border-strong)" />
-      <Row
-        text={renderRow(bins, phase, "bottom", live, N)}
-        color="var(--color-text-muted)"
-      />
+      <div className="flex justify-end" style={{ width: "100%", overflow: "hidden" }}>
+        <pre
+          className="m-0 whitespace-pre"
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: "clamp(10px, 0.95vw, 14px)",
+            lineHeight: 1.05,
+            color: "var(--color-accent)",
+            textShadow: "0 0 12px var(--color-accent-glow)",
+            paddingRight: "10px",
+          }}
+        >
+          {topSpans}
+        </pre>
+      </div>
+      <Row text={"─".repeat(N)} color="var(--color-border-strong)" />
+      <Row text={bottomText} color="var(--color-text-muted)" ariaHidden />
     </div>
   );
 }
 
-function Row({ text, color, glow }: { text: string; color: string; glow?: boolean }) {
+function Row({ text, color, ariaHidden }: { text: string; color: string; ariaHidden?: boolean }) {
   return (
-    <div className="flex justify-end" style={{ width: "100%", overflow: "hidden" }}>
+    <div
+      className="flex justify-end"
+      style={{ width: "100%", overflow: "hidden" }}
+      aria-hidden={ariaHidden}
+    >
       <pre
         className="m-0 whitespace-pre"
         style={{
@@ -152,7 +208,6 @@ function Row({ text, color, glow }: { text: string; color: string; glow?: boolea
           fontSize: "clamp(10px, 0.95vw, 14px)",
           lineHeight: 1.05,
           color,
-          textShadow: glow ? "0 0 12px var(--color-accent-glow)" : "none",
           paddingRight: "10px",
         }}
       >
@@ -160,45 +215,4 @@ function Row({ text, color, glow }: { text: string; color: string; glow?: boolea
       </pre>
     </div>
   );
-}
-
-function renderRow(bins: number[], phase: number, half: "top" | "bottom", live: boolean, N: number): string {
-  return bins
-    .map((v, i) => {
-      // Inject a slow sine ripple when bin has no real activity,
-      // so the strip never reads as "dead."
-      const ripple = v === 0
-        ? 0.18 + 0.18 * Math.sin(phase + i * 0.07)
-        : 0;
-      const effective = Math.max(v, ripple);
-      const idx = Math.min(BAR_GLYPHS.length - 1, Math.round(effective * (BAR_GLYPHS.length - 1)));
-
-      // Pulse the rightmost three bins when live.
-      const isRightTip = i >= N - 3 && live;
-      if (isRightTip && half === "top") {
-        const boost = (Math.sin(Date.now() / 120) + 1) / 2; // 0..1
-        const adj = Math.min(BAR_GLYPHS.length - 1, idx + Math.round(boost * 3));
-        return BAR_GLYPHS[adj];
-      }
-      return BAR_GLYPHS[idx];
-    })
-    .join("");
-}
-
-function centerLine(N: number): string {
-  return "─".repeat(N);
-}
-
-function buildBins(events: { ts: string }[], nBins: number, now: number): number[] {
-  const span = 24 * 60 * 60 * 1000;
-  const start = now - span;
-  const counts = new Array(nBins).fill(0);
-  for (const e of events) {
-    const t = new Date(e.ts).getTime();
-    if (t < start || t > now) continue;
-    const idx = Math.floor(((t - start) / span) * nBins);
-    counts[Math.min(nBins - 1, Math.max(0, idx))] += 1;
-  }
-  const max = Math.max(1, ...counts);
-  return counts.map((c) => c / max);
 }
