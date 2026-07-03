@@ -20,8 +20,10 @@ import secrets
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
@@ -444,6 +446,24 @@ def _visible_chat_history(history: list[dict]) -> list[dict]:
     return messages
 
 
+# Short-TTL memo for read-only derivations that scan the whole event log
+# (/api/skills, /api/stats/today — seconds per call once the log is MBs).
+# A fresh page load fires several of them concurrently; without this the
+# scans stack up and every request on the server slows to a timeout. The
+# TTL is far below the UI's poll interval, so staleness is invisible.
+_memo_store: dict[str, tuple[float, Any]] = {}
+
+
+def memo_ttl(key: str, ttl_s: float, compute: Callable[[], Any]) -> Any:
+    now = time.monotonic()
+    hit = _memo_store.get(key)
+    if hit is not None and now - hit[0] < ttl_s:
+        return hit[1]
+    value = compute()
+    _memo_store[key] = (now, value)
+    return value
+
+
 # Per-IP rate-limit state for /api/chat/send (in-memory, resets on restart).
 _chat_rate: dict[str, list[float]] = defaultdict(list)
 _CHAT_RATE_MAX = 10   # requests per window
@@ -623,6 +643,27 @@ app.include_router(_feed_routes.router)
 # and the developer is expected to use `npm run dev` for the UI.
 if SPA_DIST_DIR.exists():
     app.mount("/assets", StaticFiles(directory=SPA_DIST_DIR / "assets"), name="assets")
+
+    @app.middleware("http")
+    async def _spa_cache_headers(request, call_next):
+        """Cache policy that survives redeploys.
+
+        Hashed chunk files under /assets are immutable by construction
+        (content-addressed names) → cache forever. Everything else the
+        SPA shell serves — index.html above all — must REVALIDATE every
+        time: without an explicit Cache-Control, browsers heuristically
+        cache index.html, and after a redeploy a stale shell requests
+        chunk files that no longer exist (404 → the route crashes).
+        no-cache means "store, but ask first", so unchanged shells still
+        answer 304 via the ETag.
+        """
+        response = await call_next(request)
+        path = request.url.path
+        if path.startswith("/assets/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        elif not path.startswith("/api/") and path != "/events":
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     @app.get("/{full_path:path}")
     def spa_catchall(full_path: str):

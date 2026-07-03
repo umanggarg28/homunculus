@@ -35,7 +35,12 @@ def stats_today() -> JSONResponse:
     except Exception:
         cutoff = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    s = summarize_events(cutoff)
+    # Full-log scan → memoized briefly to absorb page-load bursts (the
+    # cutoff is in the key so the memo can't serve yesterday's window
+    # across the midnight rollover).
+    s = wa.memo_ttl(
+        f"stats_today:{cutoff.isoformat()}", 5.0, lambda: summarize_events(cutoff)
+    )
     budget_usd = float(os.environ.get("HOMUNCULUS_DAILY_BUDGET_USD", "0") or "0")
     return JSONResponse({
         "since": s["since"],

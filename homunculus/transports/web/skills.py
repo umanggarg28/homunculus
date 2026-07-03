@@ -18,7 +18,13 @@ def skills_list() -> JSONResponse:
 
     Used by the Skills page to answer "what does this agent reliably do?"
     — name + description + call count + success rate + last used.
+    The aggregation reads the whole event log, so it's memoized for a few
+    seconds (wa.memo_ttl) to absorb page-load request bursts.
     """
+    return JSONResponse(wa.memo_ttl("skills_list", 5.0, _aggregate_tool_stats))
+
+
+def _aggregate_tool_stats() -> list[dict]:
     by_name: dict[str, dict] = {}
     for schema in tools.SCHEMAS:
         fn = schema.get("function", {})
@@ -108,4 +114,4 @@ def skills_list() -> JSONResponse:
                 entry["uses"] = s.get("uses")
                 entry["consecutive_failures"] = s.get("consecutive_failures")
 
-    return JSONResponse(list(by_name.values()))
+    return list(by_name.values())
