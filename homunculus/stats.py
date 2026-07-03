@@ -45,6 +45,56 @@ def events_path() -> Path:
     return Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
 
 
+def _line_ts(raw: bytes) -> datetime | None:
+    """Timestamp of one raw log line, or None if it doesn't parse."""
+    try:
+        rec = json.loads(raw)
+        ts = datetime.fromisoformat(str(rec.get("ts", "")).replace("Z", "+00:00"))
+        return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _tail_lines_covering(p: Path, since: datetime, chunk: int = 256 * 1024) -> list[str]:
+    """The log's tail lines back to (and one past) `since`.
+
+    Reads BACKWARD in blocks from EOF and stops as soon as the buffer's
+    first complete line predates the window — so the read cost scales
+    with the window size, not the file size. The caller iterates the
+    result newest-first and breaks at the first out-of-window record,
+    exactly as it would over readlines() of the whole file.
+    """
+    try:
+        pos = p.stat().st_size
+    except OSError:
+        return []
+    buf = b""
+    try:
+        with p.open("rb") as f:
+            while pos > 0:
+                step = min(chunk, pos)
+                pos -= step
+                f.seek(pos)
+                buf = f.read(step) + buf
+                # First COMPLETE line: at BOF the buffer starts on a line;
+                # mid-file the bytes before the first newline are a partial
+                # line belonging to the previous block.
+                if pos == 0:
+                    probe = buf
+                else:
+                    nl = buf.find(b"\n")
+                    if nl == -1:
+                        continue
+                    probe = buf[nl + 1:]
+                first_ts = _line_ts(probe.split(b"\n", 1)[0])
+                if first_ts is not None and first_ts < since:
+                    buf = probe
+                    break
+    except OSError:
+        return []
+    return buf.decode("utf-8", errors="replace").splitlines()
+
+
 def summarize_events(
     since: datetime,
     *,
@@ -80,11 +130,10 @@ def summarize_events(
     p = path or events_path()
     lines: list[str] = []
     if p.exists():
-        try:
-            with p.open("r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-        except OSError:
-            lines = []
+        # Bounded tail read — the whole-file readlines() this replaces made
+        # every dashboard poll pay for megabytes of history outside the
+        # window (the reverse iteration below always skipped them anyway).
+        lines = _tail_lines_covering(p, since)
 
     for line in reversed(lines):
         line = line.strip()

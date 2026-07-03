@@ -30,6 +30,18 @@ def web_api(tmp_path, monkeypatch):
         ev.emit = lambda *a, **k: None
         ev.full_text = lambda t: t
         ev.truncate_preview = lambda t, limit=200: t[:limit]
+        # The reader must actually read — the skills route counts through
+        # it. Borrow the real implementation (dependency-free) so the stub
+        # only neuters emit, not the parsing the tests exercise.
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "_real_events",
+            Path(__file__).parent.parent / "homunculus" / "events.py",
+        )
+        assert _spec and _spec.loader
+        _real_events = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_real_events)
+        ev.read_appended_records = _real_events.read_appended_records
         sys.modules["homunculus.events"] = ev
 
     # Ensure agent_controls is importable.
@@ -67,6 +79,13 @@ def web_api(tmp_path, monkeypatch):
     mod.MEMORY_DIR = tmp_path / "memory"
     mod.TASKS_DIR = tmp_path / "tasks"
     mod.EVENTS_PATH = tmp_path / "events.jsonl"
+
+    # The skills route keeps a cross-request scan accumulator, and web_api
+    # keeps a short-TTL response memo; both must start empty per test or
+    # one test's counters/payloads leak into the next.
+    from homunculus.transports.web import skills as _skills_route
+    _skills_route._scan_state = {"offset": 0, "counters": {}}
+    mod._memo_store.clear()
     mod._chat_memory = type("FakeMemory", (), {
         "root": tmp_path / "memory",
         "load_index": lambda self, **k: "",
