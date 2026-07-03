@@ -153,7 +153,9 @@ def propose_consolidation(
     return created
 
 
-_DATE_TOKEN_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+# Filenames come from slugify (dashes → underscores), frontmatter names
+# keep dashes — match a date in either spelling.
+_DATE_TOKEN_RE = re.compile(r"\d{4}[-_]\d{2}[-_]\d{2}")
 
 
 def _dated_series(docs: list[MemoryDoc]) -> list[tuple[MemoryDoc, list[MemoryDoc]]]:
