@@ -9,9 +9,19 @@ def remember(
     name: str,
     description: str,
     type: str,
-    body: str,
+    body: str = "",
     related: list[str] | None = None,
+    content: str = "",
 ) -> str:
+    # Tolerant input: the model persistently sends `content` where the
+    # schema says `body` — the dominant remember() failure mode, one
+    # wasted correction round-trip per occurrence. A stable dialect is
+    # worth accepting; an empty memory is not. When both are given,
+    # `body` (the documented name) wins.
+    if content and not body:
+        body = content
+    if not body:
+        return "ERROR: 'body' is required — pass the full memory content as body=..."
     mem = get_memory()
     if mem is None:
         return "ERROR: memory subsystem is not initialized"

@@ -165,6 +165,8 @@ Look for:
 ━━ STEP 3 — Save memories + hygiene ━━
 
 Save AT MOST 2 new memories. Use remember() with the SAME name to update existing ones — no duplicates.
+Always pass all four arguments, exactly these names:
+  remember(name="...", description="one line", type="feedback", body="the full content")
 When a memory relates to one you already have, reference it inline as [[its-name]] in the body — cross-links are how recall finds context later.
 Call forget() AT MOST 2 times for stale or contradicted memories.
 
