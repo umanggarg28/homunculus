@@ -867,6 +867,12 @@ def _settle_silent_drop(
         )
         clear_scratchpad(tasks.root, task_id)
         tasks.attribute_usage_to_last_run(task_id, usage)
+        # Same attribution the explicit-close path records: without it,
+        # every auto-completed run reaches the reflection with no
+        # delivered_text/tool_trace — blind on exactly the runs where the
+        # model already failed to close cleanly.
+        tasks.attribute_delivered_text_to_last_run(task_id, guard.combined_notify_text())
+        tasks.attribute_tool_trace_to_last_run(task_id, guard.tool_trace())
         log.info(
             f"[heartbeat] {task_id} auto-completed — criteria satisfied, "
             f"agent omitted complete_task",
@@ -894,6 +900,7 @@ def _settle_silent_drop(
         duration_s=duration_s,
         usage=usage,
     )
+    tasks.attribute_tool_trace_to_last_run(task_id, guard.tool_trace())
     events.emit(
         "task_partial",
         name=task_id,
