@@ -38,7 +38,7 @@ export function BrutalistLanding({ bootDone, onPick }: Props) {
             lineHeight: 0.88,
             letterSpacing: "0",
             color: "var(--color-accent)",
-            textShadow: "0 0 40px var(--color-accent-glow)",
+            textShadow: "0 0 18px var(--color-accent-glow), 0 0 4px var(--color-accent)",
           }}
         >
           HOMUNCULUS

@@ -69,14 +69,21 @@ def memory_consolidation_propose(limit: int = 5) -> JSONResponse:
     mutation. The operator still approves/rejects every proposed deletion.
     """
     from homunculus.memory_consolidation import propose_consolidation
-    from homunculus.proposals import proposals_path
+    from homunculus.proposals import KIND_MEMORY_DELETE, ProposalStore, proposals_path
 
     proposals = propose_consolidation(
         memory_root=wa.MEMORY_DIR,
         proposals_path=proposals_path(),
         limit=max(1, min(int(limit or 5), 20)),
     )
-    return JSONResponse({"ok": True, "created": proposals})
+    # "0 filed" reads as "scan broken" when the real story is "candidates
+    # exist but were deduped against proposals still awaiting review" —
+    # report the pending count so the UI can say which one happened.
+    pending = sum(
+        1 for p in ProposalStore(proposals_path()).list("pending")
+        if p.get("kind") == KIND_MEMORY_DELETE
+    )
+    return JSONResponse({"ok": True, "created": proposals, "pending": pending})
 
 
 @router.get("/api/chapters", dependencies=[Depends(wa.require_web_auth)])

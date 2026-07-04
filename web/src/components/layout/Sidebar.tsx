@@ -8,6 +8,7 @@ import { ModeToggle } from "./ModeToggle";
 import { ProviderInline } from "./ProviderInline";
 import { SidebarBrand } from "./SidebarBrand";
 import { SidebarRobot } from "@/components/robot/SidebarRobot";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { SidebarTelemetry } from "./SidebarTelemetry";
 import { SoundToggle } from "./SoundToggle";
 
@@ -252,8 +253,8 @@ export function Sidebar() {
                       <span className="nav-label-full" style={{ flex: 1 }}>{item.label}</span>
                       <span className="nav-label-short" style={{ flex: 1 }}>{item.short}</span>
                       {item.to === "/overview" && pendingProposals > 0 && (
+                        <Tooltip text={`${pendingProposals} skill proposal${pendingProposals > 1 ? "s" : ""} awaiting approval`} placement="right">
                         <span
-                          title={`${pendingProposals} skill proposal${pendingProposals > 1 ? "s" : ""} awaiting approval`}
                           style={{
                             fontSize: 9,
                             lineHeight: 1,
@@ -267,11 +268,12 @@ export function Sidebar() {
                         >
                           {pendingProposals}
                         </span>
+                        </Tooltip>
                       )}
                       {item.to === "/chat" && inputExpected && (
+                        <Tooltip text="The agent is waiting for your reply" placement="right">
                         <span
                           className="hm-input-dot"
-                          title="The agent is waiting for your reply"
                           aria-label="reply expected"
                           style={{
                             width: 7,
@@ -282,6 +284,7 @@ export function Sidebar() {
                             flex: "0 0 auto",
                           }}
                         />
+                        </Tooltip>
                       )}
                       {item.kbd && (
                         <span

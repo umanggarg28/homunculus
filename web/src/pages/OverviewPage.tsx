@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCents } from "@/lib/format";
 import { ContainmentPanel } from "@/components/overview/ContainmentPanel";
+import { SetupChecklist } from "@/components/overview/SetupChecklist";
 import { SkillProposals } from "@/components/overview/SkillProposals";
 import { TransmissionsFeed } from "@/components/overview/TransmissionsFeed";
 import { useEventStream } from "@/hooks/useEventStream";
 import { api, parseServerIso } from "@/lib/api";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
+import { TickingDigits } from "@/components/ui/TickingDigits";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { SignatureHeartbeat } from "@/components/overview/SignatureHeartbeat";
 import { HomunculusRobot } from "@/components/robot/HomunculusRobot";
@@ -332,7 +334,8 @@ export function OverviewPage() {
 
       {/* ── COMMAND DECK — next action + live state + operational truth ── */}
       <div
-        className="overview-command-deck instrument-panel hm-panel-scan hm-panel-hero gap-0"
+        className="overview-command-deck instrument-panel hm-panel-scan hm-panel-hero gap-0 hm-stagger"
+        style={{ "--i": 0 } as React.CSSProperties}
       >
           {/* LEFT — countdown as hero + stats */}
           <div className="overview-command-main p-8 flex flex-col justify-center gap-0">
@@ -354,10 +357,19 @@ export function OverviewPage() {
           </div>
         </div>
 
+      <div className="hm-stagger" style={{ "--i": 1 } as React.CSSProperties}>
         <RunInspector events={events} />
-      <SkillProposals />
-      <ContainmentPanel />
-      <TransmissionsFeed />
+      </div>
+      <div className="hm-stagger" style={{ "--i": 2 } as React.CSSProperties}>
+        <SetupChecklist />
+        <SkillProposals />
+      </div>
+      <div className="hm-stagger" style={{ "--i": 3 } as React.CSSProperties}>
+        <ContainmentPanel />
+      </div>
+      <div className="hm-stagger" style={{ "--i": 4 } as React.CSSProperties}>
+        <TransmissionsFeed />
+      </div>
     </PageShell>
   );
 }
@@ -379,7 +391,7 @@ function CommandStatus({
   return (
     <div className="overview-command-status-grid">
       <div className="overview-pulse-panel">
-        <SignatureHeartbeat compact />
+        <SignatureHeartbeat />
       </div>
       <TodayLedger stats={todayStats} />
       <div className="overview-status-stack">
@@ -764,7 +776,7 @@ function UpcomingHero({
                 marginBottom: 12,
               }}
             >
-              {overdue ? "OVERDUE" : formatCountdown(delta)}
+              {overdue ? "OVERDUE" : <TickingDigits text={formatCountdown(delta)} />}
             </div>
             <div className="text-[14px] mb-1" style={{ color: "var(--color-text)", fontFamily: "var(--font-mono)" }}>
               <span style={{ color: overdue ? "var(--color-amber)" : "var(--color-accent)" }}>›</span>{" "}{target.label}

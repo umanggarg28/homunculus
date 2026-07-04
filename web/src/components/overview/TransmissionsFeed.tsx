@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 /** Transmissions — what the agent actually delivered to the user's
  * phone, newest first, grouped by day. Lives on OVERVIEW: it's
@@ -67,6 +68,7 @@ export function TransmissionsFeed() {
                   >
                     {kind.label}
                   </span>
+                  <Tooltip text={n.text} placement="top">
                   <span
                     className="brut-body truncate"
                     style={{
@@ -75,10 +77,10 @@ export function TransmissionsFeed() {
                       minWidth: 0,
                       flex: 1,
                     }}
-                    title={n.text}
                   >
                     {firstLine(n.text)}
                   </span>
+                  </Tooltip>
                   {/* Fixed sub-columns: HH:MM right-aligned in 5ch, age in
                       8ch — otherwise the time column wobbles per row. */}
                   <span className="brut-label flex gap-3" style={{ color: "var(--color-text-faint)", flexShrink: 0, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>

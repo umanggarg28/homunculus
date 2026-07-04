@@ -145,7 +145,7 @@ export const api = {
       headers: authHeaders(),
     }).then(async (r) => {
       if (!r.ok) throw new Error(`Memory consolidation failed: ${r.status}`);
-      return r.json() as Promise<{ ok: boolean; created: Proposal[] }>;
+      return r.json() as Promise<{ ok: boolean; created: Proposal[]; pending: number }>;
     }),
 
   chaptersList: () => jsonGet<Chapter[]>("/chapters"),
@@ -191,6 +191,16 @@ export const api = {
     }).then(async (r) => {
       if (!r.ok) throw new Error((await r.text()) || `Approve failed: ${r.status}`);
       return r.json() as Promise<{ ok: boolean; skill: string; version: number }>;
+    }),
+
+  proposalApproveBatch: (ids: string[]) =>
+    fetch(`${API_BASE}/proposals/approve-batch`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ ids }),
+    }).then(async (r) => {
+      if (!r.ok) throw new Error((await r.text()) || `Batch approve failed: ${r.status}`);
+      return r.json() as Promise<{ approved: number; failed: number; results: { id: string; ok: boolean; error?: string }[] }>;
     }),
 
   proposalReject: (id: string, reason: string = "") =>
@@ -240,6 +250,13 @@ export const api = {
   }>("/agent/upcoming"),
 
   statsToday: () => jsonGet<AgentBudgetStats>("/stats/today"),
+
+  statsActivity: (hours = 24, bins = 288) => jsonGet<{
+    since: string;
+    hours: number;
+    bins: number[];
+    total: number;
+  }>(`/stats/activity?hours=${hours}&bins=${bins}`),
 
   tasksCreate: (body: {
     title: string;

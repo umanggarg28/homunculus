@@ -6,7 +6,7 @@ Overview panels; neither mutates state.
 
 import json
 import os
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 from fastapi import APIRouter, Depends
@@ -55,6 +55,47 @@ def stats_today() -> JSONResponse:
         "cost_cents": round(s["cost_cents"], 2),
         "budget_cents": round(budget_usd * 100, 2),
     })
+
+
+@router.get("/api/stats/activity", dependencies=[Depends(wa.require_web_auth)])
+def stats_activity(hours: int = 24, bins: int = 288) -> JSONResponse:
+    """Event counts bucketed over the trailing window — the pulse strip's
+    data. Real counts from the event log (bounded tail read), never
+    synthesized: an empty bin renders flat because nothing happened.
+    """
+    hours = max(1, min(hours, 48))
+    bins = max(24, min(bins, 576))
+
+    def compute() -> dict:
+        now = datetime.now(UTC)
+        since = now - timedelta(hours=hours)
+        counts = [0] * bins
+        total = 0
+        span_s = hours * 3600
+        from homunculus.stats import _tail_lines_covering
+        for line in _tail_lines_covering(wa.EVENTS_PATH, since):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+                ts = datetime.fromisoformat(str(rec.get("ts", "")).replace("Z", "+00:00"))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            offset_s = (ts - since).total_seconds()
+            if offset_s < 0 or offset_s > span_s:
+                continue
+            idx = min(bins - 1, int(offset_s / span_s * bins))
+            counts[idx] += 1
+            total += 1
+        return {"since": since.isoformat(), "hours": hours,
+                "bins": counts, "total": total}
+
+    return JSONResponse(
+        wa.memo_ttl(f"stats_activity:{hours}:{bins}", 30.0, compute)
+    )
 
 
 # Known context limits for common model IDs (tokens).

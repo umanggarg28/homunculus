@@ -578,3 +578,70 @@ def test_input_expected_reflects_pending_quiz(client, tmp_path, monkeypatch):
         "pending": {"topic": "attention", "asked_at": "2026-06-16T20:00:00"},  # legacy orphan, no flag
     }))
     assert client.get("/api/input-expected").json()["expected"] is False
+
+
+def test_stats_activity_bins_real_events(client, web_api):
+    """The pulse strip's endpoint: real counts, correct binning, no
+    synthesis — an empty window is all zeros."""
+    from datetime import datetime, timedelta, UTC
+
+    now = datetime.now(UTC)
+    for mins_ago in (30, 30, 90):
+        _write_event(
+            web_api.EVENTS_PATH, event="tool_call", name="notify",
+            ts=(now - timedelta(minutes=mins_ago)).isoformat(),
+        )
+
+    resp = client.get("/api/stats/activity?hours=2&bins=24")
+    data = resp.json()
+    assert data["total"] == 3
+    assert len(data["bins"]) == 24  # bins floor is 24 (requests below clamp up)
+    assert sum(data["bins"]) == 3
+    # 2h window, 24 bins of 5min: the two 30m-ago events land in the
+    # last quarter of the window; the 90m-ago one in the first half.
+    assert sum(data["bins"][12:]) == 2
+    assert sum(data["bins"][:12]) == 1
+
+
+def test_batch_approve_resolves_each_through_the_single_gate(client, web_api):
+    """approve-batch is a UI convenience over resolve_proposal, never a
+    second code path: every id resolves individually, per-id failures
+    don't abort the rest."""
+    files = []
+    props = []
+    for i in range(2):
+        f = web_api.MEMORY_DIR / f"feedback_2026_06_{20 + i}_log.md"
+        f.write_text(
+            f"---\nname: log {i}\ndescription: d\ntype: feedback\n---\n\nbody {i}\n",
+            encoding="utf-8",
+        )
+        files.append(f)
+        props.append(_file_proposal(
+            web_api, kind="memory_delete", skill_name=f.name,
+            body="", validation={"target": f.name},
+        ))
+
+    ids = [p["id"] for p in props] + ["prop-9999"]  # one bad id in the batch
+    resp = client.post("/api/proposals/approve-batch", json={"ids": ids})
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["approved"] == 2
+    assert data["failed"] == 1
+    assert not files[0].exists() and not files[1].exists()
+    assert client.post("/api/proposals/approve-batch", json={"ids": []}).status_code == 400
+
+
+def test_setup_status_reflects_real_state(client, web_api, monkeypatch):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    d1 = client.get("/api/setup/status").json()
+    assert d1["telegram_configured"] is False
+    assert d1["memory_seeded"] is False
+    assert d1["complete"] is False
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "x")
+    (web_api.MEMORY_DIR / "user_name.md").write_text(
+        "---\nname: n\ndescription: d\ntype: user\n---\n\nUmang\n", encoding="utf-8")
+    d2 = client.get("/api/setup/status").json()
+    assert d2["telegram_configured"] is True
+    assert d2["memory_seeded"] is True

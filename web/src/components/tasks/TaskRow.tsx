@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, parseTaskWallClock } from "@/lib/api";
 import type { Task } from "@/lib/types";
+import { DataTip } from "@/components/ui/DataTip";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { RunNowPanel } from "./RunNowPanel";
 
 interface Props {
@@ -149,8 +151,8 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
           </div>
           <div className="task-row-meta">
             {task.source === "inferred" && (
+              <Tooltip text="A commitment the agent noticed and recorded to follow up on — you didn't ask for it.">
               <span
-                title="A commitment the agent noticed and recorded to follow up on — you didn't ask for it."
                 style={{
                   fontSize: 9,
                   letterSpacing: "0.14em",
@@ -165,6 +167,7 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
               >
                 ◇ proactive
               </span>
+              </Tooltip>
             )}
             {subtitle && (
               <div style={{ fontSize: 10, letterSpacing: "0.10em", textTransform: "uppercase", color: "var(--color-text-muted)" }}>
@@ -253,7 +256,6 @@ function RunSparkline({ runs }: { runs: import("@/lib/types").TaskRun[] }) {
   // counting it as ok would overstate reliability.
   const okCount = last.filter((r) => r.status === "success").length;
   const label = `${okCount}/${last.length} ok`;
-  const [tipIdx, setTipIdx] = useState<number | null>(null);
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
@@ -266,12 +268,7 @@ function RunSparkline({ runs }: { runs: import("@/lib/types").TaskRun[] }) {
         ].filter(Boolean).join(" · ");
 
         return (
-          <div
-            key={i}
-            onMouseEnter={(e) => { e.stopPropagation(); setTipIdx(i); }}
-            onMouseLeave={() => setTipIdx(null)}
-            style={{ position: "relative", flexShrink: 0 }}
-          >
+          <DataTip key={i} tip={tipText}>
             <div
               style={{
                 width: 6,
@@ -281,26 +278,7 @@ function RunSparkline({ runs }: { runs: import("@/lib/types").TaskRun[] }) {
                 cursor: "default",
               }}
             />
-            {tipIdx === i && (
-              <div style={{
-                position: "absolute",
-                bottom: "calc(100% + 4px)",
-                left: "50%",
-                transform: "translateX(-50%)",
-                background: "var(--color-surface-2)",
-                border: "1px solid var(--color-border-strong)",
-                padding: "3px 7px",
-                fontSize: 9,
-                letterSpacing: "0.06em",
-                whiteSpace: "nowrap",
-                color: "var(--color-text)",
-                pointerEvents: "none",
-                zIndex: 50,
-              }}>
-                {tipText}
-              </div>
-            )}
-          </div>
+          </DataTip>
         );
       })}
       <span style={{ fontSize: 9, letterSpacing: "0.08em", color: okCount < last.length ? "var(--color-amber)" : "var(--color-text-faint)", marginLeft: 2 }}>

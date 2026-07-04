@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { diffLines, diffStats, type DiffLine } from "@/lib/lineDiff";
 import { api } from "@/lib/api";
 import { useEventStream } from "@/hooks/useEventStream";
 import type { Proposal } from "@/lib/types";
@@ -16,6 +17,9 @@ export const PROPOSALS_CHANGED_EVENT = "hm:proposals-changed";
 export function SkillProposals() {
   const [items, setItems] = useState<Proposal[]>([]);
   const [open, setOpen] = useState<string | null>(null);
+  // proposal id → computed diff vs the CURRENT skill file, or "body"
+  // when there is nothing to diff against (new skills, memory deletes).
+  const [diffs, setDiffs] = useState<Record<string, DiffLine[] | "body">>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -62,11 +66,37 @@ export function SkillProposals() {
     }
   };
 
+  const approveAll = async (kind: string) => {
+    const ids = items.filter((p) => p.kind === kind).map((p) => p.id);
+    setBusy("__batch__");
+    setError(null);
+    try {
+      const res = await api.proposalApproveBatch(ids);
+      if (res.failed > 0) {
+        const firstErr = res.results.find((r) => !r.ok);
+        setError(`${res.approved} approved · ${res.failed} failed${firstErr?.error ? ` — ${firstErr.error}` : ""}`);
+      }
+      load();
+      window.dispatchEvent(new CustomEvent(PROPOSALS_CHANGED_EVENT));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   // Empty queue: stay quiet. This panel only appears when the agent has
   // actually proposed changing itself — which is the unsettling moment.
   if (items.length === 0) return null;
 
   const accent = "var(--color-warning)";
+  // Batch affordance only for a homogeneous stack of the same kind —
+  // e.g. the consolidation scan filing five memory deletions. Mixed
+  // queues keep per-item review; skill edits are never batched (each
+  // diff deserves its own read).
+  const kinds = [...new Set(items.map((p) => p.kind))];
+  const batchKind = kinds.length === 1 && items.length >= 2 && kinds[0] === "memory_delete"
+    ? kinds[0] : null;
 
   return (
     <div className="instrument-panel hm-panel-scan hm-panel-secondary mt-6">
@@ -75,8 +105,27 @@ export function SkillProposals() {
         style={{ color: "var(--color-text-muted)", borderBottom: "1px solid var(--color-border)" }}
       >
         <span>── proposed evolution · awaiting authorization</span>
-        <span style={{ color: accent, textShadow: `0 0 8px ${accent}`, letterSpacing: "0.14em" }}>
-          {items.length} PENDING
+        <span className="flex items-center gap-3">
+          {batchKind && (
+            <button
+              className="brut-label"
+              disabled={busy !== null}
+              onClick={() => approveAll(batchKind)}
+              style={{
+                border: "1px solid var(--color-accent)",
+                color: "var(--color-accent)",
+                background: "transparent",
+                padding: "3px 8px",
+                letterSpacing: "0.1em",
+                cursor: busy ? "wait" : "pointer",
+              }}
+            >
+              {busy === "__batch__" ? "approving…" : `approve all ${items.length}`}
+            </button>
+          )}
+          <span style={{ color: accent, textShadow: `0 0 8px ${accent}`, letterSpacing: "0.14em" }}>
+            {items.length} PENDING
+          </span>
         </span>
       </div>
 
@@ -107,10 +156,27 @@ export function SkillProposals() {
               <button
                 className="brut-label"
                 disabled={busy === p.id}
-                onClick={() => setOpen(open === p.id ? null : p.id)}
+                onClick={async () => {
+                  const next = open === p.id ? null : p.id;
+                  setOpen(next);
+                  if (next && diffs[p.id] === undefined) {
+                    if (p.kind === "skill_edit") {
+                      try {
+                        const current = await api.memoryEntry(`${p.skill_name}.md`);
+                        setDiffs((d) => ({ ...d, [p.id]: diffLines(current, p.body) }));
+                      } catch {
+                        // Current file unreadable — fall back to full body
+                        // rather than blocking review.
+                        setDiffs((d) => ({ ...d, [p.id]: "body" }));
+                      }
+                    } else {
+                      setDiffs((d) => ({ ...d, [p.id]: "body" }));
+                    }
+                  }
+                }}
                 style={btnStyle("var(--color-text-muted)")}
               >
-                {open === p.id ? "hide" : p.kind.startsWith("memory_") ? "body" : "diff"}
+                {open === p.id ? "hide" : p.kind === "skill_edit" ? "diff" : "body"}
               </button>
               <button
                 className="brut-label"
@@ -131,24 +197,7 @@ export function SkillProposals() {
             </div>
           </div>
           {open === p.id && (
-            <pre
-              className="px-4 py-3"
-              style={{
-                margin: 0,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                fontFamily: "var(--font-mono)",
-                fontSize: "11px",
-                lineHeight: 1.5,
-                color: "var(--color-text-muted)",
-                background: "color-mix(in srgb, var(--color-bg) 70%, black)",
-                borderTop: "1px solid var(--color-border)",
-                maxHeight: "340px",
-                overflow: "auto",
-              }}
-            >
-              {p.body}
-            </pre>
+            <ProposalDetail body={p.body} diff={diffs[p.id]} />
           )}
         </div>
       ))}
@@ -172,4 +221,70 @@ function kindLabel(kind: Proposal["kind"]): string {
   if (kind === "skill_edit") return "EDIT SKILL";
   if (kind === "memory_delete") return "DELETE MEMORY";
   return "PROPOSAL";
+}
+
+
+/** Expanded proposal view. skill_edit shows a REAL line diff against the
+ *  current skill file — a full-body dump made "removed one duplicated
+ *  line" unreviewable (you can't approve what you can't see). Everything
+ *  else (new skills, memory deletes) shows the body, honestly labeled.
+ */
+function ProposalDetail({ body, diff }: { body: string; diff?: DiffLine[] | "body" }) {
+  const shell: React.CSSProperties = {
+    margin: 0,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    fontFamily: "var(--font-mono)",
+    fontSize: "11px",
+    lineHeight: 1.5,
+    background: "color-mix(in srgb, var(--color-bg) 70%, black)",
+    borderTop: "1px solid var(--color-border)",
+    maxHeight: "340px",
+    overflow: "auto",
+  };
+  if (diff === undefined) {
+    return <pre className="px-4 py-3" style={{ ...shell, color: "var(--color-text-faint)" }}>computing diff…</pre>;
+  }
+  if (diff === "body") {
+    return <pre className="px-4 py-3" style={{ ...shell, color: "var(--color-text-muted)" }}>{body}</pre>;
+  }
+  const stats = diffStats(diff);
+  return (
+    <div style={{ ...shell, padding: 0 }}>
+      <div
+        className="brut-meta px-4 py-2"
+        style={{ color: "var(--color-text-faint)", borderBottom: "1px solid var(--color-border)" }}
+      >
+        vs current skill · <span style={{ color: "var(--color-accent)" }}>+{stats.added}</span>{" "}
+        <span style={{ color: "var(--color-danger)" }}>−{stats.removed}</span>
+      </div>
+      <pre className="px-4 py-3" style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+        {diff.map((l, i) =>
+          l.type === "gap" ? (
+            <div key={i} style={{ color: "var(--color-text-faint)", opacity: 0.8 }}>
+              {`··· ${l.hidden} unchanged line${l.hidden === 1 ? "" : "s"}`}
+            </div>
+          ) : (
+            <div
+              key={i}
+              style={{
+                color:
+                  l.type === "add" ? "var(--color-accent)"
+                  : l.type === "del" ? "var(--color-danger)"
+                  : "var(--color-text-muted)",
+                background:
+                  l.type === "add" ? "var(--color-accent-faint)"
+                  : l.type === "del" ? "var(--color-rose-dim)"
+                  : "transparent",
+                textDecoration: l.type === "del" ? "line-through" : "none",
+                textDecorationColor: "color-mix(in srgb, var(--color-danger) 45%, transparent)",
+              }}
+            >
+              {`${l.type === "add" ? "+" : l.type === "del" ? "−" : " "} ${l.text}`}
+            </div>
+          ),
+        )}
+      </pre>
+    </div>
+  );
 }

@@ -10,7 +10,8 @@ import type { MemoryEntry } from "@/lib/types";
 
 export function MemoryPage() {
   const [entries, setEntries] = useState<MemoryEntry[] | null>(null);
-  const [scanState, setScanState] = useState<string>("");
+  const [scanState, setScanState] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
 
   useEffect(() => {
     api.memoryList().then(setEntries).catch(() => setEntries([]));
@@ -30,30 +31,51 @@ export function MemoryPage() {
               find duplicate &amp; stale notes to review
             </div>
           </div>
-          <button
-            className="brut-label shrink-0"
-            onClick={async () => {
-              setScanState("scanning...");
-              try {
-                const res = await api.memoryConsolidationPropose(5);
-                setScanState(`${res.created.length} proposal${res.created.length === 1 ? "" : "s"} filed`);
-                window.dispatchEvent(new CustomEvent("hm:proposals-changed"));
-              } catch (e) {
-                setScanState(e instanceof Error ? e.message : String(e));
-              }
-            }}
-            style={{
-              border: "1px solid var(--color-accent)",
-              color: "var(--color-accent)",
-              background: "transparent",
-              padding: "6px 10px",
-              letterSpacing: "0.1em",
-              cursor: "pointer",
-            }}
-          >
-            scan
-          </button>
-          {scanState && <div className="brut-meta shrink-0" style={{ color: "var(--color-text-muted)" }}>{scanState}</div>}
+          {/* Status sits BEFORE the button inside one right-aligned group,
+              so its appearance never shifts the button (the old layout
+              added it as a third justify-between child — the button
+              visibly drifted on first scan). */}
+          <div className="flex items-center gap-3 shrink-0">
+            {scanState && (
+              <div className="brut-meta" style={{ color: "var(--color-text-muted)", textAlign: "right" }}>
+                {scanState}
+              </div>
+            )}
+            <button
+              className="brut-label shrink-0"
+              disabled={scanning}
+              onClick={async () => {
+                setScanning(true);
+                setScanState(null);
+                try {
+                  const res = await api.memoryConsolidationPropose(5);
+                  if (res.created.length > 0) {
+                    setScanState(`${res.created.length} proposal${res.created.length === 1 ? "" : "s"} filed — review on Overview`);
+                  } else if (res.pending > 0) {
+                    setScanState(`nothing new — ${res.pending} already pending review`);
+                  } else {
+                    setScanState("vault clean — nothing to consolidate");
+                  }
+                  window.dispatchEvent(new CustomEvent("hm:proposals-changed"));
+                } catch (e) {
+                  setScanState(e instanceof Error ? e.message : String(e));
+                } finally {
+                  setScanning(false);
+                }
+              }}
+              style={{
+                border: "1px solid var(--color-accent)",
+                color: scanning ? "var(--color-text-muted)" : "var(--color-accent)",
+                background: "transparent",
+                padding: "6px 10px",
+                letterSpacing: "0.1em",
+                cursor: scanning ? "wait" : "pointer",
+                minWidth: 96,
+              }}
+            >
+              {scanning ? "scanning…" : "scan"}
+            </button>
+          </div>
         </div>
       )}
       {entries && entries.length > 0 && <MemoryHero entries={entries} />}
