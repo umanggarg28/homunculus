@@ -49,18 +49,68 @@ export function BrutalistChatLog({ messages, toolTimeline, sending, bootDone, hi
 
   // Turn numbering = number of user messages so far + 1 for the
   // current assistant reply that belongs to the same turn.
+  //
+  // Day dividers: timestamps render as bare HH:MM, so without a marker a
+  // session spanning midnight reads as one out-of-order thread (04:46
+  // above yesterday's 04:41). A divider is emitted whenever the calendar
+  // day changes — and above the first message when it isn't from today,
+  // so the oldest group is never the only unlabeled one.
   let turn = 0;
+  let prevDay: string | null = null;
   return (
     <div className="flex flex-col gap-3">
       {messages.map((m) => {
         if (m.role === "user") turn += 1;
         const tools = (m.role === "assistant" && assistantToolCalls.get(m.id)) || [];
+        const day = m.ts ? dayKey(new Date(m.ts)) : prevDay;
+        const needsDivider =
+          day !== null && day !== prevDay && (prevDay !== null || day !== dayKey(new Date()));
+        if (day !== null) prevDay = day;
         return (
           <Fragment key={m.id}>
+            {needsDivider && m.ts && <DayDivider ts={m.ts} />}
             <BrutalistMessage message={m} toolCalls={tools} sending={sending} turnNumber={turn} />
           </Fragment>
         );
       })}
+    </div>
+  );
+}
+
+function dayKey(d: Date): string {
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+function DayDivider({ ts }: { ts: string }) {
+  const d = new Date(ts);
+  const now = new Date();
+  const dateStr = d
+    .toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
+    .replace(",", " ·");
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const label =
+    dayKey(d) === dayKey(now)
+      ? `today · ${dateStr}`
+      : dayKey(d) === dayKey(yesterday)
+        ? `yesterday · ${dateStr}`
+        : dateStr;
+
+  return (
+    <div
+      role="separator"
+      aria-label={dateStr}
+      className="flex items-center gap-3 my-2 select-none"
+      style={{ fontFamily: "var(--font-mono)" }}
+    >
+      <div style={{ flex: 1, borderTop: "1px solid var(--color-border)" }} />
+      <span
+        className="text-[9px] uppercase tracking-[0.22em] whitespace-nowrap"
+        style={{ color: "var(--color-text-faint)" }}
+      >
+        {label}
+      </span>
+      <div style={{ flex: 1, borderTop: "1px solid var(--color-border)" }} />
     </div>
   );
 }
