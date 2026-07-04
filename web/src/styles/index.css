@@ -339,12 +339,27 @@ input, textarea { caret-color: var(--color-accent); }
 
 .brut-md {
   font-family: var(--font-mono);
-  font-size: 13px;
-  line-height: 1.7;
+  /* Reading register: long-form replies get book-ish size/leading.
+     Data surfaces elsewhere stay dense — this is prose. */
+  font-size: 14px;
+  line-height: 1.75;
   color: var(--color-text);
   min-width: 0;
   max-width: 100%;
   overflow-wrap: anywhere;
+}
+/* Prose measure caps at ~68ch — mono past 70 chars is hard to track
+   back to the next line's start. Code blocks and tables are exempt:
+   they are data, they keep the full column and scroll if wider. */
+.brut-md p,
+.brut-md ul,
+.brut-md ol,
+.brut-md blockquote,
+.brut-md h1,
+.brut-md h2,
+.brut-md h3,
+.brut-md h4 {
+  max-width: 68ch;
 }
 .brut-md > * + * { margin-top: 14px; }
 .brut-md p,

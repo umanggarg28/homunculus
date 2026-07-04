@@ -41,8 +41,9 @@ export function LogEntryPage() {
             background: "var(--color-surface-1)",
             color: "var(--color-text)",
             fontFamily: "var(--font-mono)",
-            fontSize: 12.5,
-            lineHeight: 1.65,
+            fontSize: 14,
+            lineHeight: 1.75,
+            maxWidth: "76ch",
             padding: "16px 18px",
             margin: 0,
           }}

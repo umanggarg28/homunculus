@@ -31,6 +31,14 @@ export function PageHeader({ latin, title, subtitle, actions }: PageHeaderProps)
       <style>{`
         .page-header {
           min-height: 42px;
+          /* Stays pinned while the page scrolls — the title, state crumb
+             and page actions are orientation, not content. Opaque bg so
+             scrolled content passes beneath, under the hairline. */
+          position: sticky;
+          top: 0;
+          z-index: 30;
+          background: var(--color-bg);
+          padding-top: 10px;
         }
         @media (max-width: 820px) {
           .page-header {
