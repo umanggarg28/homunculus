@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import type { Task } from "@/lib/types";
 import { parseTaskWallClock } from "@/lib/api";
 import { formatCents } from "@/lib/format";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 interface Props { task: Task | null; onClose: () => void; }
 
@@ -134,7 +135,7 @@ export function TaskDetailDrawer({ task, onClose }: Props) {
                     </span>
                     <span style={{ color: "var(--color-text-faint)", fontVariantNumeric: "tabular-nums", display: "flex", gap: 8 }}>
                       {r.cost_cents != null && r.cost_cents > 0 && (
-                        <span title={costTitle(r)}>{formatCents(r.cost_cents)}</span>
+                        <Tooltip text={costTitle(r)}><span>{formatCents(r.cost_cents)}</span></Tooltip>
                       )}
                       {r.duration_s != null && (
                         <span>{r.duration_s}s</span>

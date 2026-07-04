@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { Task, MemoryEntry, Skill, LogFile } from "@/lib/types";
 import { parseTaskWallClock } from "@/lib/api";
+import { DataTip } from "@/components/ui/DataTip";
 
 /** Shared shell for every page's hero stat band. Slot-based: a giant
  *  glowing numeral on the left, label below it, a flexible "trail"
@@ -191,17 +192,18 @@ function RunStrip({ runs }: { runs: { ts: number; ok: boolean }[] }) {
       </div>
       <div style={{ display: "flex", gap: 3, height: 28, alignItems: "flex-end" }}>
         {runs.map((r, i) => (
-          <span
-            key={i}
-            title={new Date(r.ts).toLocaleString()}
-            style={{
-              width: 6,
-              height: r.ok ? "100%" : "55%",
-              background: r.ok ? "var(--color-accent)" : "var(--color-danger)",
-              boxShadow: r.ok ? "0 0 6px var(--color-accent-glow)" : "none",
-              opacity: 0.5 + (i / runs.length) * 0.5,
-            }}
-          />
+          <DataTip key={i} tip={new Date(r.ts).toLocaleString()}>
+            <span
+              style={{
+                display: "inline-block",
+                width: 6,
+                height: r.ok ? 28 : 15,
+                background: r.ok ? "var(--color-accent)" : "var(--color-danger)",
+                boxShadow: r.ok ? "0 0 6px var(--color-accent-glow)" : "none",
+                opacity: 0.5 + (i / runs.length) * 0.5,
+              }}
+            />
+          </DataTip>
         ))}
       </div>
     </div>
@@ -270,9 +272,8 @@ function MemoryHeatmap({ buckets }: { buckets: number[] }) {
         {buckets.map((v, i) => {
           const intensity = v > 0 ? 0.2 + 0.8 * (v / max) : 0;
           return (
+            <DataTip key={i} tip={`${dayLabels[i]}: ${v} write${v !== 1 ? "s" : ""}`}>
             <div
-              key={i}
-              title={`${dayLabels[i]}: ${v} write${v !== 1 ? "s" : ""}`}
               style={{
                 width: 18,
                 height: 18,
@@ -284,6 +285,7 @@ function MemoryHeatmap({ buckets }: { buckets: number[] }) {
                 flexShrink: 0,
               }}
             />
+            </DataTip>
           );
         })}
       </div>

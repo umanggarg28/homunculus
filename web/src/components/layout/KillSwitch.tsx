@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { broadcastPaused } from "@/hooks/useAgentPaused";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 /** Operator kill switch. Real control, theatrical chrome.
  *
@@ -55,6 +56,14 @@ export function KillSwitch() {
   const danger = "var(--color-danger)";
 
   return (
+    <Tooltip
+      placement="right"
+      text={
+        paused
+          ? "Heartbeat halted by operator. Click to resume autonomous operation."
+          : "Halt all autonomous operation (heartbeat ticks, scheduled tasks, reflection). Chat stays up. Two-step: arm, then confirm."
+      }
+    >
     <button
       onClick={onClick}
       disabled={busy}
@@ -68,13 +77,9 @@ export function KillSwitch() {
         animation: paused ? "hm-halt-pulse 1.6s ease-in-out infinite" : "none",
         cursor: busy ? "wait" : "pointer",
       }}
-      title={
-        paused
-          ? "Heartbeat halted by operator. Click to resume autonomous operation."
-          : "Halt all autonomous operation (heartbeat ticks, scheduled tasks, reflection). Chat stays up. Two-step: arm, then confirm."
-      }
     >
       {label}
     </button>
+    </Tooltip>
   );
 }

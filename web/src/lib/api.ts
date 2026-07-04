@@ -145,7 +145,7 @@ export const api = {
       headers: authHeaders(),
     }).then(async (r) => {
       if (!r.ok) throw new Error(`Memory consolidation failed: ${r.status}`);
-      return r.json() as Promise<{ ok: boolean; created: Proposal[] }>;
+      return r.json() as Promise<{ ok: boolean; created: Proposal[]; pending: number }>;
     }),
 
   chaptersList: () => jsonGet<Chapter[]>("/chapters"),

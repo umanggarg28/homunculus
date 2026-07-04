@@ -389,7 +389,7 @@ function CommandStatus({
   return (
     <div className="overview-command-status-grid">
       <div className="overview-pulse-panel">
-        <SignatureHeartbeat compact />
+        <SignatureHeartbeat />
       </div>
       <TodayLedger stats={todayStats} />
       <div className="overview-status-stack">

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { AgentReplayTool, AgentReplayTurn } from "@/lib/types";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 export function TraceRunCards() {
   const [runs, setRuns] = useState<AgentReplayTurn[]>([]);
@@ -67,8 +68,8 @@ function RunCard({ run, open, onToggle }: { run: AgentReplayTurn; open: boolean;
           <span className="trace-run-service">{run.service || "unknown"}</span>
           <span className="trace-run-state" style={{ color: tone }}>{failed ? "failure" : blocked ? "blocked" : "ok"}</span>
         </div>
-        <div className="trace-run-title" title={run.user}>{title}</div>
-        <div className="trace-run-meta" title={model}>{model}</div>
+        <Tooltip text={run.user} placement="top"><div className="trace-run-title">{title}</div></Tooltip>
+        <Tooltip text={model} placement="top"><div className="trace-run-meta">{model}</div></Tooltip>
         <div className="trace-run-chips">
           <Chip label="calls" value={String(run.models.length)} />
           <Chip label="tools" value={String(run.tools.length)} tone={failed ? "danger" : blocked ? "warn" : "default"} />
@@ -149,7 +150,7 @@ function ToolBlock({ tool, index }: { tool: AgentReplayTool; index: number }) {
         <span className="trace-tool-step" style={{ color: statusColor(tool.status) }}>
           {String(index).padStart(2, "0")} · {tool.status}
         </span>
-        <span title={tool.name}>{tool.name}</span>
+        <span>{tool.name}</span>
       </div>
       {(tool.args || tool.result) && (
         <div className="trace-tool-payloads">

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useEventStream } from "@/hooks/useEventStream";
 import type { FeedEvent } from "@/lib/types";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 /**
  * Activity grid — horizontal time axis, 4 lanes (USER / LLM / TOOL /
@@ -315,7 +316,8 @@ export function TracesTimeline({ focusTs }: TimelineProps = {}) {
             {LANES.map((l) => {
               const hidden = hiddenLanes.has(l.key);
               return (
-                <button key={l.key} onClick={() => toggleLane(l.key)} title={hidden ? `show ${l.key}` : `hide ${l.key}`} style={{
+                <Tooltip key={l.key} text={hidden ? `show ${l.key}` : `hide ${l.key}`} placement="top">
+                <button onClick={() => toggleLane(l.key)} style={{
                   background: "none", border: `1px solid ${hidden ? "var(--color-border)" : l.color}`,
                   padding: "2px 7px", cursor: "pointer", fontFamily: "var(--font-mono)",
                   fontSize: 9, letterSpacing: "0.14em",
@@ -324,6 +326,7 @@ export function TracesTimeline({ focusTs }: TimelineProps = {}) {
                 }}>
                   {l.key} <span style={{ color: "var(--color-text-faint)" }}>{counts[l.key].toString().padStart(2, "0")}</span>
                 </button>
+                </Tooltip>
               );
             })}
           </div>
@@ -416,7 +419,7 @@ export function TracesTimeline({ focusTs }: TimelineProps = {}) {
                     <button
                       key={i}
                       onClick={() => setSelected(isSel ? null : { lane: row.lane, bucket: i })}
-                      title={`${cell.length} event${cell.length > 1 ? "s" : ""}${hasError ? " · errors" : ""} · ${new Date(t0).toLocaleTimeString()}`}
+                      aria-label={`${cell.length} event${cell.length > 1 ? "s" : ""}${hasError ? " · errors" : ""} · ${new Date(t0).toLocaleTimeString()}`}
                       style={{
                         position: "absolute",
                         left: `${(i / BUCKETS) * 100}%`,
@@ -503,6 +506,7 @@ function TraceMetric({ label, value, tone = "muted" }: { label: string; value: s
   return (
     <div style={{ minWidth: 0 }}>
       <div className="brut-meta" style={{ color: "var(--color-text-faint)" }}>{label}</div>
+      <Tooltip text={value} placement="top">
       <div
         className="truncate"
         style={{
@@ -514,10 +518,10 @@ function TraceMetric({ label, value, tone = "muted" }: { label: string; value: s
           fontVariantNumeric: "tabular-nums",
           textTransform: label === "latest" ? "uppercase" : "none",
         }}
-        title={value}
       >
         {value}
       </div>
+      </Tooltip>
     </div>
   );
 }

@@ -92,12 +92,29 @@ const LogEntryPage = lazy(() => import("@/pages/LogEntryPage").then((m) => ({ de
 const GalleryPage = lazy(() => import("@/pages/GalleryPage").then((m) => ({ default: m.GalleryPage })));
 
 function RouteFallback() {
+  // Scanline skeleton in the page's own shape (header line + hero panel
+  // + readout row) — a chunk load should feel like the CRT warming up,
+  // not a bare string.
   return (
     <div
-      className="min-h-[calc(100vh-48px)] px-10 pt-10 brut-meta"
-      style={{ color: "var(--color-text-muted)", background: "var(--color-bg)" }}
+      className="min-h-[calc(100vh-48px)] px-10 pt-10"
+      style={{ background: "var(--color-bg)", fontFamily: "var(--font-mono)" }}
     >
-      loading route...
+      {/* Explicit signal first — the skeleton alone read as a blank page
+          on this dark surface. */}
+      <div
+        className="text-[10px] uppercase tracking-[0.32em] mb-4"
+        style={{ color: "var(--color-text-muted)" }}
+      >
+        ── loading <span className="hm-tick-sep">▮</span>
+      </div>
+      <div className="hm-skeleton" style={{ height: 18, width: 220, marginBottom: 28 }} />
+      <div className="hm-skeleton" style={{ height: 180, marginBottom: 20 }} />
+      <div className="flex gap-4">
+        <div className="hm-skeleton" style={{ height: 72, flex: 1 }} />
+        <div className="hm-skeleton" style={{ height: 72, flex: 1 }} />
+        <div className="hm-skeleton" style={{ height: 72, flex: 1 }} />
+      </div>
     </div>
   );
 }
