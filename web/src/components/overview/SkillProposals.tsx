@@ -62,11 +62,37 @@ export function SkillProposals() {
     }
   };
 
+  const approveAll = async (kind: string) => {
+    const ids = items.filter((p) => p.kind === kind).map((p) => p.id);
+    setBusy("__batch__");
+    setError(null);
+    try {
+      const res = await api.proposalApproveBatch(ids);
+      if (res.failed > 0) {
+        const firstErr = res.results.find((r) => !r.ok);
+        setError(`${res.approved} approved · ${res.failed} failed${firstErr?.error ? ` — ${firstErr.error}` : ""}`);
+      }
+      load();
+      window.dispatchEvent(new CustomEvent(PROPOSALS_CHANGED_EVENT));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   // Empty queue: stay quiet. This panel only appears when the agent has
   // actually proposed changing itself — which is the unsettling moment.
   if (items.length === 0) return null;
 
   const accent = "var(--color-warning)";
+  // Batch affordance only for a homogeneous stack of the same kind —
+  // e.g. the consolidation scan filing five memory deletions. Mixed
+  // queues keep per-item review; skill edits are never batched (each
+  // diff deserves its own read).
+  const kinds = [...new Set(items.map((p) => p.kind))];
+  const batchKind = kinds.length === 1 && items.length >= 2 && kinds[0] === "memory_delete"
+    ? kinds[0] : null;
 
   return (
     <div className="instrument-panel hm-panel-scan hm-panel-secondary mt-6">
@@ -75,8 +101,27 @@ export function SkillProposals() {
         style={{ color: "var(--color-text-muted)", borderBottom: "1px solid var(--color-border)" }}
       >
         <span>── proposed evolution · awaiting authorization</span>
-        <span style={{ color: accent, textShadow: `0 0 8px ${accent}`, letterSpacing: "0.14em" }}>
-          {items.length} PENDING
+        <span className="flex items-center gap-3">
+          {batchKind && (
+            <button
+              className="brut-label"
+              disabled={busy !== null}
+              onClick={() => approveAll(batchKind)}
+              style={{
+                border: "1px solid var(--color-accent)",
+                color: "var(--color-accent)",
+                background: "transparent",
+                padding: "3px 8px",
+                letterSpacing: "0.1em",
+                cursor: busy ? "wait" : "pointer",
+              }}
+            >
+              {busy === "__batch__" ? "approving…" : `approve all ${items.length}`}
+            </button>
+          )}
+          <span style={{ color: accent, textShadow: `0 0 8px ${accent}`, letterSpacing: "0.14em" }}>
+            {items.length} PENDING
+          </span>
         </span>
       </div>
 

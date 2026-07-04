@@ -193,6 +193,16 @@ export const api = {
       return r.json() as Promise<{ ok: boolean; skill: string; version: number }>;
     }),
 
+  proposalApproveBatch: (ids: string[]) =>
+    fetch(`${API_BASE}/proposals/approve-batch`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ ids }),
+    }).then(async (r) => {
+      if (!r.ok) throw new Error((await r.text()) || `Batch approve failed: ${r.status}`);
+      return r.json() as Promise<{ approved: number; failed: number; results: { id: string; ok: boolean; error?: string }[] }>;
+    }),
+
   proposalReject: (id: string, reason: string = "") =>
     fetch(`${API_BASE}/proposals/${encodeURIComponent(id)}/reject`, {
       method: "POST",

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCents } from "@/lib/format";
 import { ContainmentPanel } from "@/components/overview/ContainmentPanel";
+import { SetupChecklist } from "@/components/overview/SetupChecklist";
 import { SkillProposals } from "@/components/overview/SkillProposals";
 import { TransmissionsFeed } from "@/components/overview/TransmissionsFeed";
 import { useEventStream } from "@/hooks/useEventStream";
@@ -360,6 +361,7 @@ export function OverviewPage() {
         <RunInspector events={events} />
       </div>
       <div className="hm-stagger" style={{ "--i": 2 } as React.CSSProperties}>
+        <SetupChecklist />
         <SkillProposals />
       </div>
       <div className="hm-stagger" style={{ "--i": 3 } as React.CSSProperties}>

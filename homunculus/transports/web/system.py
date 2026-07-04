@@ -120,3 +120,43 @@ def log_entry_raw(rel: str) -> PlainTextResponse:
     if safe is None or not safe.exists() or not safe.is_file():
         raise HTTPException(404, "Log not found")
     return PlainTextResponse(safe.read_text(encoding="utf-8"))
+
+
+@router.get("/api/setup/status", dependencies=[Depends(wa.require_web_auth)])
+def setup_status() -> JSONResponse:
+    """First-run readiness: which capabilities are actually wired up.
+
+    Drives the Overview setup checklist — shown only while something is
+    missing, gone forever once the install is complete. Every check reads
+    the real source of truth (env, files, stores), never a cached flag.
+    """
+    import os as _os
+
+    from homunculus.user_location import get_user_location
+
+    telegram = bool(_os.environ.get("TELEGRAM_BOT_TOKEN"))
+    try:
+        location = get_user_location() is not None
+    except Exception:
+        location = False
+    try:
+        from homunculus.tools.google_auth import token_path
+        google = token_path().exists()
+    except Exception:
+        google = False
+    try:
+        tasks = any(t.get("status") == "active" for t in wa._task_store().all())
+    except Exception:
+        tasks = False
+    memory = wa.MEMORY_DIR.exists() and any(
+        f.name not in ("MEMORY.md", "README.md") and not f.name.startswith("_")
+        for f in wa.MEMORY_DIR.glob("*.md")
+    )
+    return JSONResponse({
+        "telegram_configured": telegram,
+        "location_set": location,
+        "google_connected": google,
+        "tasks_exist": tasks,
+        "memory_seeded": memory,
+        "complete": all([telegram, location, google, tasks, memory]),
+    })
