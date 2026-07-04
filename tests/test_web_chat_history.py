@@ -117,5 +117,7 @@ def test_visible_chat_history_hides_contentful_tool_planning_messages():
             "role": "assistant",
             "content": "Saved the table to notes/frameworks.md.",
             "source": "web", "ts": None,
+            # The reply carries the turn's tool receipt (chat evidence line).
+            "tools": ["web_search", "write_file"],
         },
     ]

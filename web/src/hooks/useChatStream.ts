@@ -15,6 +15,10 @@ export interface ChatMessage {
    *  fabricate a timestamp from Date.now() — that lies about when
    *  the message actually happened. */
   ts?: string;
+  /** Tool names the agent called while producing this reply, in call
+   *  order (duplicates preserved). Persisted-history only — the live
+   *  turn renders its tool timeline separately. */
+  tools?: string[];
 }
 
 interface UseChatStream {

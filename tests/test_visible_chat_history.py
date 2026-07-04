@@ -106,3 +106,58 @@ def test_tool_call_planning_messages_and_notifications_skipped():
 def test_internal_raw_idx_not_exposed():
     out = _visible_chat_history([_user("q"), _assistant("a")])
     assert all("_raw_idx" not in m for m in out)
+
+
+def _tool_call(name):
+    return {"id": "call_x", "type": "function", "function": {"name": name, "arguments": "{}"}}
+
+
+def test_tool_names_attach_to_the_final_reply():
+    """The reply entry carries a `tools` receipt of what the agent
+    actually called this turn — the chat UI's evidence line."""
+    out = _visible_chat_history([
+        _user("remind me to apply"),
+        _assistant("", tool_calls=[_tool_call("create_task")]),
+        {"role": "tool", "content": "Created task", "tool_call_id": "call_x"},
+        _assistant("planning…", tool_calls=[_tool_call("update_task"), _tool_call("notify")]),
+        {"role": "tool", "content": "ok", "tool_call_id": "call_x"},
+        _assistant("Task created — I'll remind you at noon."),
+    ])
+    assert [m["role"] for m in out] == ["user", "assistant"]
+    assert out[1]["tools"] == ["create_task", "update_task", "notify"]
+
+
+def test_tools_do_not_leak_across_turns():
+    out = _visible_chat_history([
+        _user("first"),
+        _assistant("", tool_calls=[_tool_call("web_search")]),
+        {"role": "tool", "content": "results", "tool_call_id": "call_x"},
+        _assistant("Found it."),
+        _user("second — no tools this time"),
+        _assistant("Plain answer."),
+    ])
+    assert out[1]["tools"] == ["web_search"]
+    assert "tools" not in out[3]
+
+
+def test_heartbeat_tool_calls_never_count_as_chat_receipts():
+    out = _visible_chat_history([
+        _assistant("", source="heartbeat", tool_calls=[_tool_call("notify")]),
+        _user("hello"),
+        _assistant("Hi."),
+    ])
+    assert "tools" not in out[1]
+
+
+def test_guard_rewrite_pair_keeps_the_receipt():
+    """The adjacent rewrite record replaces the raw reply — the tools
+    collected for the turn must survive the swap."""
+    out = _visible_chat_history([
+        _user("q"),
+        _assistant("", tool_calls=[_tool_call("weather")]),
+        {"role": "tool", "content": "SUNNY", "tool_call_id": "call_x"},
+        _assistant("raw reply"),
+        _assistant("guard-rewritten reply"),
+    ])
+    assert [m["content"] for m in out] == ["q", "guard-rewritten reply"]
+    assert out[1]["tools"] == ["weather"]

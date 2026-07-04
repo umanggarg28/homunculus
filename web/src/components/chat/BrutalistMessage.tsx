@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { motion } from "framer-motion";
+import { Link } from "react-router-dom";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { BrutalistToolBlock } from "./BrutalistToolBlock";
 import { ThinkingIndicator } from "./ThinkingIndicator";
@@ -184,10 +185,52 @@ function AgentReply({ message, toolCalls, inFlight, sending }: AgentReplyProps) 
           <div style={{ minWidth: 0 }}>
             <MarkdownMessage text={message.content} />
             {isWorking && <Cursor />}
+            {/* Tool receipt — persisted turns only; the live turn already
+                shows its full tool blocks above. Evidence of what the
+                agent DID this turn, linking to the audit surface. */}
+            {!inFlight && toolCalls.length === 0 && (message.tools?.length ?? 0) > 0 && (
+              <ToolReceipt tools={message.tools!} />
+            )}
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+function ToolReceipt({ tools }: { tools: string[] }) {
+  // Collapse repeats into name ×N, first-appearance order.
+  const counts = new Map<string, number>();
+  for (const t of tools) counts.set(t, (counts.get(t) ?? 0) + 1);
+
+  return (
+    <Tooltip text="Tools the agent called for this reply — click to open the run traces." placement="top">
+    <Link
+      to="/traces"
+      className="mt-2 inline-flex items-center gap-2 flex-wrap"
+      style={{ textDecoration: "none" }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = "0.75"; }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = "1"; }}
+    >
+      <span
+        className="text-[9px] uppercase tracking-[0.18em] select-none"
+        style={{ color: "var(--color-text-faint)" }}
+      >
+        ⚙
+      </span>
+      {[...counts.entries()].map(([name, n], i) => (
+        <span
+          key={name}
+          className="text-[9px] uppercase tracking-[0.14em]"
+          style={{ color: "var(--color-text-muted)" }}
+        >
+          {i > 0 && <span style={{ color: "var(--color-text-faint)", marginRight: 8 }}>·</span>}
+          {name}
+          {n > 1 ? ` ×${n}` : ""}
+        </span>
+      ))}
+    </Link>
+    </Tooltip>
   );
 }
 
