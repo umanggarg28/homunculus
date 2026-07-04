@@ -115,6 +115,66 @@ export function BrutalistMessage({ message, toolCalls, sending }: Props) {
   );
 }
 
+/** An agent-initiated delivery (morning brief, reminder, quiz…) from
+ *  the notification ledger, interleaved into the chat timeline. Rendered
+ *  as its own species — the point is that nobody asked for this turn. */
+export function TransmissionRow({ message }: { message: ChatMessage }) {
+  const timeStr = fmtTime(message.ts);
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.18, ease: "easeOut" }}
+      className="my-5"
+      style={{
+        display: "grid",
+        gridTemplateColumns: "62px minmax(0, 1fr)",
+        columnGap: "20px",
+        alignItems: "start",
+      }}
+    >
+      <div
+        className="text-[10px] leading-[1.5] pt-[2px] select-none"
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontVariantNumeric: "tabular-nums",
+          textAlign: "right",
+          paddingRight: "12px",
+          borderRight: "1px solid var(--color-accent-dim, var(--color-border-strong))",
+          color: "var(--color-text-faint)",
+        }}
+      >
+        <div className="uppercase mb-1.5" style={{ color: "var(--color-accent)", letterSpacing: "0.18em" }}>
+          tx
+        </div>
+        <div className="uppercase tracking-[0.08em]">{timeStr}</div>
+      </div>
+
+      <div
+        style={{
+          minWidth: 0,
+          borderLeft: "2px solid var(--color-accent)",
+          background: "color-mix(in srgb, var(--color-accent) 4%, transparent)",
+          padding: "8px 14px 10px",
+        }}
+      >
+        <Tooltip
+          text="The agent sent this on its own — a scheduled or proactive delivery from the notification ledger, not a reply to you."
+          placement="top"
+        >
+          <div
+            className="text-[9px] uppercase tracking-[0.22em] mb-2 inline-block"
+            style={{ color: "var(--color-accent)" }}
+          >
+            ◇ transmission · unprompted
+          </div>
+        </Tooltip>
+        <MarkdownMessage text={message.content} />
+      </div>
+    </motion.div>
+  );
+}
+
 function UserPrompt({ content }: { content: string }) {
   return (
     <div

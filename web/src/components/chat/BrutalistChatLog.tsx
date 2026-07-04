@@ -2,7 +2,7 @@ import { Fragment, useMemo } from "react";
 import { motion } from "framer-motion";
 import type { ChatMessage } from "@/hooks/useChatStream";
 import type { ToolCallEntry } from "./ToolCallCard";
-import { BrutalistMessage } from "./BrutalistMessage";
+import { BrutalistMessage, TransmissionRow } from "./BrutalistMessage";
 import { BrutalistLanding } from "./BrutalistLanding";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 
@@ -69,7 +69,11 @@ export function BrutalistChatLog({ messages, toolTimeline, sending, bootDone, hi
         return (
           <Fragment key={m.id}>
             {needsDivider && m.ts && <DayDivider ts={m.ts} />}
-            <BrutalistMessage message={m} toolCalls={tools} sending={sending} turnNumber={turn} />
+            {m.kind === "transmission" ? (
+              <TransmissionRow message={m} />
+            ) : (
+              <BrutalistMessage message={m} toolCalls={tools} sending={sending} turnNumber={turn} />
+            )}
           </Fragment>
         );
       })}

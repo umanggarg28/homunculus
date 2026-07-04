@@ -195,11 +195,11 @@ export function BrutalistChatInput({ sending, onSend, onCancel }: Props) {
               setPaletteSel(0);
               const el = e.target as HTMLTextAreaElement;
               el.style.height = "auto";
-              el.style.height = Math.max(44, Math.min(el.scrollHeight, 220)) + "px";
+              el.style.height = Math.max(24, Math.min(el.scrollHeight, 220)) + "px";
             }}
             onKeyDown={onKeyDown}
             placeholder={sending ? "agent working — press stop to interrupt" : ""}
-            rows={2}
+            rows={1}
             disabled={sending}
             className="brut-input flex-1 block w-full bg-transparent resize-none disabled:cursor-not-allowed"
             style={{
@@ -210,7 +210,7 @@ export function BrutalistChatInput({ sending, onSend, onCancel }: Props) {
               caretColor: "var(--color-accent)",
               border: "none",
               outline: "none",
-              minHeight: "44px",
+              minHeight: "24px",
               boxShadow: "none",
             }}
           />
@@ -226,8 +226,15 @@ export function BrutalistChatInput({ sending, onSend, onCancel }: Props) {
             <button
               onClick={submit}
               disabled={!canSend}
-              className="text-[11px] uppercase tracking-[0.14em] transition-colors pt-1 disabled:opacity-30"
-              style={{ color: canSend ? "var(--color-accent)" : "var(--color-text-faint)", background: "transparent", border: "none" }}
+              className="text-[11px] uppercase tracking-[0.14em] transition-all pt-1 disabled:opacity-30"
+              style={{
+                color: canSend ? "var(--color-accent)" : "var(--color-text-faint)",
+                // Armed state must be unmistakable — the faint resting
+                // form read as permanently disabled.
+                textShadow: canSend ? "0 0 8px var(--color-accent-glow)" : "none",
+                background: "transparent",
+                border: "none",
+              }}
             >
               [send ↵]
             </button>

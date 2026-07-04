@@ -136,7 +136,7 @@ export function ChatPage() {
       {/* Reduced max-width from 860 → 720 for better line-length
           (CSS body comfortably reads at 60–80 chars; mono ~ 80 chars
           at 720px). Helps the editorial feel without changing tone. */}
-      <div className="max-w-[720px] mx-auto" style={{ paddingBottom: 120 }}>
+      <div className="max-w-[720px] mx-auto" style={{ paddingBottom: 96 }}>
         <BrutalistChatLog
           messages={messages}
           toolTimeline={toolTimeline}

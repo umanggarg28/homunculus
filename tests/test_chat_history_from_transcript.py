@@ -115,3 +115,64 @@ def test_full_round_trip_transcript_to_visible_chat(tmp_path: Path) -> None:
     assert [m["content"] for m in out] == ["ping", "pong"]
     assert out[0]["_source_tx_id"] == "000001"
     assert out[1]["_source_tx_id"] == "000004"
+
+
+def test_merge_transmissions_interleaves_by_time() -> None:
+    """Ledger deliveries land between the chat turns they actually
+    happened between — chat becomes the full two-way conversation."""
+    from homunculus.transports.web.chat import _merge_transmissions
+
+    visible = [
+        {"role": "user", "content": "morning", "ts": "2026-07-04T08:00:00+00:00"},
+        {"role": "assistant", "content": "hi", "ts": "2026-07-04T08:00:05+00:00"},
+        {"role": "user", "content": "later", "ts": "2026-07-04T12:00:00+00:00"},
+        {"role": "assistant", "content": "yes", "ts": "2026-07-04T12:00:05+00:00"},
+    ]
+    # 09:30 delivery → between the two exchanges; 13:00 → after the last.
+    from datetime import datetime, timezone
+
+    def _epoch(iso: str) -> float:
+        return datetime.fromisoformat(iso).replace(tzinfo=timezone.utc).timestamp()
+
+    notes = [
+        {"ts": _epoch("2026-07-04T09:30:00"), "text": "Morning brief …"},
+        {"ts": _epoch("2026-07-04T13:00:00"), "text": "LeetCode daily …"},
+    ]
+    out = _merge_transmissions(visible, notes)
+    kinds = [(m.get("kind"), m["content"]) for m in out]
+    assert kinds == [
+        (None, "morning"),
+        (None, "hi"),
+        ("transmission", "Morning brief …"),
+        (None, "later"),
+        (None, "yes"),
+        ("transmission", "LeetCode daily …"),
+    ]
+    tx = out[2]
+    assert tx["role"] == "assistant"
+    assert tx["ts"].startswith("2026-07-04T09:30")
+
+
+def test_merge_transmissions_handles_ts_less_turns() -> None:
+    """Turns without a parseable ts inherit their predecessor's position
+    instead of breaking the merge."""
+    from homunculus.transports.web.chat import _merge_transmissions
+
+    visible = [
+        {"role": "user", "content": "q", "ts": "2026-07-04T08:00:00+00:00"},
+        {"role": "assistant", "content": "a", "ts": None},
+    ]
+    from datetime import datetime, timezone
+    notes = [{
+        "ts": datetime.fromisoformat("2026-07-04T14:00:00").replace(tzinfo=timezone.utc).timestamp(),
+        "text": "reminder",
+    }]
+    out = _merge_transmissions(visible, notes)
+    assert [m["content"] for m in out] == ["q", "a", "reminder"]
+
+
+def test_merge_transmissions_empty_ledger_is_identity() -> None:
+    from homunculus.transports.web.chat import _merge_transmissions
+
+    visible = [{"role": "user", "content": "q", "ts": None}]
+    assert _merge_transmissions(visible, []) == visible
