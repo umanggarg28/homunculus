@@ -34,7 +34,7 @@
 /* Phosphor flicker — whole-screen luminance flutter, very subtle.
    Uses a translucent green wash whose opacity micro-animates. */
 .atmo-flicker {
-  background: rgba(124, 254, 0, 0.012);
+  background: color-mix(in srgb, var(--color-accent) 1.2%, transparent);
   mix-blend-mode: screen;
   animation: atmo-flicker 5.5s steps(1) infinite;
 }
@@ -55,7 +55,7 @@
 /* Corner brightness falloff already covered by vignette; add a faint
    top glow so the "tube" feels lit from the scan band. */
 .atmo-toplight {
-  background: linear-gradient(180deg, rgba(124, 254, 0, 0.025), transparent 22%);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 2.5%, transparent), transparent 22%);
   mix-blend-mode: screen;
 }
 
@@ -63,7 +63,7 @@
 /* Apply to accent text you want to feel emissive (countdowns, the
    live readouts, the wordmark in hero contexts). */
 .atmo-glow-text {
-  text-shadow: 0 0 12px var(--color-accent-glow), 0 0 2px rgba(124, 254, 0, 0.6);
+  text-shadow: 0 0 12px var(--color-accent-glow), 0 0 2px color-mix(in srgb, var(--color-accent) 60%, transparent);
 }
 .atmo-glow-text-soft {
   text-shadow: 0 0 18px var(--color-accent-glow);
@@ -121,7 +121,7 @@
 .hm-interactive-row:focus-within,
 .hm-pressable:hover,
 .hm-pressable:focus-within {
-  background: rgba(124, 254, 0, 0.025);
+  background: color-mix(in srgb, var(--color-accent) 2.5%, transparent);
 }
 .hm-interactive-row:hover::before,
 .hm-interactive-row:focus-within::before,
@@ -147,7 +147,7 @@
   background: linear-gradient(
     90deg,
     transparent 0%,
-    rgba(124, 254, 0, 0.05) 50%,
+    color-mix(in srgb, var(--color-accent) 5%, transparent) 50%,
     transparent 100%
   );
   animation: hm-skeleton-sweep 1.6s ease-in-out infinite;
@@ -395,7 +395,7 @@
   background: linear-gradient(
     to bottom,
     transparent,
-    rgba(124, 254, 0, 0.045),
+    color-mix(in srgb, var(--color-accent) 4.5%, transparent),
     transparent
   );
   animation: hm-glowline-sweep 9s linear infinite;

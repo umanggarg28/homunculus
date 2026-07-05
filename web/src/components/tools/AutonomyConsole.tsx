@@ -74,7 +74,7 @@ export function AutonomyConsole({ controls, skills, replay, budgetStats, onContr
         }
         .autonomy-card {
           border: 1px solid var(--color-border);
-          background: linear-gradient(180deg, rgba(119,255,61,0.018), transparent), var(--color-surface-1);
+          background: linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 1.8%, transparent), transparent), var(--color-surface-1);
           min-width: 0;
           overflow: hidden;
         }
@@ -128,7 +128,7 @@ export function AutonomyConsole({ controls, skills, replay, budgetStats, onContr
         .autonomy-toggle[data-active="true"] {
           border-color: var(--color-border-bright);
           color: var(--color-accent);
-          background: rgba(124,254,0,0.08);
+          background: color-mix(in srgb, var(--color-accent) 8%, transparent);
         }
         .autonomy-list-input {
           width: 100%;
@@ -149,7 +149,7 @@ export function AutonomyConsole({ controls, skills, replay, budgetStats, onContr
         .autonomy-replay-row:first-of-type {
           border-top: none;
         }
-        .autonomy-replay-row[data-open="true"] { background: rgba(124,254,0,0.035); }
+        .autonomy-replay-row[data-open="true"] { background: color-mix(in srgb, var(--color-accent) 3.5%, transparent); }
         .autonomy-replay-summary {
           width: 100%;
           display: flex;

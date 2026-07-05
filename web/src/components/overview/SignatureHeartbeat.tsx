@@ -118,7 +118,7 @@ export function SignatureHeartbeat() {
         className="absolute inset-0 pointer-events-none"
         style={{
           background:
-            "radial-gradient(ellipse at 100% 50%, rgba(124,254,0,0.10), transparent 60%)",
+            "radial-gradient(ellipse at 100% 50%, color-mix(in srgb, var(--color-accent) 10%, transparent), transparent 60%)",
           zIndex: 0,
         }}
       />

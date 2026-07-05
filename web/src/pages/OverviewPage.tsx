@@ -107,14 +107,14 @@ export function OverviewPage() {
           margin-bottom: 40px;
           overflow: hidden;
           background:
-            radial-gradient(circle at 13% 18%, rgba(124, 254, 0, 0.075), transparent 26%),
-            linear-gradient(180deg, rgba(119, 255, 61, 0.035), rgba(108, 231, 255, 0.012)),
+            radial-gradient(circle at 13% 18%, color-mix(in srgb, var(--color-accent) 7.5%, transparent), transparent 26%),
+            linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 3.5%, transparent), rgba(108, 231, 255, 0.012)),
             var(--color-surface-1);
           box-shadow:
-            inset 0 1px 0 rgba(215, 245, 223, 0.045),
-            inset 0 -1px 0 rgba(124, 254, 0, 0.025),
+            inset 0 1px 0 color-mix(in srgb, var(--color-text) 4.5%, transparent),
+            inset 0 -1px 0 color-mix(in srgb, var(--color-accent) 2.5%, transparent),
             0 18px 64px rgba(0, 0, 0, 0.32),
-            0 0 28px rgba(124, 254, 0, 0.035);
+            0 0 28px color-mix(in srgb, var(--color-accent) 3.5%, transparent);
         }
         .overview-command-main {
           border-right: 1px solid var(--color-border);
@@ -127,7 +127,7 @@ export function OverviewPage() {
           border-top: 1px solid var(--color-border);
           padding: 18px;
           background:
-            linear-gradient(90deg, rgba(124,254,0,0.025), transparent 42%),
+            linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 2.5%, transparent), transparent 42%),
             var(--color-surface-1);
         }
         .overview-command-status-grid {
@@ -141,7 +141,7 @@ export function OverviewPage() {
           min-width: 0;
           border: 1px solid var(--color-border);
           padding: 14px 16px;
-          background: linear-gradient(90deg, rgba(124,254,0,0.025), transparent 55%);
+          background: linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 2.5%, transparent), transparent 55%);
         }
         .overview-today-ledger {
           display: grid;
@@ -248,7 +248,7 @@ export function OverviewPage() {
         }
         .overview-ops-card {
           border: 1px solid var(--color-border);
-          background: linear-gradient(180deg, rgba(119,255,61,0.018), transparent), var(--color-surface-1);
+          background: linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 1.8%, transparent), transparent), var(--color-surface-1);
           min-width: 0;
           overflow: hidden;
           transition: border-color 180ms ease, box-shadow 220ms ease;
@@ -257,9 +257,9 @@ export function OverviewPage() {
         .overview-ops-card:focus-within {
           border-color: rgba(67, 133, 105, 0.76);
           box-shadow:
-            inset 0 1px 0 rgba(215,245,223,0.03),
+            inset 0 1px 0 color-mix(in srgb, var(--color-text) 3%, transparent),
             0 14px 46px rgba(0,0,0,0.24),
-            0 0 20px rgba(124,254,0,0.028);
+            0 0 20px color-mix(in srgb, var(--color-accent) 2.8%, transparent);
         }
         .overview-ops-head {
           display: flex;
@@ -641,7 +641,7 @@ function AgentPanel({
     <div
       style={{
         border: "1px solid var(--color-border)",
-        background: "radial-gradient(ellipse at 50% 30%, rgba(124,254,0,0.03), transparent 70%)",
+        background: "radial-gradient(ellipse at 50% 30%, color-mix(in srgb, var(--color-accent) 3%, transparent), transparent 70%)",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",

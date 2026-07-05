@@ -278,10 +278,10 @@ function MemoryHeatmap({ buckets }: { buckets: number[] }) {
                 width: 18,
                 height: 18,
                 background: v > 0
-                  ? `rgba(124,254,0,${intensity})`
+                  ? `color-mix(in srgb, var(--color-accent) ${Math.round(intensity * 100)}%, transparent)`
                   : "var(--color-border)",
-                border: `1px solid ${v > 0 ? "rgba(124,254,0,0.3)" : "var(--color-border)"}`,
-                boxShadow: v > 0 ? `0 0 6px rgba(124,254,0,${intensity * 0.5})` : "none",
+                border: `1px solid ${v > 0 ? "color-mix(in srgb, var(--color-accent) 30%, transparent)" : "var(--color-border)"}`,
+                boxShadow: v > 0 ? `0 0 6px color-mix(in srgb, var(--color-accent) ${Math.round(intensity * 50)}%, transparent)` : "none",
                 flexShrink: 0,
               }}
             />

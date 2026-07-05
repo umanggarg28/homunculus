@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /** HOMUNCULUS — PIXEL ROBOT (LED-cell build).
  *
@@ -42,6 +42,23 @@ const PALETTES: Record<RobotPalette, { base: string; hot: string }> = {
   white:    { base: "230,230,230", hot: "255,255,255" },
 };
 const FAULT = { base: "255,176,0", hot: "255,214,128" }; // amber fault
+
+/** Resolve the LIVE accent tokens so the pixel robot matches the active
+ *  phosphor theme (P3 amber / P4 white swap --color-accent under it).
+ *  Falls back to the static phosphor palette if parsing fails. */
+function livePhosphorPalette(): { base: string; hot: string } {
+  const css = getComputedStyle(document.documentElement);
+  const base = hexToTriple(css.getPropertyValue("--color-accent").trim());
+  const hot = hexToTriple(css.getPropertyValue("--color-accent-hover").trim());
+  return base && hot ? { base, hot } : PALETTES.phosphor;
+}
+
+function hexToTriple(hex: string): string | null {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
+}
 
 // ── shared cursor tracker (module-level, attached once) ──────────────
 const cursor = { x: 0, y: 0, last: 0 };
@@ -94,12 +111,22 @@ export function HomunculusRobot({
 
   useEffect(() => { prevRef.current = stateRef.current; stateRef.current = state; }, [state]);
 
+  // Theme swaps rewrite --color-accent; bump to re-run the draw effect
+  // so the canvas picks up the new phosphor.
+  const [themeTick, setThemeTick] = useState(0);
+  useEffect(() => {
+    const mo = new MutationObserver(() => setThemeTick((t) => t + 1));
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-phosphor"] });
+    return () => mo.disconnect();
+  }, []);
+
   useEffect(() => {
     attachCursor();
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    const livePal = livePhosphorPalette();
 
     let raf = 0;
     let t = 0, bootT = 0, transition = 1;
@@ -248,7 +275,7 @@ export function HomunculusRobot({
       transition = Math.min(1, transition + 0.05);
 
       const isErr = cur === "error";
-      const pal = isErr ? FAULT : PALETTES[palette];
+      const pal = isErr ? FAULT : palette === "phosphor" ? livePal : PALETTES[palette];
       const base = pal.base, hot = pal.hot;
 
       ctx.fillStyle = `rgba(5,5,5,${detail === "high" ? 0.55 : 0.85})`;
@@ -314,7 +341,7 @@ export function HomunculusRobot({
     };
     raf = requestAnimationFrame(render);
     return () => cancelAnimationFrame(raf);
-  }, [detail, palette]);
+  }, [detail, palette, themeTick]);
 
   return <canvas ref={canvasRef} className={className} style={style} />;
 }

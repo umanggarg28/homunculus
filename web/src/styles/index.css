@@ -932,3 +932,58 @@ input, textarea { caret-color: var(--color-accent); }
   from { opacity: 0; transform: translateY(2px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+
+/* ===========================================================
+ * Phosphor variants — the three real CRT chemistries. P1 green is
+ * the @theme default above; P3 amber and P4 white-blue override ONLY
+ * the phosphor-family tokens (surfaces, borders, text tiers, accent).
+ * Semantic colors (danger/warning/info) are deliberately untouched —
+ * meaning must not change with the glass. Contrast validated per
+ * theme against its own field (text ≥17:1, muted ≈5:1, faint ≥3.6:1).
+ * Selected via data-phosphor on <html>, persisted in localStorage,
+ * applied pre-paint by an inline script in index.html.
+ * =========================================================== */
+:root[data-phosphor="amber"] {
+  --color-screen:    #030202;
+  --color-bg:        #0A0806;
+  --color-surface-1: #0F0C08;
+  --color-surface-2: #15110B;
+  --color-surface-3: #1C1710;
+  --color-surface-4: #251E14;
+  --color-border:        #33291A;
+  --color-border-strong: #55452B;
+  --color-border-bright: #7E6A44;
+  --color-text:       #F7EDD7;
+  --color-text-dim:   #CDB593;
+  --color-text-muted: #8E7B58;
+  --color-text-faint: #7E6B4B;
+  --color-accent:        #FFB000;
+  --color-accent-ink:    #FFC65C;
+  --color-accent-hover:  #FFC64D;
+  --color-accent-dim:    rgba(255, 176, 0, 0.12);
+  --color-accent-faint:  rgba(255, 176, 0, 0.05);
+  --color-accent-glow:   rgba(255, 176, 0, 0.5);
+}
+
+:root[data-phosphor="white"] {
+  --color-screen:    #020304;
+  --color-bg:        #070A0C;
+  --color-surface-1: #0B1013;
+  --color-surface-2: #101619;
+  --color-surface-3: #151D21;
+  --color-surface-4: #1C262B;
+  --color-border:        #1F2E38;
+  --color-border-strong: #3A5260;
+  --color-border-bright: #5B7A8C;
+  --color-text:       #ECF2F7;
+  --color-text-dim:   #B4C5D2;
+  --color-text-muted: #7B8C99;
+  --color-text-faint: #64747F;
+  --color-accent:        #A8D8FF;
+  --color-accent-ink:    #C4E4FF;
+  --color-accent-hover:  #CFE8FF;
+  --color-accent-dim:    rgba(168, 216, 255, 0.12);
+  --color-accent-faint:  rgba(168, 216, 255, 0.05);
+  --color-accent-glow:   rgba(168, 216, 255, 0.45);
+}
