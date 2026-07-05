@@ -17,6 +17,7 @@ import type { FeedEvent, MemoryEntry, Skill } from "@/lib/types";
 
 interface TodayStats {
   events: number;
+  llm_calls?: number;
   unique_tools: number;
   tasks_fired: number;
   memory_writes: number;
@@ -398,11 +399,13 @@ function CommandStatus({
         {readyItems.map((item) => (
           <StatusCell key={item.label} {...item} />
         ))}
+        {/* Model calls — the one runtime number the ledger doesn't already
+            show (the old cell repeated EVENTS/TOOLS/FIRES verbatim). */}
         <StatusCell
-          label="runtime"
-          value={todayStats ? `${todayStats.events}` : "--"}
-          hint={todayStats ? `${todayStats.unique_tools} tools · ${todayStats.tasks_fired} fires` : "loading"}
-          tone={todayStats && todayStats.events > 0 ? "ok" : "idle"}
+          label="model calls"
+          value={todayStats ? `${todayStats.llm_calls ?? 0}` : "--"}
+          hint={todayStats ? `${fmtShort((todayStats.input_tokens ?? 0) + (todayStats.output_tokens ?? 0))} tokens today` : "loading"}
+          tone={todayStats && (todayStats.llm_calls ?? 0) > 0 ? "ok" : "idle"}
         />
         <StatusCell
           label="memory"
@@ -437,6 +440,7 @@ function deriveTodayStats(events: FeedEvent[]): TodayStats {
   const tools = new Set(today.filter((e) => e.event === "tool_call" && e.name).map((e) => e.name as string));
   return {
     events: today.length,
+    llm_calls: today.filter((e) => e.event === "llm_call").length,
     unique_tools: tools.size,
     tasks_fired: today.filter((e) => ["task_fired", "task_started", "scheduled_task"].includes(e.event)).length,
     memory_writes: today.filter((e) => e.event === "memory_write").length,
@@ -575,7 +579,11 @@ function buildReadiness({
   // memories param removed — capability cell now reflects tool usage only.
 }) {
   const usedTools = skills?.filter((s) => s.call_count > 0).length ?? null;
-  const failedTools = skills?.filter((s) => s.failure_count > 0).length ?? 0;
+  // Attention means CURRENT trouble. failure_count accumulates over the
+  // whole log, so "N tools failed" read as live when it was history —
+  // a failing STREAK (consecutive_failures, reset by any success) is
+  // the honest signal.
+  const failedTools = skills?.filter((s) => (s.consecutive_failures ?? 0) > 0).length ?? 0;
   const activeRecently = lastAgeSec !== null && lastAgeSec < 300;
   return [
     {
@@ -587,7 +595,7 @@ function buildReadiness({
     {
       label: "attention",
       value: failures > 0 || failedTools > 0 ? "CHECK" : "CLEAR",
-      hint: failures > 0 ? `${failures} failures today` : failedTools > 0 ? `${failedTools} tools failed` : "no failures",
+      hint: failures > 0 ? `${failures} failures today` : failedTools > 0 ? `${failedTools} tool${failedTools > 1 ? "s" : ""} failing` : "no failures",
       tone: failures > 0 || failedTools > 0 ? "warn" : "ok",
     },
     {

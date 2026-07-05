@@ -45,6 +45,8 @@ def stats_today() -> JSONResponse:
     return JSONResponse({
         "since": s["since"],
         "events": s["events"],
+        "llm_calls": s["llm_calls"],
+        "llm_calls": s["llm_calls"],
         "unique_tools": len(s["unique_tools"]),
         "tasks_fired": s["tasks_fired"],
         "memory_writes": s["memory_writes"],
