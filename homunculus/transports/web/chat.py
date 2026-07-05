@@ -18,6 +18,7 @@ from homunculus.llm import ProviderExhaustedError
 from homunculus.memory import Memory
 from homunculus.transcript import Transcript
 from homunculus.transports import web_api as wa
+from datetime import UTC
 
 router = APIRouter()
 
@@ -50,6 +51,59 @@ def notifications_recent(limit: int = 8) -> JSONResponse:
     return JSONResponse(mem.notifications.recent(max(1, min(50, limit))))
 
 
+def _transmission_entry(note: dict) -> dict:
+    """A delivery-ledger record as a chat-history entry.
+
+    Transmissions are what the agent said UNPROMPTED (morning briefs,
+    reminders, quizzes, approval requests) — delivered via telegram and
+    recorded in the append-only ledger. Surfacing them in chat makes the
+    log the full two-way conversation instead of only the half the user
+    initiated.
+    """
+    from datetime import datetime
+
+    epoch = float(note["ts"])
+    return {
+        "id": f"tx-note-{epoch}",
+        "role": "assistant",
+        "kind": "transmission",
+        "content": note["text"],
+        "ts": datetime.fromtimestamp(epoch, tz=UTC).isoformat(),
+    }
+
+
+def _merge_transmissions(visible: list[dict], notes: list[dict]) -> list[dict]:
+    """Interleave ledger deliveries into the visible turns by time.
+
+    Both inputs are chronological. Turns missing a parseable ts inherit
+    their predecessor's position, so a transmission is placed after the
+    last turn known to precede it — approximate for pre-transcript
+    history, exact for everything since.
+    """
+    from datetime import datetime
+
+    def _epoch(ts: str | None) -> float | None:
+        if not ts:
+            return None
+        try:
+            return datetime.fromisoformat(ts).timestamp()
+        except ValueError:
+            return None
+
+    merged: list[dict] = []
+    ni = 0
+    for msg in visible:
+        t = _epoch(msg.get("ts"))
+        if t is not None:
+            while ni < len(notes) and float(notes[ni]["ts"]) <= t:
+                merged.append(_transmission_entry(notes[ni]))
+                ni += 1
+        merged.append(msg)
+    for note in notes[ni:]:
+        merged.append(_transmission_entry(note))
+    return merged
+
+
 @router.get("/api/chat/history", dependencies=[Depends(wa.require_web_auth)])
 def chat_history() -> JSONResponse:
     """Return complete persisted user/assistant chat turns for UI hydration.
@@ -78,9 +132,12 @@ def chat_history() -> JSONResponse:
             tx_id = entry.pop("_source_tx_id", None)
             if tx_id is not None:
                 entry["id"] = f"tx-{tx_id}"
-        return JSONResponse(out)
-    # Legacy path: session from before the transcript existed.
-    return JSONResponse(wa._visible_chat_history(memory.load_session()))
+    else:
+        # Legacy path: session from before the transcript existed.
+        out = wa._visible_chat_history(memory.load_session())
+    return JSONResponse(
+        _merge_transmissions(out, memory.notifications.recent(200))
+    )
 
 
 # Stream cancellation state.

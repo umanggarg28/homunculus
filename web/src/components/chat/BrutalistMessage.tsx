@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { motion } from "framer-motion";
+import { Link } from "react-router-dom";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { BrutalistToolBlock } from "./BrutalistToolBlock";
 import { ThinkingIndicator } from "./ThinkingIndicator";
@@ -114,6 +115,66 @@ export function BrutalistMessage({ message, toolCalls, sending }: Props) {
   );
 }
 
+/** An agent-initiated delivery (morning brief, reminder, quiz…) from
+ *  the notification ledger, interleaved into the chat timeline. Rendered
+ *  as its own species — the point is that nobody asked for this turn. */
+export function TransmissionRow({ message }: { message: ChatMessage }) {
+  const timeStr = fmtTime(message.ts);
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.18, ease: "easeOut" }}
+      className="my-5"
+      style={{
+        display: "grid",
+        gridTemplateColumns: "62px minmax(0, 1fr)",
+        columnGap: "20px",
+        alignItems: "start",
+      }}
+    >
+      <div
+        className="text-[10px] leading-[1.5] pt-[2px] select-none"
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontVariantNumeric: "tabular-nums",
+          textAlign: "right",
+          paddingRight: "12px",
+          borderRight: "1px solid var(--color-accent-dim, var(--color-border-strong))",
+          color: "var(--color-text-faint)",
+        }}
+      >
+        <div className="uppercase mb-1.5" style={{ color: "var(--color-accent)", letterSpacing: "0.18em" }}>
+          tx
+        </div>
+        <div className="uppercase tracking-[0.08em]">{timeStr}</div>
+      </div>
+
+      <div
+        style={{
+          minWidth: 0,
+          borderLeft: "2px solid var(--color-accent)",
+          background: "color-mix(in srgb, var(--color-accent) 4%, transparent)",
+          padding: "8px 14px 10px",
+        }}
+      >
+        <Tooltip
+          text="The agent sent this on its own — a scheduled or proactive delivery from the notification ledger, not a reply to you."
+          placement="top"
+        >
+          <div
+            className="text-[9px] uppercase tracking-[0.22em] mb-2 inline-block"
+            style={{ color: "var(--color-accent)" }}
+          >
+            ◇ transmission · unprompted
+          </div>
+        </Tooltip>
+        <MarkdownMessage text={message.content} />
+      </div>
+    </motion.div>
+  );
+}
+
 function UserPrompt({ content }: { content: string }) {
   return (
     <div
@@ -184,10 +245,52 @@ function AgentReply({ message, toolCalls, inFlight, sending }: AgentReplyProps) 
           <div style={{ minWidth: 0 }}>
             <MarkdownMessage text={message.content} />
             {isWorking && <Cursor />}
+            {/* Tool receipt — persisted turns only; the live turn already
+                shows its full tool blocks above. Evidence of what the
+                agent DID this turn, linking to the audit surface. */}
+            {!inFlight && toolCalls.length === 0 && (message.tools?.length ?? 0) > 0 && (
+              <ToolReceipt tools={message.tools!} />
+            )}
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+function ToolReceipt({ tools }: { tools: string[] }) {
+  // Collapse repeats into name ×N, first-appearance order.
+  const counts = new Map<string, number>();
+  for (const t of tools) counts.set(t, (counts.get(t) ?? 0) + 1);
+
+  return (
+    <Tooltip text="Tools the agent called for this reply — click to open the run traces." placement="top">
+    <Link
+      to="/traces"
+      className="mt-2 inline-flex items-center gap-2 flex-wrap"
+      style={{ textDecoration: "none" }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = "0.75"; }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = "1"; }}
+    >
+      <span
+        className="text-[9px] uppercase tracking-[0.18em] select-none"
+        style={{ color: "var(--color-text-faint)" }}
+      >
+        ⚙
+      </span>
+      {[...counts.entries()].map(([name, n], i) => (
+        <span
+          key={name}
+          className="text-[9px] uppercase tracking-[0.14em]"
+          style={{ color: "var(--color-text-muted)" }}
+        >
+          {i > 0 && <span style={{ color: "var(--color-text-faint)", marginRight: 8 }}>·</span>}
+          {name}
+          {n > 1 ? ` ×${n}` : ""}
+        </span>
+      ))}
+    </Link>
+    </Tooltip>
   );
 }
 

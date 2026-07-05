@@ -24,8 +24,10 @@ import pytest
 @pytest.fixture()
 def web_api(tmp_path, monkeypatch):
     """Import (or reload) transports.web_api with tmp dirs wired in."""
-    # Ensure events is importable.
-    if "events" not in sys.modules:
+    # Ensure events is importable (guard on the real sys.modules key —
+    # a bare-"events" check re-stubs on every call and splits identities
+    # between modules that bound events at different times).
+    if "homunculus.events" not in sys.modules:
         ev = types.ModuleType("events")
         ev.emit = lambda *a, **k: None
         ev.full_text = lambda t: t
@@ -45,7 +47,7 @@ def web_api(tmp_path, monkeypatch):
         sys.modules["homunculus.events"] = ev
 
     # Ensure agent_controls is importable.
-    if "agent_controls" not in sys.modules:
+    if "homunculus.agent_controls" not in sys.modules:
         from homunculus import agent_controls  # noqa: F401
 
     # Restore the real tasks module so _task_store() uses the real TaskStore,

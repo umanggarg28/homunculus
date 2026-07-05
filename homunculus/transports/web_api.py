@@ -368,6 +368,15 @@ def _autonomous_replay_label(service: str, event: str | None, rec: dict) -> str:
 #                nudges); they're role=user but the user never typed them
 _NON_CHAT_SOURCES = frozenset({"heartbeat", "refinement", "harness"})
 
+# Harness corrections recorded before source-tagging existed carry no
+# `source` field, so the set above can't catch them — they're matched
+# by their fixed prefixes instead. Applies ONLY to untagged records;
+# everything written since tagging is filtered by source alone.
+_LEGACY_HARNESS_PREFIXES = (
+    "Your last reply did not include a tool call",
+    "Heads-up from the harness:",
+)
+
 
 def _visible_chat_history(history: list[dict]) -> list[dict]:
     """Filter persisted agent history down to visible complete chat turns.
@@ -378,9 +387,21 @@ def _visible_chat_history(history: list[dict]) -> list[dict]:
     """
     messages = []
     pending_user: dict | None = None
+    # Tool calls made between a user message and the final reply are
+    # collected so the reply entry can carry a `tools` receipt — the
+    # UI's evidence line for what the agent actually did this turn.
+    pending_tools: list[str] = []
     for idx, msg in enumerate(history):
         role = msg.get("role")
         content = msg.get("content")
+        if role == "assistant" and msg.get("tool_calls") and msg.get("source") not in _NON_CHAT_SOURCES:
+            for tc in msg["tool_calls"]:
+                name = (tc.get("function") or {}).get("name") if isinstance(tc, dict) else None
+                if name:
+                    pending_tools.append(name)
+            # fall through: a tool-planning message is never the final
+            # reply, and the checks below drop it whether or not the
+            # provider attached visible-looking content.
         if not isinstance(content, str) or not content.strip():
             continue
         # Agent-internal traffic (heartbeat tick prompts, harness
@@ -389,12 +410,21 @@ def _visible_chat_history(history: list[dict]) -> list[dict]:
         # as fake YOU/AI bubbles — the "traces leaking into chat" bug.
         if msg.get("source") in _NON_CHAT_SOURCES:
             continue
+        if (
+            role == "user"
+            and not msg.get("source")
+            and content.startswith(_LEGACY_HARNESS_PREFIXES)
+        ):
+            continue
         # Skip heartbeat notifications — they live in LLM context for
         # follow-up questions but shouldn't appear as chat bubbles.
         if content.startswith("[notification I sent you at"):
             continue
         tx_id = msg.get("_tx_id")
         if role == "user":
+            # A new turn starts — tool calls from an aborted or
+            # tool-only exchange must not leak onto the next reply.
+            pending_tools = []
             pending_user = {
                 "id": f"persisted-{idx}",
                 "role": role,
@@ -425,6 +455,9 @@ def _visible_chat_history(history: list[dict]) -> list[dict]:
                 "ts": msg.get("ts"),
                 "_raw_idx": idx,
             }
+            if pending_tools:
+                entry["tools"] = pending_tools
+                pending_tools = []
             if tx_id is not None:
                 entry["_source_tx_id"] = tx_id
             # Transcript rewrite pair: _journal_append wrote the raw
@@ -438,6 +471,10 @@ def _visible_chat_history(history: list[dict]) -> list[dict]:
                 and prev.get("role") == "assistant"
                 and prev.get("_raw_idx") == idx - 1
             ):
+                # Same turn — the receipt collected for the raw form
+                # belongs to the rewritten form too.
+                if "tools" in prev and "tools" not in entry:
+                    entry["tools"] = prev["tools"]
                 messages[-1] = entry
             else:
                 messages.append(entry)

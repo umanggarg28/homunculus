@@ -4,7 +4,11 @@ import types
 
 
 def _load_web_api():
-    if "tools" not in sys.modules:
+    # Guard on the REAL sys.modules key. The old bare-"tools" check was
+    # never true, so every call installed a FRESH stub — modules that
+    # imported tools earlier (web/skills.py) kept an older stub than the
+    # one later tests monkeypatched, and /api/skills read empty SCHEMAS.
+    if "homunculus.tools" not in sys.modules:
         tools_stub = types.ModuleType("tools")
         tools_stub.SCHEMAS = []
         tools_stub.init = lambda *a, **k: None
@@ -117,5 +121,7 @@ def test_visible_chat_history_hides_contentful_tool_planning_messages():
             "role": "assistant",
             "content": "Saved the table to notes/frameworks.md.",
             "source": "web", "ts": None,
+            # The reply carries the turn's tool receipt (chat evidence line).
+            "tools": ["web_search", "write_file"],
         },
     ]

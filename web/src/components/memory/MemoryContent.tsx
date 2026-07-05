@@ -35,8 +35,10 @@ export function MemoryContent({ text, entries }: Props) {
         background: "var(--color-surface-1)",
         color: "var(--color-text)",
         fontFamily: "var(--font-mono)",
-        fontSize: 13,
-        lineHeight: 1.65,
+        fontSize: 14,
+        lineHeight: 1.75,
+        // Reading register + measure cap: memory files are prose.
+        maxWidth: "76ch",
         padding: "16px 18px",
         margin: 0,
       }}
