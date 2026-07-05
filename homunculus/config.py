@@ -68,7 +68,10 @@ class LoopConfig(BaseModel):
     model_config = _STRICT
 
     max_turns: PositiveInt = Field(
-        default=20,
+        # 28: a long application form legitimately needs ~20 sequential
+        # tool calls (prepare + context + one draft_answer per question)
+        # — the budget enforcer, not this cap, is the runaway backstop.
+        default=28,
         description=(
             "Iteration cap per chat/heartbeat turn. The loop yields a "
             "fallback string after this many LLM calls without a final reply."

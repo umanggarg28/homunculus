@@ -342,3 +342,60 @@ def test_leaves_normal_text_untouched():
     # CJK brackets without the † separator are not citation artifacts.
     assert _strip_citation_artifacts("see 【note】 here") == "see 【note】 here"
     assert _strip_citation_artifacts("") == ""
+
+
+def test_tool_syntax_leak_detected():
+    """Live failure 2026-07-06: the model wrote its harmony tool-call
+    markup as reply TEXT ('<|start|>assistant<|channel|>commentary
+    to=functions.job_posting …'), executed nothing, and claimed the
+    application was saved."""
+    from homunculus.output_guard import correction_prompt_for, run_output_guard
+
+    reply = (
+        "<|start|>assistant<|channel|>commentary to=functions.job_posting "
+        'json<|message|>{"url":"https://example.greenhouse.io/x"}<|call|> '
+        "I've drafted answers for every question and the application is saved."
+    )
+    _, violations = run_output_guard(reply, set(), [], tools_available=True)
+    assert "tool_syntax_leak" in violations
+    prompt = correction_prompt_for(violations)
+    assert "NEVER executed" in prompt
+
+
+def test_normal_reply_mentioning_functions_is_clean():
+    from homunculus.output_guard import run_output_guard
+
+    _, violations = run_output_guard(
+        "The plan uses two functions to do this.", set(), [], tools_available=True
+    )
+    assert "tool_syntax_leak" not in (violations or [])
+
+
+def test_drafting_completion_claim_caught():
+    """Live failure 2026-07-06: 2 of 12 questions drafted, reply said
+    'All required fields have been drafted and saved'."""
+    from homunculus.output_guard import correction_prompt_for, run_output_guard
+
+    outcomes = [
+        {"name": "draft_answer", "result": "Saved. Still needing answers:\n  - Why us?"},
+    ]
+    _, violations = run_output_guard(
+        "All required fields have been drafted and saved in the plan.",
+        {"draft_answer"}, outcomes, tools_available=True,
+    )
+    assert "drafting_completion_claim" in violations
+    assert "Nothing you narrate is saved" in correction_prompt_for(violations)
+
+
+def test_drafting_completion_claim_ok_when_actually_done():
+    from homunculus.output_guard import run_output_guard
+
+    outcomes = [
+        {"name": "draft_answer", "result": "Saved. Still needing answers:\n  - Why us?"},
+        {"name": "draft_answer", "result": "Saved — all free-text questions answered. Tell the user to run..."},
+    ]
+    _, violations = run_output_guard(
+        "All questions are drafted and saved — run the fill script.",
+        {"draft_answer"}, outcomes, tools_available=True,
+    )
+    assert "drafting_completion_claim" not in (violations or [])

@@ -32,7 +32,7 @@ def _reset_singleton():
 
 def test_loop_defaults():
     loop = LoopConfig()
-    assert loop.max_turns == 20
+    assert loop.max_turns == 28
     assert loop.compact_trigger_user_turns == 8
     assert loop.compact_keep_recent_user_turns == 4
     assert loop.tool_result_hard_cap_chars == 6000
@@ -153,7 +153,7 @@ def test_missing_env_uses_default(monkeypatch):
     for name in ("HOMUNCULUS_MAX_TURNS", "HOMUNCULUS_COMPACT_TRIGGER_USER_TURNS"):
         monkeypatch.delenv(name, raising=False)
     config = HomunculusConfig.from_env()
-    assert config.loop.max_turns == 20
+    assert config.loop.max_turns == 28
     assert config.loop.compact_trigger_user_turns == 8
 
 
@@ -162,7 +162,7 @@ def test_empty_env_value_treated_as_unset(monkeypatch):
     'unset', defer to the default."""
     monkeypatch.setenv("HOMUNCULUS_MAX_TURNS", "")
     config = HomunculusConfig.from_env()
-    assert config.loop.max_turns == 20
+    assert config.loop.max_turns == 28
 
 
 # Singleton helper.

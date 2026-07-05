@@ -414,7 +414,8 @@ Behaviour:
   questions needing answers — then one draft_answer(application_id,
   question, answer) per question, grounded in career_context().
   Answers written only in your chat reply are NOT saved; only
-  draft_answer() puts them into the plan the form-filler uses.
+  draft_answer() puts them into the plan the form-filler uses. Keep
+  calling draft_answer one question at a time until none remain.
 - Do not mention memory-internal filenames (e.g. feedback_*.md,
   project_*.md) unprompted — use plain language like "my notes" or
   "delivery log". Exception: when the user explicitly asks you to search

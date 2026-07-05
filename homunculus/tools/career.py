@@ -377,7 +377,7 @@ def prepare_application(url: str) -> str:
     if needs_draft:
         lines.append("Questions needing a drafted answer — write each with "
                      "draft_answer(application_id, question, answer), grounded "
-                     "in career_context():")
+                     "in career_context(), one call per question:")
         lines += [f"  - {q}" for q in needs_draft]
     else:
         lines.append("No free-text questions; the plan is ready.")
@@ -423,10 +423,17 @@ def draft_answer(application_id: str, question: str, answer: str) -> str:
     path.write_text(_json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
     remaining = [
         f["label"] for f in plan["fields"]
-        if f["value"] is None and (f["type"] in ("textarea", "input_text") or f.get("options"))
+        if f["value"] is None and not f.get("human_only")
+        and (f["type"] in ("textarea", "input_text") or f.get("options"))
     ]
     if remaining:
-        return "Saved. Still needing answers:\n" + "\n".join(f"  - {r}" for r in remaining)
+        return (
+            "Saved. Still needing answers:\n"
+            + "\n".join(f"  - {r}" for r in remaining)
+            + "\n\nDO NOT stop or summarise yet — call draft_answer again "
+            "now for the next question above. The plan is NOT complete "
+            "until this list is empty."
+        )
     return (
         "Saved — all free-text questions answered. Tell the user to run:\n"
         f"  uv run --group apply python scripts/apply_fill.py {application_id}"
