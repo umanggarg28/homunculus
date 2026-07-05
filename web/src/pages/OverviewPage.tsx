@@ -650,8 +650,9 @@ function AgentPanel({
         gap: 16,
       }}
     >
-      {/* Framed robot */}
-      <div style={{ position: "relative", width: "100%", maxWidth: 240, aspectRatio: "3/4", border: "1px solid var(--color-border)", background: "var(--color-surface-1)" }}>
+      {/* Framed robot — a CRT screen inside the chassis: the true-black
+          well plus the raster/sweep texture that marks lit glass. */}
+      <div className="hm-screen-well" style={{ position: "relative", width: "100%", maxWidth: 240, aspectRatio: "3/4", border: "1px solid var(--color-border)", background: "var(--color-screen)", overflow: "hidden" }}>
         {/* HUD top */}
         <div style={{ position: "absolute", left: 10, right: 10, top: 9, display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 8, letterSpacing: "0.14em", color: "var(--color-text-muted)", textTransform: "uppercase", pointerEvents: "none" }}>
           <span>UNIT · <b style={{ color: "var(--color-accent)", fontWeight: 500 }}>HMCL-01</b></span>

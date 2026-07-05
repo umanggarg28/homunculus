@@ -123,7 +123,7 @@ export function SignatureHeartbeat() {
         }}
       />
       <div
-        className="relative w-full overflow-hidden"
+        className="hm-screen-well relative w-full overflow-hidden"
         style={{
           // Screen well: the strip is a CRT readout, so it gets the true
           // black the lifted page field gave up.
