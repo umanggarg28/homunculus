@@ -7,6 +7,7 @@ import { BrutalistChatInput } from "@/components/chat/BrutalistChatInput";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
 import { Tooltip } from "@/components/ui/Tooltip";
+import { useArmedAction } from "@/hooks/useArmedAction";
 import { api } from "@/lib/api";
 
 type ChatView = "all" | "chat" | "tx";
@@ -50,9 +51,14 @@ export function ChatPage() {
     return () => clearTimeout(t);
   }, []);
 
+  // Arm/confirm instead of a browser confirm() — the OS dialog broke
+  // the fiction and is easier to click through than a control that
+  // visibly changes state and asks again.
+  const { armed, arm, disarm } = useArmedAction();
   const closeChapter = async () => {
     if (closing || messages.length === 0) return;
-    if (!confirm("ARCHIVE THIS SESSION AND OPEN A NEW ONE?")) return;
+    if (armed !== "close") { arm("close"); return; }
+    disarm();
     setClosing(true);
     try {
       await api.chapterClose();
@@ -103,9 +109,10 @@ export function ChatPage() {
                   style={{
                     padding: 0,
                     cursor: closing ? "default" : "pointer",
+                    color: armed === "close" ? "var(--color-danger)" : undefined,
                   }}
                 >
-                  [{closing ? "archiving…" : "close session"}]
+                  [{closing ? "archiving…" : armed === "close" ? "confirm archive" : "close session"}]
                 </button>
               </div>
             ) : undefined

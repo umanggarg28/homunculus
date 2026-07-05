@@ -9,6 +9,10 @@ interface Command {
   keywords?: string;
 }
 
+// Lets chrome (the PageHeader hint chip) open the palette without a
+// keyboard — dispatch this event from anywhere.
+export const PALETTE_OPEN_EVENT = "hm:palette-open";
+
 /** Brutalist command palette — ⌘K / Ctrl+K opens. Fuzzy-match prefix,
  *  Enter to run, Esc to close. Replaces clicking through the sidebar
  *  for power users. */
@@ -46,8 +50,17 @@ export function CommandPalette() {
         setOpen(false);
       }
     };
+    const onOpenEvent = () => {
+      setOpen(true);
+      setQuery("");
+      setHighlight(0);
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener(PALETTE_OPEN_EVENT, onOpenEvent);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener(PALETTE_OPEN_EVENT, onOpenEvent);
+    };
   }, [open]);
 
   // Focus input on open

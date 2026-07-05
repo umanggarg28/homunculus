@@ -75,7 +75,7 @@ export function BrutalistMessage({ message, toolCalls, sending }: Props) {
         </div>
         <div className="uppercase tracking-[0.08em]">
           {inFlight && !isUser
-            ? <span style={{ color: "var(--color-amber)" }}>live</span>
+            ? <span style={{ color: "var(--color-accent-ink)" }}>live</span>
             : timeStr}
         </div>
         {message.source && message.source !== "web" && (

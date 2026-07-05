@@ -84,7 +84,7 @@ export function BrutalistChatInput({ sending, onSend, onCancel }: Props) {
 
   const canSend = !!value.trim() && !sending;
   const borderColor = sending
-    ? "var(--color-amber)"
+    ? "var(--color-accent)"
     : focused
       ? "var(--color-border-bright)"
       : "var(--color-border)";
@@ -245,7 +245,7 @@ export function BrutalistChatInput({ sending, onSend, onCancel }: Props) {
           style={{ color: "var(--color-text-faint)" }}
         >
           <span>↵ send · ⇧↵ newline · esc clear · / commands</span>
-          <span style={{ color: sending ? "var(--color-amber)" : "var(--color-text-faint)" }}>
+          <span style={{ color: sending ? "var(--color-accent-ink)" : "var(--color-text-faint)" }}>
             ● {sending ? "working" : "idle"}
           </span>
         </div>
