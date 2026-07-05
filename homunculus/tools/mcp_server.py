@@ -454,6 +454,24 @@ def job_posting(
     return career.job_posting(url)
 
 
+@mcp.tool()
+def prepare_application(
+    url: Annotated[str, Field(description="Greenhouse job posting URL the user wants to apply to.")],
+) -> str:
+    """Build an application plan for a Greenhouse posting: contact fields fill themselves from the career wiki (never guess them), the resume attaches from the wiki, and the result lists the free-text questions YOU must draft with draft_answer(), grounded in career_context(). The plan is filled into a real browser by the user later — you never submit anything."""
+    return career.prepare_application(url)
+
+
+@mcp.tool()
+def draft_answer(
+    application_id: Annotated[str, Field(description="Plan id returned by prepare_application, e.g. 'acme-4012345'.")],
+    question: Annotated[str, Field(description="The form question this answers (substring of its label).")],
+    answer: Annotated[str, Field(description="The full drafted answer text, grounded in career_context().")],
+) -> str:
+    """Save a drafted answer into an application plan. Ground every claim in career_context() — never invent employers, dates, or visa facts. Returns the remaining unanswered questions."""
+    return career.draft_answer(application_id, question, answer)
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def get_weather() -> str:
     """Today's weather (condition, high/low °C) for the user's configured home location. Takes NO arguments — the location is read from config, never supplied by you. If it returns 'WEATHER UNAVAILABLE', omit weather rather than inventing a forecast."""

@@ -20,9 +20,11 @@ UNAVAILABLE" / "POSTING UNAVAILABLE") rather than raising.
 
 from __future__ import annotations
 
+import json as _json
 import logging
 import os
 import re
+from datetime import datetime as _dt
 from pathlib import Path
 
 import httpx
@@ -34,8 +36,15 @@ POSTING_UNAVAILABLE = "POSTING UNAVAILABLE"
 
 #: Files read from the career repo, in order. CAREER-CONTEXT.md is the
 #: wiki; cv.md is the factual record forms get filled from.
-_CONTEXT_FILES = ("CAREER-CONTEXT.md", "cv.md")
-_MAX_CHARS = 9000
+_CONTEXT_FILES = (
+    "CAREER-CONTEXT.md",
+    "cv.md",
+    # The user's rehearsed interview voice — better raw material for
+    # "why us?" drafts than the CV's bullet prose.
+    "interview-prep/narrative-playbook.md",
+    "interview-prep/story-bank.md",
+)
+_MAX_CHARS = 14000
 
 
 def _career_dir() -> Path:
@@ -195,3 +204,230 @@ def _lever_posting(org: str, posting_id: str) -> str:
     for l in data.get("lists") or []:
         lines.append(f"\n{l.get('text', '')}:\n" + _strip_html(l.get("content") or "", cap=1200))
     return "\n".join(lines)[: _MAX_CHARS]
+
+
+# ── application plans (apply-assist CP2) ─────────────────────────────
+# prepare_application() builds a structured field→value plan:
+# deterministic facts (name, email, links) are parsed straight out of
+# the wiki's Personal table — never model-supplied — and the free-text
+# questions are listed for the model to draft via draft_answer(). The
+# host-side scripts/apply_fill.py reads the finished plan and fills the
+# real form in a visible browser; submission stays with the human.
+
+def _applications_dir() -> Path:
+    from homunculus.tools._helpers import WORKSPACE_ROOT
+
+    d = WORKSPACE_ROOT / "applications"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+_PERSONAL_ROW_RE = re.compile(r"\|\s*\*\*(?P<key>[^*|]+)\*\*\s*\|\s*(?P<val>[^|]+)\|")
+
+#: Questions the model must NEVER answer, even with options in hand:
+#: visa/work-authorization (a wrong answer is a legal misrepresentation
+#: — the observed failure: the wiki says "H1-B transfer, no lottery"
+#: and the model rounded that to "No sponsorship required", which is
+#: false) and EEO/demographic self-identification. These stay empty in
+#: the plan and are decided by the human in the open browser.
+_HUMAN_ONLY_RE = re.compile(
+    r"sponsor|visa|work authoriz|legally authorized|citizen|immigration"
+    r"|gender|race|ethnicit|veteran|disabilit|self.?identif",
+    re.IGNORECASE,
+)
+
+#: wiki Personal-table keys → canonical form-field names.
+_FIELD_ALIASES = {
+    "name": "full_name",
+    "email": "email",
+    "phone": "phone",
+    "linkedin": "linkedin",
+    "github": "github",
+    "location": "location",
+}
+
+
+def _personal_fields() -> dict[str, str]:
+    """Contact facts parsed from the wiki's Personal table. Deterministic
+    lookup — a form must never contain a model-guessed phone number."""
+    p = _career_dir() / "CAREER-CONTEXT.md"
+    if not p.is_file():
+        return {}
+    out: dict[str, str] = {}
+    for m in _PERSONAL_ROW_RE.finditer(p.read_text(encoding="utf-8", errors="replace")):
+        key = m.group("key").strip().lower()
+        if key in _FIELD_ALIASES:
+            out[_FIELD_ALIASES[key]] = m.group("val").strip()
+    full = out.get("full_name", "")
+    if full and " " in full:
+        out.setdefault("first_name", full.split()[0])
+        out.setdefault("last_name", full.split()[-1])
+    return out
+
+
+def _resume_path() -> str | None:
+    """Newest PDF in the wiki's resume/ dir (container path)."""
+    d = _career_dir() / "resume"
+    if not d.is_dir():
+        return None
+    pdfs = sorted(d.glob("*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return str(pdfs[0]) if pdfs else None
+
+
+# Question labels the personal table can answer directly, by substring.
+_LABEL_TO_FACT = [
+    ("first name", "first_name"),
+    ("last name", "last_name"),
+    ("full name", "full_name"),
+    ("email", "email"),
+    ("phone", "phone"),
+    ("linkedin", "linkedin"),
+    ("github", "github"),
+]
+
+
+def prepare_application(url: str) -> str:
+    """Create an application plan for a Greenhouse posting URL.
+
+    Contact fields fill deterministically from the career wiki; the
+    resume attaches from the wiki's resume/ dir; free-text questions
+    are listed for draft_answer(). Returns the plan summary."""
+    gh = _GREENHOUSE_RE.search((url or "").strip())
+    if not gh:
+        return (
+            f"{POSTING_UNAVAILABLE} — prepare_application currently supports "
+            "Greenhouse URLs only (their API exposes the form schema). For "
+            "other platforms use job_posting(url) and draft answers in chat."
+        )
+    org, job_id = gh.group("org"), gh.group("id")
+    data = _get_json(
+        f"https://boards-api.greenhouse.io/v1/boards/{org}/jobs/{job_id}",
+        {"questions": "true"},
+    )
+    if not data:
+        return f"{POSTING_UNAVAILABLE} — Greenhouse API returned nothing for {org}/{job_id}."
+
+    facts = _personal_fields()
+    resume = _resume_path()
+    fields: list[dict] = []
+    needs_draft: list[str] = []
+    for q in data.get("questions") or []:
+        label = str(q.get("label") or "").strip()
+        fl = label.lower()
+        ftype = (q.get("fields") or [{}])[0].get("type", "?")
+        entry: dict = {
+            "label": label,
+            "type": ftype,
+            "required": bool(q.get("required")),
+            "value": None,
+            "source": None,
+        }
+        # Select options come from the Greenhouse schema — the model may
+        # PRE-CHOOSE one (validated as an exact option in draft_answer),
+        # and the filler only ever selects exact matches. The human still
+        # reviews every choice in the open browser before submitting.
+        values = (q.get("fields") or [{}])[0].get("values") or []
+        options = [str(v.get("label", "")).strip() for v in values if v.get("label")]
+        if options:
+            entry["options"] = options
+        if ftype == "input_file":
+            if "resume" in fl or "cv" in fl:
+                entry["value"], entry["source"] = resume, "wiki"
+        else:
+            for needle, fact in _LABEL_TO_FACT:
+                if needle in fl and facts.get(fact):
+                    entry["value"], entry["source"] = facts[fact], "wiki"
+                    break
+            else:
+                if _HUMAN_ONLY_RE.search(label):
+                    entry["human_only"] = True
+                elif ftype in ("textarea", "input_text") or options:
+                    # Every unanswered question the model can sensibly
+                    # draft: essays, short texts (start date, address),
+                    # and selects whose right answer the wiki knows —
+                    # legal/EEO questions never reach this branch.
+                    suffix = f"  [choose ONE of: {' | '.join(options)}]" if options else ""
+                    needs_draft.append(label + suffix)
+        fields.append(entry)
+
+    app_id = f"{org}-{job_id}"
+    plan = {
+        "id": app_id,
+        "url": data.get("absolute_url") or url,
+        "platform": "greenhouse",
+        "org": org,
+        "job_id": job_id,
+        "title": data.get("title", "?"),
+        "created": _dt.now().isoformat(timespec="seconds"),
+        "fields": fields,
+    }
+    path = _applications_dir() / f"{app_id}.json"
+    path.write_text(_json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    filled = sum(1 for f in fields if f["value"])
+    lines = [
+        f"Application plan {app_id} created for: {plan['title']}",
+        f"{filled}/{len(fields)} fields pre-filled from the career wiki"
+        + ("" if resume else " (NO resume PDF found in the wiki's resume/ dir)"),
+    ]
+    human_only = [f["label"] for f in fields if f.get("human_only")]
+    if human_only:
+        lines.append("Reserved for the user in the browser (never draft): "
+                     + "; ".join(human_only))
+    if needs_draft:
+        lines.append("Questions needing a drafted answer — write each with "
+                     "draft_answer(application_id, question, answer), grounded "
+                     "in career_context():")
+        lines += [f"  - {q}" for q in needs_draft]
+    else:
+        lines.append("No free-text questions; the plan is ready.")
+    lines.append(
+        f"When drafting is done, tell the user to run on their machine:\n"
+        f"  uv run --group apply python scripts/apply_fill.py {app_id}"
+    )
+    return "\n".join(lines)
+
+
+def draft_answer(application_id: str, question: str, answer: str) -> str:
+    """Attach a drafted answer to a plan question (matched by substring)."""
+    path = _applications_dir() / f"{application_id}.json"
+    if not path.is_file():
+        return f"ERROR: no application plan '{application_id}'. Call prepare_application(url) first."
+    if not (answer or "").strip():
+        return "ERROR: empty answer — draft real content grounded in career_context()."
+    plan = _json.loads(path.read_text(encoding="utf-8"))
+    ql = (question or "").strip().lower()
+    matches = [f for f in plan["fields"] if ql and ql in f["label"].lower()]
+    if len(matches) != 1:
+        options = [f["label"] for f in plan["fields"] if not f["value"]]
+        return (
+            f"ERROR: question matched {len(matches)} fields. Unanswered fields:\n"
+            + "\n".join(f"  - {o}" for o in options)
+        )
+    if matches[0].get("human_only"):
+        return (
+            "ERROR: this question (visa/legal/self-identification) is "
+            "answered by the user directly in the browser — never draft it."
+        )
+    options = matches[0].get("options") or []
+    if options:
+        exact = [o for o in options if o.lower() == answer.strip().lower()]
+        if not exact:
+            return (
+                "ERROR: this question is a choice — the answer must be "
+                "EXACTLY one of:\n" + "\n".join(f"  - {o}" for o in options)
+            )
+        answer = exact[0]
+    matches[0]["value"] = answer.strip()
+    matches[0]["source"] = "model"
+    path.write_text(_json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
+    remaining = [
+        f["label"] for f in plan["fields"]
+        if f["value"] is None and (f["type"] in ("textarea", "input_text") or f.get("options"))
+    ]
+    if remaining:
+        return "Saved. Still needing answers:\n" + "\n".join(f"  - {r}" for r in remaining)
+    return (
+        "Saved — all free-text questions answered. Tell the user to run:\n"
+        f"  uv run --group apply python scripts/apply_fill.py {application_id}"
+    )
