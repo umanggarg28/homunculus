@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useEventStream } from "@/hooks/useEventStream";
 import { api } from "@/lib/api";
 
@@ -143,10 +143,32 @@ export function AlertBanner() {
     return out;
   }, [events, tasksFailed, budgetCents, spentCents, tracesSeenAt]);
 
+  // The banner and the sticky PageHeader share the viewport top edge —
+  // publish the banner's measured height so the header sticks BELOW it
+  // (PageHeader reads --hm-alert-offset for its `top`). Measured, not
+  // hardcoded: the strip stacks one row per active alert.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    const el = wrapRef.current;
+    if (!el || alerts.length === 0) {
+      root.style.setProperty("--hm-alert-offset", "0px");
+      return;
+    }
+    const update = () => root.style.setProperty("--hm-alert-offset", `${el.offsetHeight}px`);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      root.style.setProperty("--hm-alert-offset", "0px");
+    };
+  }, [alerts.length]);
+
   if (alerts.length === 0) return null;
 
   return (
-    <div style={{ position: "sticky", top: 0, zIndex: 70, fontFamily: "var(--font-mono)" }}>
+    <div ref={wrapRef} style={{ position: "sticky", top: 0, zIndex: 70, fontFamily: "var(--font-mono)" }}>
       {alerts.map((a, i) => (
         <div
           key={i}

@@ -35,7 +35,9 @@ export function PageHeader({ latin, title, subtitle, actions }: PageHeaderProps)
              and page actions are orientation, not content. Opaque bg so
              scrolled content passes beneath, under the hairline. */
           position: sticky;
-          top: 0;
+          /* Below the alert strip when one is showing (AlertBanner
+             publishes its measured height); flush to the top otherwise. */
+          top: var(--hm-alert-offset, 0px);
           z-index: 30;
           background: var(--color-bg);
           padding-top: 10px;
