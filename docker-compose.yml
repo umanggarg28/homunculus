@@ -41,6 +41,7 @@ services:
       # can only read/write files INSIDE this directory by default.
       - ./workspace:/app/workspace
       - ./secrets:/app/secrets:ro  # Google OAuth client + token (read-only; outside the workspace so no agent tool can reach it)
+      - ${HOMUNCULUS_CAREER_DIR_HOST:-../../career-ops}:/app/career:ro  # career wiki (career-ops repo) — the agent reads it live, never copies it
 
     command: ["uv", "run", "--project", "/app", "python", "-m", "homunculus.transports.repl"]
 
@@ -56,6 +57,7 @@ services:
     volumes:
       - ./workspace:/app/workspace  # Same workspace mount → shared memory
       - ./secrets:/app/secrets:ro  # Google OAuth client + token (read-only; outside the workspace so no agent tool can reach it)
+      - ${HOMUNCULUS_CAREER_DIR_HOST:-../../career-ops}:/app/career:ro  # career wiki (career-ops repo) — the agent reads it live, never copies it
     # Override the default CMD to launch the daemon instead of the REPL.
     command: ["uv", "run", "--project", "/app", "python", "-m", "homunculus.heartbeat"]
     # Auto-restart if the daemon crashes (but not if we explicitly stop it).
@@ -75,6 +77,7 @@ services:
     volumes:
       - ./workspace:/app/workspace  # Same workspace mount → shared memory
       - ./secrets:/app/secrets:ro  # Google OAuth client + token (read-only; outside the workspace so no agent tool can reach it)
+      - ${HOMUNCULUS_CAREER_DIR_HOST:-../../career-ops}:/app/career:ro  # career wiki (career-ops repo) — the agent reads it live, never copies it
       - /var/run/docker.sock:/var/run/docker.sock  # for python_exec sandbox
     command: ["uv", "run", "--project", "/app", "python", "-m", "homunculus.transports.telegram"]
     restart: unless-stopped
@@ -97,6 +100,7 @@ services:
     volumes:
       - ./workspace:/app/workspace  # Same workspace mount → shared memory
       - ./secrets:/app/secrets:ro  # Google OAuth client + token (read-only; outside the workspace so no agent tool can reach it)
+      - ${HOMUNCULUS_CAREER_DIR_HOST:-../../career-ops}:/app/career:ro  # career wiki (career-ops repo) — the agent reads it live, never copies it
       - /var/run/docker.sock:/var/run/docker.sock  # for python_exec sandbox
     command: ["uv", "run", "--project", "/app", "python", "-m", "homunculus.transports.discord"]
     restart: unless-stopped
@@ -113,6 +117,7 @@ services:
     volumes:
       - ./workspace:/app/workspace  # read the shared events file + memory
       - ./secrets:/app/secrets:ro  # Google OAuth client + token (read-only; outside the workspace so no agent tool can reach it)
+      - ${HOMUNCULUS_CAREER_DIR_HOST:-../../career-ops}:/app/career:ro  # career wiki (career-ops repo) — the agent reads it live, never copies it
     # Bind to 8765 on the host. Open http://localhost:8765 in a browser
     # for the full web UI. (8000 is a popular dev port and tends to
     # collide — 8765 avoids common defaults.)
