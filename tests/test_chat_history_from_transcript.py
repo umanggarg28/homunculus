@@ -12,6 +12,7 @@ from pathlib import Path
 from homunculus.memory import Memory
 from homunculus.transcript import Transcript
 from homunculus.transports.web_api import _visible_chat_history
+from datetime import UTC
 
 
 def _append_msgs(t: Transcript, msgs: list[dict]) -> None:
@@ -129,10 +130,10 @@ def test_merge_transmissions_interleaves_by_time() -> None:
         {"role": "assistant", "content": "yes", "ts": "2026-07-04T12:00:05+00:00"},
     ]
     # 09:30 delivery → between the two exchanges; 13:00 → after the last.
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     def _epoch(iso: str) -> float:
-        return datetime.fromisoformat(iso).replace(tzinfo=timezone.utc).timestamp()
+        return datetime.fromisoformat(iso).replace(tzinfo=UTC).timestamp()
 
     notes = [
         {"ts": _epoch("2026-07-04T09:30:00"), "text": "Morning brief …"},
@@ -162,9 +163,9 @@ def test_merge_transmissions_handles_ts_less_turns() -> None:
         {"role": "user", "content": "q", "ts": "2026-07-04T08:00:00+00:00"},
         {"role": "assistant", "content": "a", "ts": None},
     ]
-    from datetime import datetime, timezone
+    from datetime import datetime
     notes = [{
-        "ts": datetime.fromisoformat("2026-07-04T14:00:00").replace(tzinfo=timezone.utc).timestamp(),
+        "ts": datetime.fromisoformat("2026-07-04T14:00:00").replace(tzinfo=UTC).timestamp(),
         "text": "reminder",
     }]
     out = _merge_transmissions(visible, notes)
