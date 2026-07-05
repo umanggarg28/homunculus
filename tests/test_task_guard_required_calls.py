@@ -189,3 +189,41 @@ def test_plan_tick_folds_required_tools_onto_task(tmp_path, monkeypatch):
 
     guard = build_task_guard(task)
     assert guard.missing_required_calls("t1") == ["get_weather", "news_headlines"]
+
+
+def test_record_failure_blocked_when_run_already_succeeded():
+    """Observed close-out mode (2026-07-05 morning-brief): deliver fine,
+    then grab record_failure as a generic wrap-up tool — stamping a false
+    failure on a delivered run. The guard has ground truth and refuses."""
+    guard = TaskGuard(
+        {"morning-brief": [{"type": "notify_called"}]},
+        required_calls_by_task={"morning-brief": ["news_headlines"]},
+    )
+    guard.on_tool_call("news_headlines", {})
+    guard.observe_tool_result("news_headlines", "- headline")
+    assert guard.on_tool_call("notify", {"text": "Morning, Umang — brief…"}) is None
+
+    verdict = guard.on_tool_call("record_failure", {"task_id": "morning-brief", "reason": "No further action required"})
+    assert verdict is not None and verdict.startswith("ERROR")
+    assert "complete_task" in verdict
+    # The refused call must NOT count as a close-out.
+    assert "morning-brief" not in guard._completed_tasks
+
+
+def test_record_failure_allowed_when_criteria_unmet():
+    """A genuine failure (never delivered) records normally."""
+    guard = TaskGuard({"morning-brief": [{"type": "notify_called"}]})
+    assert guard.on_tool_call("record_failure", {"task_id": "morning-brief", "reason": "source down"}) is None
+    assert "morning-brief" in guard._completed_tasks
+
+
+def test_record_failure_allowed_when_required_calls_missing():
+    """Criteria met but a declared source was skipped: complete_task would
+    be blocked, so record_failure must stay available — the model can
+    never be refused by both gates at once."""
+    guard = TaskGuard(
+        {"t": [{"type": "notify_called"}]},
+        required_calls_by_task={"t": ["news_headlines"]},
+    )
+    assert guard.on_tool_call("notify", {"text": "something"}) is None
+    assert guard.on_tool_call("record_failure", {"task_id": "t", "reason": "skipped source"}) is None

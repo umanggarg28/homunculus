@@ -106,7 +106,9 @@ export function SignatureHeartbeat() {
       <div
         className="relative w-full overflow-hidden"
         style={{
-          background: "var(--color-bg)",
+          // Screen well: the strip is a CRT readout, so it gets the true
+          // black the lifted page field gave up.
+          background: "var(--color-screen)",
           borderTop: "1px solid var(--color-border)",
           borderBottom: "1px solid var(--color-border)",
           padding: "10px 0",

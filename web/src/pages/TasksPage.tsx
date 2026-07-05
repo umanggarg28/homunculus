@@ -6,11 +6,15 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { TasksHero } from "@/components/ui/HeroBand";
 import { TaskRow } from "@/components/tasks/TaskRow";
+import { markTasksSeen } from "@/components/layout/AlertBanner";
 import { TaskDetailDrawer } from "@/components/tasks/TaskDetailDrawer";
 import { TaskForm } from "@/components/tasks/TaskForm";
 import type { Task } from "@/lib/types";
 
 export function TasksPage() {
+  // Opening this page IS the "check task detail" the failure banner asks
+  // for — acknowledge so it stops re-alerting on already-inspected runs.
+  useEffect(() => { markTasksSeen(); }, []);
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [detailFor, setDetailFor] = useState<Task | null>(null);
   const [creating, setCreating] = useState(false);

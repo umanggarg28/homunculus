@@ -203,7 +203,9 @@ export function SidebarRobot() {
         }
         style={{
           border: `1px solid ${paused ? "color-mix(in srgb, var(--color-danger) 50%, transparent)" : "var(--color-border)"}`,
-          background: "var(--color-surface-2)",
+          // A CRT screen inside the chassis — the deepest black in the
+          // app, so the panel reads as physically recessed and lit.
+          background: "var(--color-screen)",
           padding: "10px",
           display: "grid",
           gridTemplateColumns: "50px 1fr",

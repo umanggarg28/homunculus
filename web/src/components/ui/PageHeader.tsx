@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useRobotState } from "@/hooks/useRobotState";
 import { Tooltip } from "@/components/ui/Tooltip";
+import { PALETTE_OPEN_EVENT } from "@/components/layout/CommandPalette";
 
 interface PageHeaderProps {
   /** @deprecated alias for title — kept for older pages. */
@@ -35,7 +36,9 @@ export function PageHeader({ latin, title, subtitle, actions }: PageHeaderProps)
              and page actions are orientation, not content. Opaque bg so
              scrolled content passes beneath, under the hairline. */
           position: sticky;
-          top: 0;
+          /* Below the alert strip when one is showing (AlertBanner
+             publishes its measured height); flush to the top otherwise. */
+          top: var(--hm-alert-offset, 0px);
           z-index: 30;
           background: var(--color-bg);
           padding-top: 10px;
@@ -72,8 +75,24 @@ export function PageHeader({ latin, title, subtitle, actions }: PageHeaderProps)
         )}
       </div>
 
-      {/* Right: unit crumb + actions */}
+      {/* Right: palette hint + unit crumb + actions */}
       <div className="shrink-0 flex items-center gap-4">
+        <Tooltip text="Command palette — jump to any page by typing. Also opens with ⌘K / Ctrl+K." placement="bottom">
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent(PALETTE_OPEN_EVENT))}
+            className="text-[9px] uppercase tracking-[0.18em]"
+            style={{
+              background: "transparent",
+              border: "1px solid var(--color-border)",
+              color: "var(--color-text-faint)",
+              padding: "2px 6px",
+              cursor: "pointer",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            ⌘K
+          </button>
+        </Tooltip>
         <Tooltip
           text={<><strong>HMCL-01</strong> — Homunculus Unit 01, this instance's identifier (cosmetic; only relevant if you run more than one).<br /><strong>STATE</strong> — the agent's liveness: active when it's running a turn, idle otherwise.</>}
           placement="bottom"

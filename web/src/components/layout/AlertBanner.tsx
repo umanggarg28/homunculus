@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useEventStream } from "@/hooks/useEventStream";
 import { api } from "@/lib/api";
 
@@ -20,6 +20,21 @@ export function markTracesSeen(): void {
   const t = Date.now();
   localStorage.setItem(TRACES_SEEN_KEY, String(t));
   window.dispatchEvent(new CustomEvent(TRACES_SEEN_EVENT, { detail: t }));
+}
+
+// Same acknowledgment contract for the task-failure alert: it says
+// "check task detail", so opening Tasks (where the RETRY badge and the
+// failing run are in view) IS the check. Only a run that fails AFTER
+// that visit re-lights the banner — an alert that nags all day about a
+// failure already inspected trains the reader to ignore the strip.
+const TASKS_SEEN_KEY = "hm.tasksSeenAt";
+export const TASKS_SEEN_EVENT = "hm:tasks-seen";
+
+/** Call when the Tasks page is opened — acknowledges current task-failure alerts. */
+export function markTasksSeen(): void {
+  const t = Date.now();
+  localStorage.setItem(TASKS_SEEN_KEY, String(t));
+  window.dispatchEvent(new CustomEvent(TASKS_SEEN_EVENT, { detail: t }));
 }
 
 
@@ -51,28 +66,40 @@ export function AlertBanner() {
   const [tracesSeenAt, setTracesSeenAt] = useState(
     () => Number(localStorage.getItem(TRACES_SEEN_KEY)) || 0,
   );
+  const [tasksSeenAt, setTasksSeenAt] = useState(
+    () => Number(localStorage.getItem(TASKS_SEEN_KEY)) || 0,
+  );
 
   useEffect(() => {
     const onSeen = (e: Event) =>
       setTracesSeenAt((e as CustomEvent).detail ?? Date.now());
+    const onTasksSeen = (e: Event) =>
+      setTasksSeenAt((e as CustomEvent).detail ?? Date.now());
     window.addEventListener(TRACES_SEEN_EVENT, onSeen);
-    return () => window.removeEventListener(TRACES_SEEN_EVENT, onSeen);
+    window.addEventListener(TASKS_SEEN_EVENT, onTasksSeen);
+    return () => {
+      window.removeEventListener(TRACES_SEEN_EVENT, onSeen);
+      window.removeEventListener(TASKS_SEEN_EVENT, onTasksSeen);
+    };
   }, []);
 
   useEffect(() => {
     api.tasksList("all").then((tasks) => {
       const startOfToday = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
+      // Failures older than the last Tasks visit are acknowledged —
+      // only runs that failed since then count toward the banner.
+      const cutoff = Math.max(startOfToday, tasksSeenAt);
       let failed = 0;
       for (const t of tasks) {
         for (const r of (t.last_runs || [])) {
           // Provider exhaustion is a transient infra failure, not a broken task — exclude it
           const isProviderExhaustion = typeof r.result === "string" && r.result.toLowerCase().includes("all providers exhausted");
-          if (r.status === "failure" && !isProviderExhaustion && new Date(r.ts).getTime() >= startOfToday) failed += 1;
+          if (r.status === "failure" && !isProviderExhaustion && new Date(r.ts).getTime() >= cutoff) failed += 1;
         }
       }
       setTasksFailed(failed);
     }).catch(() => undefined);
-  }, [events.length]);
+  }, [events.length, tasksSeenAt]);
 
   useEffect(() => {
     api.statsToday().then((s) => {
@@ -143,10 +170,32 @@ export function AlertBanner() {
     return out;
   }, [events, tasksFailed, budgetCents, spentCents, tracesSeenAt]);
 
+  // The banner and the sticky PageHeader share the viewport top edge —
+  // publish the banner's measured height so the header sticks BELOW it
+  // (PageHeader reads --hm-alert-offset for its `top`). Measured, not
+  // hardcoded: the strip stacks one row per active alert.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    const el = wrapRef.current;
+    if (!el || alerts.length === 0) {
+      root.style.setProperty("--hm-alert-offset", "0px");
+      return;
+    }
+    const update = () => root.style.setProperty("--hm-alert-offset", `${el.offsetHeight}px`);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      root.style.setProperty("--hm-alert-offset", "0px");
+    };
+  }, [alerts.length]);
+
   if (alerts.length === 0) return null;
 
   return (
-    <div style={{ position: "sticky", top: 0, zIndex: 70, fontFamily: "var(--font-mono)" }}>
+    <div ref={wrapRef} style={{ position: "sticky", top: 0, zIndex: 70, fontFamily: "var(--font-mono)" }}>
       {alerts.map((a, i) => (
         <div
           key={i}

@@ -225,6 +225,31 @@ class TaskGuard:
         # drop (which would double-record a partial on the same run).
         if name in ("record_failure", "cancel_task", "continue_task"):
             task_id = arguments.get("task_id", "")
+            if name == "record_failure" and task_id:
+                # Mirror of the complete_task gate. That gate blocks a
+                # completion the harness can prove undeserved; this blocks
+                # a failure the harness can prove wrong — every declared
+                # criterion satisfied by real delivered notifies AND every
+                # required tool exercised means the run succeeded by the
+                # task's own definition (observed close-out mode: deliver
+                # fine, then pick record_failure as a generic "wrap up"
+                # tool and stamp a false failure on a delivered run). Only
+                # blocked when complete_task would definitely be allowed,
+                # so the model can never be refused by both gates at once.
+                criteria = self._criteria.get(task_id) or []
+                if (
+                    criteria
+                    and not self.criteria_failures(task_id)
+                    and not self.missing_required_calls(task_id)
+                ):
+                    return (
+                        "ERROR: record_failure blocked — this run already "
+                        "satisfied every success criterion for this task "
+                        "(the delivery went out). A delivered task is a "
+                        "success: call complete_task(task_id=...) instead. "
+                        "record_failure is only for runs that could not "
+                        "deliver."
+                    )
             if task_id:
                 self._completed_tasks.add(task_id)
             return None

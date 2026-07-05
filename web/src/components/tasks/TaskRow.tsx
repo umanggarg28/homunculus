@@ -3,6 +3,7 @@ import { api, parseTaskWallClock } from "@/lib/api";
 import type { Task } from "@/lib/types";
 import { DataTip } from "@/components/ui/DataTip";
 import { Tooltip } from "@/components/ui/Tooltip";
+import { useArmedAction } from "@/hooks/useArmedAction";
 import { RunNowPanel } from "./RunNowPanel";
 
 interface Props {
@@ -40,15 +41,22 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
     // due_at, failure shows up in last_runs).
     api.tasksGet(task.id).then(onChanged).catch(() => undefined);
   };
+  // Destructive row actions use the kill switch's arm/confirm pattern —
+  // an OS confirm() dialog inside the console broke the fiction, and a
+  // browser-chrome popup is also easier to click through on reflex than
+  // a control that visibly changes state and asks again.
+  const { armed, arm, disarm } = useArmedAction();
   const cancel = async (e: React.MouseEvent) => {
     stop(e);
-    if (!confirm(`CANCEL "${task.title}"?`)) return;
+    if (armed !== "cancel") { arm("cancel"); return; }
+    disarm();
     setBusy("cancel");
     try { onChanged(await api.tasksCancel(task.id)); } finally { setBusy(null); }
   };
   const remove = async (e: React.MouseEvent) => {
     stop(e);
-    if (!confirm(`PERMANENTLY DELETE "${task.title}"?`)) return;
+    if (armed !== "del") { arm("del"); return; }
+    disarm();
     setBusy("del");
     try { await api.tasksDelete(task.id); onDeleted(task.id); } catch { setBusy(null); }
   };
@@ -201,10 +209,24 @@ export function TaskRow({ task, onChanged, onDeleted, onOpenDetail }: Props) {
         {isActive && (
           <>
             <Action onClick={runNow} color="var(--color-accent)" busy={busy === "run"}>run now</Action>
-            <Action onClick={cancel} color="var(--color-text-muted)" busy={busy === "cancel"}>cancel</Action>
+            <Action
+              onClick={cancel}
+              color={armed === "cancel" ? "var(--color-danger)" : "var(--color-text-muted)"}
+              filled={armed === "cancel"}
+              busy={busy === "cancel"}
+            >
+              {armed === "cancel" ? "confirm cancel" : "cancel"}
+            </Action>
           </>
         )}
-        <Action onClick={remove} color="var(--color-danger)" busy={busy === "del"}>delete</Action>
+        <Action
+          onClick={remove}
+          color="var(--color-danger)"
+          filled={armed === "del"}
+          busy={busy === "del"}
+        >
+          {armed === "del" ? "confirm delete" : "delete"}
+        </Action>
       </div>
     </div>
     </>
@@ -289,19 +311,20 @@ function RunSparkline({ runs }: { runs: import("@/lib/types").TaskRun[] }) {
 }
 
 function Action({
-  onClick, color, busy, children,
+  onClick, color, busy, filled, children,
 }: {
   onClick: (e: React.MouseEvent) => void;
-  color: string; busy?: boolean; children: React.ReactNode;
+  color: string; busy?: boolean; filled?: boolean; children: React.ReactNode;
 }) {
+  const restBg = filled ? "color-mix(in srgb, var(--color-danger) 18%, transparent)" : "transparent";
   return (
     <button
       onClick={onClick}
       disabled={busy}
       className="px-2 py-0.5 transition-colors disabled:opacity-50"
-      style={{ background: "transparent", color, border: `1px solid ${color}`, fontFamily: "var(--font-mono)" }}
+      style={{ background: restBg, color, border: `1px solid ${color}`, fontFamily: "var(--font-mono)" }}
       onMouseEnter={(e) => { if (busy) return; const el = e.currentTarget as HTMLButtonElement; el.style.background = color; el.style.color = "var(--color-bg)"; }}
-      onMouseLeave={(e) => { if (busy) return; const el = e.currentTarget as HTMLButtonElement; el.style.background = "transparent"; el.style.color = color; }}
+      onMouseLeave={(e) => { if (busy) return; const el = e.currentTarget as HTMLButtonElement; el.style.background = restBg; el.style.color = color; }}
     >
       [{busy ? "…" : children}]
     </button>
