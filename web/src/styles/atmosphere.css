@@ -34,7 +34,7 @@
 /* Phosphor flicker — whole-screen luminance flutter, very subtle.
    Uses a translucent green wash whose opacity micro-animates. */
 .atmo-flicker {
-  background: rgba(124, 254, 0, 0.012);
+  background: color-mix(in srgb, var(--color-accent) 1.2%, transparent);
   mix-blend-mode: screen;
   animation: atmo-flicker 5.5s steps(1) infinite;
 }
@@ -55,7 +55,7 @@
 /* Corner brightness falloff already covered by vignette; add a faint
    top glow so the "tube" feels lit from the scan band. */
 .atmo-toplight {
-  background: linear-gradient(180deg, rgba(124, 254, 0, 0.025), transparent 22%);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 2.5%, transparent), transparent 22%);
   mix-blend-mode: screen;
 }
 
@@ -63,7 +63,7 @@
 /* Apply to accent text you want to feel emissive (countdowns, the
    live readouts, the wordmark in hero contexts). */
 .atmo-glow-text {
-  text-shadow: 0 0 12px var(--color-accent-glow), 0 0 2px rgba(124, 254, 0, 0.6);
+  text-shadow: 0 0 12px var(--color-accent-glow), 0 0 2px color-mix(in srgb, var(--color-accent) 60%, transparent);
 }
 .atmo-glow-text-soft {
   text-shadow: 0 0 18px var(--color-accent-glow);
@@ -121,7 +121,7 @@
 .hm-interactive-row:focus-within,
 .hm-pressable:hover,
 .hm-pressable:focus-within {
-  background: rgba(124, 254, 0, 0.025);
+  background: color-mix(in srgb, var(--color-accent) 2.5%, transparent);
 }
 .hm-interactive-row:hover::before,
 .hm-interactive-row:focus-within::before,
@@ -147,7 +147,7 @@
   background: linear-gradient(
     90deg,
     transparent 0%,
-    rgba(124, 254, 0, 0.05) 50%,
+    color-mix(in srgb, var(--color-accent) 5%, transparent) 50%,
     transparent 100%
   );
   animation: hm-skeleton-sweep 1.6s ease-in-out infinite;
@@ -357,4 +357,54 @@
 @media (prefers-reduced-motion: reduce) {
   .hm-tick-sep { animation: none !important; }
   .hm-stagger { animation: none !important; opacity: 1 !important; }
+}
+
+/* ---------- screen-well CRT texture ----------
+   Applied ONLY to the true-black --color-screen wells (robot presence
+   card, pulse strip) — the "screens" inside the chassis. Two layers:
+   a static raster (dark 1px lines every 3px, cutting the glyph glow
+   the way a CRT's beam gaps do) and cool-retro-term's slow descending
+   glow line — the sweep of a slightly miscalibrated monitor. Page
+   surfaces never get this; it's what makes the screens read as lit
+   glass rather than painted panels. */
+.hm-screen-well {
+  position: relative;
+}
+.hm-screen-well::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.22) 0px,
+    rgba(0, 0, 0, 0.22) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+.hm-screen-well::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 14px;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in srgb, var(--color-accent) 4.5%, transparent),
+    transparent
+  );
+  animation: hm-glowline-sweep 9s linear infinite;
+}
+@keyframes hm-glowline-sweep {
+  0%   { top: -12%; }
+  100% { top: 112%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hm-screen-well::after { animation: none !important; opacity: 0 !important; }
 }

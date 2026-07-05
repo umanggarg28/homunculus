@@ -198,9 +198,9 @@ export function SidebarRobot() {
       <div
         ref={cardRef}
         onMouseEnter={onEnter}
-        className={
-          glitching ? "hm-glitching" : annoyed ? "hm-robot-annoyed" : celebrating ? "hm-robot-celebrate" : undefined
-        }
+        className={`hm-screen-well ${
+          glitching ? "hm-glitching" : annoyed ? "hm-robot-annoyed" : celebrating ? "hm-robot-celebrate" : ""
+        }`}
         style={{
           border: `1px solid ${paused ? "color-mix(in srgb, var(--color-danger) 50%, transparent)" : "var(--color-border)"}`,
           // A CRT screen inside the chassis — the deepest black in the

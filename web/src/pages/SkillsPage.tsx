@@ -298,7 +298,7 @@ function SkillRow({ skill, maxCalls }: { skill: Skill; maxCalls: number }) {
       <div
         className="px-4 py-3 cursor-pointer"
         onClick={() => setOpen((v) => !v)}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "rgba(124,254,0,0.02)"; }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "color-mix(in srgb, var(--color-accent) 2%, transparent)"; }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "transparent"; }}
       >
         <div className="skill-row-grid">

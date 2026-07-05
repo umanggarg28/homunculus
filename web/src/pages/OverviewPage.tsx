@@ -17,6 +17,7 @@ import type { FeedEvent, MemoryEntry, Skill } from "@/lib/types";
 
 interface TodayStats {
   events: number;
+  llm_calls?: number;
   unique_tools: number;
   tasks_fired: number;
   memory_writes: number;
@@ -106,14 +107,14 @@ export function OverviewPage() {
           margin-bottom: 40px;
           overflow: hidden;
           background:
-            radial-gradient(circle at 13% 18%, rgba(124, 254, 0, 0.075), transparent 26%),
-            linear-gradient(180deg, rgba(119, 255, 61, 0.035), rgba(108, 231, 255, 0.012)),
+            radial-gradient(circle at 13% 18%, color-mix(in srgb, var(--color-accent) 7.5%, transparent), transparent 26%),
+            linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 3.5%, transparent), rgba(108, 231, 255, 0.012)),
             var(--color-surface-1);
           box-shadow:
-            inset 0 1px 0 rgba(215, 245, 223, 0.045),
-            inset 0 -1px 0 rgba(124, 254, 0, 0.025),
+            inset 0 1px 0 color-mix(in srgb, var(--color-text) 4.5%, transparent),
+            inset 0 -1px 0 color-mix(in srgb, var(--color-accent) 2.5%, transparent),
             0 18px 64px rgba(0, 0, 0, 0.32),
-            0 0 28px rgba(124, 254, 0, 0.035);
+            0 0 28px color-mix(in srgb, var(--color-accent) 3.5%, transparent);
         }
         .overview-command-main {
           border-right: 1px solid var(--color-border);
@@ -126,7 +127,7 @@ export function OverviewPage() {
           border-top: 1px solid var(--color-border);
           padding: 18px;
           background:
-            linear-gradient(90deg, rgba(124,254,0,0.025), transparent 42%),
+            linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 2.5%, transparent), transparent 42%),
             var(--color-surface-1);
         }
         .overview-command-status-grid {
@@ -140,7 +141,7 @@ export function OverviewPage() {
           min-width: 0;
           border: 1px solid var(--color-border);
           padding: 14px 16px;
-          background: linear-gradient(90deg, rgba(124,254,0,0.025), transparent 55%);
+          background: linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 2.5%, transparent), transparent 55%);
         }
         .overview-today-ledger {
           display: grid;
@@ -247,7 +248,7 @@ export function OverviewPage() {
         }
         .overview-ops-card {
           border: 1px solid var(--color-border);
-          background: linear-gradient(180deg, rgba(119,255,61,0.018), transparent), var(--color-surface-1);
+          background: linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 1.8%, transparent), transparent), var(--color-surface-1);
           min-width: 0;
           overflow: hidden;
           transition: border-color 180ms ease, box-shadow 220ms ease;
@@ -256,9 +257,9 @@ export function OverviewPage() {
         .overview-ops-card:focus-within {
           border-color: rgba(67, 133, 105, 0.76);
           box-shadow:
-            inset 0 1px 0 rgba(215,245,223,0.03),
+            inset 0 1px 0 color-mix(in srgb, var(--color-text) 3%, transparent),
             0 14px 46px rgba(0,0,0,0.24),
-            0 0 20px rgba(124,254,0,0.028);
+            0 0 20px color-mix(in srgb, var(--color-accent) 2.8%, transparent);
         }
         .overview-ops-head {
           display: flex;
@@ -398,11 +399,13 @@ function CommandStatus({
         {readyItems.map((item) => (
           <StatusCell key={item.label} {...item} />
         ))}
+        {/* Model calls — the one runtime number the ledger doesn't already
+            show (the old cell repeated EVENTS/TOOLS/FIRES verbatim). */}
         <StatusCell
-          label="runtime"
-          value={todayStats ? `${todayStats.events}` : "--"}
-          hint={todayStats ? `${todayStats.unique_tools} tools · ${todayStats.tasks_fired} fires` : "loading"}
-          tone={todayStats && todayStats.events > 0 ? "ok" : "idle"}
+          label="model calls"
+          value={todayStats ? `${todayStats.llm_calls ?? 0}` : "--"}
+          hint={todayStats ? `${fmtShort((todayStats.input_tokens ?? 0) + (todayStats.output_tokens ?? 0))} tokens today` : "loading"}
+          tone={todayStats && (todayStats.llm_calls ?? 0) > 0 ? "ok" : "idle"}
         />
         <StatusCell
           label="memory"
@@ -437,6 +440,7 @@ function deriveTodayStats(events: FeedEvent[]): TodayStats {
   const tools = new Set(today.filter((e) => e.event === "tool_call" && e.name).map((e) => e.name as string));
   return {
     events: today.length,
+    llm_calls: today.filter((e) => e.event === "llm_call").length,
     unique_tools: tools.size,
     tasks_fired: today.filter((e) => ["task_fired", "task_started", "scheduled_task"].includes(e.event)).length,
     memory_writes: today.filter((e) => e.event === "memory_write").length,
@@ -575,7 +579,11 @@ function buildReadiness({
   // memories param removed — capability cell now reflects tool usage only.
 }) {
   const usedTools = skills?.filter((s) => s.call_count > 0).length ?? null;
-  const failedTools = skills?.filter((s) => s.failure_count > 0).length ?? 0;
+  // Attention means CURRENT trouble. failure_count accumulates over the
+  // whole log, so "N tools failed" read as live when it was history —
+  // a failing STREAK (consecutive_failures, reset by any success) is
+  // the honest signal.
+  const failedTools = skills?.filter((s) => (s.consecutive_failures ?? 0) > 0).length ?? 0;
   const activeRecently = lastAgeSec !== null && lastAgeSec < 300;
   return [
     {
@@ -587,7 +595,7 @@ function buildReadiness({
     {
       label: "attention",
       value: failures > 0 || failedTools > 0 ? "CHECK" : "CLEAR",
-      hint: failures > 0 ? `${failures} failures today` : failedTools > 0 ? `${failedTools} tools failed` : "no failures",
+      hint: failures > 0 ? `${failures} failures today` : failedTools > 0 ? `${failedTools} tool${failedTools > 1 ? "s" : ""} failing` : "no failures",
       tone: failures > 0 || failedTools > 0 ? "warn" : "ok",
     },
     {
@@ -633,7 +641,7 @@ function AgentPanel({
     <div
       style={{
         border: "1px solid var(--color-border)",
-        background: "radial-gradient(ellipse at 50% 30%, rgba(124,254,0,0.03), transparent 70%)",
+        background: "radial-gradient(ellipse at 50% 30%, color-mix(in srgb, var(--color-accent) 3%, transparent), transparent 70%)",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
@@ -642,8 +650,9 @@ function AgentPanel({
         gap: 16,
       }}
     >
-      {/* Framed robot */}
-      <div style={{ position: "relative", width: "100%", maxWidth: 240, aspectRatio: "3/4", border: "1px solid var(--color-border)", background: "var(--color-surface-1)" }}>
+      {/* Framed robot — a CRT screen inside the chassis: the true-black
+          well plus the raster/sweep texture that marks lit glass. */}
+      <div className="hm-screen-well" style={{ position: "relative", width: "100%", maxWidth: 240, aspectRatio: "3/4", border: "1px solid var(--color-border)", background: "var(--color-screen)", overflow: "hidden" }}>
         {/* HUD top */}
         <div style={{ position: "absolute", left: 10, right: 10, top: 9, display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 8, letterSpacing: "0.14em", color: "var(--color-text-muted)", textTransform: "uppercase", pointerEvents: "none" }}>
           <span>UNIT · <b style={{ color: "var(--color-accent)", fontWeight: 500 }}>HMCL-01</b></span>

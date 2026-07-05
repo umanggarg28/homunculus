@@ -52,7 +52,13 @@ function RunCard({ run, open, onToggle }: { run: AgentReplayTurn; open: boolean;
   ).length;
   const blocked = run.tools.filter((t) => t.status === "blocked").length;
   const model = run.models[run.models.length - 1]?.model ?? "no model";
-  const cost = run.cost_cents > 0 ? `${run.cost_cents.toFixed(3)}c` : "$0";
+  // ¢ prefix like every other cost in the app (budget line, spend cell) —
+  // this card previously invented its own "0.123c"/"$0" formats.
+  const cost = run.cost_cents > 0 ? `¢${run.cost_cents.toFixed(2)}` : "¢0";
+  const tokens = (run.input_tokens ?? 0) + (run.output_tokens ?? 0);
+  const durationS = run.started_at && run.ended_at
+    ? Math.max(0, Math.round((new Date(run.ended_at).getTime() - new Date(run.started_at).getTime()) / 1000))
+    : null;
   const tone = failed ? "var(--color-danger)" : blocked ? "var(--color-amber)" : "var(--color-accent)";
   const title = runTitle(run);
 
@@ -74,10 +80,19 @@ function RunCard({ run, open, onToggle }: { run: AgentReplayTurn; open: boolean;
           <Chip label="calls" value={String(run.models.length)} />
           <Chip label="tools" value={String(run.tools.length)} tone={failed ? "danger" : blocked ? "warn" : "default"} />
           <Chip label="guards" value={String(run.guards.length)} />
+          <Tooltip
+            text={`${run.input_tokens.toLocaleString()} in · ${run.output_tokens.toLocaleString()} out · ${run.cached_tokens.toLocaleString()} cached`}
+            placement="top"
+          >
+            <span><Chip label="tok" value={fmtTokens(tokens)} /></span>
+          </Tooltip>
           <Chip label="cost" value={cost} />
         </div>
         <div className="trace-run-card-footer">
-          <span>{startedAt(run.started_at)}</span>
+          <span>
+            {startedAt(run.started_at)}
+            {durationS !== null && ` · ${durationS >= 60 ? `${Math.floor(durationS / 60)}m ${durationS % 60}s` : `${durationS}s`}`}
+          </span>
           <span>{open ? "collapse" : "inspect"}</span>
         </div>
       </button>
@@ -108,6 +123,12 @@ function RunCard({ run, open, onToggle }: { run: AgentReplayTurn; open: boolean;
       )}
     </article>
   );
+}
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}m`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
 }
 
 function TraceSection({ label, children }: { label: string; children: React.ReactNode }) {

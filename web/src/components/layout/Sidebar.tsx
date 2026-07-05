@@ -11,6 +11,7 @@ import { SidebarRobot } from "@/components/robot/SidebarRobot";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { SidebarTelemetry } from "./SidebarTelemetry";
 import { SoundToggle } from "./SoundToggle";
+import { PhosphorToggle } from "./PhosphorToggle";
 
 interface NavItem { to: string; label: string; short: string; kbd?: string; }
 
@@ -121,7 +122,7 @@ export function Sidebar() {
           content: "";
           position: absolute;
           inset: 0;
-          background: linear-gradient(90deg, transparent, rgba(124,254,0,0.10), transparent);
+          background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-accent) 10%, transparent), transparent);
           transform: translateX(-100%);
           transition: transform 0.5s ease;
           pointer-events: none;
@@ -318,6 +319,7 @@ export function Sidebar() {
       {/* Footer */}
       <div className="px-3 pb-2 pt-2 flex flex-col gap-1" style={{ borderTop: "1px solid var(--color-border)" }}>
         <SoundToggle />
+        <PhosphorToggle />
         <ModeToggle />
         <KillSwitch />
         <ProviderInline />

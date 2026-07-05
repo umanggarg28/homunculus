@@ -213,13 +213,13 @@ export function LandingPage() {
       <style>{`
         .landing-page {
           background:
-            linear-gradient(180deg, rgba(119,255,61,0.05), transparent 34%),
+            linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 5%, transparent), transparent 34%),
             linear-gradient(90deg, rgba(108,231,255,0.025), transparent 38%),
             var(--color-bg) !important;
         }
         .landing-actions {
           border: 1px solid var(--color-border);
-          background: linear-gradient(180deg, rgba(119,255,61,0.025), transparent), var(--color-surface-1);
+          background: linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 2.5%, transparent), transparent), var(--color-surface-1);
           box-shadow: 0 24px 80px rgba(0,0,0,0.26);
         }
         .landing-action-row {
@@ -229,7 +229,7 @@ export function LandingPage() {
         .landing-action-row:hover,
         .landing-action-row:focus-visible {
           background:
-            linear-gradient(90deg, rgba(124,254,0,0.10), rgba(124,254,0,0.025) 42%, transparent),
+            linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 10%, transparent), color-mix(in srgb, var(--color-accent) 2.5%, transparent) 42%, transparent),
             var(--color-surface-2);
           color: var(--color-text);
           box-shadow: inset 2px 0 0 var(--color-accent);
@@ -261,7 +261,7 @@ export function LandingPage() {
         }
         .landing-panel {
           border: 1px solid var(--color-border);
-          background: linear-gradient(180deg, rgba(119,255,61,0.022), transparent), var(--color-surface-1);
+          background: linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 2.2%, transparent), transparent), var(--color-surface-1);
           min-width: 0;
           transition: border-color 180ms ease, box-shadow 220ms ease, transform 180ms ease;
         }
@@ -269,9 +269,9 @@ export function LandingPage() {
         .landing-panel:hover {
           border-color: rgba(67, 133, 105, 0.78);
           box-shadow:
-            inset 0 1px 0 rgba(215,245,223,0.035),
+            inset 0 1px 0 color-mix(in srgb, var(--color-text) 3.5%, transparent),
             0 18px 58px rgba(0,0,0,0.28),
-            0 0 24px rgba(124,254,0,0.035);
+            0 0 24px color-mix(in srgb, var(--color-accent) 3.5%, transparent);
         }
         .landing-panel-head {
           padding: 14px 16px;
@@ -322,8 +322,8 @@ export function LandingPage() {
           border-top: none;
         }
         .landing-telemetry-cell:hover {
-          background: rgba(124,254,0,0.025);
-          box-shadow: inset 2px 0 0 rgba(124,254,0,0.7);
+          background: color-mix(in srgb, var(--color-accent) 2.5%, transparent);
+          box-shadow: inset 2px 0 0 color-mix(in srgb, var(--color-accent) 70%, transparent);
         }
         .landing-telemetry-cell:focus-visible {
           outline: 2px solid var(--color-accent);
