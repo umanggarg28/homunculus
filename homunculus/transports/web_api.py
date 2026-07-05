@@ -368,6 +368,15 @@ def _autonomous_replay_label(service: str, event: str | None, rec: dict) -> str:
 #                nudges); they're role=user but the user never typed them
 _NON_CHAT_SOURCES = frozenset({"heartbeat", "refinement", "harness"})
 
+# Harness corrections recorded before source-tagging existed carry no
+# `source` field, so the set above can't catch them — they're matched
+# by their fixed prefixes instead. Applies ONLY to untagged records;
+# everything written since tagging is filtered by source alone.
+_LEGACY_HARNESS_PREFIXES = (
+    "Your last reply did not include a tool call",
+    "Heads-up from the harness:",
+)
+
 
 def _visible_chat_history(history: list[dict]) -> list[dict]:
     """Filter persisted agent history down to visible complete chat turns.
@@ -400,6 +409,12 @@ def _visible_chat_history(history: list[dict]) -> list[dict]:
         # but is not part of the user's conversation. It used to render
         # as fake YOU/AI bubbles — the "traces leaking into chat" bug.
         if msg.get("source") in _NON_CHAT_SOURCES:
+            continue
+        if (
+            role == "user"
+            and not msg.get("source")
+            and content.startswith(_LEGACY_HARNESS_PREFIXES)
+        ):
             continue
         # Skip heartbeat notifications — they live in LLM context for
         # follow-up questions but shouldn't appear as chat bubbles.

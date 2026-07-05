@@ -161,3 +161,19 @@ def test_guard_rewrite_pair_keeps_the_receipt():
     ])
     assert [m["content"] for m in out] == ["q", "guard-rewritten reply"]
     assert out[1]["tools"] == ["weather"]
+
+
+def test_untagged_legacy_harness_corrections_are_hidden():
+    """Corrections recorded before source-tagging carry no source field
+    — they're matched by their fixed prefixes, and only when untagged
+    (a real user quoting the phrase mid-message is unaffected)."""
+    out = _visible_chat_history([
+        {"role": "user", "content": "Your last reply did not include a tool call. In this mode..."},
+        {"role": "user", "content": "Heads-up from the harness: you have 2 iterations left."},
+        _user("real question"),
+        _assistant("real answer"),
+    ])
+    assert [(m["role"], m["content"]) for m in out] == [
+        ("user", "real question"),
+        ("assistant", "real answer"),
+    ]

@@ -4,7 +4,11 @@ import types
 
 
 def _load_web_api():
-    if "tools" not in sys.modules:
+    # Guard on the REAL sys.modules key. The old bare-"tools" check was
+    # never true, so every call installed a FRESH stub — modules that
+    # imported tools earlier (web/skills.py) kept an older stub than the
+    # one later tests monkeypatched, and /api/skills read empty SCHEMAS.
+    if "homunculus.tools" not in sys.modules:
         tools_stub = types.ModuleType("tools")
         tools_stub.SCHEMAS = []
         tools_stub.init = lambda *a, **k: None
