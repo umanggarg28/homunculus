@@ -95,6 +95,15 @@ def _tail_lines_covering(p: Path, since: datetime, chunk: int = 256 * 1024) -> l
     return buf.decode("utf-8", errors="replace").splitlines()
 
 
+# Infrastructure keepalives are not agent activity. Every service emits
+# a ping every few minutes even when the agent does nothing, so counting
+# them into "events today" or the pulse strip's bins overstates a quiet
+# day by ~3x (observed 2026-07-05: 278 of 403 "events" were pings) and
+# paints a flat synthetic baseline onto the activity graph. They remain
+# in the log and in Traces — they're just not ACTIVITY.
+NON_ACTIVITY_EVENTS = frozenset({"service_ping"})
+
+
 def summarize_events(
     since: datetime,
     *,
@@ -152,8 +161,10 @@ def summarize_events(
         if ts < since:
             break
 
-        total_events += 1
         evt = rec.get("event", "")
+        if evt in NON_ACTIVITY_EVENTS:
+            continue
+        total_events += 1
         if evt == "tool_call":
             name = rec.get("name") or ""
             if name:

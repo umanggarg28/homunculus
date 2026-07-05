@@ -72,7 +72,7 @@ def stats_activity(hours: int = 24, bins: int = 288) -> JSONResponse:
         counts = [0] * bins
         total = 0
         span_s = hours * 3600
-        from homunculus.stats import _tail_lines_covering
+        from homunculus.stats import NON_ACTIVITY_EVENTS, _tail_lines_covering
         for line in _tail_lines_covering(wa.EVENTS_PATH, since):
             line = line.strip()
             if not line:
@@ -86,6 +86,9 @@ def stats_activity(hours: int = 24, bins: int = 288) -> JSONResponse:
                 ts = ts.replace(tzinfo=UTC)
             offset_s = (ts - since).total_seconds()
             if offset_s < 0 or offset_s > span_s:
+                continue
+            # Keepalive pings would paint a flat synthetic baseline.
+            if rec.get("event") in NON_ACTIVITY_EVENTS:
                 continue
             idx = min(bins - 1, int(offset_s / span_s * bins))
             counts[idx] += 1

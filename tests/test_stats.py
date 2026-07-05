@@ -133,3 +133,20 @@ def test_cost_bucketed_per_day_in_given_timezone(events_file):
     expected_day = late_utc.astimezone(ist).date().isoformat()
     assert list(s["cost_per_day"].keys()) == [expected_day]
     assert s["cost_cents"] == pytest.approx(15.0)  # 1M tok * $0.15/M = 15¢
+
+
+def test_keepalive_pings_are_not_activity(tmp_path):
+    """service_ping fires every few minutes from every container even
+    when the agent does nothing — counting it as activity overstated a
+    quiet day ~3x (2026-07-05: 278 of 403 'events' were pings)."""
+    p = tmp_path / "events.jsonl"
+    now = datetime.now(UTC)
+    lines = []
+    for i in range(10):
+        lines.append(json.dumps({"ts": (now - timedelta(minutes=i)).isoformat(), "event": "service_ping", "service": "web"}))
+    lines.append(json.dumps({"ts": now.isoformat(), "event": "tool_call", "name": "notify"}))
+    p.write_text("\n".join(lines) + "\n")
+
+    s = stats.summarize_events(now - timedelta(hours=1), path=p)
+    assert s["events"] == 1, "only the tool_call is activity"
+    assert s["notifies"] == 1
