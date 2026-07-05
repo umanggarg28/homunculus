@@ -9,12 +9,18 @@
  * tool call labels, and live signals.
  * =========================================================== */
 @theme {
-  /* Surfaces (darkest → lightest) */
-  --color-bg:        #030504;   /* page background */
-  --color-surface-1: #070B09;   /* sidebar / topbar */
-  --color-surface-2: #0B1110;   /* cards, primary content blocks */
-  --color-surface-3: #101918;   /* hover, raised */
-  --color-surface-4: #172321;   /* selected / active row */
+  /* Surfaces (darkest → lightest). The page field sits one step above
+     true black: high-chroma green on near-black halates (worst for
+     astigmatic eyes), and lifting the chassis lets the CRT "screens"
+     (--color-screen wells) read as physically deeper than the panel
+     around them. Whole ladder shifted together so every relationship
+     between surfaces is preserved. */
+  --color-screen:    #020403;   /* in-panel screen wells — the only true black */
+  --color-bg:        #060A08;   /* page background (the chassis) */
+  --color-surface-1: #0A0F0C;   /* sidebar / topbar */
+  --color-surface-2: #0E1513;   /* cards, primary content blocks */
+  --color-surface-3: #141D1B;   /* hover, raised */
+  --color-surface-4: #1A2724;   /* selected / active row */
 
   /* Borders — phosphor-tinted hairlines */
   --color-border:        #173227;
@@ -25,13 +31,18 @@
   --color-text:       #D7F5DF;
   --color-text-dim:   #93C7A7;
   --color-text-muted: #5F8771;
-  /* Dimmest legible tier — 3.75:1 on --color-bg (was #315344 at 2.39:1,
-     below any readability floor for the timestamps/sublabels it carries).
-     Still comfortably darker than muted (5.05:1), so the hierarchy holds. */
-  --color-text-faint: #45735B;
+  /* Dimmest legible tier — 3.79:1 on the lifted --color-bg (nudged one
+     step when the field rose so the floor held; muted sits at 4.9:1, so
+     the hierarchy is intact). */
+  --color-text-faint: #487760;
 
   /* Phosphor accent — the agent's signal */
   --color-accent:        #77FF3D;
+  /* Accent as RUNNING TEXT (prompt prefixes, reply markers) — same hue,
+     chroma pulled toward the cream tier. Marks, borders, numerals and
+     glows keep the pure accent; prose-adjacent green loses the vibrating
+     edge. */
+  --color-accent-ink:    #8CFD61;
   --color-accent-hover:  #A4FF74;
   --color-accent-dim:    rgba(124, 254, 0, 0.12);
   --color-accent-faint:  rgba(124, 254, 0, 0.05);

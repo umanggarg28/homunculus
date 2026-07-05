@@ -176,7 +176,7 @@ export function BrutalistChatInput({ sending, onSend, onCancel }: Props) {
           <span
             className="brut-chat-input-prompt select-none"
             style={{
-              color: "var(--color-accent)",
+              color: "var(--color-accent-ink)",
               fontSize: 13,
               lineHeight: "20px",
               flexShrink: 0,

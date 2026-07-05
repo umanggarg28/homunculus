@@ -164,7 +164,7 @@ export function TransmissionRow({ message }: { message: ChatMessage }) {
         >
           <div
             className="text-[9px] uppercase tracking-[0.22em] mb-2 inline-block"
-            style={{ color: "var(--color-accent)" }}
+            style={{ color: "var(--color-accent-ink)" }}
           >
             ◇ transmission · unprompted
           </div>
@@ -183,7 +183,7 @@ function UserPrompt({ content }: { content: string }) {
     >
       <span
         className="select-none"
-        style={{ color: "var(--color-accent)", marginRight: 8 }}
+        style={{ color: "var(--color-accent-ink)", marginRight: 8 }}
       >
         user@homunculus:~$
       </span>
@@ -238,7 +238,7 @@ function AgentReply({ message, toolCalls, inFlight, sending }: AgentReplyProps) 
         >
           <span
             className="select-none"
-            style={{ color: "var(--color-accent)", fontSize: 13, lineHeight: "1.7" }}
+            style={{ color: "var(--color-accent-ink)", fontSize: 13, lineHeight: "1.7" }}
           >
             ›
           </span>
