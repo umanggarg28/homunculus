@@ -350,6 +350,8 @@ def prepare_application(url: str) -> str:
                     needs_draft.append(label + suffix)
         fields.append(entry)
 
+    import html as _html
+
     app_id = f"{org}-{job_id}"
     plan = {
         "id": app_id,
@@ -359,6 +361,9 @@ def prepare_application(url: str) -> str:
         "job_id": job_id,
         "title": data.get("title", "?"),
         "created": _dt.now().isoformat(timespec="seconds"),
+        # JD digest rides in the plan so draft_all_answers can ground
+        # tailored answers without refetching.
+        "jd": _strip_html(_html.unescape(data.get("content") or ""), cap=2500),
         "fields": fields,
     }
     path = _applications_dir() / f"{app_id}.json"
@@ -375,10 +380,12 @@ def prepare_application(url: str) -> str:
         lines.append("Reserved for the user in the browser (never draft): "
                      + "; ".join(human_only))
     if needs_draft:
-        lines.append("Questions needing a drafted answer — write each with "
-                     "draft_answer(application_id, question, answer), grounded "
-                     "in career_context(), one call per question:")
-        lines += [f"  - {q}" for q in needs_draft]
+        lines.append(
+            f"{len(needs_draft)} questions need drafted answers. Call "
+            f"draft_all_answers(application_id={app_id!r}) — ONE call "
+            "drafts them all. Use draft_answer() only to revise a "
+            "single answer afterwards."
+        )
     else:
         lines.append("No free-text questions; the plan is ready.")
     lines.append(
@@ -438,3 +445,103 @@ def draft_answer(application_id: str, question: str, answer: str) -> str:
         "Saved — all free-text questions answered. Tell the user to run:\n"
         f"  uv run --group apply python scripts/apply_fill.py {application_id}"
     )
+
+
+_DRAFT_SYSTEM = (
+    "You draft job-application answers for the user, in their first-person "
+    "voice. Ground every claim ONLY in the provided career context — never "
+    "invent employers, dates, links, or numbers. If the context does not "
+    "contain the fact a question needs, reply exactly UNKNOWN. Output only "
+    "the answer text: no preamble, no markdown, no surrounding quotes."
+)
+
+
+def draft_all_answers(application_id: str) -> str:
+    """Draft every open question in a plan with one tool call.
+
+    The harness fans out one bounded plain-chat LLM call per question
+    instead of relying on the agent loop to sustain a long draft_answer
+    sequence (observed live: the model quits after 1-3 sequential calls
+    and no prompt or correction changes that — guards force honesty,
+    not stamina; iteration belongs to the harness)."""
+    path = _applications_dir() / f"{application_id}.json"
+    if not path.is_file():
+        return f"ERROR: no application plan '{application_id}'. Call prepare_application(url) first."
+    plan = _json.loads(path.read_text(encoding="utf-8"))
+
+    open_fields = [
+        f for f in plan["fields"]
+        if f["value"] is None and not f.get("human_only")
+        and (f["type"] in ("textarea", "input_text") or f.get("options"))
+    ]
+    if not open_fields:
+        return (
+            "Nothing to draft — every model-draftable question is answered. "
+            f"Tell the user to run:\n  uv run --group apply python scripts/apply_fill.py {application_id}"
+        )
+
+    from homunculus.llm import call_llm
+
+    context = career_context()[:6000]
+    jd = str(plan.get("jd") or "")[:2500]
+    drafted: list[str] = []
+    left_for_user: list[str] = []
+
+    for f in open_fields:
+        opts = f.get("options") or []
+        if opts:
+            instruction = "Answer with EXACTLY one of these options, nothing else: " + " | ".join(opts)
+        elif f["type"] == "textarea":
+            instruction = ("Write the answer: 2-6 sentences, specific to this job, "
+                           "first person, grounded only in the career context.")
+        else:
+            instruction = "Write a short one-line answer (a few words at most)."
+        messages = [
+            {"role": "system", "content": _DRAFT_SYSTEM},
+            {"role": "user", "content": (
+                f"CAREER CONTEXT:\n{context}\n\nJOB ({plan.get('title', '?')}):\n{jd}"
+                f"\n\nFORM QUESTION: {f['label']}\n{instruction}"
+            )},
+        ]
+        try:
+            answer = (call_llm(messages, None).get("content") or "").strip().strip('\'"')
+        except Exception as e:  # noqa: BLE001 — one failed draft must not sink the batch
+            log.warning(f"[career] draft failed for {f['label']!r}: {e}")
+            left_for_user.append(f["label"])
+            continue
+        if opts:
+            exact = [o for o in opts if o.lower() == answer.lower()]
+            if not exact:
+                messages += [
+                    {"role": "assistant", "content": answer},
+                    {"role": "user", "content": "Invalid. Reply with exactly one of: " + " | ".join(opts)},
+                ]
+                try:
+                    answer = (call_llm(messages, None).get("content") or "").strip()
+                except Exception:  # noqa: BLE001
+                    answer = ""
+                exact = [o for o in opts if o.lower() == answer.strip().lower()]
+            if not exact:
+                left_for_user.append(f["label"])
+                continue
+            answer = exact[0]
+        if not answer or answer.upper().startswith("UNKNOWN"):
+            # The wiki genuinely lacks the fact (e.g. "have you
+            # interviewed here before?") — guessing would be worse.
+            left_for_user.append(f["label"])
+            continue
+        f["value"], f["source"] = answer, "model"
+        drafted.append(f["label"])
+
+    path.write_text(_json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    lines = [f"Drafted {len(drafted)}/{len(open_fields)} questions:"]
+    lines += [f"  ✓ {d}" for d in drafted]
+    if left_for_user:
+        lines.append("Left for the user (context lacks the fact, or no valid option):")
+        lines += [f"  ○ {q}" for q in left_for_user]
+    lines.append(
+        "Tell the user to review and run:\n"
+        f"  uv run --group apply python scripts/apply_fill.py {application_id}"
+    )
+    return "\n".join(lines)

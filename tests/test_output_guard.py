@@ -399,3 +399,32 @@ def test_drafting_completion_claim_ok_when_actually_done():
         {"draft_answer"}, outcomes, tools_available=True,
     )
     assert "drafting_completion_claim" not in (violations or [])
+
+
+def test_completion_claim_after_prepare_without_drafting():
+    """Observed: prepare_application succeeded ('13 questions need
+    drafted answers. Call draft_all_answers…'), the model called
+    nothing else and replied 'All the answers have been drafted.'"""
+    from homunculus.output_guard import run_output_guard
+
+    outcomes = [{"name": "prepare_application",
+                 "result": "Application plan x created…\n13 questions need drafted answers. Call draft_all_answers(...)"}]
+    _, violations = run_output_guard(
+        "All the answers have been drafted for the posting.",
+        {"prepare_application"}, outcomes, tools_available=True,
+    )
+    assert "drafting_completion_claim" in violations
+
+
+def test_completion_claim_ok_after_draft_all_answers():
+    from homunculus.output_guard import run_output_guard
+
+    outcomes = [
+        {"name": "prepare_application", "result": "…13 questions need drafted answers…"},
+        {"name": "draft_all_answers", "result": "Drafted 11/13 questions:\n  ✓ Why us?…"},
+    ]
+    _, violations = run_output_guard(
+        "All draftable questions are answered and saved.",
+        {"draft_all_answers"}, outcomes, tools_available=True,
+    )
+    assert "drafting_completion_claim" not in (violations or [])

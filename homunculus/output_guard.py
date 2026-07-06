@@ -404,15 +404,31 @@ def run_output_guard(
     # sequence after a few calls and narrates completion (observed live:
     # 2 of 12 questions drafted, reply: "All required fields have been
     # drafted and saved").
-    _drafting_open = any(
+    _outcomes = tool_outcomes or []
+    _still_open = any(
         "Still needing answers" in str(o.get("result") or "")
-        for o in (tool_outcomes or [])
-        if o.get("name") == "draft_answer"
-    ) and not any(
-        "all free-text questions answered" in str(o.get("result") or "").lower()
-        for o in (tool_outcomes or [])
+        for o in _outcomes if o.get("name") == "draft_answer"
     )
-    if _drafting_open and _CLAIMS_DRAFTING_DONE_RE.search(reply):
+    # prepare_application announced questions to draft, and no drafting
+    # call ran after it (observed: prepare succeeded, model replied
+    # "All the answers have been drafted" having drafted nothing).
+    _announced_undrafted = any(
+        "need drafted answers" in str(o.get("result") or "")
+        for o in _outcomes if o.get("name") == "prepare_application"
+    ) and not any(
+        o.get("name") == "draft_all_answers" and "Drafted " in str(o.get("result") or "")
+        for o in _outcomes
+    )
+    _finished = any(
+        "all free-text questions answered" in str(o.get("result") or "").lower()
+        or "Nothing to draft" in str(o.get("result") or "")
+        for o in _outcomes
+    ) or any(
+        o.get("name") == "draft_all_answers" and "Drafted " in str(o.get("result") or "")
+        for o in _outcomes
+    )
+    if (_still_open or _announced_undrafted) and not _finished \
+            and _CLAIMS_DRAFTING_DONE_RE.search(reply):
         violations.append("drafting_completion_claim")
 
     lower_reply = reply.lower().replace("\n", " ")
@@ -636,11 +652,11 @@ _CLAIMS_DRAFTING_DONE_RE = __import__("re").compile(
 )
 
 _DRAFTING_INCOMPLETE_CORRECTION_PROMPT = (
-    "Your reply claims the drafting is complete, but the last "
-    "draft_answer result still listed unanswered questions. Nothing you "
-    "narrate is saved. Call draft_answer for EACH remaining question "
-    "now, one at a time, until the tool says the plan is complete — "
-    "then reply."
+    "Your reply claims the drafting is complete, but no drafting "
+    "actually finished this turn. Nothing you narrate is saved. Call "
+    "draft_all_answers(application_id=...) NOW — one call drafts every "
+    "open question — wait for its result, then reply with what it "
+    "reports."
 )
 
 _TOOL_SYNTAX_LEAK_CORRECTION_PROMPT = (

@@ -174,7 +174,7 @@ def test_prepare_application_fills_facts_never_guesses(tmp_path, monkeypatch):
     monkeypatch.setattr(career, "_get_json", lambda url, params=None: dict(_GH_FIXTURE))
     out = career.prepare_application("https://boards.greenhouse.io/acme/jobs/77")
     assert "acme-77" in out
-    assert "Why us?" in out  # listed as needing a draft
+    assert "draft_all_answers" in out  # the one-call drafting pointer
 
     import json
     plan = json.loads((tmp_path / "ws" / "applications" / "acme-77.json").read_text())
@@ -186,9 +186,8 @@ def test_prepare_application_fills_facts_never_guesses(tmp_path, monkeypatch):
     assert by_label["Why us?"]["value"] is None             # model's job, later
     assert by_label["Open to office 2 days/week?"]["value"] is None  # model may pre-choose, human confirms
     assert by_label["Open to office 2 days/week?"]["options"] == ["Yes", "No"]
-    # short texts and selects are listed for drafting, options shown
-    assert "Earliest start date" in out
-    assert "choose ONE of: Yes | No" in out
+    # short texts and selects count toward the drafting pointer
+    assert "3 questions need drafted answers" in out
 
 
 def test_draft_answer_round_trip(tmp_path, monkeypatch):
@@ -254,3 +253,52 @@ def test_visa_and_eeo_questions_are_human_only(tmp_path, monkeypatch):
     assert "Reserved for the user" in out
     assert "visa sponsorship" in out.lower()
     assert career.draft_answer("acme-77", "visa sponsorship", "No").startswith("ERROR")
+
+
+def test_draft_all_answers_fans_out_and_validates(tmp_path, monkeypatch):
+    """One tool call drafts everything: per-question harness LLM calls,
+    option validation, UNKNOWN → left for the user (never guessed)."""
+    _plan_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(career, "_get_json", lambda url, params=None: dict(_GH_FIXTURE))
+    career.prepare_application("https://boards.greenhouse.io/acme/jobs/77")
+
+    calls = []
+
+    def fake_llm(messages, tool_schemas=None, **kw):
+        q = messages[-1]["content"]
+        calls.append(q)
+        if "Why us?" in q:
+            return {"content": "Because I build agents for a living."}
+        if "office 2 days" in q.lower():
+            return {"content": "yes"}  # case-normalized to option
+        if "Earliest start" in q:
+            return {"content": "UNKNOWN"}
+        return {"content": "x"}
+
+    import homunculus.llm as llm_mod
+    monkeypatch.setattr(llm_mod, "call_llm", fake_llm)
+
+    out = career.draft_all_answers("acme-77")
+    assert "Drafted 2/3" in out
+    assert "Earliest start date" in out  # left for user, not guessed
+
+    import json
+    plan = json.loads((tmp_path / "ws" / "applications" / "acme-77.json").read_text())
+    by_label = {f["label"]: f for f in plan["fields"]}
+    assert by_label["Why us?"]["value"] == "Because I build agents for a living."
+    assert by_label["Open to office 2 days/week?"]["value"] == "Yes"  # canonical casing
+    assert by_label["Earliest start date"]["value"] is None
+    # each drafting call carried the career context and the JD title
+    assert all("CAREER CONTEXT" in c for c in calls)
+
+
+def test_draft_all_answers_complete_plan_says_so(tmp_path, monkeypatch):
+    _plan_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(career, "_get_json", lambda url, params=None: dict(_GH_FIXTURE))
+    career.prepare_application("https://boards.greenhouse.io/acme/jobs/77")
+    import homunculus.llm as llm_mod
+    # "Yes" satisfies the select's option validation; fine for text Qs too
+    monkeypatch.setattr(llm_mod, "call_llm", lambda m, t=None, **k: {"content": "Yes"})
+    career.draft_all_answers("acme-77")
+    out = career.draft_all_answers("acme-77")
+    assert "Nothing to draft" in out

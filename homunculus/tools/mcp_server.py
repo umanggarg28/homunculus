@@ -463,6 +463,14 @@ def prepare_application(
 
 
 @mcp.tool()
+def draft_all_answers(
+    application_id: Annotated[str, Field(description="Plan id returned by prepare_application, e.g. 'acme-4012345'.")],
+) -> str:
+    """Draft EVERY open question in an application plan with one call — the harness makes one grounded LLM call per question and validates each answer. Call this right after prepare_application. Questions the career wiki can't answer are left for the user; report them honestly."""
+    return career.draft_all_answers(application_id)
+
+
+@mcp.tool()
 def draft_answer(
     application_id: Annotated[str, Field(description="Plan id returned by prepare_application, e.g. 'acme-4012345'.")],
     question: Annotated[str, Field(description="The form question this answers (substring of its label).")],
