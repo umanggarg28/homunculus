@@ -1090,6 +1090,18 @@ class Agent:
         closed = 0
         for call in tool_calls:
             name = call["function"]["name"]
+            # The weak model occasionally leaks harmony channel markup into
+            # the tool NAME itself ("news_headlines<|channel|>commentary").
+            # The intended tool is unambiguous — strip the markup and
+            # dispatch rather than burning a turn on a does-not-exist error.
+            if "<|" in name:
+                trimmed = name.split("<|", 1)[0].strip()
+                events.emit(
+                    "output_guard",
+                    name=trimmed or name,
+                    text=f"tool name syntax leak: {name!r} → {trimmed!r}",
+                )
+                name = trimmed
             raw_args = call["function"].get("arguments") or "{}"
             try:
                 args = json.loads(raw_args)
