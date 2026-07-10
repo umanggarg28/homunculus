@@ -185,8 +185,9 @@ _MODEL_HINTS = [
     "gemini-2.5-pro",
     "meta-llama/llama-3.3-70b-instruct:free",
     "openai/gpt-oss-120b:free",
-    "anthropic/claude-sonnet-4-6",
-    "anthropic/claude-haiku-4-5",
+    "anthropic/claude-sonnet-5",
+    "anthropic/claude-sonnet-4.6",
+    "anthropic/claude-haiku-4.5",
 ]
 
 

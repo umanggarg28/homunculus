@@ -255,6 +255,37 @@ def test_visa_and_eeo_questions_are_human_only(tmp_path, monkeypatch):
     assert career.draft_answer("acme-77", "visa sponsorship", "No").startswith("ERROR")
 
 
+def test_company_history_questions_are_human_only(tmp_path, monkeypatch):
+    """Live failure 2026-07-06: 'Have you ever interviewed at Anthropic
+    before?' got a confident 'No' from BOTH the weak loop model and the
+    strong drafting model — no document can contain the fact, and the
+    UNKNOWN instruction doesn't hold. Company-history questions are
+    reserved for the human, same as visa/EEO."""
+    _plan_env(tmp_path, monkeypatch)
+    fixture = dict(_GH_FIXTURE)
+    fixture["questions"] = list(fixture["questions"]) + [
+        {"label": "Have you ever interviewed at Acme before?", "required": True,
+         "fields": [{"type": "multi_value_single_select",
+                     "values": [{"label": "Yes"}, {"label": "No"}]}]},
+        {"label": "How did you hear about this role?", "required": True,
+         "fields": [{"type": "input_text"}]},
+        {"label": "Were you referred by a current employee?", "required": False,
+         "fields": [{"type": "input_text"}]},
+    ]
+    monkeypatch.setattr(career, "_get_json", lambda url, params=None: fixture)
+    career.prepare_application("https://boards.greenhouse.io/acme/jobs/77")
+
+    import json
+    plan = json.loads((tmp_path / "ws" / "applications" / "acme-77.json").read_text())
+    by_label = {f["label"]: f for f in plan["fields"]}
+    assert by_label["Have you ever interviewed at Acme before?"]["human_only"]
+    assert by_label["How did you hear about this role?"]["human_only"]
+    assert by_label["Were you referred by a current employee?"]["human_only"]
+    # and drafting refuses them
+    out = career.draft_answer("acme-77", "interviewed at Acme", "No")
+    assert out.startswith("ERROR")
+
+
 def test_draft_all_answers_fans_out_and_validates(tmp_path, monkeypatch):
     """One tool call drafts everything: per-question harness LLM calls,
     option validation, UNKNOWN → left for the user (never guessed)."""
@@ -263,10 +294,12 @@ def test_draft_all_answers_fans_out_and_validates(tmp_path, monkeypatch):
     career.prepare_application("https://boards.greenhouse.io/acme/jobs/77")
 
     calls = []
+    models_used = []
 
     def fake_llm(messages, tool_schemas=None, **kw):
         q = messages[-1]["content"]
         calls.append(q)
+        models_used.append(kw.get("model"))
         if "Why us?" in q:
             return {"content": "Because I build agents for a living."}
         if "office 2 days" in q.lower():
@@ -290,6 +323,9 @@ def test_draft_all_answers_fans_out_and_validates(tmp_path, monkeypatch):
     assert by_label["Earliest start date"]["value"] is None
     # each drafting call carried the career context and the JD title
     assert all("CAREER CONTEXT" in c for c in calls)
+    # judgment calls route to the strong drafting model, not the loop default
+    from homunculus.config import get_config
+    assert models_used == [get_config().provider.drafting_model] * len(models_used)
 
 
 def test_draft_all_answers_complete_plan_says_so(tmp_path, monkeypatch):

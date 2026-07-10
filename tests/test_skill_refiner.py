@@ -252,7 +252,7 @@ def test_default_refinement_model_is_haiku() -> None:
     """Documents the cost/quality trade for the rare refinement-mode use
     case. If this default changes, the cost projection in the docstring
     must be updated too."""
-    assert DEFAULT_REFINEMENT_MODEL == "anthropic/claude-haiku-4-5"
+    assert DEFAULT_REFINEMENT_MODEL == "anthropic/claude-haiku-4.5"
 
 
 def test_resolve_refinement_model_priority_explicit_over_env(monkeypatch) -> None:
@@ -321,10 +321,10 @@ def test_refine_skill_explicit_model_wins(tmp_path: Path, monkeypatch) -> None:
             skill_name="skill_x",
             failure_context="ctx",
             memory=mem,
-            model="anthropic/claude-sonnet-4-6",
+            model="anthropic/claude-sonnet-4.6",
         )
 
-    assert seen_models == ["anthropic/claude-sonnet-4-6"]
+    assert seen_models == ["anthropic/claude-sonnet-4.6"]
 
 
 def test_refine_skill_exhausted_when_neither_tool_called(tmp_path: Path) -> None:

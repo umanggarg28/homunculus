@@ -40,7 +40,7 @@ def test_gemini_unchanged() -> None:
 
 def test_claude_unchanged() -> None:
     payload: dict = {}
-    _apply_reasoning_effort(payload, "anthropic/claude-haiku-4-5")
+    _apply_reasoning_effort(payload, "anthropic/claude-haiku-4.5")
     assert "reasoning" not in payload
 
 

@@ -56,6 +56,13 @@ def test_provider_defaults():
     assert provider.primary_max_retry_wait == 45.0
     assert provider.primary_default_retry_wait == 8.0
     assert provider.enforce_daily_budget is True
+    assert provider.drafting_model == "anthropic/claude-sonnet-5"
+
+
+def test_env_override_drafting_model(monkeypatch):
+    monkeypatch.setenv("HOMUNCULUS_DRAFTING_MODEL", "anthropic/claude-haiku-4.5")
+    config = HomunculusConfig.from_env()
+    assert config.provider.drafting_model == "anthropic/claude-haiku-4.5"
 
 
 def test_cache_defaults():

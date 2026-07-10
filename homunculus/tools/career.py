@@ -224,15 +224,22 @@ def _applications_dir() -> Path:
 
 _PERSONAL_ROW_RE = re.compile(r"\|\s*\*\*(?P<key>[^*|]+)\*\*\s*\|\s*(?P<val>[^|]+)\|")
 
-#: Questions the model must NEVER answer, even with options in hand:
-#: visa/work-authorization (a wrong answer is a legal misrepresentation
-#: — the observed failure: the wiki says "H1-B transfer, no lottery"
+#: Questions the model must NEVER answer, even with options in hand.
+#: Two categories: (1) visa/work-authorization and EEO/demographic
+#: self-identification — a wrong answer is a legal misrepresentation
+#: (the observed failure: the wiki says "H1-B transfer, no lottery"
 #: and the model rounded that to "No sponsorship required", which is
-#: false) and EEO/demographic self-identification. These stay empty in
-#: the plan and are decided by the human in the open browser.
+#: false); (2) the applicant's history with this specific company
+#: ("interviewed here before?", "referred by anyone?", "how did you
+#: hear about this role?") — no document can contain these facts, and
+#: the UNKNOWN instruction demonstrably fails to hold: models answer
+#: a confident "No" instead. Both stay empty in the plan and are
+#: decided by the human in the open browser.
 _HUMAN_ONLY_RE = re.compile(
     r"sponsor|visa|work authoriz|legally authorized|citizen|immigration"
-    r"|gender|race|ethnicit|veteran|disabilit|self.?identif",
+    r"|gender|race|ethnicit|veteran|disabilit|self.?identif"
+    r"|interviewed (at|with|here|before)|previously (applied|worked|interviewed)"
+    r"|applied (to|with|at|here|before)|referr|hear about",
     re.IGNORECASE,
 )
 
@@ -480,8 +487,10 @@ def draft_all_answers(application_id: str) -> str:
             f"Tell the user to run:\n  uv run --group apply python scripts/apply_fill.py {application_id}"
         )
 
+    from homunculus.config import get_config
     from homunculus.llm import call_llm
 
+    drafting_model = get_config().provider.drafting_model
     context = career_context()[:6000]
     jd = str(plan.get("jd") or "")[:2500]
     drafted: list[str] = []
@@ -504,7 +513,9 @@ def draft_all_answers(application_id: str) -> str:
             )},
         ]
         try:
-            answer = (call_llm(messages, None).get("content") or "").strip().strip('\'"')
+            answer = (
+                call_llm(messages, None, model=drafting_model).get("content") or ""
+            ).strip().strip('\'"')
         except Exception as e:  # noqa: BLE001 — one failed draft must not sink the batch
             log.warning(f"[career] draft failed for {f['label']!r}: {e}")
             left_for_user.append(f["label"])
@@ -517,7 +528,9 @@ def draft_all_answers(application_id: str) -> str:
                     {"role": "user", "content": "Invalid. Reply with exactly one of: " + " | ".join(opts)},
                 ]
                 try:
-                    answer = (call_llm(messages, None).get("content") or "").strip()
+                    answer = (
+                        call_llm(messages, None, model=drafting_model).get("content") or ""
+                    ).strip()
                 except Exception:  # noqa: BLE001
                     answer = ""
                 exact = [o for o in opts if o.lower() == answer.strip().lower()]
