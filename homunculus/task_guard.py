@@ -151,6 +151,20 @@ class TaskGuard:
                     f"output. If the tool itself failed, resend the message "
                     f"with that section omitted entirely."
                 )
+            # An odd number of ``` fences means an unclosed code block —
+            # the message was cut off mid-generation. Observed live
+            # (2026-07-09): a fallback provider truncated the notify
+            # argument mid-solution ("line = ") but the JSON stayed valid,
+            # so a half-finished LeetCode answer reached the user. Fences
+            # always pair; odd count is deterministic proof of a cut.
+            if text.count("```") % 2 == 1:
+                return (
+                    "BLOCKED: notify() not sent — the message has an "
+                    "unclosed ``` code fence, so it appears cut off "
+                    "mid-generation. Regenerate the COMPLETE message: "
+                    "finish the content, close the fence with ```, and "
+                    "call notify again."
+                )
             # Check criteria across ALL due tasks. If any task's criteria
             # would fail with the combined text so far + this proposed
             # message, refuse the send and tell the agent what's missing.

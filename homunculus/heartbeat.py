@@ -109,6 +109,9 @@ you. Do NOT read tasks.json; everything you need to judge is right here:
 
 {recent_deliveries}
 
+Skill files live in the memory directory: read_file("memory/skill_<name>.md").
+There is NO "skills/" directory — that path always fails.
+
 Before proposing anything, call list_proposals(status="pending") and skip
 any skill that already has a pending proposal — never file a duplicate.
 

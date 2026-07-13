@@ -57,6 +57,19 @@ def test_silent_task_gets_no_criteria(tasks_dir):
     assert task["success_criteria"] == []
 
 
+def test_unknown_task_id_error_suggests_close_match(tasks_dir):
+    """Live failure 2026-07-12: complete_task("quiz-cocoach") — the model
+    garbled the id and the bare not-found error left it guessing. The
+    error now names the nearest real id so the retry is a copy."""
+    _sched.create_task("Quiz coach", due_at="2027-07-09T20:00:00+05:30", notify=True)
+    with pytest.raises(KeyError) as exc:
+        _sched.complete_task("quiz-cocoach", "done")
+    # The MCP layer relays the exception message as the tool error the
+    # model sees ("Error executing tool complete_task: ...").
+    assert "not found" in str(exc.value)
+    assert "Did you mean 'quiz-coach'?" in str(exc.value)
+
+
 def test_commitment_check_in_gets_delivery_criteria(tasks_dir):
     out = _sched.record_commitment(
         "wish Umang luck before the interview",
