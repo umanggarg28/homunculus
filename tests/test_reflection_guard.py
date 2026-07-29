@@ -34,10 +34,22 @@ def test_blocks_workspace_writes_and_shell():
         assert heartbeat._reflection_tool_guard(name, {}) is not None, name
 
 
+def test_blocks_create_task_status_notes():
+    """Live misuse (07-14→22): reflection minted junk tasks as status
+    notes — 'reflection-completed-2026-07-15' (active forever, due=None),
+    'all-skill-deliveries-succeeded-…'. Reflection records real
+    commitments via record_commitment; create_task there is always junk."""
+    refusal = heartbeat._reflection_tool_guard(
+        "create_task", {"title": "reflection completed 2026-07-15"},
+    )
+    assert refusal is not None and "record_commitment" in refusal
+
+
 def test_allows_the_tools_reflection_actually_needs():
-    # Skill review + memory hygiene must pass straight through.
+    # Skill review + memory hygiene must pass straight through —
+    # including record_commitment, the sanctioned follow-up mechanism.
     for name in ("read_file", "recall", "list_proposals", "propose_skill",
-                 "remember", "forget"):
+                 "remember", "forget", "record_commitment"):
         assert heartbeat._reflection_tool_guard(name, {}) is None, name
 
 

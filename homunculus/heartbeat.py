@@ -226,6 +226,10 @@ _REFLECTION_FORBIDDEN = {
     "complete_task": "Reflection doesn't run tasks. Skip task-lifecycle calls.",
     "continue_task": "Reflection doesn't run tasks. Skip task-lifecycle calls.",
     "record_failure": "Reflection doesn't run tasks. Skip task-lifecycle calls.",
+    "create_task": "Reflection doesn't create reminder tasks — observed misuse: "
+                   "status-note tasks like 'reflection-completed-<date>' that "
+                   "pollute the store and never fire. For a REAL commitment "
+                   "found in the log, use record_commitment.",
     "write_file": "Reflection must not write workspace files. Use propose_skill, "
                   "remember, or forget.",
     "append_file": "Reflection must not write workspace files. Use propose_skill, "
