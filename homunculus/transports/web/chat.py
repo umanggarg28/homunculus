@@ -181,10 +181,11 @@ def _drain_notifications_for_chat(agent) -> None:
 # without typing the full provider path. Anything else is allowed too —
 # this is just a discoverability list shown by bare `/use`.
 _MODEL_HINTS = [
+    "deepseek/deepseek-v4-flash-0731",
+    "openai/gpt-oss-120b",
     "gemini-2.5-flash",
     "gemini-2.5-pro",
     "meta-llama/llama-3.3-70b-instruct:free",
-    "openai/gpt-oss-120b:free",
     "anthropic/claude-sonnet-5",
     "anthropic/claude-sonnet-4.6",
     "anthropic/claude-haiku-4.5",

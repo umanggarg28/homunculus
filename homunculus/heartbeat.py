@@ -1137,13 +1137,12 @@ def main() -> None:
 
     interval_min = int(os.environ.get("HEARTBEAT_INTERVAL_MINUTES", "60"))
     memory_dir = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
-    # Heartbeat's task is simpler than the bot/REPL — pick a smaller
-    # default. Saves ~6x on tokens-per-tick. Override via env if needed.
-    # Heartbeat default: openai/gpt-oss-120b (same as the chat primary).
-    # See core.MODEL for why — single-model setup keeps reliability
-    # reasoning consistent across heartbeat and chat. Override via
-    # HOMUNCULUS_MODEL_HEARTBEAT in .env if you want to A/B test.
-    model = os.environ.get("HOMUNCULUS_MODEL_HEARTBEAT", "openai/gpt-oss-120b")
+    # Heartbeat follows the PRIMARY model unless explicitly overridden via
+    # HOMUNCULUS_MODEL_HEARTBEAT (A/B testing knob). The old hardcoded
+    # default meant a primary-model swap in .env silently left the daemon
+    # on the previous model — one knob must move both loops.
+    from homunculus.llm import MODEL as _primary_model
+    model = os.environ.get("HOMUNCULUS_MODEL_HEARTBEAT") or _primary_model
 
     memory = Memory(memory_dir)
     tools.init(memory, autonomous=True)
