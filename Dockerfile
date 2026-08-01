@@ -31,11 +31,13 @@ COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 # Where our code lives inside the container.
 WORKDIR /app
 
-# uv reads pyproject.toml to install deps. Doing this BEFORE copying source
+# uv installs deps from the LOCKFILE. Doing this BEFORE copying source
 # means a code edit doesn't bust the dep-install cache layer — rebuilds are fast.
-# --no-install-project: install deps only, not the package itself.
-COPY pyproject.toml ./
-RUN uv sync --no-install-project
+# --frozen: install exactly uv.lock, never re-resolve — a rebuild without the
+# lock once silently pulled mcp 2.0.0 (breaking API) and killed every tool
+# for three days. --no-install-project: install deps only, not the package.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-install-project
 
 # Copy the source code into the image. The application lives in the
 # `homunculus` package; operational scripts and runtime config sit beside it.

@@ -49,12 +49,19 @@ def _setup(tmp_path, monkeypatch, n_due: int):
 def _patch_heartbeat(monkeypatch):
     """Stub the parts of tick() we don't exercise and capture isolated runs."""
     from homunculus import heartbeat
+    import homunculus.tools as tools_module
 
     monkeypatch.setattr(
         heartbeat.agent_controls, "load_controls",
         lambda: types.SimpleNamespace(paused=False),
     )
     monkeypatch.setattr(heartbeat.events, "emit", lambda *a, **k: None)
+    # A healthy (non-empty) tool registry — the outage guard skips task
+    # runs entirely when SCHEMAS is empty (see test_tool_registry_outage).
+    monkeypatch.setattr(
+        tools_module, "SCHEMAS",
+        [{"function": {"name": "notify"}}], raising=False,
+    )
 
     calls: list[tuple[str, int, int]] = []
 

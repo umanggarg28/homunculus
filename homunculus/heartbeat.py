@@ -363,6 +363,31 @@ def tick(memory: Memory, model: str | None) -> None:
         _run_reflection_or_idle(memory, model, tasks, now_iso)
         return
 
+    # A readable-but-EMPTY tool registry means the MCP tool server is down
+    # (import crash, bad dependency) — every task run is guaranteed to fail
+    # while still burning LLM calls. Observed live: a rebuild pulled a
+    # breaking mcp release, the registry stayed empty for three days, and
+    # 30 straight task runs flailed against "Available tools: ." with the
+    # user seeing only per-task escalation spam. Distinct from an
+    # UNREADABLE registry (introspection hiccup → capability gate fails
+    # open, tasks still run). Leave the tasks due — they fire as soon as
+    # the registry recovers — and tell the user ONCE per outage.
+    if _tool_registry_empty():
+        log.error(
+            "[heartbeat] tool registry is EMPTY (MCP server down?) — "
+            f"skipping {len(due_tasks)} due task(s) until tools return",
+        )
+        events.emit(
+            "tool_registry_empty",
+            name="heartbeat",
+            text=f"skipping {len(due_tasks)} due task(s) — no tools registered",
+        )
+        _alert_tool_registry_down_once()
+        return
+    # Healthy registry → arm the alert for the next outage.
+    global _registry_alert_sent
+    _registry_alert_sent = False
+
     log.info(
         f"\n[heartbeat] tick at {now_iso}: {len(due_tasks)} due task(s) "
         f"(model={model or 'default'})",
@@ -660,6 +685,41 @@ def settle_task_outcome(
         _settle_quiz_pending(task, delivered=False)
     except Exception as inner:
         log.error(f"[heartbeat] settle_task_outcome failed for {task_id}: {inner}")
+
+
+def _tool_registry_empty() -> bool:
+    """True when the tool catalogue is readable and has ZERO entries.
+
+    Empty and unreadable are opposite signals: unreadable → introspection
+    hiccup, fail open; empty → the MCP tool server never started, nothing
+    can succeed, fail LOUD (tick() skips task runs and alerts once).
+    """
+    try:
+        return not (getattr(tools, "SCHEMAS", None) or [])
+    except Exception:
+        return False
+
+
+#: One alert per outage, not one per tick: reset only when a tick sees a
+#: healthy registry again.
+_registry_alert_sent = False
+
+
+def _alert_tool_registry_down_once() -> None:
+    global _registry_alert_sent
+    if _registry_alert_sent:
+        return
+    _registry_alert_sent = True
+    try:
+        from homunculus.tools.notify import deliver
+        deliver(
+            "🛑 My tool server failed to start, so scheduled tasks are on "
+            "hold (they'll resume automatically once it's back). This "
+            "needs an operator look: `docker logs homunculus-heartbeat-1 "
+            "| grep -i mcp`."
+        )
+    except Exception as e:  # noqa: BLE001 — alerting must never crash the tick
+        log.info(f"[heartbeat] registry-down alert failed: {e}")
 
 
 def _known_tool_names() -> set[str] | None:
