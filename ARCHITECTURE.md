@@ -7,13 +7,17 @@ is*, so a new reader (or reviewer) can navigate the codebase in one sitting.
 ## 1. What this is, in one paragraph
 
 Homunculus is a single Python package (`homunculus/`) that wraps a tool-calling
-LLM (`openai/gpt-oss-120b` via OpenRouter) in the machinery that makes a small,
+LLM (currently `deepseek/deepseek-v4-flash-0731` via OpenRouter — swappable via
+`HOMUNCULUS_MODEL`, see `.env.example`) in the machinery that makes a small,
 open-weight model useful unattended: durable memory, scheduled tasks, a
 background autonomy loop, self-authored skills, and chat across web / Telegram /
 Discord. There is **no agent framework** — the loop is raw `httpx` + JSON. The
 central design bet is that **reliability is a property of the harness, not the
-model**: a 120B open model drifts, claims work it didn't do, and occasionally
+model**: a small open model drifts, claims work it didn't do, and occasionally
 invents data, so the harness verifies, gates, and audits everything around it.
+Quality-critical judgment calls (e.g. drafting job-application answers, see
+§3 `tools/career.py`) can route to a stronger paid model per-call via
+`HOMUNCULUS_DRAFTING_MODEL` while the routine loop stays on the cheap primary.
 
 ## 2. Runtime topology
 
@@ -74,8 +78,12 @@ homunculus/
 ├── events.py  notifications.py  messages.py  agent_controls.py
 ├── quiz.py    news_feeds.py     user_location.py  user_tz.py  logging_config.py
 │
-├── tools/               # ~23 tool modules (one concern each); _-prefixed = internal helpers
+├── tools/               # ~24 tool modules (one concern each); _-prefixed = internal helpers
 │   ├── notify.py  memory_tools.py  scheduling.py  authoring.py  report.py
+│   ├── career.py  # career wiki lookup + job-posting parse + application
+│   │               # drafting (prepare_application, draft_all_answers) —
+│   │               # facts from files, judgment from the model, mechanism
+│   │               # is scripts/apply_fill.py on the HOST (never submits)
 │   ├── news.py  leetcode.py  weather.py  github.py …   # deterministic-fetch tools
 │   └── mcp_server.py / mcp_manager.py / mcp_config.py   # MCP integration
 │
