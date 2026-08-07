@@ -137,12 +137,16 @@ _MODEL_PRICING_CENTS: dict[str, tuple[float, float]] = {
     "openai/gpt-4o":                            (250.0, 1000.0),
     "openai/gpt-4o-mini":                       (15.0,  60.0),
     "openai/gpt-4.1-mini":                      (40.0,  160.0),
-    "anthropic/claude-sonnet-4-6":              (300.0, 1500.0),
-    "anthropic/claude-haiku-4-5":               (100.0, 500.0),
+    "anthropic/claude-sonnet-5":                (200.0, 1000.0),
+    "anthropic/claude-sonnet-4.6":              (300.0, 1500.0),
+    "anthropic/claude-haiku-4.5":               (100.0, 500.0),
     "deepseek/deepseek-v3":                     (14.0,  28.0),
-    # gpt-oss-120b on OpenRouter: $0.20/M blended (per artificialanalysis.ai)
-    # roughly maps to $0.15/M input, $0.50/M output on the paid tier.
-    "openai/gpt-oss-120b":                      (15.0,  50.0),
+    "deepseek/deepseek-v4-flash-0731":          (14.0,  28.0),
+    "deepseek/deepseek-v4-pro":                 (43.5,  87.0),
+    "qwen/qwen3.7-flash":                       (3.0,   13.0),
+    # OpenRouter list price as of 2026-08; provider competition has cut it
+    # several times, so refresh when the budget report looks inflated.
+    "openai/gpt-oss-120b":                      (3.7,   17.0),
 }
 
 # Module-level cooldown cache: url|model -> wall-clock expiry timestamp.

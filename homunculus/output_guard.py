@@ -390,6 +390,47 @@ def run_output_guard(
     if reply.lstrip().startswith("ERROR:") or "ERROR running " in reply:
         violations.append("error_echo")
 
+    # Raw tool-call syntax in a final reply: the model wrote its harmony
+    # channel markup as TEXT instead of emitting a real tool call — the
+    # call never executed, and the prose around it typically claims the
+    # work happened (observed live: "<|start|>assistant<|channel|>
+    # commentary to=functions.job_posting …" followed by "the complete
+    # application is now saved" with zero calls made).
+    if any(m in reply for m in ("<|start|>", "<|channel|>", "<|message|>", "to=functions.")):
+        violations.append("tool_syntax_leak")
+
+    # "Everything is drafted/saved" while this turn's own tool results
+    # still listed open questions. The weak model quits a long drafting
+    # sequence after a few calls and narrates completion (observed live:
+    # 2 of 12 questions drafted, reply: "All required fields have been
+    # drafted and saved").
+    _outcomes = tool_outcomes or []
+    _still_open = any(
+        "Still needing answers" in str(o.get("result") or "")
+        for o in _outcomes if o.get("name") == "draft_answer"
+    )
+    # prepare_application announced questions to draft, and no drafting
+    # call ran after it (observed: prepare succeeded, model replied
+    # "All the answers have been drafted" having drafted nothing).
+    _announced_undrafted = any(
+        "need drafted answers" in str(o.get("result") or "")
+        for o in _outcomes if o.get("name") == "prepare_application"
+    ) and not any(
+        o.get("name") == "draft_all_answers" and "Drafted " in str(o.get("result") or "")
+        for o in _outcomes
+    )
+    _finished = any(
+        "all free-text questions answered" in str(o.get("result") or "").lower()
+        or "Nothing to draft" in str(o.get("result") or "")
+        for o in _outcomes
+    ) or any(
+        o.get("name") == "draft_all_answers" and "Drafted " in str(o.get("result") or "")
+        for o in _outcomes
+    )
+    if (_still_open or _announced_undrafted) and not _finished \
+            and _CLAIMS_DRAFTING_DONE_RE.search(reply):
+        violations.append("drafting_completion_claim")
+
     lower_reply = reply.lower().replace("\n", " ")
     if any(t in lower_reply for t in _GUARD_CONFABULATION_TERMS):
         if not (tool_names_used & {"web_fetch", "web_search"}):
@@ -605,7 +646,31 @@ _UNGROUNDED_URL_CORRECTION_PROMPT = (
 # Violation → correction prompt, most specific first. Ordering matters where
 # violations co-occur: the action/success families carry tool-calling
 # instructions, so they win over the generic path-leak restatement.
+_CLAIMS_DRAFTING_DONE_RE = __import__("re").compile(
+    r"\b(all|every)\b.{0,60}\b(drafted|saved|answered|complete[d]?)\b",
+    __import__("re").IGNORECASE | __import__("re").DOTALL,
+)
+
+_DRAFTING_INCOMPLETE_CORRECTION_PROMPT = (
+    "Your reply claims the drafting is complete, but no drafting "
+    "actually finished this turn. Nothing you narrate is saved. Call "
+    "draft_all_answers(application_id=...) NOW — one call drafts every "
+    "open question — wait for its result, then reply with what it "
+    "reports."
+)
+
+_TOOL_SYNTAX_LEAK_CORRECTION_PROMPT = (
+    "Your reply contains raw tool-call markup (<|channel|>/to=functions...) "
+    "as plain text — that call was NEVER executed, and nothing it claimed "
+    "happened. Re-issue the operation as a proper tool call (one call, no "
+    "markup in your text), wait for its result, then answer based on what "
+    "actually happened. Do not claim work is saved unless the tool result "
+    "confirmed it."
+)
+
 _CORRECTION_PROMPTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("tool_syntax_leak",), _TOOL_SYNTAX_LEAK_CORRECTION_PROMPT),
+    (("drafting_completion_claim",), _DRAFTING_INCOMPLETE_CORRECTION_PROMPT),
     (("action_claim_without_tool_call",), _ACTION_CLAIM_CORRECTION_PROMPT),
     (
         ("success_claim_all_tools_failed", "success_claim_tool_failed"),

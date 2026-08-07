@@ -726,7 +726,14 @@ class TaskStore:
         for task in tasks:
             if task.get("id") == task_id:
                 return task
-        raise KeyError(f"task '{task_id}' not found")
+        # The model garbles ids under load ("quiz-cocoach" for
+        # "quiz-coach", a hallucinated digit in a job id). A close-match
+        # hint turns the retry from a blind guess into a copy.
+        import difflib
+        known = [t.get("id", "") for t in tasks]
+        close = difflib.get_close_matches(task_id, known, n=1, cutoff=0.6)
+        hint = f" Did you mean '{close[0]}'?" if close else ""
+        raise KeyError(f"task '{task_id}' not found.{hint}")
 
     @staticmethod
     def _normalize_datetime(value: str | None) -> str | None:

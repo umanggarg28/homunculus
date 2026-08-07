@@ -68,17 +68,25 @@ def rotate(keep_days: int = 14) -> int:
         lines = _EVENTS_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
         kept: list[str] = []
         dropped = 0
-        for line in lines:
+        for i, line in enumerate(lines):
             line = line.strip()
             if not line:
                 continue
             try:
-                ts = json.loads(line).get("ts", "")
+                ts = json.loads(line, strict=False).get("ts", "")
                 if ts < cutoff:
                     dropped += 1
                     continue
             except Exception:
-                pass  # malformed line — keep it
+                # Malformed line: no consumer can read it (budget, stats,
+                # and the feed all skip unparseable lines), so keeping it
+                # only preserves corruption forever — a disk-full crash
+                # once pinned a multi-MB NUL blob in the log this way.
+                # Drop it, EXCEPT the final line, which may be another
+                # service's append still in flight rather than corruption.
+                if i < len(lines) - 1:
+                    dropped += 1
+                    continue
             kept.append(line)
         if dropped:
             _EVENTS_PATH.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")

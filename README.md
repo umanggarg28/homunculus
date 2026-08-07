@@ -6,13 +6,13 @@
 
 ![CI](https://github.com/umanggarg28/homunculus/actions/workflows/ci.yml/badge.svg)
 &nbsp;![Python](https://img.shields.io/badge/python-3.12-blue)
-&nbsp;![Model](https://img.shields.io/badge/model-gpt--oss--120b-6e56cf)
+&nbsp;![Model](https://img.shields.io/badge/model-deepseek--v4--flash-6e56cf)
 
 One small Python package wraps a tool-calling LLM in the pieces that make it
 useful unattended: durable memory, scheduled tasks, a background autonomy loop,
 self-authored skills, and chat over the web, Telegram, and Discord. It runs on
-an open-weight model (`openai/gpt-oss-120b` via OpenRouter) on a deliberately
-tight budget.
+a small, cheap open-weight model (`deepseek/deepseek-v4-flash-0731` via
+OpenRouter, swappable in `.env`) on a deliberately tight budget.
 
 <div align="center">
 <table>
@@ -29,10 +29,10 @@ tight budget.
 
 ## The problem
 
-Homunculus runs a small, open-weight model (`gpt-oss-120b`) unattended on a tight
-budget. A model that size drifts off task, claims work it didn't do, and
-sometimes invents data — so reliability is treated as a property of the harness,
-not the model:
+Homunculus runs a small, open-weight model unattended on a tight budget. A
+model that size drifts off task, claims work it didn't do, and sometimes
+invents data — so reliability is treated as a property of the harness, not
+the model:
 
 - **Deliveries are verified against tool output** — a result with no work behind
   it, or a fabricated link, is refused rather than sent.
@@ -53,6 +53,10 @@ end to end.
   with optional semantic recall.
 - **Runs scheduled work on its own** via a heartbeat daemon — daily briefs, a
   weekly GitHub health check, a spaced-repetition quiz coach, RSS digests.
+- **Drafts job applications from your own career context** — paste a posting
+  link and it fills the form's free-text answers grounded in a wiki you
+  control, leaves legal/EEO questions to you by design, and never submits;
+  a visible local browser does the mechanical fill for your review.
 - **Extends itself** by proposing new skills and repairing broken ones — every
   change is filed for your approval, never applied silently.
 - **Stays cheap and honest** — a multi-provider fallback chain, a per-tick
@@ -74,7 +78,7 @@ flowchart TB
 
     AGENT["<b>core.Agent</b> — the LLM loop<br/>per-tick budget · one isolated run per task"]
     GUARD{{"Delivery guard<br/>checks success_criteria<br/>before output goes out"}}
-    OR["LLM providers<br/>gpt-oss-120b → fallback chain"]
+    OR["LLM providers<br/>primary model → fallback chain"]
 
     subgraph proc["Tool server · MCP subprocess"]
         TOOLS["fs · web · python · notify<br/>memory · tasks · skills"]

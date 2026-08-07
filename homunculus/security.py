@@ -101,6 +101,7 @@ _UNTRUSTED_CONTENT_TOOLS = frozenset({
     "gmail_unread",
     "gmail_search",
     "calendar_events",
+    "job_posting",
 })
 
 

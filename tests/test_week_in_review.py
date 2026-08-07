@@ -45,6 +45,23 @@ def test_empty_world_returns_valid_zeroed_report(wired):
     assert "from" in out["window"] and "to" in out["window"]
 
 
+def test_suggested_message_bakes_in_exact_figures(wired):
+    """Live fabrication (2026-07-25): the tool reported 42.0 of 210.0
+    cents and the model's message said '¢500 of ¢1000'. The tool now
+    ships a ready-to-send body with the numbers already inside, so the
+    correct message is the laziest possible action."""
+    _tasks_dir, events = wired
+    recent = (datetime.now() - timedelta(hours=2)).astimezone().isoformat(timespec="seconds")
+    events.write_text(json.dumps(
+        {"ts": recent, "event": "tool_call", "name": "notify"}
+    ) + "\n", encoding="utf-8")
+    out = json.loads(_report.week_in_review())
+    msg = out["suggested_message"]
+    assert "¢0 of ¢119 weekly budget" in msg
+    assert "1 deliveries" in msg
+    assert "never alter the numbers" in out["note"].lower()
+
+
 def test_activity_counts_flow_from_event_log(wired):
     _tasks_dir, events = wired
     recent = (datetime.now() - timedelta(hours=2)).astimezone().isoformat(timespec="seconds")

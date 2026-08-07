@@ -68,7 +68,10 @@ class LoopConfig(BaseModel):
     model_config = _STRICT
 
     max_turns: PositiveInt = Field(
-        default=20,
+        # 28: a long application form legitimately needs ~20 sequential
+        # tool calls (prepare + context + one draft_answer per question)
+        # — the budget enforcer, not this cap, is the runaway backstop.
+        default=28,
         description=(
             "Iteration cap per chat/heartbeat turn. The loop yields a "
             "fallback string after this many LLM calls without a final reply."
@@ -125,6 +128,16 @@ class ProviderConfig(BaseModel):
     primary_max_retry_wait: PositiveFloat = Field(default=45.0)
     primary_default_retry_wait: PositiveFloat = Field(default=8.0)
     enforce_daily_budget: bool = Field(default=True)
+    drafting_model: str = Field(
+        default="anthropic/claude-sonnet-5",
+        description=(
+            "Model for harness-owned judgment calls (drafting job-application "
+            "answers). These are few, bounded, and quality-critical — user-"
+            "facing prose sent to third parties — so they route to a strong "
+            "model while the routine agent loop stays on the cheap primary. "
+            "Still budget-enforced like every paid call."
+        ),
+    )
 
 
 class CacheConfig(BaseModel):
@@ -250,7 +263,13 @@ class HomunculusConfig(BaseModel):
         return cls(
             loop=LoopConfig(**_load_from_env(LoopConfig, "HOMUNCULUS")),
             task=TaskLifecycleConfig(**_load_from_env(TaskLifecycleConfig, "HOMUNCULUS")),
-            provider=ProviderConfig(**_load_from_env(ProviderConfig, "HOMUNCULUS_PROVIDER")),
+            provider=ProviderConfig(**_load_from_env(
+                ProviderConfig,
+                "HOMUNCULUS_PROVIDER",
+                # Model selection reads like HOMUNCULUS_MODEL, not like a
+                # provider-chain tuning knob — keep the env family together.
+                overrides={"drafting_model": "HOMUNCULUS_DRAFTING_MODEL"},
+            )),
             cache=CacheConfig(**_load_from_env(
                 CacheConfig,
                 # Unused — every cache field uses an explicit legacy name.

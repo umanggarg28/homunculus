@@ -89,8 +89,32 @@ def create_task(
         if _slug(existing["title"]) == title_slug:
             task = store.schedule(existing["id"], due_at or existing.get("due_at") or "", recurrence if recurrence != "none" else existing.get("recurrence", "none"))
             return f"Updated existing task {task['id']} (was {existing['status']}): {task['title']} — due {task.get('due_at')}, recurrence: {task.get('recurrence')}"
-    task = store.create(title, description, due_at, recurrence, notify)
+    task = store.create(
+        title, description, due_at, recurrence, notify,
+        success_criteria=_default_reminder_criteria(title, notify),
+    )
     return f"Created task {task['id']}: {task['title']}"
+
+
+def _default_reminder_criteria(title: str, notify: bool) -> list[dict]:
+    """Harness-owned delivery contract for a notifying task.
+
+    create_task exposes no success_criteria parameter on purpose — the
+    contract for "a reminder fired" is the harness's to define, never
+    the model's. Observed live without this: the model invented a
+    success_criteria argument (silently dropped), the task stored with
+    no criteria, and at fire time a 34-char nonsense notify ("Memorang
+    response: task completed.") plus a false completion claim passed
+    the gate unchallenged. With these defaults the TaskGuard pre-send
+    check rejects any notify that doesn't actually mention the
+    reminder, and complete_task stays blocked until one does.
+    """
+    if not notify:
+        return []
+    criteria: list[dict] = [{"type": "notify_called"}]
+    if title.strip():
+        criteria.append({"type": "notify_contains", "text": title.strip()})
+    return criteria
 
 
 _COMMITMENT_KINDS = {"deadline_check", "event_check_in", "open_loop", "care_check_in"}
@@ -146,7 +170,10 @@ def record_commitment(
             store.schedule(existing["id"], check_at or existing.get("due_at") or "", "none")
             return f"Updated existing commitment {existing['id']}: {existing['title']}"
     desc = f"[commitment:{kind}] Proactive check-in the agent inferred, not a user reminder. {what}"
-    task = store.create(what, desc, check_at, "none", notify=True, source="inferred")
+    task = store.create(
+        what, desc, check_at, "none", notify=True, source="inferred",
+        success_criteria=_default_reminder_criteria(what, notify=True),
+    )
     return (
         f"Recorded commitment {task['id']} ({kind}): {task['title']} — "
         f"event {event_at}, check-in fires {task.get('due_at')}"

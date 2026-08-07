@@ -60,7 +60,29 @@ def week_in_review() -> str:
         })
 
     daily_budget_usd = float(os.environ.get("HOMUNCULUS_DAILY_BUDGET_USD", "0") or "0")
+
+    # Pre-formatted message with the numbers baked in. The model reported
+    # "¢500 of ¢1000" from a result that said 42.0 of 210.0 (live,
+    # 2026-07-25) — a weak model transcribing figures into its own prose
+    # is a fabrication surface. Giving it a ready-to-send body makes the
+    # correct message the laziest possible action.
+    weekly_budget_cents = daily_budget_usd * 100 * 7
+    suggested = (
+        f"🗓 Weekly check-in — {now_local.date().isoformat()}\n\n"
+        f"This week:\n"
+        f"• {s['notifies']} deliveries · {s['task_failures']} failure(s) recorded\n"
+        f"• spend ¢{s['cost_cents']:.0f} of ¢{weekly_budget_cents:.0f} weekly budget\n"
+        f"• {s['llm_calls']} model calls · "
+        f"{s['input_tokens'] + s['output_tokens']:,} tokens"
+    )
+
     return json.dumps({
+        "suggested_message": suggested,
+        "note": (
+            "Send suggested_message via notify(), appending any nudges the "
+            "playbook asks for. NEVER alter the numbers — they are computed "
+            "from the event ledger and must reach the user exactly."
+        ),
         "window": {
             "from": since_local.isoformat(timespec="seconds"),
             "to": now_local.isoformat(timespec="seconds"),

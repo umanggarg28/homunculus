@@ -70,7 +70,7 @@ if TYPE_CHECKING:  # avoid import at module-load time
 #
 # Override via HOMUNCULUS_MODEL_REFINEMENT in .env or --model on the
 # CLI for one-off experiments.
-DEFAULT_REFINEMENT_MODEL = "anthropic/claude-haiku-4-5"
+DEFAULT_REFINEMENT_MODEL = "anthropic/claude-haiku-4.5"
 
 
 REFINEMENT_PROMPT_TEMPLATE = """You are in SKILL-REFINEMENT mode.

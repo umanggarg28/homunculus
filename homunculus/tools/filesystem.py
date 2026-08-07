@@ -31,11 +31,36 @@ def _sandbox_error(path: str, exc: PathOutsideWorkspace) -> str:
     )
 
 
+def _missing_file_error(path: str) -> str:
+    """ERROR string for a nonexistent path, with same-name suggestions.
+
+    The model frequently drops the directory from a known filename
+    ("skill_quiz_coach.md" instead of "memory/skill_quiz_coach.md") and
+    then burns turns retrying blind. Searching the workspace for the
+    basename lets the error message itself carry the correct path.
+    """
+    from ._helpers import WORKSPACE_ROOT
+
+    _SKIP = {"cache", "__pycache__", ".git", "node_modules", ".venv"}
+    name = Path(path).name
+    found: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(WORKSPACE_ROOT):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in _SKIP]
+        if name in filenames:
+            found.append(str((Path(dirpath) / name).relative_to(WORKSPACE_ROOT)))
+            if len(found) >= 3:
+                break
+    hint = f" Did you mean: {', '.join(found)}?" if found else ""
+    return f"ERROR: file '{path}' does not exist.{hint}"
+
+
 def read_file(path: str) -> str:
     try:
         safe = normalize_workspace_path(path)
     except PathOutsideWorkspace as e:
         return _sandbox_error(path, e)
+    if not Path(safe).is_file():
+        return _missing_file_error(path)
     text = Path(safe).read_text(encoding="utf-8")
     max_chars = get_config().loop.read_file_max_chars
     if len(text) <= max_chars:

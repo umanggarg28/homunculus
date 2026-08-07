@@ -109,6 +109,9 @@ you. Do NOT read tasks.json; everything you need to judge is right here:
 
 {recent_deliveries}
 
+Skill files live in the memory directory: read_file("memory/skill_<name>.md").
+There is NO "skills/" directory — that path always fails.
+
 Before proposing anything, call list_proposals(status="pending") and skip
 any skill that already has a pending proposal — never file a duplicate.
 
@@ -223,6 +226,10 @@ _REFLECTION_FORBIDDEN = {
     "complete_task": "Reflection doesn't run tasks. Skip task-lifecycle calls.",
     "continue_task": "Reflection doesn't run tasks. Skip task-lifecycle calls.",
     "record_failure": "Reflection doesn't run tasks. Skip task-lifecycle calls.",
+    "create_task": "Reflection doesn't create reminder tasks — observed misuse: "
+                   "status-note tasks like 'reflection-completed-<date>' that "
+                   "pollute the store and never fire. For a REAL commitment "
+                   "found in the log, use record_commitment.",
     "write_file": "Reflection must not write workspace files. Use propose_skill, "
                   "remember, or forget.",
     "append_file": "Reflection must not write workspace files. Use propose_skill, "
@@ -231,12 +238,39 @@ _REFLECTION_FORBIDDEN = {
 }
 
 
-def _reflection_tool_guard(name: str, arguments: dict) -> str | None:
-    """The reflection Agent's pre_execute_hook: refuse a forbidden tool by
-    returning a string (surfaced to the agent as that tool's result), else None
-    to allow. Mirrors how task ticks attach guard.on_tool_call."""
-    refusal = _REFLECTION_FORBIDDEN.get(name)
-    return f"BLOCKED: {refusal}" if refusal else None
+#: The prompt says "AT MOST 2" for both — stated once, unenforced, so a
+#: model can spin rewording the same memory forever, only ever curbed by
+#: the generic 3-identical-calls STUCK_LOOP (which restarts every time it
+#: rewords). Observed live: 11 remember() calls in one reflection tick, all
+#: paraphrases of the same daily summary. The cap makes "at most 2" real.
+_REFLECTION_CALL_CAPS = {"remember": 2, "forget": 2}
+
+
+class _ReflectionToolGuard:
+    """The reflection Agent's pre_execute_hook for one tick.
+
+    A fresh instance per tick (constructed in _run_reflection_or_idle) so
+    the call counters never leak between days — mirrors how TaskGuard is
+    built per task-run rather than kept as module state.
+    """
+
+    def __init__(self) -> None:
+        self._counts: dict[str, int] = {}
+
+    def __call__(self, name: str, arguments: dict) -> str | None:
+        refusal = _REFLECTION_FORBIDDEN.get(name)
+        if refusal:
+            return f"BLOCKED: {refusal}"
+        cap = _REFLECTION_CALL_CAPS.get(name)
+        if cap is not None:
+            self._counts[name] = self._counts.get(name, 0) + 1
+            if self._counts[name] > cap:
+                return (
+                    f"BLOCKED: {name}() already called {cap} time(s) this "
+                    f"reflection tick — that's the limit. Stop here; if the "
+                    f"content needs refining, that's a future tick's job."
+                )
+        return None
 
 
 #: A task still flagged ``executing`` after this long has lost its agent without
@@ -303,7 +337,7 @@ def _run_reflection_or_idle(
     # a rule stated only in the prompt once let a reflection tick notify()
     # the user a fabricated skill update; run-scoped enforcement can't leak
     # into (or out of) any other agent in the process.
-    agent = Agent(memory=memory, model=model, pre_execute_hook=_reflection_tool_guard)
+    agent = Agent(memory=memory, model=model, pre_execute_hook=_ReflectionToolGuard())
     yesterday_iso, yesterday_path = _yesterday_iso_and_path()
     log.info(f"\n[heartbeat] REFLECTION tick at {now_iso} "
              f"(reviewing {yesterday_iso}, model={agent.model})")
@@ -355,6 +389,31 @@ def tick(memory: Memory, model: str | None) -> None:
     if not due_tasks:
         _run_reflection_or_idle(memory, model, tasks, now_iso)
         return
+
+    # A readable-but-EMPTY tool registry means the MCP tool server is down
+    # (import crash, bad dependency) — every task run is guaranteed to fail
+    # while still burning LLM calls. Observed live: a rebuild pulled a
+    # breaking mcp release, the registry stayed empty for three days, and
+    # 30 straight task runs flailed against "Available tools: ." with the
+    # user seeing only per-task escalation spam. Distinct from an
+    # UNREADABLE registry (introspection hiccup → capability gate fails
+    # open, tasks still run). Leave the tasks due — they fire as soon as
+    # the registry recovers — and tell the user ONCE per outage.
+    if _tool_registry_empty():
+        log.error(
+            "[heartbeat] tool registry is EMPTY (MCP server down?) — "
+            f"skipping {len(due_tasks)} due task(s) until tools return",
+        )
+        events.emit(
+            "tool_registry_empty",
+            name="heartbeat",
+            text=f"skipping {len(due_tasks)} due task(s) — no tools registered",
+        )
+        _alert_tool_registry_down_once()
+        return
+    # Healthy registry → arm the alert for the next outage.
+    global _registry_alert_sent
+    _registry_alert_sent = False
 
     log.info(
         f"\n[heartbeat] tick at {now_iso}: {len(due_tasks)} due task(s) "
@@ -653,6 +712,41 @@ def settle_task_outcome(
         _settle_quiz_pending(task, delivered=False)
     except Exception as inner:
         log.error(f"[heartbeat] settle_task_outcome failed for {task_id}: {inner}")
+
+
+def _tool_registry_empty() -> bool:
+    """True when the tool catalogue is readable and has ZERO entries.
+
+    Empty and unreadable are opposite signals: unreadable → introspection
+    hiccup, fail open; empty → the MCP tool server never started, nothing
+    can succeed, fail LOUD (tick() skips task runs and alerts once).
+    """
+    try:
+        return not (getattr(tools, "SCHEMAS", None) or [])
+    except Exception:
+        return False
+
+
+#: One alert per outage, not one per tick: reset only when a tick sees a
+#: healthy registry again.
+_registry_alert_sent = False
+
+
+def _alert_tool_registry_down_once() -> None:
+    global _registry_alert_sent
+    if _registry_alert_sent:
+        return
+    _registry_alert_sent = True
+    try:
+        from homunculus.tools.notify import deliver
+        deliver(
+            "🛑 My tool server failed to start, so scheduled tasks are on "
+            "hold (they'll resume automatically once it's back). This "
+            "needs an operator look: `docker logs homunculus-heartbeat-1 "
+            "| grep -i mcp`."
+        )
+    except Exception as e:  # noqa: BLE001 — alerting must never crash the tick
+        log.info(f"[heartbeat] registry-down alert failed: {e}")
 
 
 def _known_tool_names() -> set[str] | None:
@@ -1070,13 +1164,12 @@ def main() -> None:
 
     interval_min = int(os.environ.get("HEARTBEAT_INTERVAL_MINUTES", "60"))
     memory_dir = Path(os.environ.get("HOMUNCULUS_MEMORY_DIR", "./memory"))
-    # Heartbeat's task is simpler than the bot/REPL — pick a smaller
-    # default. Saves ~6x on tokens-per-tick. Override via env if needed.
-    # Heartbeat default: openai/gpt-oss-120b (same as the chat primary).
-    # See core.MODEL for why — single-model setup keeps reliability
-    # reasoning consistent across heartbeat and chat. Override via
-    # HOMUNCULUS_MODEL_HEARTBEAT in .env if you want to A/B test.
-    model = os.environ.get("HOMUNCULUS_MODEL_HEARTBEAT", "openai/gpt-oss-120b")
+    # Heartbeat follows the PRIMARY model unless explicitly overridden via
+    # HOMUNCULUS_MODEL_HEARTBEAT (A/B testing knob). The old hardcoded
+    # default meant a primary-model swap in .env silently left the daemon
+    # on the previous model — one knob must move both loops.
+    from homunculus.llm import MODEL as _primary_model
+    model = os.environ.get("HOMUNCULUS_MODEL_HEARTBEAT") or _primary_model
 
     memory = Memory(memory_dir)
     tools.init(memory, autonomous=True)

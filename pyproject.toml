@@ -11,7 +11,7 @@ dependencies = [
     "lxml>=5.0",
     "fastapi>=0.115",
     "uvicorn>=0.32",
-    "mcp>=1.0",
+    "mcp>=1.0,<2",
     "pyyaml>=6.0",
     "watchfiles>=0.24",
     "mcp-server-fetch>=2025.1.17",
@@ -20,6 +20,9 @@ dependencies = [
 ]
 
 [dependency-groups]
+apply = [
+    "playwright>=1.61.0",
+]
 dev = [
     "pyright>=1.1.411",
     "pytest>=9.0.3",

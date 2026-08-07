@@ -97,6 +97,11 @@ READ_ONLY_CACHEABLE_TOOLS = frozenset({
     "search_files",
     "get_current_time",
     "list_tasks",
+    "list_proposals",  # idempotent within a turn — reflection is guard-blocked
+                        # from resolve_proposal, so nothing it does can change
+                        # the answer mid-tick. Missing this made a legitimate
+                        # "still pending?" re-check trip STUCK_LOOP instead of
+                        # getting the same cheap cache-hit list_tasks gets.
     "get_world_state",
     "conversation_search",
     "archival_memory_search",
@@ -408,6 +413,12 @@ Behaviour:
   two lines — don't call more tools.
 - If a follow-up is ambiguous and you have no grounded context from
   this conversation to answer it, ask for clarification. One sentence.
+- Job applications: when the user wants to APPLY to a job link (not
+  just discuss it): prepare_application(url), then
+  draft_all_answers(application_id) — ONE call drafts every question.
+  Use draft_answer(application_id, question, answer) only to revise a
+  single answer the user wants changed. Answers written in your chat
+  reply are NOT saved; only the tools write the plan.
 - Do not mention memory-internal filenames (e.g. feedback_*.md,
   project_*.md) unprompted — use plain language like "my notes" or
   "delivery log". Exception: when the user explicitly asks you to search
@@ -1084,6 +1095,18 @@ class Agent:
         closed = 0
         for call in tool_calls:
             name = call["function"]["name"]
+            # The weak model occasionally leaks harmony channel markup into
+            # the tool NAME itself ("news_headlines<|channel|>commentary").
+            # The intended tool is unambiguous — strip the markup and
+            # dispatch rather than burning a turn on a does-not-exist error.
+            if "<|" in name:
+                trimmed = name.split("<|", 1)[0].strip()
+                events.emit(
+                    "output_guard",
+                    name=trimmed or name,
+                    text=f"tool name syntax leak: {name!r} → {trimmed!r}",
+                )
+                name = trimmed
             raw_args = call["function"].get("arguments") or "{}"
             try:
                 args = json.loads(raw_args)

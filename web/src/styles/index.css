@@ -641,7 +641,8 @@ input, textarea { caret-color: var(--color-accent); }
 }
 .trace-run-chips {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* five chips: calls · tools · guards · tok · cost */
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 5px;
   align-self: end;
 }

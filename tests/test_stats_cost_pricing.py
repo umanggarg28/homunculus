@@ -15,8 +15,8 @@ from homunculus.stats import model_cost_cents
 def test_primary_model_is_costed_not_zero():
     cost = model_cost_cents("openai/gpt-oss-120b", 1_000_000, 100_000, 0)
     assert cost > 0, "the primary paid model must never appear free in the UI"
-    # 1M uncached input at 15c + 100k output at 50c/1M = 15 + 5 cents.
-    assert abs(cost - 20.0) < 0.01
+    # 1M uncached input at 3.7c + 100k output at 17c/1M = 3.7 + 1.7 cents.
+    assert abs(cost - 5.4) < 0.01
 
 
 def test_free_models_cost_zero():

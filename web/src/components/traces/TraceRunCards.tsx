@@ -80,12 +80,11 @@ function RunCard({ run, open, onToggle }: { run: AgentReplayTurn; open: boolean;
           <Chip label="calls" value={String(run.models.length)} />
           <Chip label="tools" value={String(run.tools.length)} tone={failed ? "danger" : blocked ? "warn" : "default"} />
           <Chip label="guards" value={String(run.guards.length)} />
-          <Tooltip
-            text={`${run.input_tokens.toLocaleString()} in · ${run.output_tokens.toLocaleString()} out · ${run.cached_tokens.toLocaleString()} cached`}
-            placement="top"
-          >
-            <span><Chip label="tok" value={fmtTokens(tokens)} /></span>
-          </Tooltip>
+          <Chip
+            label="tok"
+            value={fmtTokens(tokens)}
+            tip={`${run.input_tokens.toLocaleString()} in · ${run.output_tokens.toLocaleString()} out · ${run.cached_tokens.toLocaleString()} cached`}
+          />
           <Chip label="cost" value={cost} />
         </div>
         <div className="trace-run-card-footer">
@@ -148,10 +147,17 @@ function runTitle(run: AgentReplayTurn): string {
   return raw.length > 92 ? `${raw.slice(0, 92).trim()}...` : raw;
 }
 
-function Chip({ label, value, tone = "default" }: { label: string; value: string; tone?: "default" | "warn" | "danger" }) {
+function Chip({ label, value, tone = "default", tip }: { label: string; value: string; tone?: "default" | "warn" | "danger"; tip?: string }) {
+  // The tooltip trigger lives INSIDE the chip: .trace-run-chip must stay
+  // a direct grid child of .trace-run-chips or the row layout shatters.
+  const body = tip ? (
+    <Tooltip text={tip} placement="top"><span>{label}</span></Tooltip>
+  ) : (
+    <span>{label}</span>
+  );
   return (
     <span className="trace-run-chip" data-tone={tone}>
-      <span>{label}</span>
+      {body}
       <b>{value}</b>
     </span>
   );

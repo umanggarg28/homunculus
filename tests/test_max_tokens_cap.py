@@ -22,7 +22,7 @@ def test_openrouter_gets_max_tokens_cap() -> None:
     payload: dict = {}
     llm._apply_max_tokens(
         payload, "https://openrouter.ai/api/v1/chat/completions",
-        "anthropic/claude-haiku-4-5",
+        "anthropic/claude-haiku-4.5",
     )
     assert payload["max_tokens"] == 4096
 
@@ -33,7 +33,7 @@ def test_openrouter_preserves_explicit_max_tokens() -> None:
     payload: dict = {"max_tokens": 200}
     llm._apply_max_tokens(
         payload, "https://openrouter.ai/api/v1/chat/completions",
-        "anthropic/claude-haiku-4-5",
+        "anthropic/claude-haiku-4.5",
     )
     assert payload["max_tokens"] == 200
 
