@@ -30,6 +30,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
       { to: "/tasks",  label: "TASKS",  short: "TASK", kbd: "T" },
       { to: "/memory", label: "MEMORY", short: "MEM",  kbd: "M" },
       { to: "/tools",  label: "TOOLS",  short: "TOOL", kbd: "X" },
+      { to: "/evals",  label: "EVALS",  short: "EVAL", kbd: "E" },
     ],
   },
   {

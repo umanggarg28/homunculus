@@ -36,6 +36,7 @@ import type {
   AgentBudgetStats,
   AgentReplayTurn,
   Chapter,
+  EvalScorecards,
   ContainmentStatus,
   MemoryEntry,
   Proposal,
@@ -250,6 +251,8 @@ export const api = {
   }>("/agent/upcoming"),
 
   statsToday: () => jsonGet<AgentBudgetStats>("/stats/today"),
+
+  evals: () => jsonGet<EvalScorecards>("/evals"),
 
   statsActivity: (hours = 24, bins = 288) => jsonGet<{
     since: string;

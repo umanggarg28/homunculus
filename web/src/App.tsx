@@ -84,6 +84,7 @@ const OverviewPage = lazy(() => import("@/pages/OverviewPage").then((m) => ({ de
 const ChatPage = lazy(() => import("@/pages/ChatPage").then((m) => ({ default: m.ChatPage })));
 const FeedPage = lazy(() => import("@/pages/FeedPage").then((m) => ({ default: m.FeedPage })));
 const TasksPage = lazy(() => import("@/pages/TasksPage").then((m) => ({ default: m.TasksPage })));
+const EvalsPage = lazy(() => import("@/pages/EvalsPage").then((m) => ({ default: m.EvalsPage })));
 const SkillsPage = lazy(() => import("@/pages/SkillsPage").then((m) => ({ default: m.SkillsPage })));
 const MemoryPage = lazy(() => import("@/pages/MemoryPage").then((m) => ({ default: m.MemoryPage })));
 const MemoryEntryPage = lazy(() => import("@/pages/MemoryEntryPage").then((m) => ({ default: m.MemoryEntryPage })));
@@ -136,6 +137,7 @@ export default function App() {
               {/* /live merged into /traces — same SSE stream, no value in two routes */}
               <Route path="/traces"  element={<FeedPage />} />
               <Route path="/tasks"   element={<TasksPage />} />
+              <Route path="/evals"   element={<EvalsPage />} />
               <Route path="/tools"   element={<SkillsPage />} />
               <Route path="/memory"  element={<MemoryPage />} />
               <Route path="/memory/:filename" element={<MemoryEntryPage />} />
