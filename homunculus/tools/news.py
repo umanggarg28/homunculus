@@ -67,11 +67,22 @@ def news_headlines(topic: str = "", limit: int = 5) -> str:
     if not feeds:
         return "NEWS_UNAVAILABLE: no feeds configured. Omit the news section."
 
+    # A topic that resolves to exactly one feed has no redundancy — any
+    # other topic just loses that one source and keeps going, but here a
+    # single transient blip fails the whole call. Give the no-fallback
+    # case a bigger retry budget on that one source rather than accept
+    # the same attempt count everyone else gets to spread across many.
+    # Observed live: weekly-hacker-news-ai-summary (topic="hn-ai", the
+    # only feed with that label) failed once in 9 weeks — the feed itself
+    # was healthy again within minutes, but the task still lost its whole
+    # week's delivery to a blip more attempts on the same request would
+    # have absorbed.
+    attempts = _FETCH_ATTEMPTS * 2 if len(feeds) == 1 else _FETCH_ATTEMPTS
     items: list[dict] = []
     for label, url in feeds:
         if _url_block_reason(url) is not None:
             continue
-        items.extend(_fetch_feed(label, url))
+        items.extend(_fetch_feed(label, url, attempts=attempts))
 
     if not items:
         return (
@@ -85,12 +96,12 @@ def news_headlines(topic: str = "", limit: int = 5) -> str:
     return "\n".join(f"- [{it['title']}]({it['link']})" for it in chosen)
 
 
-def _get_feed(url: str) -> httpx.Response | None:
+def _get_feed(url: str, attempts: int = _FETCH_ATTEMPTS) -> httpx.Response | None:
     """GET a feed, retrying on transient 5xx / transport errors. Returns the
     successful response, or None once the attempts are exhausted. 4xx is not
     retried — a bad request won't fix itself."""
     import time
-    for attempt in range(_FETCH_ATTEMPTS):
+    for attempt in range(attempts):
         try:
             r = httpx.get(url, timeout=_TIMEOUT, headers=_HEADERS, follow_redirects=True)
             if r.status_code < 500:
@@ -101,15 +112,15 @@ def _get_feed(url: str) -> httpx.Response | None:
             return None  # 4xx — not retryable
         except httpx.HTTPError:
             pass  # connect/read/transport error — retry
-        if attempt < _FETCH_ATTEMPTS - 1:
+        if attempt < attempts - 1:
             time.sleep(_RETRY_BACKOFF_S)
     return None
 
 
-def _fetch_feed(label: str, url: str) -> list[dict]:
+def _fetch_feed(label: str, url: str, attempts: int = _FETCH_ATTEMPTS) -> list[dict]:
     """Fetch one feed and return scored item dicts with real http links.
     Returns [] on any failure so the caller skips this source."""
-    r = _get_feed(url)
+    r = _get_feed(url, attempts=attempts)
     if r is None:
         return []
     out: list[dict] = []

@@ -97,6 +97,11 @@ READ_ONLY_CACHEABLE_TOOLS = frozenset({
     "search_files",
     "get_current_time",
     "list_tasks",
+    "list_proposals",  # idempotent within a turn — reflection is guard-blocked
+                        # from resolve_proposal, so nothing it does can change
+                        # the answer mid-tick. Missing this made a legitimate
+                        # "still pending?" re-check trip STUCK_LOOP instead of
+                        # getting the same cheap cache-hit list_tasks gets.
     "get_world_state",
     "conversation_search",
     "archival_memory_search",

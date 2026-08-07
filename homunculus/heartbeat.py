@@ -238,12 +238,39 @@ _REFLECTION_FORBIDDEN = {
 }
 
 
-def _reflection_tool_guard(name: str, arguments: dict) -> str | None:
-    """The reflection Agent's pre_execute_hook: refuse a forbidden tool by
-    returning a string (surfaced to the agent as that tool's result), else None
-    to allow. Mirrors how task ticks attach guard.on_tool_call."""
-    refusal = _REFLECTION_FORBIDDEN.get(name)
-    return f"BLOCKED: {refusal}" if refusal else None
+#: The prompt says "AT MOST 2" for both — stated once, unenforced, so a
+#: model can spin rewording the same memory forever, only ever curbed by
+#: the generic 3-identical-calls STUCK_LOOP (which restarts every time it
+#: rewords). Observed live: 11 remember() calls in one reflection tick, all
+#: paraphrases of the same daily summary. The cap makes "at most 2" real.
+_REFLECTION_CALL_CAPS = {"remember": 2, "forget": 2}
+
+
+class _ReflectionToolGuard:
+    """The reflection Agent's pre_execute_hook for one tick.
+
+    A fresh instance per tick (constructed in _run_reflection_or_idle) so
+    the call counters never leak between days — mirrors how TaskGuard is
+    built per task-run rather than kept as module state.
+    """
+
+    def __init__(self) -> None:
+        self._counts: dict[str, int] = {}
+
+    def __call__(self, name: str, arguments: dict) -> str | None:
+        refusal = _REFLECTION_FORBIDDEN.get(name)
+        if refusal:
+            return f"BLOCKED: {refusal}"
+        cap = _REFLECTION_CALL_CAPS.get(name)
+        if cap is not None:
+            self._counts[name] = self._counts.get(name, 0) + 1
+            if self._counts[name] > cap:
+                return (
+                    f"BLOCKED: {name}() already called {cap} time(s) this "
+                    f"reflection tick — that's the limit. Stop here; if the "
+                    f"content needs refining, that's a future tick's job."
+                )
+        return None
 
 
 #: A task still flagged ``executing`` after this long has lost its agent without
@@ -310,7 +337,7 @@ def _run_reflection_or_idle(
     # a rule stated only in the prompt once let a reflection tick notify()
     # the user a fabricated skill update; run-scoped enforcement can't leak
     # into (or out of) any other agent in the process.
-    agent = Agent(memory=memory, model=model, pre_execute_hook=_reflection_tool_guard)
+    agent = Agent(memory=memory, model=model, pre_execute_hook=_ReflectionToolGuard())
     yesterday_iso, yesterday_path = _yesterday_iso_and_path()
     log.info(f"\n[heartbeat] REFLECTION tick at {now_iso} "
              f"(reviewing {yesterday_iso}, model={agent.model})")

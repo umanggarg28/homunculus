@@ -193,7 +193,28 @@ def test_gives_up_after_attempts_on_persistent_5xx(tmp_path, monkeypatch):
     monkeypatch.setattr(httpx, "get", always_500)
     out = news.news_headlines(topic="hn-ai", limit=5)
     assert out.startswith("NEWS_UNAVAILABLE")
-    assert calls["n"] == news._FETCH_ATTEMPTS, "should retry up to the attempt cap"
+    # A single-feed topic (no fallback source) gets a doubled attempt
+    # budget — see news_headlines' no-redundancy comment.
+    assert calls["n"] == news._FETCH_ATTEMPTS * 2, "single-feed topic should get the doubled budget"
+
+
+def test_multi_feed_topic_keeps_the_normal_attempt_budget(tmp_path, monkeypatch):
+    """The doubled retry budget is only for the no-fallback (single-feed)
+    case — a topic with real redundancy shouldn't burn extra requests on
+    one flaky source when its sibling feeds can just cover the gap."""
+    _feeds(tmp_path, monkeypatch,
+           ("tech-a", "https://a.example/f"), ("tech-b", "https://b.example/f"))
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    calls = {"n": 0}
+
+    def always_500(url, *a, **k):
+        calls["n"] += 1
+        return _status_resp(url, 503)
+
+    monkeypatch.setattr(httpx, "get", always_500)
+    out = news.news_headlines(topic="tech", limit=5)
+    assert out.startswith("NEWS_UNAVAILABLE")
+    assert calls["n"] == news._FETCH_ATTEMPTS * 2, "two feeds, each at the normal per-feed budget"
 
 
 def test_4xx_is_not_retried(tmp_path, monkeypatch):
