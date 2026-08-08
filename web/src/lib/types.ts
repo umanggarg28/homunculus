@@ -115,6 +115,21 @@ export interface AgentBudgetStats {
   budget_cents: number;
 }
 
+export type EvalTrend = "improving" | "steady" | "degrading" | "insufficient_data";
+export type EvalContractKind = "states" | "requires_tools" | "none";
+
+export interface EvalScorecard {
+  contract_kind: EvalContractKind;
+  runs: number;
+  compliance_rate: number | null;
+  avg_violations: number | null;
+  avg_guard_fires: number | null;
+  avg_cost_cents: number | null;
+  trend: EvalTrend;
+}
+
+export type EvalScorecards = Record<string, EvalScorecard>;
+
 export interface AgentControls {
   mode: "plan" | "build";
   max_steps: number;

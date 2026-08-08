@@ -751,6 +751,133 @@ input, textarea { caret-color: var(--color-accent); }
   font-size: 11px;
   line-height: 1.45;
 }
+
+/* ── Evals page — same card/chip grammar as .trace-run-*, a new
+   instance of the pattern rather than a new one. Meter fill uses the
+   accent ramp (sequential: one hue, this-is-the-good-metric, same
+   role the accent already plays elsewhere); trend uses the app's
+   existing reserved status tokens, never a generated hue. */
+.eval-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+}
+.eval-card {
+  border: 1px solid color-mix(in srgb, var(--color-border) 58%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--card-tone, var(--color-accent)) 70%, transparent);
+  background: color-mix(in srgb, var(--color-surface-1) 52%, transparent);
+  padding: 11px 12px 10px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  display: grid;
+  gap: 9px;
+}
+.eval-card-head {
+  min-width: 0; /* .eval-card-head is itself a grid item of .eval-card
+    (display:grid) — grid items default to min-width:auto same as flex
+    items, so without this the row refuses to shrink below its content
+    width and drags the flex-shrink:0 trend chip out past the card. */
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.eval-card-title {
+  min-width: 0;
+  color: var(--color-text);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.eval-trend-chip {
+  flex-shrink: 0;
+  border: 1px solid currentColor;
+  padding: 2px 6px;
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  white-space: nowrap;
+}
+.eval-card-meta {
+  color: var(--color-text-faint);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.eval-meter {
+  display: grid;
+  gap: 4px;
+}
+.eval-meter-track {
+  height: 6px;
+  background: var(--color-screen);
+  border: 1px solid var(--color-border);
+}
+.eval-meter-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-accent) 0%, var(--color-accent-ink) 100%);
+  transition: width 0.3s ease;
+}
+.eval-meter-label {
+  color: var(--color-text-dim);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.eval-chips {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+.eval-chip {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  padding: 4px 6px;
+  color: var(--color-text-faint);
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  line-height: 1.25;
+}
+.eval-chip b {
+  display: block;
+  margin-top: 2px;
+  color: var(--color-text);
+  font-size: 9px;
+  font-weight: 600;
+}
+.eval-chip[data-tone="warn"] b { color: var(--color-amber); }
+
+.eval-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+}
+.eval-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.eval-table th, .eval-table td {
+  padding: 7px 10px;
+  text-align: left;
+  white-space: nowrap;
+}
+.eval-table th {
+  color: var(--color-text-faint);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  border-bottom: 1px solid var(--color-border-strong);
+}
+.eval-table td {
+  color: var(--color-text-dim);
+  border-bottom: 1px solid var(--color-border);
+}
+.eval-table tr:hover td {
+  background: rgba(255,255,255,0.02);
+}
 .trace-guard-note,
 .trace-empty-note {
   color: var(--color-amber);

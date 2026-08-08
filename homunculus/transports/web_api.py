@@ -651,6 +651,7 @@ from homunculus.transports.web import agent as _agent_routes  # noqa: E402
 from homunculus.transports.web import capture as _capture_routes  # noqa: E402
 from homunculus.transports.web import chat as _chat_routes  # noqa: E402
 from homunculus.transports.web import dashboard as _dashboard_routes  # noqa: E402
+from homunculus.transports.web import evals as _evals_routes  # noqa: E402
 from homunculus.transports.web import feed as _feed_routes  # noqa: E402
 from homunculus.transports.web import memory as _memory_routes  # noqa: E402
 from homunculus.transports.web import prefs as _prefs_routes  # noqa: E402
@@ -668,6 +669,7 @@ app.include_router(_skills_routes.router)
 app.include_router(_tasks_routes.router)
 app.include_router(_capture_routes.router)
 app.include_router(_dashboard_routes.router)
+app.include_router(_evals_routes.router)
 app.include_router(_chat_routes.router)
 app.include_router(_feed_routes.router)
 

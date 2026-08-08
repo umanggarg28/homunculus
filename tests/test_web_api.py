@@ -647,3 +647,51 @@ def test_setup_status_reflects_real_state(client, web_api, monkeypatch):
     d2 = client.get("/api/setup/status").json()
     assert d2["telegram_configured"] is True
     assert d2["memory_seeded"] is True
+
+
+# ---------------------------------------------------------------------------
+# /api/evals
+# ---------------------------------------------------------------------------
+
+def test_evals_empty_when_no_skill_linked_tasks(client):
+    resp = client.get("/api/evals")
+    assert resp.status_code == 200
+    assert resp.json() == {}
+
+
+def test_evals_scores_a_skill_linked_task(client, web_api):
+    (web_api.MEMORY_DIR / "skill_quiz_coach.md").write_text(
+        "---\nname: skill_quiz_coach\nstates:\n  - tool: quiz_pick\n"
+        "  - tool: notify\n  - tool: complete_task\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    # Direct tasks.json write: no public TaskStore API sets `skill` or
+    # backdates `last_runs`, same approach test_week_in_review.py uses.
+    (web_api.TASKS_DIR / "tasks.json").write_text(json.dumps([{
+        "id": "quiz-coach", "title": "Quiz coach", "status": "active",
+        "skill": "skill_quiz_coach",
+        "last_runs": [{
+            "ts": "2026-08-08T20:00:00", "status": "success",
+            "tool_trace": "quiz_pick, notify, complete_task",
+            "calls": 3, "cost_cents": 0.15,
+        }],
+    }]), encoding="utf-8")
+
+    resp = client.get("/api/evals")
+    assert resp.status_code == 200
+    data = resp.json()
+    card = data["quiz-coach"]
+    assert card["contract_kind"] == "states"
+    assert card["runs"] == 1
+    assert card["compliance_rate"] == 1.0
+    assert card["avg_violations"] == 0.0
+    assert card["trend"] == "insufficient_data"
+
+
+def test_evals_requires_web_auth(web_api, monkeypatch):
+    monkeypatch.setenv("HOMUNCULUS_WEB_AUTH_TOKEN", "secret")
+    import importlib
+    mod = importlib.reload(web_api)
+    from starlette.testclient import TestClient
+    c = TestClient(mod.app)
+    assert c.get("/api/evals").status_code == 401
