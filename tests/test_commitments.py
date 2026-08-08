@@ -51,6 +51,33 @@ def test_deadline_check_fires_a_day_before(tmp_path, monkeypatch):
     assert due.startswith("2026-07-04T17:00")
 
 
+def test_lead_hours_accepts_fractional_hours_for_a_just_before_reminder(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOMUNCULUS_TASKS_DIR", str(tmp_path))
+    sched = load_real_tool_submodule("scheduling")
+    # 15 min before a 14:00 event → 13:45, not truncated to the top of the hour.
+    sched.record_commitment(
+        "Standup (15 min)", "2026-07-04T14:00:00", "event_check_in", lead_hours=0.25,
+    )
+    due = sched._task_store().list("all")[0]["due_at"]
+    assert due.startswith("2026-07-04T13:45")
+
+
+def test_distinct_titles_record_two_reminders_for_the_same_event(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOMUNCULUS_TASKS_DIR", str(tmp_path))
+    sched = load_real_tool_submodule("scheduling")
+    sched.record_commitment(
+        "Standup (1 day)", "2026-07-04T14:00:00", "event_check_in", lead_hours=24,
+    )
+    sched.record_commitment(
+        "Standup (15 min)", "2026-07-04T14:00:00", "event_check_in", lead_hours=0.25,
+    )
+    tasks = sched._task_store().list("all")
+    assert len(tasks) == 2
+    dues = sorted(t["due_at"] for t in tasks)
+    assert dues[0].startswith("2026-07-03T14:00")
+    assert dues[1].startswith("2026-07-04T13:45")
+
+
 def test_record_commitment_requires_event_at(tmp_path, monkeypatch):
     monkeypatch.setenv("HOMUNCULUS_TASKS_DIR", str(tmp_path))
     sched = load_real_tool_submodule("scheduling")

@@ -131,8 +131,8 @@ _DEFAULT_LEAD_HOURS = {
 }
 
 
-def _derive_check_at(event_at: str, kind: str, lead_hours: int | None) -> str:
-    lead = _DEFAULT_LEAD_HOURS.get(kind, 0) if lead_hours is None else max(0, int(lead_hours))
+def _derive_check_at(event_at: str, kind: str, lead_hours: float | None) -> str:
+    lead = _DEFAULT_LEAD_HOURS.get(kind, 0) if lead_hours is None else max(0.0, float(lead_hours))
     if not lead:
         return event_at
     try:
@@ -143,7 +143,7 @@ def _derive_check_at(event_at: str, kind: str, lead_hours: int | None) -> str:
 
 
 def record_commitment(
-    what: str, event_at: str, kind: str = "open_loop", lead_hours: int | None = None
+    what: str, event_at: str, kind: str = "open_loop", lead_hours: float | None = None
 ) -> str:
     """Record a commitment the agent NOTICED (not user-requested) as a check-in.
 
@@ -153,6 +153,14 @@ def record_commitment(
     is when the thing HAPPENS/is due; the check-in fires a sensible lead before it
     (a day before a deadline, ~2h before an event) so it arrives in time to be
     useful. `kind` ∈ deadline_check / event_check_in / open_loop / care_check_in.
+    `lead_hours` overrides the kind's default and accepts fractions of an hour
+    (0.25 = 15 min, 0.17 ≈ 10 min) for a just-before-the-event reminder.
+
+    Dedup is by TITLE (see the slug-match loop below): to record more than one
+    lead-time reminder for the same event (e.g. a day-before AND a 15-min-before
+    check-in), give each call a distinct `what`, e.g. "Standup (1 day)" and
+    "Standup (15 min)" — otherwise the second call updates the first instead of
+    adding a second reminder.
     """
     what = (what or "").strip()
     event_at = (event_at or "").strip()
