@@ -532,7 +532,9 @@ class TaskStore:
 
         `usage` shape (all fields optional):
             input_tokens, output_tokens, cached_tokens, cost_cents,
-            calls (number of LLM round-trips during this run)
+            calls (number of LLM round-trips during this run), model
+            (model_id that ran it — lets eval history be split by model
+            across a swap instead of blended)
         """
         run: dict[str, Any] = {
             "ts": ts.isoformat(timespec="seconds"),
@@ -549,6 +551,8 @@ class TaskStore:
                     run[key] = int(usage[key])
             if usage.get("cost_cents"):
                 run["cost_cents"] = round(float(usage["cost_cents"]), 4)
+            if usage.get("model"):
+                run["model"] = str(usage["model"])
         runs = task.setdefault("last_runs", [])
         runs.append(run)
         cap = get_config().task.run_history_cap
@@ -616,6 +620,8 @@ class TaskStore:
                     run[key] = int(usage[key])
             if usage.get("cost_cents"):
                 run["cost_cents"] = round(float(usage["cost_cents"]), 4)
+            if usage.get("model"):
+                run["model"] = str(usage["model"])
             self._write(tasks)
 
     # How much of a delivery we keep for the reflection's quality

@@ -106,6 +106,31 @@ function EvalCard({ taskId, card }: { taskId: string; card: EvalScorecard }) {
         <EvalChip label="guard" value={fmt(card.avg_guard_fires, 1)} warn={(card.avg_guard_fires ?? 0) > 1} />
         <EvalChip label="¢/run" value={card.avg_cost_cents === null ? "—" : card.avg_cost_cents.toFixed(2)} />
       </div>
+
+      <ModelBreakdown byModel={card.by_model} />
+    </div>
+  );
+}
+
+// Only renders once a skill has actually lived through more than one
+// model — a single-model skill has nothing to compare yet, and showing
+// a one-row "breakdown" would just be noise.
+function ModelBreakdown({ byModel }: { byModel: EvalScorecard["by_model"] }) {
+  const rows = Object.entries(byModel);
+  if (rows.length < 2) return null;
+  return (
+    <div className="eval-model-rows">
+      {rows.map(([model, slice_]) => (
+        <div className="eval-model-row" key={model}>
+          <Tooltip text={model} placement="top">
+            <span className="eval-model-name">{model}</span>
+          </Tooltip>
+          <span className="eval-model-stat">
+            {slice_.compliance_rate === null ? "—" : `${Math.round(slice_.compliance_rate * 100)}%`}
+            <span className="eval-model-stat-dim"> · {slice_.runs} run{slice_.runs === 1 ? "" : "s"}</span>
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

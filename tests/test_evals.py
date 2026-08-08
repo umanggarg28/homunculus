@@ -161,6 +161,54 @@ def test_outage_window_scores_as_bad_not_a_crash():
     assert all(not r.contract_compliance for r in card.run_scores)
 
 
+# ---- by_model: splitting a scorecard's history across a model swap ------
+
+
+def test_score_run_reads_model_from_run_record():
+    contract = evals.Contract(states=("notify",))
+    run = {"ts": "t1", "status": "success", "tool_trace": "notify", "calls": 1,
+           "model": "deepseek/deepseek-v4-flash-0731"}
+    score = evals.score_run(contract, run, events_window=[])
+    assert score.model == "deepseek/deepseek-v4-flash-0731"
+
+
+def test_score_run_model_defaults_to_empty_string_for_legacy_runs():
+    contract = evals.Contract(states=("notify",))
+    run = {"ts": "t1", "status": "success", "tool_trace": "notify", "calls": 1}
+    score = evals.score_run(contract, run, events_window=[])
+    assert score.model == ""
+
+
+def test_by_model_splits_history_across_a_swap():
+    contract = evals.Contract(states=("notify",))
+    runs = (
+        [{"ts": f"t{i:03d}", "status": "success", "tool_trace": "", "calls": 1,
+          "model": "openai/gpt-oss-120b"} for i in range(3)]
+        + [{"ts": f"t{i:03d}", "status": "success", "tool_trace": "notify", "calls": 1,
+            "model": "deepseek/deepseek-v4-flash-0731"} for i in range(3, 8)]
+    )
+    card = evals.score_skill("x", contract, runs, events=[])
+    by_model = card.by_model
+    assert set(by_model) == {"openai/gpt-oss-120b", "deepseek/deepseek-v4-flash-0731"}
+    assert by_model["openai/gpt-oss-120b"].runs == 3
+    assert by_model["openai/gpt-oss-120b"].compliance_rate == 0.0
+    assert by_model["deepseek/deepseek-v4-flash-0731"].runs == 5
+    assert by_model["deepseek/deepseek-v4-flash-0731"].compliance_rate == 1.0
+
+
+def test_by_model_groups_legacy_runs_under_empty_string():
+    contract = evals.Contract(states=("notify",))
+    runs = [{"ts": "t1", "status": "success", "tool_trace": "notify", "calls": 1}]
+    card = evals.score_skill("x", contract, runs, events=[])
+    assert list(card.by_model) == [""]
+    assert card.by_model[""].runs == 1
+
+
+def test_by_model_empty_when_no_runs():
+    card = evals.SkillScorecard(task_id="x", contract_kind="states", run_scores=())
+    assert card.by_model == {}
+
+
 def test_scorecard_empty_runs_reports_none_not_zero_division():
     card = evals.SkillScorecard(task_id="x", contract_kind="states", run_scores=())
     assert card.compliance_rate is None

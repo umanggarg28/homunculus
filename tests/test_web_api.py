@@ -674,6 +674,7 @@ def test_evals_scores_a_skill_linked_task(client, web_api):
             "ts": "2026-08-08T20:00:00", "status": "success",
             "tool_trace": "quiz_pick, notify, complete_task",
             "calls": 3, "cost_cents": 0.15,
+            "model": "deepseek/deepseek-v4-flash-0731",
         }],
     }]), encoding="utf-8")
 
@@ -686,6 +687,12 @@ def test_evals_scores_a_skill_linked_task(client, web_api):
     assert card["compliance_rate"] == 1.0
     assert card["avg_violations"] == 0.0
     assert card["trend"] == "insufficient_data"
+    assert card["by_model"] == {
+        "deepseek/deepseek-v4-flash-0731": {
+            "runs": 1, "compliance_rate": 1.0, "avg_violations": 0.0,
+            "avg_guard_fires": 0.0, "avg_cost_cents": 0.15,
+        },
+    }
 
 
 def test_evals_requires_web_auth(web_api, monkeypatch):
