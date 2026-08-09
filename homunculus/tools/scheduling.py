@@ -142,6 +142,24 @@ def _derive_check_at(event_at: str, kind: str, lead_hours: float | None) -> str:
     return (dt - timedelta(hours=lead)).isoformat()
 
 
+def _is_past(event_at: str, grace_hours: float = 1.0) -> bool:
+    """True if `event_at` already happened (with a small grace window for
+    timezone/parsing slop). A commitment for a past event is never
+    legitimate — the harness rejects it rather than trusting the model
+    not to invent one. Observed live: a tool returning UNAVAILABLE led a
+    model to fabricate a "test" commitment dated the day before, which
+    would have fired a nonsense notify on the very next tick."""
+    try:
+        dt = datetime.fromisoformat(event_at)
+    except ValueError:
+        return False  # let the existing unparseable-string path handle it
+    if dt.tzinfo is not None:
+        from homunculus.user_tz import get_user_tz
+        tz = get_user_tz()
+        dt = (dt.astimezone(tz) if tz else dt.astimezone()).replace(tzinfo=None)
+    return dt < now_user_naive() - timedelta(hours=grace_hours)
+
+
 def record_commitment(
     what: str, event_at: str, kind: str = "open_loop", lead_hours: float | None = None
 ) -> str:
@@ -170,6 +188,12 @@ def record_commitment(
         return "ERROR: 'event_at' is required — when does the event happen / when is it due?"
     if kind not in _COMMITMENT_KINDS:
         return f"ERROR: kind must be one of {sorted(_COMMITMENT_KINDS)}, got '{kind}'."
+    if _is_past(event_at):
+        return (
+            f"ERROR: event_at '{event_at}' is already in the past — record_commitment "
+            "is for a FUTURE event/deadline only. If you don't have a real future "
+            "event to record, do not call this tool at all."
+        )
     check_at = _derive_check_at(event_at, kind, lead_hours)
     store = _task_store()
     slug = _slug(what)
