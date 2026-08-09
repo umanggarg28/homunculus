@@ -118,6 +118,14 @@ export interface AgentBudgetStats {
 export type EvalTrend = "improving" | "steady" | "degrading" | "insufficient_data";
 export type EvalContractKind = "states" | "requires_tools" | "none";
 
+export interface EvalModelSlice {
+  runs: number;
+  compliance_rate: number | null;
+  avg_violations: number | null;
+  avg_guard_fires: number | null;
+  avg_cost_cents: number | null;
+}
+
 export interface EvalScorecard {
   contract_kind: EvalContractKind;
   runs: number;
@@ -126,6 +134,10 @@ export interface EvalScorecard {
   avg_guard_fires: number | null;
   avg_cost_cents: number | null;
   trend: EvalTrend;
+  /** Keyed by model_id ("unknown" = predates model-tracking). One entry
+   *  per model this skill has ever run under — lets a model swap show up
+   *  as two comparable slices instead of one blended average. */
+  by_model: Record<string, EvalModelSlice>;
 }
 
 export type EvalScorecards = Record<string, EvalScorecard>;

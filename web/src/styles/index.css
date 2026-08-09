@@ -849,6 +849,44 @@ input, textarea { caret-color: var(--color-accent); }
 }
 .eval-chip[data-tone="warn"] b { color: var(--color-amber); }
 
+.eval-model-rows {
+  /* min-width: 0 on both this grid item AND the flex row below —
+     grid items and flex items each default to min-width: auto, so a
+     flex row nested inside a grid item needs the reset at both levels
+     or long model ids drag the row past the card boundary. */
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border-top: 1px dashed var(--color-border);
+  padding-top: 6px;
+}
+.eval-model-row {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 9px;
+}
+.eval-model-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.eval-model-stat {
+  flex-shrink: 0;
+  color: var(--color-text);
+  font-weight: 600;
+}
+.eval-model-stat-dim {
+  color: var(--color-text-faint);
+  font-weight: 400;
+}
+
 .eval-table-wrap {
   overflow-x: auto;
   border: 1px solid var(--color-border);

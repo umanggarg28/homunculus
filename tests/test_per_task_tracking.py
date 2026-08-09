@@ -49,6 +49,25 @@ def test_append_run_records_usage(tmp_path):
     assert last["calls"] == 3
 
 
+def test_append_run_records_model(tmp_path):
+    _, store = _store(tmp_path)
+    task = _new_task(store)
+    usage = {"calls": 1, "model": "deepseek/deepseek-v4-flash-0731"}
+    updated = store.mark_partial(task["id"], "x", usage=usage)
+    assert updated["last_runs"][-1]["model"] == "deepseek/deepseek-v4-flash-0731"
+
+
+def test_attribute_usage_retrofits_model(tmp_path):
+    _, store = _store(tmp_path)
+    task = _new_task(store)
+    store.complete(task["id"], result="delivered")
+    store.attribute_usage_to_last_run(
+        task["id"], {"input_tokens": 5000, "model": "deepseek/deepseek-v4-flash-0731"},
+    )
+    last = store.get(task["id"])["last_runs"][-1]
+    assert last["model"] == "deepseek/deepseek-v4-flash-0731"
+
+
 def test_attribute_usage_to_last_run_retrofits(tmp_path):
     """The success path appends a run via the tool layer (no usage
     visible there). The orchestrator then calls

@@ -108,6 +108,10 @@ class RunScore:
     calls: int
     expected_calls: int | None
     cost_cents: float
+    #: model_id that ran it, "" for runs recorded before this field
+    #: existed. Lets a scorecard split its history by model instead of
+    #: blending every model the skill has ever run under into one number.
+    model: str = ""
 
 
 def score_run(contract: Contract, run: dict[str, Any], events_window: list[dict]) -> RunScore:
@@ -148,7 +152,46 @@ def score_run(contract: Contract, run: dict[str, Any], events_window: list[dict]
         calls=int(run.get("calls") or 0),
         expected_calls=expected_calls,
         cost_cents=float(run.get("cost_cents") or 0.0),
+        model=str(run.get("model") or ""),
     )
+
+
+@dataclass(frozen=True)
+class ModelSlice:
+    """The same aggregate numbers as SkillScorecard, scoped to runs that
+    happened to run under one model — how SkillScorecard.by_model groups
+    its history when a skill has lived through more than one model."""
+
+    model: str
+    run_scores: tuple[RunScore, ...]
+
+    @property
+    def runs(self) -> int:
+        return len(self.run_scores)
+
+    @property
+    def compliance_rate(self) -> float | None:
+        if not self.run_scores:
+            return None
+        return sum(1 for r in self.run_scores if r.contract_compliance) / self.runs
+
+    @property
+    def avg_violations(self) -> float | None:
+        if not self.run_scores:
+            return None
+        return sum(r.violations for r in self.run_scores) / self.runs
+
+    @property
+    def avg_guard_fires(self) -> float | None:
+        if not self.run_scores:
+            return None
+        return sum(r.guard_fires for r in self.run_scores) / self.runs
+
+    @property
+    def avg_cost_cents(self) -> float | None:
+        if not self.run_scores:
+            return None
+        return sum(r.cost_cents for r in self.run_scores) / self.runs
 
 
 @dataclass(frozen=True)
@@ -206,6 +249,21 @@ class SkillScorecard:
         if newer_avg > older_avg + 0.5:
             return "degrading"
         return "steady"
+
+    @property
+    def by_model(self) -> dict[str, ModelSlice]:
+        """Split run history by the model that ran each run, in first-
+        seen order — so a model swap shows up as two distinct slices
+        instead of one blended average. Runs recorded before `model`
+        was tracked group under "" (rendered "unknown" by callers)."""
+        order: list[str] = []
+        buckets: dict[str, list[RunScore]] = {}
+        for r in self.run_scores:
+            if r.model not in buckets:
+                order.append(r.model)
+                buckets[r.model] = []
+            buckets[r.model].append(r)
+        return {m: ModelSlice(model=m, run_scores=tuple(buckets[m])) for m in order}
 
 
 def _events_between(events: list[dict], start_ts: str | None, end_ts: str) -> list[dict]:
@@ -284,6 +342,7 @@ def load_tasks(tasks_path: Path) -> list[dict]:
 __all__ = [
     "Contract",
     "RunScore",
+    "ModelSlice",
     "SkillScorecard",
     "load_contract",
     "score_run",

@@ -391,7 +391,7 @@ def _scan_spend_bytes(
 
 def measure_llm_usage_since(
     cutoff_ts: datetime,
-) -> dict[str, float | int]:
+) -> dict[str, float | int | str]:
     """Aggregate LLM token counts and cost from events.jsonl since cutoff.
 
     Used by the task layer to attribute per-task spend. We scan
@@ -401,22 +401,37 @@ def measure_llm_usage_since(
     no llm_call events lie in the window.
 
     Output shape:
-        {input_tokens, output_tokens, cached_tokens, cost_cents, calls}
+        {input_tokens, output_tokens, cached_tokens, cost_cents, calls, model}
+
+    `model` is the model_id of the most recent llm_call in the window —
+    good enough to attribute a run to "the model that ran it" for eval
+    history, since a run only switches models mid-flight on a fallback,
+    which is itself worth surfacing rather than averaged away.
     """
-    out: dict[str, float | int] = {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cached_tokens": 0,
-        "cost_cents": 0.0,
-        "calls": 0,
-    }
+    input_tokens = 0
+    output_tokens = 0
+    cached_tokens = 0
+    cost_cents = 0.0
+    calls = 0
+    model = ""
+
+    def _result() -> dict[str, float | int | str]:
+        return {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cached_tokens": cached_tokens,
+            "cost_cents": cost_cents,
+            "calls": calls,
+            "model": model,
+        }
+
     events_path = Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
     if not events_path.exists():
-        return out
+        return _result()
     try:
         lines = events_path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
-        return out
+        return _result()
     cutoff = cutoff_ts if cutoff_ts.tzinfo is not None else cutoff_ts.replace(tzinfo=UTC)
     for line in reversed(lines):
         try:
@@ -434,15 +449,14 @@ def measure_llm_usage_since(
             break
         if rec.get("event") != "llm_call":
             continue
-        in_tok = int(rec.get("input_tokens") or 0)
-        out_tok = int(rec.get("output_tokens") or 0)
-        cached_tok = int(rec.get("cached_tokens") or 0)
-        out["input_tokens"] += in_tok
-        out["output_tokens"] += out_tok
-        out["cached_tokens"] += cached_tok
-        out["calls"] += 1
-        out["cost_cents"] += _record_cost_cents(rec)
-    return out
+        input_tokens += int(rec.get("input_tokens") or 0)
+        output_tokens += int(rec.get("output_tokens") or 0)
+        cached_tokens += int(rec.get("cached_tokens") or 0)
+        calls += 1
+        cost_cents += _record_cost_cents(rec)
+        if not model:
+            model = str(rec.get("model") or "")
+    return _result()
 
 
 #: Warn once per process when a paid model runs with enforcement on but no
