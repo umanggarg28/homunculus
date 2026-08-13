@@ -49,6 +49,7 @@ homunculus/
 ├── llm.py               # provider HTTP layer: call_llm / call_llm_stream, fallback chain, budget gate
 ├── heartbeat.py         # autonomous loop: tick(), task firing, settlement
 ├── task_guard.py        # TaskGuard: delivery criteria enforced at notify/complete time
+├── permissions.py       # declarative gate on tool execution: modes, rules, arg repair
 ├── config.py            # single typed source of truth for all tuning knobs
 │
 │  ── persistence / state ──
@@ -121,6 +122,17 @@ model never builds URLs/links itself).
 This is what a reviewer should weigh most, because it is where the engineering
 judgment lives:
 
+- **Permission gate** (`permissions.py`): every tool call is checked before it
+  runs. A policy can allow it, deny it (the reason becomes the tool result, so
+  a refusal is a steering signal the model reads rather than a silent drop), or
+  **allow it on corrected arguments**. That third outcome is the reason the
+  module exists: elsewhere a malformed call costs a round trip — guard rejects,
+  model reads, model retries — whereas a normalizer repairs a known-shape defect
+  in place and the call proceeds. Modes (`default` / `readonly` / `autonomous` /
+  `bypass`) set the posture for a whole run; rules are per-tool and first-match-
+  wins. Distinct from `Agent._pre_execute_hook`, which is run-scoped and dynamic
+  (the TaskGuard asking whether *this* run has met its criteria) — the policy is
+  static and asks whether the call is permissible at all, so it runs first.
 - **Output guard** (`output_guard.py`): an
   action-claim is cross-checked against the turn's tool outcomes. A reply that
   claims work with no tool evidence behind it — or a fabricated link — is
