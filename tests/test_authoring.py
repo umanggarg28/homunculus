@@ -224,3 +224,70 @@ def test_edit_field_aliases_accepted(env):
     ))
     assert out["ok"] is True, out
     assert "Pick a hard topic." in _store(env).get(out["proposal_id"])["body"]
+
+
+# --- a rejection must carry the text the retry needs -----------------------
+#
+# A surgical edit asks the model to reproduce an exact substring of the skill.
+# When it cannot, a bare rejection leaves it nowhere to go: it does not have
+# the text, so the retry is byte-identical and the loop never terminates.
+# Production showed this as 214 stuck-loop events on propose_skill in one day.
+# The tool already holds the body it is asking for, so it returns it.
+
+
+def test_edit_without_edits_returns_the_current_body(env):
+    _seed(env)
+    out = json.loads(_authoring.propose_skill("skill_quiz", kind="skill_edit"))
+    assert out["ok"] is False
+    assert "current_body" in out
+    assert "Pick a topic." in out["current_body"]
+    assert "hint" in out
+
+
+def test_old_not_found_returns_the_current_body(env):
+    _seed(env)
+    out = json.loads(_authoring.propose_skill(
+        "skill_quiz", kind="skill_edit",
+        edits=[{"old": "text that is not in the skill", "new": "x"}],
+    ))
+    assert out["ok"] is False
+    assert "current_body" in out
+    assert "Pick a topic." in out["current_body"]
+
+
+def test_returned_body_lets_the_next_attempt_succeed(env):
+    """The whole point: the retry can copy from what it was handed."""
+    _seed(env)
+    first = json.loads(_authoring.propose_skill("skill_quiz", kind="skill_edit"))
+    body = first["current_body"]
+
+    # Pick a line from the body the way the model would.
+    lines = body.splitlines()
+    fence = [i for i, line in enumerate(lines) if line.strip() == "---"][1]
+    target = next(
+        line for line in lines[fence + 1:]
+        if len(line.strip()) > 10 and body.count(line) == 1
+    )
+
+    out = json.loads(_authoring.propose_skill(
+        "skill_quiz", kind="skill_edit", rationale="apply it",
+        edits=[{"old": target, "new": target + " Then stop."}],
+    ))
+    assert out["ok"] is True, out
+
+
+def test_returned_body_is_bounded(env, monkeypatch):
+    monkeypatch.setattr(_authoring, "_MAX_RETURNED_BODY_CHARS", 50)
+    _seed(env)
+    out = json.loads(_authoring.propose_skill("skill_quiz", kind="skill_edit"))
+    assert len(out["current_body"]) < 120
+    assert "truncated" in out["current_body"]
+
+
+def test_missing_skill_rejection_carries_no_body(env):
+    """Nothing to hand back when the skill does not exist."""
+    out = json.loads(_authoring.propose_skill(
+        "skill_ghost", kind="skill_edit", edits=[{"old": "a", "new": "b"}],
+    ))
+    assert out["ok"] is False
+    assert "current_body" not in out

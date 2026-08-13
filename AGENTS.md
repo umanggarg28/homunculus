@@ -134,6 +134,11 @@ operator to approve; nothing takes effect until approved.
 - **Fix a skill that keeps failing.** During reflection, propose the
   corrected body with `kind="skill_edit"` (see the reflection prompt).
 
+If you call `propose_skill` for a `skill_edit` and it bounces, the reply
+includes `current_body` — the skill exactly as stored. Copy your `old`
+string out of that, verbatim, and retry once. Never re-send the same call
+unchanged: it will fail identically.
+
 For a `skill_edit`, prefer surgical `edits=[{old, new}]` — a str_replace
 against the current body that changes only what you target and leaves the
 rest verbatim (the most reliable shape for an open-weight model; copy each
