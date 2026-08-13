@@ -85,6 +85,18 @@ def normalize_workspace_path(path: str) -> str:
         ) from None
 
 
+def workspace_path(path: str) -> Path:
+    """Validate `path` and return the absolute location to read or write.
+
+    `normalize_workspace_path` returns the workspace-*relative* form, which is
+    what log lines and tool results should show. Anchoring that form for actual
+    I/O requires joining it back onto WORKSPACE_ROOT: resolving it against the
+    process cwd instead is only equivalent while the two happen to coincide,
+    and silently writes outside the sandbox when they don't.
+    """
+    return WORKSPACE_ROOT / normalize_workspace_path(path)
+
+
 def cache_key(kind: str, value: str) -> Path:
     digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
     return CACHE_DIR / kind / f"{digest}.json"
