@@ -41,6 +41,29 @@ def _edit_field(edit: dict, *names: str) -> str | None:
     return None
 
 
+# A surgical edit requires the model to reproduce an exact substring of the
+# skill it is editing. When it cannot, rejecting the call alone leaves it no way
+# forward: it does not have the text, so the retry is identical and the loop
+# never terminates. The tool is already holding the body it is asking for, so it
+# returns it with the rejection and the next attempt can copy from it.
+_MAX_RETURNED_BODY_CHARS = 8000
+
+
+def _rejection_with_body(errors: list[str], current: str | None) -> str:
+    """Reject a skill_edit, handing back the text the next attempt needs."""
+    payload: dict[str, object] = {"ok": False, "errors": errors}
+    if current:
+        body = current
+        if len(body) > _MAX_RETURNED_BODY_CHARS:
+            body = body[:_MAX_RETURNED_BODY_CHARS] + "\n...(truncated)"
+        payload["current_body"] = body
+        payload["hint"] = (
+            "current_body is the skill exactly as stored. Copy an 'old' string "
+            "from it verbatim — including indentation — and retry."
+        )
+    return json.dumps(payload, indent=2)
+
+
 def _apply_edits(current: str, edits: list[dict]) -> tuple[str | None, list[str]]:
     """Apply surgical {old, new} string replacements to a skill body, the way
     Letta's core_memory_replace / Anthropic's str_replace editor do: each `old`
@@ -70,7 +93,7 @@ def _apply_edits(current: str, edits: list[dict]) -> tuple[str | None, list[str]
         if count == 0:
             errors.append(
                 f"edit #{i + 1}: 'old' text not found in the current skill. "
-                f"Read the skill again and copy the exact text verbatim."
+                f"Copy the exact text from current_body below."
             )
         elif count > 1:
             errors.append(
@@ -139,13 +162,13 @@ def propose_skill(
             })
         edited_body, edit_errors = _apply_edits(current or "", edits)
         if edit_errors:
-            return json.dumps({"ok": False, "errors": edit_errors}, indent=2)
+            return _rejection_with_body(edit_errors, current)
         body = edited_body or ""
     elif not body:
-        return json.dumps({
-            "ok": False,
-            "errors": ["provide a full body, or edits=[{old, new}] for a skill_edit"],
-        })
+        return _rejection_with_body(
+            ["provide a full body, or edits=[{old, new}] for a skill_edit"],
+            current,
+        )
 
     result = validate_skill_body(body, expected_name=name)
     errors = list(result.errors)
