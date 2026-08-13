@@ -34,6 +34,10 @@ model that size drifts off task, claims work it didn't do, and sometimes
 invents data — so reliability is treated as a property of the harness, not
 the model:
 
+- **Tool calls pass a gate before they run** — a policy can refuse a call (the
+  reason goes back to the model, so it adapts instead of failing blindly) or
+  repair a malformed argument in place, which costs nothing where a rejection
+  would have cost a round trip.
 - **Deliveries are verified against tool output** — a result with no work behind
   it, or a fabricated link, is refused rather than sent.
 - **Self-improvement is human-gated** — the agent proposes skill changes from its

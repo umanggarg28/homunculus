@@ -11,6 +11,7 @@ from homunculus.config import get_config
 from ._helpers import (
     PathOutsideWorkspace,
     normalize_workspace_path,
+    workspace_path,
 )
 
 _MAX_LIST_ENTRIES = 200
@@ -56,12 +57,12 @@ def _missing_file_error(path: str) -> str:
 
 def read_file(path: str) -> str:
     try:
-        safe = normalize_workspace_path(path)
+        target = workspace_path(path)
     except PathOutsideWorkspace as e:
         return _sandbox_error(path, e)
-    if not Path(safe).is_file():
+    if not target.is_file():
         return _missing_file_error(path)
-    text = Path(safe).read_text(encoding="utf-8")
+    text = target.read_text(encoding="utf-8")
     max_chars = get_config().loop.read_file_max_chars
     if len(text) <= max_chars:
         return text
@@ -72,44 +73,47 @@ def read_file(path: str) -> str:
 
 def write_file(path: str, content: str) -> str:
     try:
-        safe = normalize_workspace_path(path)
+        target = workspace_path(path)
     except PathOutsideWorkspace as e:
         return _sandbox_error(path, e)
-    p = Path(safe)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content, encoding="utf-8")
-    return f"Wrote {len(content)} bytes to {p}"
+    safe = normalize_workspace_path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    return f"Wrote {len(content)} bytes to {safe}"
 
 
 def append_file(path: str, content: str) -> str:
     try:
-        safe = normalize_workspace_path(path)
+        target = workspace_path(path)
     except PathOutsideWorkspace as e:
         return _sandbox_error(path, e)
-    p = Path(safe)
-    p.parent.mkdir(parents=True, exist_ok=True)
+    safe = normalize_workspace_path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
     # Ensure appended content starts on its own line.
     prefix = ""
-    if p.exists() and p.stat().st_size > 0:
-        last_byte = p.read_bytes()[-1:]
+    if target.exists() and target.stat().st_size > 0:
+        last_byte = target.read_bytes()[-1:]
         if last_byte and last_byte != b"\n":
             prefix = "\n"
-    with p.open("a", encoding="utf-8") as f:
+    with target.open("a", encoding="utf-8") as f:
         f.write(prefix + content)
-    return f"Appended {len(content)} bytes to {p} (total size: {p.stat().st_size} bytes)"
+    return (
+        f"Appended {len(content)} bytes to {safe} "
+        f"(total size: {target.stat().st_size} bytes)"
+    )
 
 
 def list_files(path: str = ".") -> str:
     """List files and directories under path (relative to workspace cwd)."""
     try:
-        safe = normalize_workspace_path(path)
+        root = workspace_path(path)
     except PathOutsideWorkspace as e:
         return _sandbox_error(path, e)
-    root = Path(safe)
+    safe = normalize_workspace_path(path)
     if not root.exists():
         return f"ERROR: path '{path}' does not exist"
     if root.is_file():
-        return str(root)
+        return safe
 
     # Skip noisy dirs that don't belong to the user's workspace content
     _SKIP = {"cache", "__pycache__", ".git", "node_modules", ".venv"}
@@ -128,17 +132,16 @@ def list_files(path: str = ".") -> str:
             break
 
     if not entries:
-        return f"(empty directory: {root})"
-    return f"{root}:\n" + "\n".join(entries)
+        return f"(empty directory: {safe})"
+    return f"{safe}:\n" + "\n".join(entries)
 
 
 def search_files(query: str, path: str = ".", case_sensitive: bool = False) -> str:
     """Grep for query across text files under path."""
     try:
-        safe = normalize_workspace_path(path)
+        root = workspace_path(path)
     except PathOutsideWorkspace as e:
         return _sandbox_error(path, e)
-    root = Path(safe)
     if not root.exists():
         return f"ERROR: path '{path}' does not exist"
 

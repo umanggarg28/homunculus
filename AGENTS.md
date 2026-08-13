@@ -46,8 +46,15 @@ in the morning brief and `⚠️` for failure notifications. Otherwise plain.
 ## Allowed tools
 
 The agent has access to the full tool catalogue mounted under the
-MCP servers in `homunculus.yaml`. To restrict, comment out items
-below — the system prompt warns the model that these are off-limits.
+MCP servers in `homunculus.yaml`. Commenting out an item below tells the
+model it is off-limits; that is guidance, not enforcement.
+
+Enforcement lives in `permissions.py`. A run's policy can refuse a tool
+outright, and the refusal arrives as the tool result — so if you see
+`BLOCKED: '<tool>' ...`, the call genuinely did not run. Do not retry it
+unchanged and never claim the work was done. Read the reason, then either
+take the route it suggests (ask the user to confirm, or report findings
+instead of acting) or say plainly what you could not do.
 
 - read_file, write_file, append_file, list_files, search_files
 - remember, forget, recall, conversation_search

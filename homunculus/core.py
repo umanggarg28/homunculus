@@ -31,6 +31,7 @@ from homunculus import events, REPO_ROOT
 from homunculus import tools
 from homunculus.config import get_config
 from homunculus.memory import Memory
+from homunculus.permissions import PermissionPolicy, clean_tool_name, policy_from_mode
 from homunculus.transcript import Transcript
 from homunculus.tasks import TaskStore
 # The provider/LLM layer was extracted to homunculus/llm.py (Phase 2). The Agent
@@ -553,9 +554,17 @@ class Agent:
         pre_execute_hook: Callable[[str, dict], str | None] | None = None,
         post_execute_hook: Callable[[str, str], None] | None = None,
         pre_turn_hook: Callable[[int, list], dict | None] | None = None,
+        permissions: PermissionPolicy | None = None,
     ) -> None:
         self.memory = memory
         self.model = model or MODEL
+        # Declarative gate on tool execution (permissions.py). Static for the
+        # life of the Agent, unlike the run-scoped hooks below: it answers
+        # "may this tool run at all", not "has this run met its criteria".
+        # Defaults to the deployment's configured mode.
+        self.permissions = permissions or policy_from_mode(
+            get_config().permission.mode
+        )
         # Run-scoped guard hooks. A guard belongs to the run it supervises —
         # the heartbeat's TaskGuard, the reflection tool guard, and the web
         # run-now guard each attach to the ONE Agent they drive. Process-
@@ -1094,24 +1103,34 @@ class Agent:
         """
         closed = 0
         for call in tool_calls:
-            name = call["function"]["name"]
-            # The weak model occasionally leaks harmony channel markup into
-            # the tool NAME itself ("news_headlines<|channel|>commentary").
-            # The intended tool is unambiguous — strip the markup and
-            # dispatch rather than burning a turn on a does-not-exist error.
-            if "<|" in name:
-                trimmed = name.split("<|", 1)[0].strip()
+            raw_name = call["function"]["name"]
+            name = clean_tool_name(raw_name)
+            if name != raw_name:
                 events.emit(
                     "output_guard",
-                    name=trimmed or name,
-                    text=f"tool name syntax leak: {name!r} → {trimmed!r}",
+                    name=name,
+                    text=f"tool name syntax leak: {raw_name!r} → {name!r}",
                 )
-                name = trimmed
             raw_args = call["function"].get("arguments") or "{}"
             try:
                 args = json.loads(raw_args)
             except json.JSONDecodeError:
                 args = {}
+
+            # Permission gate. Normalizers may repair the arguments before
+            # anything else sees them, so the cache key, the schema check, and
+            # the recorded outcome all describe the corrected call.
+            decision = self.permissions.check(name, args)
+            if decision.corrected:
+                events.emit(
+                    "output_guard",
+                    name=name,
+                    text=f"arguments corrected for {name}",
+                    result=events.truncate_preview(
+                        json.dumps(decision.args, ensure_ascii=False), limit=400
+                    ),
+                )
+            args = decision.args
 
             tool_names_used.add(name)
             self._log_tool_call(name, args)
@@ -1132,7 +1151,17 @@ class Agent:
             # round trips and prevents read_file/recall thrashing —
             # the most common shape of the "stuck loop" failure in
             # production was 3× read_file with identical args.
-            if (
+            if not decision.allowed:
+                # A refusal is a steering signal, not a silent drop: the
+                # reason becomes the tool result so the model can adapt.
+                result = decision.message
+                events.emit(
+                    "output_guard",
+                    name=name,
+                    text=f"permission denied: {name}",
+                    result=decision.message,
+                )
+            elif (
                 name in READ_ONLY_CACHEABLE_TOOLS
                 and call_key in tool_result_cache
             ):

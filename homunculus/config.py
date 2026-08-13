@@ -149,6 +149,19 @@ class CacheConfig(BaseModel):
     web_fetch_seconds: PositiveInt = Field(default=6 * 3600)
 
 
+class PermissionConfig(BaseModel):
+    """Default posture for the tool-execution gate (`permissions.py`).
+
+    Only the mode is configurable here. Rules are per-run rather than
+    deployment-wide — a reflection tick and a chat turn want different ones —
+    so callers construct a `PermissionPolicy` and pass it to the `Agent`.
+    """
+
+    model_config = _STRICT
+
+    mode: str = Field(default="default")
+
+
 # ---------------------------------------------------------------------------
 # Env-var helpers
 # ---------------------------------------------------------------------------
@@ -244,6 +257,7 @@ class HomunculusConfig(BaseModel):
     task: TaskLifecycleConfig = Field(default_factory=TaskLifecycleConfig)
     provider: ProviderConfig = Field(default_factory=ProviderConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
+    permission: PermissionConfig = Field(default_factory=PermissionConfig)
 
     @classmethod
     def from_env(cls) -> HomunculusConfig:
@@ -278,6 +292,10 @@ class HomunculusConfig(BaseModel):
                     "web_search_seconds": "WEB_SEARCH_CACHE_SECONDS",
                     "web_fetch_seconds": "WEB_FETCH_CACHE_SECONDS",
                 },
+            )),
+            permission=PermissionConfig(**_load_from_env(
+                PermissionConfig,
+                "HOMUNCULUS_PERMISSION",
             )),
         )
 

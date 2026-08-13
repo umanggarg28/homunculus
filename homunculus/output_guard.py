@@ -13,6 +13,7 @@ import logging
 import re
 
 from homunculus import events
+from homunculus.permissions import MUTATING_TOOLS
 
 log = logging.getLogger(__name__)
 
@@ -234,11 +235,10 @@ _GUARD_MUTATION_PROMISE_RE = re.compile(
 # Tools that actually change persistent state. A mutation PROMISE is only a lie
 # if NONE of these ran this turn — if the agent called one, it acted on the
 # promise (success/failure of that call is covered by the success-claim guards).
-_MUTATING_TOOLS = frozenset({
-    "propose_skill", "create_task", "update_task", "delete_task", "cancel_task",
-    "complete_task", "record_failure", "write_file", "append_file", "remember",
-    "schedule_next_tick", "update_world_state", "quiz_pick",
-})
+# Canonical definition lives in `permissions` — the gate that decides whether a
+# mutating call may run at all. Imported rather than restated so the guard's
+# after-the-fact check and the before-the-fact gate can never disagree.
+_MUTATING_TOOLS = MUTATING_TOOLS
 
 
 # Map tool names → which arg holds the targeted resource (file path or

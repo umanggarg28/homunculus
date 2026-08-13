@@ -103,3 +103,44 @@ def test_read_file_surfaces_sandbox_error_as_friendly_string(workspace, monkeypa
     result = read_file("/etc/passwd")
     assert result.startswith("ERROR:")
     assert "outside the workspace" in result.lower()
+
+
+# --- I/O anchoring ---------------------------------------------------------
+#
+# The sandbox check and the actual read/write must agree on where the
+# workspace is. `normalize_workspace_path` returns the workspace-relative
+# form for display; resolving that against the process cwd is only
+# equivalent while cwd happens to equal WORKSPACE_ROOT, which is the
+# default but not a guarantee — notably not when driving a regression
+# against a temp workspace.
+
+
+def test_workspace_path_anchors_to_the_root_not_cwd(workspace):
+    h = _load_helpers(workspace)
+    target = h.workspace_path("memory/ok.md")
+    assert target.is_absolute()
+    assert target == workspace.resolve() / "memory" / "ok.md"
+
+
+def test_workspace_path_rejects_escapes(workspace):
+    h = _load_helpers(workspace)
+    with pytest.raises(h.PathOutsideWorkspace):
+        h.workspace_path("../outside.txt")
+
+
+def test_writes_land_in_the_workspace_when_cwd_differs(workspace, monkeypatch):
+    """The bug this guards: a write reported success while the bytes went
+    to the process cwd, leaving the workspace empty."""
+    from tests.conftest import load_real_tool_submodule
+
+    monkeypatch.setenv("HOMUNCULUS_WORKSPACE_ROOT", str(workspace))
+    helpers = load_real_tool_submodule("_helpers")
+    fs = load_real_tool_submodule("filesystem")
+    monkeypatch.setattr(helpers, "WORKSPACE_ROOT", workspace.resolve())
+
+    result = fs.write_file("out/note.md", "HELLO")
+
+    assert (workspace / "out" / "note.md").read_text(encoding="utf-8") == "HELLO"
+    # The result string stays workspace-relative so log lines stay compact.
+    assert "out/note.md" in result
+    assert str(workspace) not in result
