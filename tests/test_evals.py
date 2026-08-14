@@ -334,3 +334,55 @@ def test_load_events_skips_malformed_lines(tmp_path: Path):
 
 def test_load_events_missing_file(tmp_path: Path):
     assert evals.load_events(tmp_path / "nope.jsonl") == []
+
+
+# ---- refused replies are tracked apart from loop guards ------------------
+#
+# A blocked reply is a subset of guard_fires, carried separately because it is
+# rare and severe: averaged in with hundreds of loop fires it would round to
+# invisibility, which defeats the point of recording it at all.
+
+
+def _score(events):
+    contract = evals.Contract(states=("notify",))
+    run = {"ts": "t1", "status": "success", "tool_trace": "notify", "calls": 1}
+    return evals.score_run(contract, run, events_window=events)
+
+
+def test_reply_block_is_counted_separately_and_also_as_a_guard_fire():
+    score = _score([
+        {"event": "output_guard", "kind": "reply_blocked", "violations": "unsupported_claim"},
+        {"event": "output_guard", "kind": "stuck_loop", "text": "stuck loop: read_file × 3"},
+    ])
+    assert score.reply_blocks == 1
+    assert score.guard_fires == 2, "a refused reply is still a guard fire"
+
+
+def test_loop_guards_are_not_counted_as_refused_replies():
+    score = _score([
+        {"event": "output_guard", "kind": "stuck_loop", "text": "x"},
+        {"event": "output_guard", "kind": "cache_hit", "text": "y"},
+        {"event": "output_guard", "kind": "permission_denied", "text": "z"},
+    ])
+    assert score.reply_blocks == 0
+
+
+def test_untagged_reply_block_identified_by_its_violations_field():
+    """Historical reply blocks carry `violations`, which no dispatch guard
+    has ever written."""
+    score = _score([{"event": "output_guard", "violations": "fabricated_link",
+                     "preview": "Here is the report..."}])
+    assert score.reply_blocks == 1
+
+
+def test_scorecard_reports_refusals_as_a_total_not_an_average():
+    """Dividing by run count would round a single occurrence toward zero."""
+    scores = tuple(
+        evals.RunScore(ts=f"t{i}", status="success", contract_kind="states",
+                       contract_compliance=True, violations=0, guard_fires=1,
+                       calls=1, expected_calls=1, cost_cents=0.0,
+                       reply_blocks=(1 if i == 0 else 0))
+        for i in range(20)
+    )
+    card = evals.SkillScorecard(task_id="t", contract_kind="states", run_scores=scores)
+    assert card.reply_blocks == 1, "one refusal in 20 runs must still read as 1"

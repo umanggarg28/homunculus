@@ -690,9 +690,12 @@ def test_evals_scores_a_skill_linked_task(client, web_api):
     assert card["by_model"] == {
         "deepseek/deepseek-v4-flash-0731": {
             "runs": 1, "compliance_rate": 1.0, "avg_violations": 0.0,
-            "avg_guard_fires": 0.0, "avg_cost_cents": 0.15,
+            "avg_guard_fires": 0.0, "reply_blocks": 0, "avg_cost_cents": 0.15,
         },
     }
+    # A clean scorecard reports zero refusals rather than omitting the field —
+    # the UI decides whether to render it, so the API must always answer.
+    assert card["reply_blocks"] == 0
 
 
 def test_evals_requires_web_auth(web_api, monkeypatch):

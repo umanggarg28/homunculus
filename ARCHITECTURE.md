@@ -216,6 +216,15 @@ that by substring meant rewording a log line silently moved a metric used to
 compare models. Events written before the tag existed fall back to the old
 text match so historical runs keep their original scores.
 
+Refused replies (`reply_blocked`) are additionally counted on their own as
+`reply_blocks` — a **total**, not an average. They are a subset of
+`guard_fires`, split out on severity rather than category: a refused reply
+means the model claimed work with no tool evidence behind it, which is both the
+worst outcome here and the rarest. One occurrence among hundreds of loop fires
+would not visibly move an average, so it is carried as a count and the console
+renders it only when non-zero — a permanent `0` chip trains the eye to skip the
+one number that must never be skipped.
+
 ## 6. Persistence model
 
 Everything durable is a **plain file on the shared volume** — no database.

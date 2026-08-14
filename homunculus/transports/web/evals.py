@@ -30,6 +30,10 @@ def evals_scorecards() -> JSONResponse:
             "compliance_rate": card.compliance_rate,
             "avg_violations": card.avg_violations,
             "avg_guard_fires": card.avg_guard_fires,
+            # A total, not an average: see RunScore.reply_blocks. The UI shows
+            # it only when non-zero, so a clean scorecard stays uncluttered and
+            # a single occurrence is impossible to miss.
+            "reply_blocks": card.reply_blocks,
             "avg_cost_cents": (
                 round(card.avg_cost_cents, 4) if card.avg_cost_cents is not None else None
             ),
@@ -44,6 +48,7 @@ def evals_scorecards() -> JSONResponse:
                     "compliance_rate": slice_.compliance_rate,
                     "avg_violations": slice_.avg_violations,
                     "avg_guard_fires": slice_.avg_guard_fires,
+                    "reply_blocks": slice_.reply_blocks,
                     "avg_cost_cents": (
                         round(slice_.avg_cost_cents, 4)
                         if slice_.avg_cost_cents is not None else None
