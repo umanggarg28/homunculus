@@ -118,7 +118,12 @@ operator to approve; nothing takes effect until approved.
   "summarize HN weekly" task created bare ran, did a stray web_search,
   and dropped without notifying).
 
-  **Delivery tasks need VERIFIABLE success criteria.** For a job that
+  **Delivery tasks need VERIFIABLE success criteria — now enforced.**
+  `propose_skill` rejects criteria too weak to tell a delivery from a
+  failure notice: `notify_called` on its own, or a `notify_min_chars`
+  below 120. Those are not style preferences; a run whose sources all
+  failed sends a one-line apology that satisfies both, and the task
+  reports success forever. For a job that
   delivers content, do NOT set only `notify_called` — that passes on an
   empty "nothing found" message, so a broken skill looks successful and
   never gets refined. Require evidence the content is real: e.g.

@@ -75,17 +75,82 @@ def test_complete_task_blocked_until_required_tools_attempted():
 
 
 def test_failed_attempt_still_counts_as_exercised():
-    """Graceful degradation stays intact: a source that ERRORS was still
-    consulted, so the task may complete with that section omitted."""
+    """Graceful degradation stays intact: a source that fails was still
+    consulted, so a MULTI-source task may complete with that section omitted
+    — the other sources still produced something real to send."""
     guard = TaskGuard(
         {"brief": []},
-        required_calls_by_task={"brief": ["news_headlines"]},
+        required_calls_by_task={"brief": ["news_headlines", "get_weather"]},
     )
     guard.on_tool_call("news_headlines", {})
     guard.observe_tool_result(
         "news_headlines", "NEWS_UNAVAILABLE: every configured feed failed to fetch."
     )
+    guard.on_tool_call("get_weather", {})
+    guard.observe_tool_result("get_weather", "28C, clear")
+
+    assert guard.missing_required_calls("brief") == []
     assert guard.on_tool_call("complete_task", {"task_id": "brief", "result": "x"}) is None
+
+
+def test_completion_blocked_when_every_source_failed():
+    """The other side of the same rule. With nothing left that worked, the
+    only thing to send is the outage notice — that is a failure, not a
+    delivery. Six days of "Email not connected; cannot scan for events."
+    closed as successes before this gate existed."""
+    guard = TaskGuard(
+        {"watch": []},
+        required_calls_by_task={"watch": ["gmail_search"]},
+    )
+    guard.on_tool_call("gmail_search", {})
+    guard.observe_tool_result(
+        "gmail_search", "GMAIL_UNAVAILABLE: Google account not connected."
+    )
+
+    # The source WAS consulted — this is not the skipped-source case.
+    assert guard.missing_required_calls("watch") == []
+    assert guard.every_required_source_failed("watch") == ["gmail_search"]
+
+    blocked = guard.on_tool_call("complete_task", {"task_id": "watch", "result": "x"})
+    assert blocked is not None and blocked.startswith("ERROR")
+    assert "record_failure" in blocked
+
+
+def test_record_failure_stays_available_when_sources_are_down():
+    """The gate must steer somewhere. record_failure has its own guard that
+    blocks a false failure on a delivered run; it must not also fire here,
+    or the model is refused by both gates at once."""
+    guard = TaskGuard(
+        {"watch": []},
+        required_calls_by_task={"watch": ["gmail_search"]},
+    )
+    guard.on_tool_call("gmail_search", {})
+    guard.observe_tool_result("gmail_search", "GMAIL_UNAVAILABLE: not connected.")
+
+    assert guard.on_tool_call("record_failure", {"task_id": "watch"}) is None
+
+
+def test_task_with_no_declared_sources_is_unaffected():
+    guard = TaskGuard({"plain": []}, required_calls_by_task={})
+    assert guard.every_required_source_failed("plain") == []
+    assert guard.on_tool_call("complete_task", {"task_id": "plain", "result": "x"}) is None
+
+
+def test_quoted_sentinel_is_not_a_source_failure():
+    """read_file returning a log line that mentions GMAIL_UNAVAILABLE is
+    reporting content, not failing. Only a result that STARTS with the
+    sentinel counts."""
+    guard = TaskGuard(
+        {"digest": []},
+        required_calls_by_task={"digest": ["read_file"]},
+    )
+    guard.on_tool_call("read_file", {"path": "log.md"})
+    guard.observe_tool_result(
+        "read_file", "2026-08-10 gmail_search returned GMAIL_UNAVAILABLE: not connected."
+    )
+
+    assert guard.every_required_source_failed("digest") == []
+    assert guard.on_tool_call("complete_task", {"task_id": "digest", "result": "x"}) is None
 
 
 def test_skill_listing_lifecycle_tools_does_not_deadlock():

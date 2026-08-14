@@ -144,6 +144,12 @@ judgment lives:
 - **Failure classification** (`failures.py`, `heartbeat.py:_is_infra_error`):
   transient infra outages are retried/alerted and kept *out* of the reflection
   loop, so the agent doesn't try to "fix" problems that aren't its own.
+- **Delivery-criteria floor** (`skill_validation.criteria_strength_errors`):
+  success criteria are validated for *strength*, not just shape — a criterion
+  set a failure notice could satisfy is rejected at proposal time. Paired with
+  `TaskGuard.every_required_source_failed`, which blocks `complete_task` when
+  every data source a task depends on failed: that is an outage, not a
+  delivery, and it belongs in `record_failure`.
 - **Task settlement & silent-drop detection** (`heartbeat.py`): a fired task
   that produces no delivery is detected, settled, and (after repeated failure)
   auto-cancelled rather than silently looping.

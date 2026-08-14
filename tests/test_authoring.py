@@ -69,7 +69,8 @@ def test_new_skill_with_valid_task_is_queued(env):
     out = json.loads(_authoring.propose_skill(
         "skill_summarize_hn", VALID_BODY, "weekly digest",
         task={"title": "HN digest", "recurrence": "weekly",
-              "success_criteria": [{"type": "notify_called"}]},
+              "success_criteria": [{"type": "notify_called"},
+                                   {"type": "notify_min_chars", "n": 200}]},
     ))
     assert out["ok"] is True
     assert _store(env).get(out["proposal_id"])["task_spec"]["title"] == "HN digest"
@@ -291,3 +292,84 @@ def test_missing_skill_rejection_carries_no_body(env):
     ))
     assert out["ok"] is False
     assert "current_body" not in out
+
+
+# --- criteria must be able to tell a delivery from a failure notice --------
+#
+# Production, 2026-08: a task declaring `notify_min_chars: 15` +
+# `notify_contains: "Event watch"` recorded six consecutive days of success
+# while delivering "Email not connected; cannot scan for events." Both
+# criteria passed. The skill never looked broken and the outage stayed
+# invisible. Shape validation cannot catch that; strength validation can.
+
+
+def _task(criteria):
+    return {"title": "T", "recurrence": "weekly", "success_criteria": criteria}
+
+
+def test_notify_called_alone_is_rejected(env):
+    out = json.loads(_authoring.propose_skill(
+        "skill_summarize_hn", VALID_BODY, "r",
+        task=_task([{"type": "notify_called"}]),
+    ))
+    assert out["ok"] is False
+    assert any("cannot distinguish a delivery" in e for e in out["errors"])
+
+
+def test_min_chars_below_the_floor_is_rejected(env):
+    """The exact shape of the production failure."""
+    out = json.loads(_authoring.propose_skill(
+        "skill_summarize_hn", VALID_BODY, "r",
+        task=_task([{"type": "notify_called"},
+                    {"type": "notify_min_chars", "n": 15},
+                    {"type": "notify_contains", "text": "Event watch"}]),
+    ))
+    assert out["ok"] is False
+    assert any("below the" in e and "floor" in e for e in out["errors"])
+
+
+def test_adequate_criteria_pass(env):
+    out = json.loads(_authoring.propose_skill(
+        "skill_summarize_hn", VALID_BODY, "r",
+        task=_task([{"type": "notify_called"},
+                    {"type": "notify_min_chars", "n": 200},
+                    {"type": "notify_contains", "text": "Hacker News"}]),
+    ))
+    assert out["ok"] is True, out
+
+
+def test_a_content_check_without_min_chars_is_enough(env):
+    """The floor demands a content check, not specifically a length one."""
+    out = json.loads(_authoring.propose_skill(
+        "skill_summarize_hn", VALID_BODY, "r",
+        task=_task([{"type": "notify_called"},
+                    {"type": "notify_links_grounded"}]),
+    ))
+    assert out["ok"] is True, out
+
+
+def test_compact_yaml_form_is_checked_too(env):
+    """Authors write `- notify_min_chars: 15`; the floor must see through
+    the compact form, not just the canonical dict."""
+    out = json.loads(_authoring.propose_skill(
+        "skill_summarize_hn", VALID_BODY, "r",
+        task=_task(["notify_called", {"notify_min_chars": 15}]),
+    ))
+    assert out["ok"] is False
+    assert any("floor" in e for e in out["errors"])
+
+
+def test_non_integer_min_chars_is_reported(env):
+    out = json.loads(_authoring.propose_skill(
+        "skill_summarize_hn", VALID_BODY, "r",
+        task=_task([{"type": "notify_min_chars", "n": "lots"}]),
+    ))
+    assert out["ok"] is False
+    assert any("integer" in e for e in out["errors"])
+
+
+def test_empty_criteria_are_left_alone(env):
+    """A task spec with no criteria is a separate concern; the floor only
+    judges criteria that exist."""
+    from homunculus.skill_validation import criteria_strength_errors
+    assert criteria_strength_errors([], where="t") == []

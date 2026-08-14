@@ -315,6 +315,15 @@ def _claim_target_inconsistencies(reply: str, tool_outcomes: list[dict]) -> list
     return inconsistent
 
 
+# Data-source tools report "the source is not reachable" with an uppercase
+# sentinel rather than an ERROR prefix — GMAIL_UNAVAILABLE, NEWS_UNAVAILABLE,
+# CALENDAR_UNAVAILABLE, and so on. The sentinel is ANCHORED to the start of
+# the result: a tool that merely quotes one (read_file returning a log line,
+# recall returning a memory entry that mentions an outage) is reporting
+# content, not failing, and must not be misread as a failure.
+_UNAVAILABLE_SENTINEL_RE = re.compile(r"^[A-Z][A-Z_]{3,}_UNAVAILABLE\b")
+
+
 def tool_result_indicates_failure(result) -> bool:
     """Whether a tool result string signals failure.
 
@@ -324,11 +333,17 @@ def tool_result_indicates_failure(result) -> bool:
     output guard can't catch a reply that claims it worked — the live
     case where the agent said "I've filed a proposal" after propose_skill
     returned {"ok": false}.
+
+    The third family is the *_UNAVAILABLE sentinel. Without it a six-day
+    provider outage reads as a string of successful runs: the tool "worked",
+    the agent relayed the notice, and every downstream check agreed.
     """
     if not isinstance(result, str):
         return False
     s = result.lstrip()
     if s.startswith(("ERROR", "Error", "BLOCKED:")):
+        return True
+    if _UNAVAILABLE_SENTINEL_RE.match(s):
         return True
     compact = s.replace(" ", "")
     return '"ok":false' in compact
