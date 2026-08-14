@@ -121,6 +121,57 @@ def test_violations_counted_from_events_window():
     assert score.guard_fires == 1  # the cache-hit doesn't count as a real guard fire
 
 
+# ---- guard classification is structural, not prose-matching --------------
+#
+# `output_guard` is emitted by two different subsystems for six different
+# reasons. Classifying them by substring on a display string means any reword
+# of a log line silently changes a metric that feeds the model scorecard.
+
+
+def test_guard_kinds_are_classified_by_tag_not_wording():
+    """Every dispatch guard except the cache hit counts, whatever its text."""
+    kinds = ["stuck_loop", "permission_denied", "args_corrected",
+             "name_syntax_leak", "reply_blocked"]
+    events = [{"event": "output_guard", "kind": k, "text": "reworded"} for k in kinds]
+    events.append({"event": "output_guard", "kind": "cache_hit", "text": "reworded"})
+    contract = evals.Contract(states=("notify",))
+    run = {"ts": "t1", "status": "success", "tool_trace": "notify", "calls": 1}
+    score = evals.score_run(contract, run, events_window=events)
+    assert score.guard_fires == len(kinds)
+
+
+def test_rewording_a_log_line_does_not_move_the_metric():
+    """The regression this classification exists to prevent: a cache-hit event
+    whose text no longer says "cache hit" must still be excluded."""
+    events = [{"event": "output_guard", "kind": "cache_hit",
+               "text": "served from per-turn cache: list_tasks (2nd call)"}]
+    contract = evals.Contract(states=("notify",))
+    run = {"ts": "t1", "status": "success", "tool_trace": "notify", "calls": 1}
+    assert evals.score_run(contract, run, events_window=events).guard_fires == 0
+
+
+def test_untagged_historical_events_keep_their_original_scoring():
+    """Traces written before `kind` existed must not be rescored — the model
+    head-to-head compares runs across that boundary."""
+    events = [
+        {"event": "output_guard", "text": "cache hit: list_tasks × 2"},
+        {"event": "output_guard", "text": "stuck loop: read_file × 3"},
+    ]
+    contract = evals.Contract(states=("notify",))
+    run = {"ts": "t1", "status": "success", "tool_trace": "notify", "calls": 1}
+    assert evals.score_run(contract, run, events_window=events).guard_fires == 1
+
+
+def test_tag_wins_over_text_when_both_are_present():
+    """A tagged event is never re-judged by its prose, even when the prose
+    would have said otherwise."""
+    events = [{"event": "output_guard", "kind": "stuck_loop",
+               "text": "cache hit: this wording would fool the legacy path"}]
+    contract = evals.Contract(states=("notify",))
+    run = {"ts": "t1", "status": "success", "tool_trace": "notify", "calls": 1}
+    assert evals.score_run(contract, run, events_window=events).guard_fires == 1
+
+
 # ---- score_skill: real-incident fixtures ---------------------------------
 
 

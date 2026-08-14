@@ -47,6 +47,35 @@ from typing import Any
 
 _VIOLATION_EVENTS = frozenset({"required_tool_violation", "wrong_forced_tool"})
 
+# `output_guard` is an overloaded event name: core.py emits it for tool-dispatch
+# guards (five distinct kinds) and output_guard.py for a blocked reply. Each
+# emitter tags itself with `kind`, so the classification below is structural.
+#
+# A cache hit is excluded because it is not a model defect the scorecard should
+# charge for — the harness served a repeated read-only call from cache, saving a
+# round trip. Every other kind is the harness correcting something the model got
+# wrong, which is exactly the signal a model comparison wants.
+_BENIGN_GUARD_KINDS = frozenset({"cache_hit"})
+
+# Events written before `kind` existed carry only a human-readable `text`.
+# Matching prose is fragile, which is why it is confined to this fallback and
+# never used for events that do declare a kind.
+_LEGACY_BENIGN_TEXT = ("cache hit",)
+
+
+def _is_scored_guard_fire(event: dict[str, Any]) -> bool:
+    """Whether an `output_guard` event counts against the model.
+
+    Prefers the structural `kind` tag; falls back to the legacy text match only
+    for events emitted before that tag existed, so historical traces keep
+    scoring the same way they did when they were written.
+    """
+    kind = event.get("kind")
+    if kind is not None:
+        return str(kind) not in _BENIGN_GUARD_KINDS
+    text = str(event.get("text", ""))
+    return not any(marker in text for marker in _LEGACY_BENIGN_TEXT)
+
 
 @dataclass(frozen=True)
 class Contract:
@@ -139,7 +168,7 @@ def score_run(contract: Contract, run: dict[str, Any], events_window: list[dict]
     violations = sum(1 for e in events_window if e.get("event") in _VIOLATION_EVENTS)
     guard_fires = sum(
         1 for e in events_window
-        if e.get("event") == "output_guard" and "cache hit" not in str(e.get("text", ""))
+        if e.get("event") == "output_guard" and _is_scored_guard_fire(e)
     )
 
     return RunScore(

@@ -561,6 +561,7 @@ def run_output_guard(
     try:
         events.emit(
             "output_guard",
+            kind="reply_blocked",
             violations=",".join(violations),
             preview=reply[:100].replace("\n", " "),
         )

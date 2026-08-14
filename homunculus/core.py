@@ -1108,6 +1108,7 @@ class Agent:
             if name != raw_name:
                 events.emit(
                     "output_guard",
+                    kind="name_syntax_leak",
                     name=name,
                     text=f"tool name syntax leak: {raw_name!r} → {name!r}",
                 )
@@ -1124,6 +1125,7 @@ class Agent:
             if decision.corrected:
                 events.emit(
                     "output_guard",
+                    kind="args_corrected",
                     name=name,
                     text=f"arguments corrected for {name}",
                     result=events.truncate_preview(
@@ -1157,6 +1159,7 @@ class Agent:
                 result = decision.message
                 events.emit(
                     "output_guard",
+                    kind="permission_denied",
                     name=name,
                     text=f"permission denied: {name}",
                     result=decision.message,
@@ -1176,6 +1179,7 @@ class Agent:
                 )
                 events.emit(
                     "output_guard",
+                    kind="cache_hit",
                     name=name,
                     text=f"cache hit: {name} × {call_counts[call_key]}",
                     result=canon_args[:120],
@@ -1189,6 +1193,7 @@ class Agent:
                 )
                 events.emit(
                     "output_guard",
+                    kind="stuck_loop",
                     name=name,
                     text=f"stuck loop: {name} × {call_counts[call_key]}",
                     result=canon_args[:120],
