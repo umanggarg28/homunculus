@@ -77,6 +77,18 @@ def _is_scored_guard_fire(event: dict[str, Any]) -> bool:
     return not any(marker in text for marker in _LEGACY_BENIGN_TEXT)
 
 
+def _is_reply_block(event: dict[str, Any]) -> bool:
+    """Whether this event is the delivery verifier refusing to send a reply.
+
+    Untagged historical events are identified by the `violations` field, which
+    only `output_guard.py` has ever written — the tool-dispatch guards in
+    `core.py` do not carry it.
+    """
+    if event.get("kind") is not None:
+        return str(event.get("kind")) == "reply_blocked"
+    return "violations" in event
+
+
 @dataclass(frozen=True)
 class Contract:
     """A skill's golden reference, in whichever shape it declared.
@@ -141,6 +153,13 @@ class RunScore:
     #: existed. Lets a scorecard split its history by model instead of
     #: blending every model the skill has ever run under into one number.
     model: str = ""
+    #: Replies the delivery verifier refused to send (`kind="reply_blocked"`),
+    #: a subset of `guard_fires`. Tracked apart on severity, not category: a
+    #: blocked reply means the model claimed work it had no tool evidence for
+    #: — the worst thing this system can do, and the rarest. Averaged in with
+    #: hundreds of loop fires a single one would not visibly move the number,
+    #: so it is carried as its own count and surfaced only when non-zero.
+    reply_blocks: int = 0
 
 
 def score_run(contract: Contract, run: dict[str, Any], events_window: list[dict]) -> RunScore:
@@ -170,6 +189,10 @@ def score_run(contract: Contract, run: dict[str, Any], events_window: list[dict]
         1 for e in events_window
         if e.get("event") == "output_guard" and _is_scored_guard_fire(e)
     )
+    reply_blocks = sum(
+        1 for e in events_window
+        if e.get("event") == "output_guard" and _is_reply_block(e)
+    )
 
     return RunScore(
         ts=str(run.get("ts", "")),
@@ -178,6 +201,7 @@ def score_run(contract: Contract, run: dict[str, Any], events_window: list[dict]
         contract_compliance=compliance,
         violations=violations,
         guard_fires=guard_fires,
+        reply_blocks=reply_blocks,
         calls=int(run.get("calls") or 0),
         expected_calls=expected_calls,
         cost_cents=float(run.get("cost_cents") or 0.0),
@@ -217,6 +241,17 @@ class ModelSlice:
         return sum(r.guard_fires for r in self.run_scores) / self.runs
 
     @property
+    def reply_blocks(self) -> int:
+        """Total refused replies, not an average.
+
+        This number is meant to be read as "has this ever happened, and how
+        often" — dividing a rare, severe event by the run count would round it
+        toward invisibility, which is the failure mode this field exists to
+        avoid.
+        """
+        return sum(r.reply_blocks for r in self.run_scores)
+
+    @property
     def avg_cost_cents(self) -> float | None:
         if not self.run_scores:
             return None
@@ -252,6 +287,17 @@ class SkillScorecard:
         if not self.run_scores:
             return None
         return sum(r.guard_fires for r in self.run_scores) / self.runs
+
+    @property
+    def reply_blocks(self) -> int:
+        """Total refused replies, not an average.
+
+        This number is meant to be read as "has this ever happened, and how
+        often" — dividing a rare, severe event by the run count would round it
+        toward invisibility, which is the failure mode this field exists to
+        avoid.
+        """
+        return sum(r.reply_blocks for r in self.run_scores)
 
     @property
     def avg_cost_cents(self) -> float | None:

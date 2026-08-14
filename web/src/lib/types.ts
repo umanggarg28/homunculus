@@ -123,6 +123,7 @@ export interface EvalModelSlice {
   compliance_rate: number | null;
   avg_violations: number | null;
   avg_guard_fires: number | null;
+  reply_blocks: number;
   avg_cost_cents: number | null;
 }
 
@@ -132,6 +133,7 @@ export interface EvalScorecard {
   compliance_rate: number | null;
   avg_violations: number | null;
   avg_guard_fires: number | null;
+  reply_blocks: number;
   avg_cost_cents: number | null;
   trend: EvalTrend;
   /** Keyed by model_id ("unknown" = predates model-tracking). One entry

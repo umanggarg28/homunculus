@@ -104,6 +104,12 @@ function EvalCard({ taskId, card }: { taskId: string; card: EvalScorecard }) {
       <div className="eval-chips">
         <EvalChip label="viol" value={fmt(card.avg_violations, 1)} warn={(card.avg_violations ?? 0) > 0.5} />
         <EvalChip label="guard" value={fmt(card.avg_guard_fires, 1)} warn={(card.avg_guard_fires ?? 0) > 1} />
+        {/* Rendered only when non-zero. A refused reply is rare and severe; a
+            permanent "0" chip would train the eye to skip exactly the number
+            that must never be skipped. */}
+        {card.reply_blocks > 0 && (
+          <EvalChip label="refused" value={String(card.reply_blocks)} warn />
+        )}
         <EvalChip label="¢/run" value={card.avg_cost_cents === null ? "—" : card.avg_cost_cents.toFixed(2)} />
       </div>
 
