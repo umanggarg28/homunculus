@@ -49,20 +49,17 @@ API_URL = os.environ.get(
     "HOMUNCULUS_API_URL",
     "https://openrouter.ai/api/v1/chat/completions",
 )
-# Primary model: openai/gpt-oss-120b on OpenRouter.
-# Why this over Gemini 2.5 Flash (the previous primary):
-#   - Intelligence index 33 vs Flash's 21 (artificialanalysis.ai, Nov 2026)
-#   - Blended price $0.20/M vs Flash's $0.33/M — cheaper AND smarter
-#   - Strong tool-calling on τ²-Bench, verified working in our fallback
-#     chain for weeks
-#   - 131K context (vs Flash's 1M) is irrelevant for our workload:
-#     measured max ever sent = 31K, p99 = 21K, p50 = 6K. Plenty of headroom.
-# The structural failures we kept patching (re-delivers same task, skips
-# complete_task, ignores ordered skill steps) are long-context instruction-
-# following failures Flash exhibits at our prompt sizes. gpt-oss-120b's
-# higher intelligence index correlates directly with reliability on
-# those classes of task.
-MODEL = os.environ.get("HOMUNCULUS_MODEL", "openai/gpt-oss-120b")
+# Primary model. Selection criteria, in priority order: reliable tool-calling
+# (the loop is useless without it), then intelligence per dollar under the
+# monthly ceiling, then context headroom — the last is rarely binding, since
+# measured prompt size runs ~6K median against six-figure context windows.
+#
+# Pin a dated snapshot rather than a floating alias. An alias silently becomes
+# a different model: one such swap turned a fallback into a reasoning model
+# that returned no content at all, and the pinned primary is what made that
+# diagnosable. Which model is current, and the head-to-head that chose it,
+# belongs in the PR history rather than here, where it goes stale.
+MODEL = os.environ.get("HOMUNCULUS_MODEL", "deepseek/deepseek-v4-flash-0731")
 
 # Fallback provider chain. Each slot is independent — set only the keys
 # you have. On 429 from one provider, we move to the next; a 429'd
