@@ -29,10 +29,13 @@ OpenRouter, swappable in `.env`) on a deliberately tight budget.
 
 ## The problem
 
-Homunculus runs a small, open-weight model unattended on a tight budget. A
-model that size drifts off task, claims work it didn't do, and sometimes
-invents data — so reliability is treated as a property of the harness, not
-the model:
+Homunculus runs a cheap, open-weight model unattended on a tight budget. The
+hard part is *unattended*: no one reads any individual run, so a plausible
+wrong answer ships as readily as a right one, and a task that quietly stopped
+working looks exactly like one that never had anything to report. That is true
+of a frontier model too — it is a property of running without a reader, not of
+model size. So reliability is treated as a property of the harness, not the
+model:
 
 - **Tool calls pass a gate before they run** — a policy can refuse a call (the
   reason goes back to the model, so it adapts instead of failing blindly) or
@@ -47,7 +50,14 @@ the model:
   loop, so the agent doesn't try to fix problems that aren't its own.
 
 Every tool call, cost, and guard decision is recorded, so the system is auditable
-end to end.
+end to end — including against itself. Two weeks of production traces (9,375
+events) show which guards actually earn their keep: the delivery verifier
+blocked nothing across 59 replies, while the loop guards fired 383 times (236
+stuck-loop, 147 duplicate-call), 211 of them a single skill re-proposing an
+identical edit. The observed failure mode is repetition under an autonomy
+budget, not invention — so the loop guards are load-bearing today and the
+delivery verifier is insurance. Which of those two a reviewer should weigh more
+is a question the event log answers, not the README.
 
 ## What it does
 

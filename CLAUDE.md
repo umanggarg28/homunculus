@@ -9,8 +9,11 @@ Homunculus is a single Python package (`homunculus/`) wrapping a tool-calling LL
 in the machinery to run it unattended: durable memory, scheduled tasks, a
 background autonomy loop, self-authored skills, and chat over web/Telegram/Discord.
 No agent framework — the loop is raw `httpx` + JSON. **Reliability is a property
-of the harness, not the model**: a small open-weight model drifts and sometimes
-fabricates, so the harness verifies, gates, and audits everything around it.
+of the harness, not the model**: nothing reads an individual unattended run, so
+an unverified claim ships and a broken task looks like a quiet one. The harness
+verifies, gates, and audits around the model. This is about the operating mode,
+not model strength — in production the model's actual failure mode is repetition
+(stuck loops), not fabrication; see ARCHITECTURE.md §5.1 for the trace counts.
 
 For full architecture detail, read `ARCHITECTURE.md` first — it is a reviewer-
 oriented map of the package, the agent loop, and the reliability harness, kept
