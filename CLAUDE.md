@@ -78,6 +78,9 @@ inside that directory, not `uv`.
     human-gated: the agent proposes skill changes from its own execution traces,
     nothing takes effect until approved (web/Telegram/Discord). Never bypass this
     with a direct `write_file` to a skill.
+  - `doctor.py` — advisory audit of stored config at heartbeat startup. Write-time
+    validation can't see what was written before the rule; this re-checks and warns.
+    Never blocks.
   - `failures.py`, `heartbeat.py:_is_infra_error` — separates transient infra
     outages (retried/alerted, kept out of reflection) from genuine agent failures.
   - `security.py` — prompt-injection canaries; untrusted web/RSS content is
