@@ -71,7 +71,7 @@ homunculus/
 ├── archival.py          # cold-storage of stale state
 │
 │  ── safety harness ──
-├── security.py          # prompt-injection canaries, leak detection, untrusted-content wrapping
+├── security.py          # injection canaries, leak detection, untrusted-content wrap, secret redaction
 ├── output_guard.py      # action-claim verification, citation-artifact stripping, failure detection
 ├── failures.py          # infra-vs-genuine failure classification
 │
@@ -147,6 +147,13 @@ judgment lives:
 - **Task settlement & silent-drop detection** (`heartbeat.py`): a fired task
   that produces no delivery is detected, settled, and (after repeated failure)
   auto-cancelled rather than silently looping.
+- **Secret redaction** (`security.py:redact_secrets`, applied in `events.emit`):
+  the event log is rendered in the web console and screenshots of that console
+  are committed to a public repo, so a credential reaching the log has a path
+  to the public internet. Provider error bodies and tool results are echoed
+  verbatim, so the line is scrubbed on the way out — matched on each provider's
+  own key prefix, and applied to the serialized record so a credential nested
+  inside tool args cannot slip past. ~0.075 ms per event.
 - **Prompt-injection defense** (`security.py`): canary instructions detect
   prompt-leak attempts; untrusted tool content (web/RSS) is wrapped before it
   reaches the model.

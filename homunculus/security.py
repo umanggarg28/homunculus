@@ -1,11 +1,14 @@
-"""Security guards — system-prompt-leak canary + untrusted-content wrapper.
+"""Security guards — leak canary, untrusted-content wrapper, secret redaction.
 
-Two defenses against prompt extraction and indirect prompt injection, extracted
-from core.py (Phase 3). The canary embeds a per-request token in the system
-prompt and detects it (or structural paraphrases) in the model's output; the
-untrusted-content wrapper frames external tool results so the model treats them
-as data, not instructions. Pure functions — no Agent dependency, so this imports
-with no cycle and core.py re-exports the names its loop uses.
+Three defenses, all pure functions with no Agent dependency, so this imports
+with no cycle and core.py re-exports the names its loop uses:
+
+- the canary embeds a per-request token in the system prompt and detects it
+  (or structural paraphrases) in the model's output;
+- the untrusted-content wrapper frames external tool results so the model
+  treats them as data, not instructions;
+- `redact_secrets` scrubs provider credentials out of anything on its way to
+  the event log.
 """
 
 import re
@@ -131,3 +134,50 @@ def _wrap_untrusted_content(name: str, result: str) -> str:
         f"---\n"
         f"[END UNTRUSTED CONTENT]"
     )
+
+
+# --- Secret redaction --------------------------------------------------------
+#
+# The event log is not a private file. It is rendered in the web console, and
+# screenshots of that console are committed to a public repository — so a
+# credential that reaches the log has a path to the public internet. Nothing
+# deliberately writes a key there, but provider error bodies and tool results
+# are echoed verbatim, and some providers quote the offending key back at you.
+#
+# Patterns are keyed by the credential's own prefix rather than by a generic
+# "long random string" heuristic, which would mangle hashes, IDs and base64
+# payloads. Each entry requires enough trailing characters that a prefix
+# appearing in prose ("the sk- prefix") is not a match.
+#
+# Note the two Google shapes: `AIza…` is the legacy API key and `AQ.…` the
+# current AI Studio format. A redactor written for only the first sails
+# straight past a modern key.
+_SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("google", re.compile(r"\bAQ\.[A-Za-z0-9_.\-]{20,}")),
+    ("google", re.compile(r"\bAIza[A-Za-z0-9_\-]{30,}")),
+    ("google-oauth", re.compile(r"\bya29\.[A-Za-z0-9_\-]{20,}")),
+    ("google-oauth", re.compile(r"\bGOCSPX-[A-Za-z0-9_\-]{15,}")),
+    ("openrouter", re.compile(r"\bsk-or-v1-[A-Za-z0-9]{20,}")),
+    ("cerebras", re.compile(r"\bcsk-[A-Za-z0-9]{20,}")),
+    ("tavily", re.compile(r"\btvly-[A-Za-z0-9\-]{20,}")),
+    ("openai", re.compile(r"\bsk-[A-Za-z0-9]{20,}")),
+    ("github", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}")),
+    ("slack", re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,}")),
+    ("telegram", re.compile(r"\b\d{8,12}:AA[A-Za-z0-9_\-]{30,}")),
+    ("bearer", re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-]{25,}")),
+)
+
+
+def redact_secrets(text: str) -> str:
+    """Replace anything shaped like a provider credential with a marker.
+
+    Returns `text` unchanged when it holds no secrets, so the hot path pays
+    only the scan. The marker names the provider so a redacted log line still
+    says which credential was involved, which is what you need when deciding
+    what to rotate.
+    """
+    if not text:
+        return text
+    for label, pattern in _SECRET_PATTERNS:
+        text = pattern.sub(f"[REDACTED:{label}]", text)
+    return text
