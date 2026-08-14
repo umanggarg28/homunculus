@@ -1197,6 +1197,15 @@ def main() -> None:
 
     log.info(f"[heartbeat] starting, interval = {interval_min} min, model = {model}")
 
+    # Advisory posture audit. Write-time validation only protects what is
+    # written after the rule exists; this re-examines what is already stored.
+    # Findings are logged, never enforced — see doctor.py.
+    try:
+        from homunculus.doctor import run_startup_audit
+        run_startup_audit(_task_store.all())
+    except Exception as _audit_err:
+        log.warning(f"[heartbeat] startup audit skipped: {_audit_err}")
+
     default_interval = interval_min * 60
     tick_failed = False
     while True:

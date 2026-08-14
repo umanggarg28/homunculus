@@ -50,6 +50,7 @@ homunculus/
 ├── heartbeat.py         # autonomous loop: tick(), task firing, settlement
 ├── task_guard.py        # TaskGuard: delivery criteria enforced at notify/complete time
 ├── permissions.py       # declarative gate on tool execution: modes, rules, arg repair
+├── doctor.py            # advisory startup audit of stored config (never blocks)
 ├── config.py            # single typed source of truth for all tuning knobs
 │
 │  ── persistence / state ──
@@ -150,6 +151,11 @@ judgment lives:
   `TaskGuard.every_required_source_failed`, which blocks `complete_task` when
   every data source a task depends on failed: that is an outage, not a
   delivery, and it belongs in `record_failure`.
+- **Startup posture audit** (`doctor.py`): write-time validation only protects
+  what is written *after* a rule exists, so stored config drifts silently. The
+  heartbeat re-audits it at boot and logs findings — advisory, never blocking
+  (the shape Hermes and OpenClaw both converged on; an audit that can stop the
+  agent booting is one an operator deletes).
 - **Task settlement & silent-drop detection** (`heartbeat.py`): a fired task
   that produces no delivery is detected, settled, and (after repeated failure)
   auto-cancelled rather than silently looping.
