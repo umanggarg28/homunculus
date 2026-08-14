@@ -386,3 +386,197 @@ def test_scorecard_reports_refusals_as_a_total_not_an_average():
     )
     card = evals.SkillScorecard(task_id="t", contract_kind="states", run_scores=scores)
     assert card.reply_blocks == 1, "one refusal in 20 runs must still read as 1"
+
+
+# ---- did the skill edit actually help? -----------------------------------
+#
+# The agent proposes the edit, so it cannot be the one to grade it. These pin
+# that the verdict is computed from recorded runs and nothing else.
+
+
+def _run(version, *, compliance=True, guards=1, cost=0.30, status="success", blocks=0):
+    return evals.RunScore(
+        ts="t", status=status, contract_kind="states",
+        contract_compliance=compliance, violations=0, guard_fires=guards,
+        calls=3, expected_calls=3, cost_cents=cost,
+        reply_blocks=blocks, skill_version=version,
+    )
+
+
+def _card(runs):
+    return evals.SkillScorecard(
+        task_id="hn", contract_kind="states", run_scores=tuple(runs),
+    )
+
+
+def test_by_version_groups_runs_and_keeps_unstamped_separate():
+    card = _card([_run(3), _run(3), _run(4), _run(0)])
+    assert set(card.by_version) == {0, 3, 4}
+    assert card.by_version[3].runs == 2
+
+
+def test_comparison_needs_two_versions():
+    assert evals.compare_versions(_card([_run(3), _run(3)])) is None
+
+
+def test_verdict_is_inconclusive_below_the_run_floor():
+    """Two runs a side is not evidence; saying so is the honest output."""
+    c = evals.compare_versions(_card([_run(3), _run(3), _run(4), _run(4)]))
+    assert c is not None and c.verdict == "inconclusive"
+    assert c.score == 0
+    assert "not enough" in c.headline.lower()
+
+
+def test_a_clearly_better_version_reads_as_improved():
+    old = [_run(3, compliance=False, guards=12, cost=0.40) for _ in range(4)]
+    new = [_run(4, compliance=True, guards=2, cost=0.20) for _ in range(4)]
+    c = evals.compare_versions(_card(old + new))
+    assert c is not None
+    assert c.verdict == "improved"
+    assert c.score > 0
+    assert c.before_version == 3 and c.after_version == 4
+
+
+def test_a_clearly_worse_version_reads_as_regressed():
+    old = [_run(3, compliance=True, guards=2, cost=0.20) for _ in range(4)]
+    new = [_run(4, compliance=False, guards=12, cost=0.40) for _ in range(4)]
+    c = evals.compare_versions(_card(old + new))
+    assert c is not None and c.verdict == "regressed" and c.score < 0
+
+
+def test_a_refused_reply_in_the_new_version_overrides_every_average():
+    """Cheaper and fewer guard fires does not excuse claiming work it did not
+    do — the one failure mode the whole harness exists to prevent."""
+    old = [_run(3, guards=9, cost=0.40) for _ in range(4)]
+    new = [_run(4, guards=1, cost=0.10) for _ in range(3)] + [_run(4, guards=1, cost=0.10, blocks=1)]
+    c = evals.compare_versions(_card(old + new))
+    assert c is not None and c.verdict == "regressed"
+
+
+def test_infra_failures_are_excluded_from_the_comparison():
+    """A provider outage inside the window is not the edit's fault. `partial`
+    is what the harness records for transient infrastructure failures."""
+    old = [_run(3, guards=2) for _ in range(4)]
+    new = [_run(4, guards=2) for _ in range(4)] + [
+        _run(4, compliance=False, guards=40, status="partial") for _ in range(5)
+    ]
+    c = evals.compare_versions(_card(old + new))
+    assert c is not None
+    assert c.after_runs == 4, "the five outage runs must not count"
+    assert c.verdict != "regressed"
+
+
+def test_percent_change_from_zero_is_not_reported():
+    """0 -> 0.1 is not an infinite regression; the percent is undefined and
+    reporting it as a number is how a trivial change reads as a disaster."""
+    old = [_run(3, guards=0) for _ in range(4)]
+    new = [_run(4, guards=1) for _ in range(4)]
+    c = evals.compare_versions(_card(old + new))
+    assert c is not None
+    guard_delta = next(d for d in c.deltas if d.name == "avg_guard_fires")
+    assert guard_delta.pct_change is None
+    assert guard_delta.improved is False
+
+
+def test_headline_names_the_biggest_mover_in_plain_words():
+    old = [_run(3, guards=10, cost=0.30) for _ in range(4)]
+    new = [_run(4, guards=1, cost=0.30) for _ in range(4)]
+    c = evals.compare_versions(_card(old + new))
+    assert c is not None
+    assert "guard fires per run" in c.headline.lower()
+    assert "improved" in c.headline.lower()
+
+
+# ---- reconstructing which version produced a historical run --------------
+
+
+def test_version_inference_picks_the_body_live_at_the_time():
+    timeline = (("2026-06-01T00:00:00", 1), ("2026-07-01T00:00:00", 2), ("2026-08-01T00:00:00", 3))
+    assert evals.infer_skill_version(timeline, "2026-06-15T12:00:00") == 1
+    assert evals.infer_skill_version(timeline, "2026-07-02T12:00:00") == 2
+    assert evals.infer_skill_version(timeline, "2026-09-01T12:00:00") == 3
+
+
+def test_runs_older_than_every_version_belong_to_none_of_them():
+    """A run predating the first archive ran under a body never snapshotted.
+    Attributing it to v1 would credit an edit with runs it never produced."""
+    timeline = (("2026-06-01T00:00:00", 1),)
+    assert evals.infer_skill_version(timeline, "2026-05-31T23:59:59") == 0
+
+
+def test_an_explicit_stamp_is_never_overwritten_by_inference():
+    contract = evals.Contract(states=("notify",))
+    runs = [{"ts": "2026-07-15T00:00:00", "status": "success",
+             "tool_trace": "notify", "calls": 1, "skill_version": 9}]
+    timeline = (("2026-06-01T00:00:00", 1), ("2026-07-01T00:00:00", 2))
+    card = evals.score_skill("t", contract, runs, [], timeline=timeline)
+    assert card.run_scores[0].skill_version == 9
+
+
+def test_empty_timeline_leaves_runs_unversioned():
+    contract = evals.Contract(states=("notify",))
+    runs = [{"ts": "2026-07-15T00:00:00", "status": "success", "tool_trace": "notify", "calls": 1}]
+    card = evals.score_skill("t", contract, runs, [], timeline=())
+    assert card.run_scores[0].skill_version == 0
+
+
+def test_guard_fires_are_not_scored_when_they_cannot_be_attributed():
+    """The regression this exists to prevent: one reflection tick looping on
+    one skill put 214 guard fires inside every other task's time window, and
+    three unrelated skills all read as 'regressed'."""
+    old = [_run(3, guards=1) for _ in range(4)]
+    new = [_run(4, guards=40) for _ in range(4)]
+    # Mark the new runs' guard counts as coming from unattributed events.
+    new = [
+        evals.RunScore(**{**r.__dict__, "unattributed_guards": 40}) for r in new
+    ]
+    c = evals.compare_versions(_card(old + new))
+    assert c is not None
+    guard = next(d for d in c.deltas if d.name == "avg_guard_fires")
+    assert guard.improved is None and guard.pct_change is None
+    assert c.verdict != "regressed", "an unattributable metric must not drive a verdict"
+
+
+def test_attributed_guard_fires_still_count():
+    old = [_run(3, guards=10) for _ in range(4)]
+    new = [_run(4, guards=1) for _ in range(4)]
+    c = evals.compare_versions(_card(old + new))
+    assert c is not None
+    guard = next(d for d in c.deltas if d.name == "avg_guard_fires")
+    assert guard.improved is True
+
+
+def test_events_from_another_task_are_excluded_from_the_window():
+    contract = evals.Contract(states=("notify",))
+    runs = [{"ts": "2026-08-10T10:00:00", "status": "success", "tool_trace": "notify", "calls": 1}]
+    events = [
+        {"ts": "2026-08-10T09:59:00", "event": "output_guard", "kind": "stuck_loop",
+         "task": "some-other-task", "text": "stuck loop: propose_skill"},
+        {"ts": "2026-08-10T09:59:30", "event": "output_guard", "kind": "stuck_loop",
+         "task": "mine", "text": "stuck loop: read_file"},
+    ]
+    card = evals.score_skill("mine", contract, runs, events)
+    assert card.run_scores[0].guard_fires == 1, "only this task's fire counts"
+    assert card.run_scores[0].unattributed_guards == 0
+
+
+def test_a_comparison_across_a_model_swap_is_inconclusive():
+    """A version window that straddles a model change measures the model, not
+    the edit. Reporting a verdict there is worse than reporting nothing."""
+    old = tuple(evals.RunScore(**{**_run(3, guards=2, cost=0.10).__dict__, "model": "old-model"})
+                for _ in range(5))
+    new = tuple(evals.RunScore(**{**_run(4, guards=2, cost=0.40).__dict__, "model": "new-model"})
+                for _ in range(5))
+    c = evals.compare_versions(_card(list(old) + list(new)))
+    assert c is not None
+    assert c.before_runs == 0, "no old runs share the new model"
+    assert c.verdict == "inconclusive"
+
+
+def test_same_model_on_both_sides_still_produces_a_verdict():
+    old = tuple(evals.RunScore(**{**_run(3, guards=9, cost=0.40).__dict__, "model": "m"})
+                for _ in range(4))
+    new = tuple(evals.RunScore(**{**_run(4, guards=1, cost=0.10).__dict__, "model": "m"})
+                for _ in range(4))
+    c = evals.compare_versions(_card(list(old) + list(new)))
+    assert c is not None and c.verdict == "improved"

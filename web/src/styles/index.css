@@ -887,6 +887,75 @@ input, textarea { caret-color: var(--color-accent); }
   font-weight: 400;
 }
 
+/* Skill evolution — did the last edit to this skill help?
+   Sits under the model breakdown and follows the same dashed-rule
+   separator, so a card reads as one column of increasingly specific
+   detail rather than three stacked widgets. */
+.eval-evolution {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  border-top: 1px dashed var(--color-border);
+  padding-top: 6px;
+}
+.eval-evolution-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 9px;
+}
+.eval-evolution-versions {
+  color: var(--color-text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
+}
+.eval-evolution-verdict {
+  flex-shrink: 0;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.eval-evolution-score {
+  margin-left: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.eval-evolution-headline {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--color-text);
+}
+.eval-evolution-deltas {
+  display: grid;
+  gap: 2px;
+}
+.eval-evolution-delta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 9px;
+}
+.eval-evolution-metric {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-faint);
+}
+.eval-evolution-move {
+  flex-shrink: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.eval-evolution-basis {
+  font-size: 9px;
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
 .eval-table-wrap {
   overflow-x: auto;
   border: 1px solid var(--color-border);

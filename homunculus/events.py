@@ -19,8 +19,11 @@ plus event-specific fields.
 
 import json
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, UTC
 from pathlib import Path
+from collections.abc import Iterator
 
 from homunculus.security import redact_secrets
 
@@ -35,6 +38,25 @@ _EVENTS_PATH = Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
 _SERVICE = os.environ.get("HOMUNCULUS_SERVICE", "unknown")
 
 
+# Which task's run is executing on this thread, if any. Events are otherwise
+# only ordered in time, and a heartbeat interleaves many tasks — so a metric
+# that windows the log by timestamp alone attributes one task's tool calls to
+# whichever task happens to bracket them. That is not a small error: a single
+# reflection tick looping on one skill once landed 214 guard fires inside
+# every other task's window.
+_current_task: ContextVar[str] = ContextVar("homunculus_current_task", default="")
+
+
+@contextmanager
+def task_context(task_id: str) -> Iterator[None]:
+    """Stamp every event emitted inside this block with `task_id`."""
+    token = _current_task.set(str(task_id or ""))
+    try:
+        yield
+    finally:
+        _current_task.reset(token)
+
+
 def emit(event: str, **fields) -> None:
     """Append one JSON event line to the shared events log.
 
@@ -47,6 +69,9 @@ def emit(event: str, **fields) -> None:
         "event": event,
         **fields,
     }
+    task_id = _current_task.get()
+    if task_id and "task" not in record:
+        record["task"] = task_id
     try:
         # Redact the serialized line rather than each field: tool args and
         # results nest arbitrarily, and one pass over the final text cannot be

@@ -225,6 +225,41 @@ would not visibly move an average, so it is carried as a count and the console
 renders it only when non-zero — a permanent `0` chip trains the eye to skip the
 one number that must never be skipped.
 
+### 5.2 Did the edit help? (measured skill evolution)
+
+The agent proposes edits to its own skills from its own traces, and a human
+approves them — but nothing ever checked whether an approved edit *helped*.
+One skill reached version 12 that way. `evals.compare_versions` closes the
+loop: runs are stamped with the skill version that produced them (the same
+move as stamping `model`), the scorecard slices `by_version`, and the two most
+recent versions are compared on contract compliance, guard fires, and cost.
+
+The verdict (`improved` / `regressed` / `mixed` / `inconclusive`, plus a
+-5..+5 score and a plain sentence) is **computed, never model-generated**. The
+model wrote the edit; asking it to grade its own edit reintroduces exactly the
+unverified self-report the rest of the harness exists to remove.
+
+Most of the work here is refusing to answer when the data cannot support one:
+
+* **Attribution.** Events carry a `task` stamp (`events.task_context`), because
+  a time window is not attribution — the heartbeat interleaves tasks, and one
+  reflection tick looping on a single skill put 214 guard fires inside every
+  other task's window, which read as three unrelated skills regressing at once.
+  Runs whose guard counts predate that stamp are reported but never scored.
+* **Model held constant.** A version window that straddles a model swap
+  measures the swap. Runs are filtered to the newer version's model; runs from
+  before model tracking group under `""` and so compare against nothing.
+* **Infrastructure excluded.** `partial` runs (transient provider/network
+  failures) are dropped — a six-day mail outage is not an edit's fault.
+* **A floor of 3 clean runs a side**, below which the verdict is
+  `inconclusive`. Not significance — just the point under which one slow API
+  dominates the result.
+
+Backfill: version history records when each version went live, so runs
+recorded before stamping are attributed by timestamp
+(`infer_skill_version`). Runs older than the first archived version belong to
+version 0 and are never credited to the first edit.
+
 ## 6. Persistence model
 
 Everything durable is a **plain file on the shared volume** — no database.

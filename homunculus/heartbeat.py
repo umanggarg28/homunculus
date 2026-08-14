@@ -31,6 +31,7 @@ from homunculus import tools
 from homunculus.core import Agent, measure_llm_usage_since
 from homunculus.failures import is_transient_failure
 from homunculus.memory import Memory
+from homunculus.skills import current_skill_version
 from homunculus.tasks import TaskStore, clear_scratchpad
 from homunculus.tools.notify import deliver
 from homunculus.logging_config import configure_logging
@@ -491,18 +492,22 @@ def _run_task_isolated(
     started = datetime.now()
     # Wall-clock UTC for events.jsonl scan; events log timestamps are UTC.
     started_utc = datetime.now(UTC)
+    # Stamp this task's id on every event the loop emits. Windowing the log by
+    # time alone attributes whatever else the heartbeat was doing to this run.
     try:
-        response = agent.chat(
-            prompt,
-            source="heartbeat",
-            state_sequence=state_sequence,
-            expected_completions=1,
-        )
+        with events.task_context(str(task.get("id") or "")):
+            response = agent.chat(
+                prompt,
+                source="heartbeat",
+                state_sequence=state_sequence,
+                expected_completions=1,
+            )
     except Exception as e:
         # Record the outcome (infra → partial, real error → failure), then
         # re-raise so main() can apply its transient-network backoff. Shared
         # with run-now via settle_task_failure so the two can't diverge.
         settle_task_failure(
+            memory,
             tasks,
             task,
             guard,
@@ -589,6 +594,7 @@ def build_task_guard(task: dict[str, Any]) -> TaskGuard:
 
 
 def settle_task_failure(
+    memory: Memory,
     tasks: TaskStore,
     task: dict[str, Any],
     guard: TaskGuard,
@@ -618,7 +624,7 @@ def settle_task_failure(
                 f"skipping record_failure",
             )
             return
-        usage = measure_llm_usage_since(started_utc)
+        usage = _stamp_skill_version(measure_llm_usage_since(started_utc), task, memory)
         if _is_infra_error(err):
             log.info(
                 f"[heartbeat] {task_id} provider-exhaustion — marking partial, "
@@ -644,6 +650,23 @@ def settle_task_failure(
             )
     except Exception as inner:
         log.error(f"[heartbeat] settle_task_failure failed for {task_id}: {inner}")
+
+
+def _stamp_skill_version(usage: dict[str, Any], task: dict[str, Any], memory: Memory) -> dict[str, Any]:
+    """Record which version of the task's skill produced this run.
+
+    The same move as recording `model`: an outcome is only comparable if you
+    know what produced it. Without this a scorecard blends the runs before a
+    skill edit with the runs after it, and the edit's effect is invisible —
+    which is how a skill reached version 12 with no evidence that any edit
+    helped. Tasks with no skill are left alone.
+    """
+    skill = task.get("skill")
+    if skill:
+        version = current_skill_version(memory.root, str(skill))
+        if version:
+            usage = {**usage, "skill_version": version}
+    return usage
 
 
 def settle_task_outcome(
@@ -674,7 +697,7 @@ def settle_task_outcome(
     task_id = task["id"]
     silently_dropped = task_id in set(guard.expected_remaining())
     _record_delivery_keys(tasks, guard, [task])
-    usage = measure_llm_usage_since(started_utc)
+    usage = _stamp_skill_version(measure_llm_usage_since(started_utc), task, memory)
     try:
         current = tasks.get(task_id)
         if current is None:

@@ -1,5 +1,5 @@
 import { Tooltip } from "@/components/ui/Tooltip";
-import type { EvalScorecard, EvalTrend } from "@/lib/types";
+import type { EvalScorecard, EvalTrend, EvalVerdict } from "@/lib/types";
 
 // Status tokens the app already defines and validates (index.css) — a
 // trend is a STATE, not a series, so it gets one reserved color +
@@ -10,6 +10,17 @@ const TREND_META: Record<EvalTrend, { icon: string; label: string; tone: string 
   steady:             { icon: "■", label: "steady",     tone: "var(--color-text-dim)" },
   degrading:          { icon: "▼", label: "degrading",  tone: "var(--color-danger)" },
   insufficient_data:  { icon: "·", label: "new",         tone: "var(--color-text-faint)" },
+};
+
+
+// A verdict is a STATE, like trend above — one reserved status color, an
+// icon, and a word. Never color alone: the label carries the same meaning
+// for anyone who can't separate the hues.
+const VERDICT_META: Record<EvalVerdict, { icon: string; label: string; tone: string }> = {
+  improved:     { icon: "▲", label: "improved",     tone: "var(--color-success)" },
+  regressed:    { icon: "▼", label: "regressed",    tone: "var(--color-danger)" },
+  mixed:        { icon: "◆", label: "mixed",        tone: "var(--color-amber)" },
+  inconclusive: { icon: "·", label: "not yet clear", tone: "var(--color-text-faint)" },
 };
 
 const CONTRACT_LABEL: Record<EvalScorecard["contract_kind"], string> = {
@@ -114,6 +125,7 @@ function EvalCard({ taskId, card }: { taskId: string; card: EvalScorecard }) {
       </div>
 
       <ModelBreakdown byModel={card.by_model} />
+      <SkillEvolution comparison={card.comparison} />
     </div>
   );
 }
@@ -137,6 +149,61 @@ function ModelBreakdown({ byModel }: { byModel: EvalScorecard["by_model"] }) {
           </span>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** Whether the most recent edit to this skill actually helped.
+ *
+ *  The numbers come from recorded runs, not from the model that wrote the
+ *  edit — showing a self-graded verdict would reintroduce exactly the
+ *  unverified claim the rest of the app refuses to send. */
+function SkillEvolution({ comparison }: { comparison: EvalScorecard["comparison"] }) {
+  if (!comparison) return null;
+  const meta = VERDICT_META[comparison.verdict];
+  const conclusive = comparison.verdict !== "inconclusive";
+  return (
+    <div className="eval-evolution">
+      <div className="eval-evolution-head">
+        <span className="eval-evolution-versions">
+          v{comparison.before_version} → v{comparison.after_version}
+        </span>
+        <span className="eval-evolution-verdict" style={{ color: meta.tone }}>
+          {meta.icon} {meta.label}
+          {conclusive && (
+            <b className="eval-evolution-score">
+              {comparison.score > 0 ? `+${comparison.score}` : comparison.score}
+            </b>
+          )}
+        </span>
+      </div>
+      <p className="eval-evolution-headline">{comparison.headline}</p>
+      <div className="eval-evolution-deltas">
+        {comparison.deltas.map((d) => (
+          <div className="eval-evolution-delta" key={d.name}>
+            <span className="eval-evolution-metric">{d.label}</span>
+            <span
+              className="eval-evolution-move"
+              style={{
+                color:
+                  d.improved === null
+                    ? "var(--color-text-faint)"
+                    : d.improved
+                      ? "var(--color-success)"
+                      : "var(--color-danger)",
+              }}
+            >
+              {d.pct_change === null
+                ? "—"
+                : `${d.pct_change > 0 ? "+" : ""}${d.pct_change.toFixed(0)}%`}
+            </span>
+          </div>
+        ))}
+      </div>
+      <span className="eval-evolution-basis">
+        {comparison.before_runs} run{comparison.before_runs === 1 ? "" : "s"} before ·{" "}
+        {comparison.after_runs} after
+      </span>
     </div>
   );
 }
