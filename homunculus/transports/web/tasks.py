@@ -191,7 +191,7 @@ async def tasks_run_stream(task_id: str, request: Request):
                 # Same failure recording the scheduled tick uses (infra →
                 # partial, real → failure), then end the stream.
                 settle_task_failure(
-                    store, task, guard, err,
+                    wa._chat_memory, store, task, guard, err,
                     due_at_before=due_at_before,
                     duration_s=(datetime.now() - started).total_seconds(),
                     started_utc=started_utc,

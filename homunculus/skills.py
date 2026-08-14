@@ -474,3 +474,21 @@ def effective_success_criteria(task: dict, memory_root: Path) -> list[dict]:
             if c not in merged:
                 merged.append(c)
     return merged
+
+
+def current_skill_version(memory_root: Path, skill_name: str) -> int:
+    """Highest recorded version for a skill, or 0 when it has no history.
+
+    Module-level twin of `Skills.current_version`, in the same shape as the
+    other `load_skill_*` helpers, so a caller holding only a memory root can
+    stamp a run without constructing a registry.
+
+    Returns 0 rather than raising when the manifest is missing or malformed —
+    a run record must not fail over version history. `OSError` and
+    `json.JSONDecodeError` are what that path can actually raise; anything
+    else is a bug worth surfacing rather than swallowing.
+    """
+    try:
+        return Skills(memory_root).current_version(skill_name)
+    except (OSError, json.JSONDecodeError):
+        return 0

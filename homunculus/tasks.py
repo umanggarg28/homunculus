@@ -99,6 +99,28 @@ def clear_scratchpad(tasks_root: Path, task_id: str) -> None:
         pass
 
 
+def _apply_usage(run: dict[str, Any], usage: dict) -> None:
+    """Copy the measured usage fields onto a run record.
+
+    Shared by the append path and the retrofit path (a delivery detected after
+    the fact re-attributes usage to the last run). They must agree field for
+    field — when they drifted, a retrofitted run silently lost whichever
+    attribute the other path had gained.
+    """
+    for key in ("input_tokens", "output_tokens", "cached_tokens", "calls"):
+        if usage.get(key):
+            run[key] = int(usage[key])
+    if usage.get("cost_cents"):
+        # Round to 4 decimals so a daily brief costing 0.0023¢ doesn't render as 0.
+        run["cost_cents"] = round(float(usage["cost_cents"]), 4)
+    if usage.get("model"):
+        run["model"] = str(usage["model"])
+    # 0 means "no version history recorded", which is not version 1 — an
+    # unversioned run must never be attributed to the first edit.
+    if usage.get("skill_version"):
+        run["skill_version"] = int(usage["skill_version"])
+
+
 class TaskStore:
     """Tiny JSON-backed task database."""
 
@@ -534,7 +556,10 @@ class TaskStore:
             input_tokens, output_tokens, cached_tokens, cost_cents,
             calls (number of LLM round-trips during this run), model
             (model_id that ran it — lets eval history be split by model
-            across a swap instead of blended)
+            across a swap instead of blended), skill_version (which
+            version of the task's skill produced it — same idea applied
+            to skill edits, so a scorecard can compare the runs before
+            an edit against the runs after it)
         """
         run: dict[str, Any] = {
             "ts": ts.isoformat(timespec="seconds"),
@@ -544,15 +569,7 @@ class TaskStore:
         if duration_s is not None:
             run["duration_s"] = round(duration_s, 2)
         if usage:
-            # Round cost to 4 decimals so a daily-brief that costs
-            # 0.0023¢ doesn't render as 0.
-            for key in ("input_tokens", "output_tokens", "cached_tokens", "calls"):
-                if usage.get(key):
-                    run[key] = int(usage[key])
-            if usage.get("cost_cents"):
-                run["cost_cents"] = round(float(usage["cost_cents"]), 4)
-            if usage.get("model"):
-                run["model"] = str(usage["model"])
+            _apply_usage(run, usage)
         runs = task.setdefault("last_runs", [])
         runs.append(run)
         cap = get_config().task.run_history_cap
@@ -615,13 +632,7 @@ class TaskStore:
             if not runs:
                 return
             run = runs[-1]
-            for key in ("input_tokens", "output_tokens", "cached_tokens", "calls"):
-                if usage.get(key):
-                    run[key] = int(usage[key])
-            if usage.get("cost_cents"):
-                run["cost_cents"] = round(float(usage["cost_cents"]), 4)
-            if usage.get("model"):
-                run["model"] = str(usage["model"])
+            _apply_usage(run, usage)
             self._write(tasks)
 
     # How much of a delivery we keep for the reflection's quality

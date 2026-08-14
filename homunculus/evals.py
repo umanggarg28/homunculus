@@ -41,6 +41,7 @@ run, real scope for a later pass, not this one.
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -160,6 +161,16 @@ class RunScore:
     #: hundreds of loop fires a single one would not visibly move the number,
     #: so it is carried as its own count and surfaced only when non-zero.
     reply_blocks: int = 0
+    #: Guard events counted for this run that carried no task attribution.
+    #: They predate task stamping, so they may belong to any task the
+    #: heartbeat was running at the time. Non-zero means `guard_fires` is a
+    #: time-window figure, not a per-task one, and comparisons must not score
+    #: on it.
+    unattributed_guards: int = 0
+    #: Which version of the task's skill produced this run, 0 when the skill
+    #: has no version history (or the run predates version stamping). Lets a
+    #: scorecard compare the runs before a skill edit against those after it.
+    skill_version: int = 0
 
 
 def score_run(contract: Contract, run: dict[str, Any], events_window: list[dict]) -> RunScore:
@@ -202,6 +213,11 @@ def score_run(contract: Contract, run: dict[str, Any], events_window: list[dict]
         violations=violations,
         guard_fires=guard_fires,
         reply_blocks=reply_blocks,
+        skill_version=int(run.get("skill_version") or 0),
+        unattributed_guards=sum(
+            1 for e in events_window
+            if e.get("event") == "output_guard" and _is_scored_guard_fire(e) and not e.get("task")
+        ),
         calls=int(run.get("calls") or 0),
         expected_calls=expected_calls,
         cost_cents=float(run.get("cost_cents") or 0.0),
@@ -209,13 +225,15 @@ def score_run(contract: Contract, run: dict[str, Any], events_window: list[dict]
     )
 
 
-@dataclass(frozen=True)
-class ModelSlice:
-    """The same aggregate numbers as SkillScorecard, scoped to runs that
-    happened to run under one model — how SkillScorecard.by_model groups
-    its history when a skill has lived through more than one model."""
+class _RunAggregate:
+    """Metrics over a set of scored runs.
 
-    model: str
+    A mixin, not a base dataclass: each aggregate below declares its own
+    `run_scores` field with its own ordering, and inheriting a field here
+    would constrain that. Every aggregate answers the same questions, so the
+    answers live in one place — they drifted when they didn't.
+    """
+
     run_scores: tuple[RunScore, ...]
 
     @property
@@ -259,51 +277,24 @@ class ModelSlice:
 
 
 @dataclass(frozen=True)
-class SkillScorecard:
+class ModelSlice(_RunAggregate):
+    """The same aggregate numbers as SkillScorecard, scoped to runs that
+    happened to run under one model — how SkillScorecard.by_model groups
+    its history when a skill has lived through more than one model."""
+
+    model: str
+    run_scores: tuple[RunScore, ...]
+
+
+
+@dataclass(frozen=True)
+class SkillScorecard(_RunAggregate):
     """Aggregate score for one task/skill over its recent run history."""
 
     task_id: str
     contract_kind: str
     run_scores: tuple[RunScore, ...] = field(default_factory=tuple)
 
-    @property
-    def runs(self) -> int:
-        return len(self.run_scores)
-
-    @property
-    def compliance_rate(self) -> float | None:
-        if not self.run_scores:
-            return None
-        return sum(1 for r in self.run_scores if r.contract_compliance) / self.runs
-
-    @property
-    def avg_violations(self) -> float | None:
-        if not self.run_scores:
-            return None
-        return sum(r.violations for r in self.run_scores) / self.runs
-
-    @property
-    def avg_guard_fires(self) -> float | None:
-        if not self.run_scores:
-            return None
-        return sum(r.guard_fires for r in self.run_scores) / self.runs
-
-    @property
-    def reply_blocks(self) -> int:
-        """Total refused replies, not an average.
-
-        This number is meant to be read as "has this ever happened, and how
-        often" — dividing a rare, severe event by the run count would round it
-        toward invisibility, which is the failure mode this field exists to
-        avoid.
-        """
-        return sum(r.reply_blocks for r in self.run_scores)
-
-    @property
-    def avg_cost_cents(self) -> float | None:
-        if not self.run_scores:
-            return None
-        return sum(r.cost_cents for r in self.run_scores) / self.runs
 
     @property
     def trend(self) -> str:
@@ -340,10 +331,253 @@ class SkillScorecard:
             buckets[r.model].append(r)
         return {m: ModelSlice(model=m, run_scores=tuple(buckets[m])) for m in order}
 
+    @property
+    def by_version(self) -> dict[int, VersionSlice]:
+        """Split run history by the skill version that produced each run,
+        ascending. Runs from before version stamping group under 0, which
+        `compare_versions` excludes — an unstamped run belongs to no known
+        version and must not be attributed to one."""
+        buckets: dict[int, list[RunScore]] = {}
+        for r in self.run_scores:
+            buckets.setdefault(r.skill_version, []).append(r)
+        return {
+            v: VersionSlice(version=v, run_scores=tuple(buckets[v]))
+            for v in sorted(buckets)
+        }
 
-def _events_between(events: list[dict], start_ts: str | None, end_ts: str) -> list[dict]:
+
+@dataclass(frozen=True)
+class VersionSlice(_RunAggregate):
+    """The runs that executed under one version of a skill.
+
+    The skill-edit twin of ModelSlice: a scorecard that blends the runs before
+    an edit with the runs after it cannot show whether the edit helped.
+    """
+
+    version: int
+    run_scores: tuple[RunScore, ...]
+
+
+# A verdict needs enough runs on both sides to mean anything. Three is not
+# statistical significance -- it is the point below which a single bad news
+# day or a slow API would dominate the comparison. Below it the comparison
+# reports "inconclusive" rather than a number that invites a wrong decision.
+_MIN_RUNS_FOR_VERDICT = 3
+
+# Metric weights for the headline score. Compliance dominates because it is
+# the only metric tied to what the skill promised to do; cost is a tiebreak,
+# never a reason to prefer a worse delivery.
+_SCORE_WEIGHTS = {"compliance_rate": 3.0, "avg_guard_fires": 2.0, "avg_cost_cents": 1.0}
+
+# Direction each metric should move for the edit to count as an improvement.
+_HIGHER_IS_BETTER = {"compliance_rate": True, "avg_guard_fires": False, "avg_cost_cents": False}
+
+_METRIC_LABELS = {
+    "compliance_rate": "contract compliance",
+    "avg_guard_fires": "guard fires per run",
+    "avg_cost_cents": "cost per run",
+}
+
+
+@dataclass(frozen=True)
+class MetricDelta:
+    """One metric, before and after, with its direction accounted for."""
+
+    name: str
+    label: str
+    before: float | None
+    after: float | None
+    #: Signed percent change from `before`. None when before is 0 or missing —
+    #: percent change from zero is undefined, and reporting it as a large
+    #: number is how a metric that went 0 -> 0.1 reads as a catastrophe.
+    pct_change: float | None
+    #: True when the change moved the right way for this metric, None when
+    #: there is nothing to compare or the value did not move.
+    improved: bool | None
+
+
+@dataclass(frozen=True)
+class VersionComparison:
+    """Whether a skill edit actually helped, decided from run outcomes.
+
+    Deterministic on purpose. The model proposes the edit, so asking it to
+    grade its own edit reintroduces exactly the unverified self-report the
+    rest of this harness exists to eliminate. Every field here is computed
+    from recorded runs.
+    """
+
+    task_id: str
+    before_version: int
+    after_version: int
+    before_runs: int
+    after_runs: int
+    #: "improved" | "regressed" | "mixed" | "inconclusive"
+    verdict: str
+    #: -5..+5, negative meaning the newer version is worse. A single number is
+    #: lossy by construction; it exists to be scannable, and `deltas` carries
+    #: the honest detail underneath it.
+    score: int
+    #: One plain sentence, built from the deltas -- never model-generated.
+    headline: str
+    deltas: tuple[MetricDelta, ...]
+
+
+def _pct_change(before: float | None, after: float | None) -> float | None:
+    if before is None or after is None or before == 0:
+        return None
+    return (after - before) / abs(before) * 100.0
+
+
+def _clean(runs: tuple[RunScore, ...]) -> tuple[RunScore, ...]:
+    """Drop runs that failed for reasons a skill edit could not affect.
+
+    `partial` is what the harness records for transient infrastructure
+    failures. A six-day mail outage inside the comparison window would
+    otherwise read as an edit that broke the skill.
+    """
+    return tuple(r for r in runs if r.status != "partial")
+
+
+def _describe(deltas: tuple[MetricDelta, ...], verdict: str) -> str:
+    """Build the human sentence from the numbers, with no model involved."""
+    moved = [d for d in deltas if d.improved is not None and d.pct_change is not None]
+    if verdict == "inconclusive":
+        return "Not enough clean runs on both versions to judge yet."
+    if not moved:
+        return "No measurable change between the two versions."
+    moved.sort(key=lambda d: abs(d.pct_change or 0), reverse=True)
+    top = moved[0]
+    direction = "improved" if top.improved else "regressed"
+    lead = f"{top.label.capitalize()} {direction} {abs(top.pct_change or 0):.0f}%"
+    rest = [d for d in moved[1:] if abs(d.pct_change or 0) >= 5]
+    if rest:
+        tail = ", ".join(
+            f"{d.label} {'better' if d.improved else 'worse'} by {abs(d.pct_change or 0):.0f}%"
+            for d in rest
+        )
+        return f"{lead}; {tail}."
+    return f"{lead}."
+
+
+def compare_versions(
+    card: SkillScorecard, before: int | None = None, after: int | None = None,
+) -> VersionComparison | None:
+    """Compare two versions of a skill using the runs each one produced.
+
+    Defaults to the two most recent versions present in the history, which is
+    the question an approved edit raises: did the thing I just approved help?
+    Returns None when the scorecard has fewer than two versions to compare.
+    """
+    slices = card.by_version
+    versions = [v for v in slices if v > 0]
+    if len(versions) < 2:
+        return None
+    versions.sort()
+    before_v = before if before is not None else versions[-2]
+    after_v = after if after is not None else versions[-1]
+    if before_v not in slices or after_v not in slices:
+        return None
+
+    old = _clean(slices[before_v].run_scores)
+    new = _clean(slices[after_v].run_scores)
+
+    # Hold the model constant. A version window that straddles a model swap
+    # measures the swap, not the edit — the cheaper model looks like a
+    # brilliant edit and the pricier one like a broken skill. Runs recorded
+    # before model tracking group under "", which is treated as its own model
+    # precisely so a comparison across that boundary reports inconclusive
+    # rather than a confident wrong number.
+    if new:
+        reference_model = Counter(r.model for r in new).most_common(1)[0][0]
+        old = tuple(r for r in old if r.model == reference_model)
+        new = tuple(r for r in new if r.model == reference_model)
+    old_card = VersionSlice(version=before_v, run_scores=old)
+    new_card = VersionSlice(version=after_v, run_scores=new)
+
+    # Guard fires are only per-task once events carry attribution. Where they
+    # do not, the figure includes whatever else the heartbeat was doing, and
+    # scoring on it manufactures confident nonsense — three unrelated skills
+    # "regressing" because one reflection tick looped on a fourth.
+    guards_attributable = not any(
+        r.unattributed_guards for r in old + new
+    )
+
+    deltas: list[MetricDelta] = []
+    weighted = 0.0
+    for name, weight in _SCORE_WEIGHTS.items():
+        b = getattr(old_card, name)
+        a = getattr(new_card, name)
+        pct = _pct_change(b, a)
+        improved: bool | None = None
+        if b is not None and a is not None and a != b:
+            improved = (a > b) if _HIGHER_IS_BETTER[name] else (a < b)
+        deltas.append(MetricDelta(
+            name=name, label=_METRIC_LABELS[name], before=b, after=a,
+            pct_change=pct, improved=improved,
+        ))
+        if name == "avg_guard_fires" and not guards_attributable:
+            # Reported for context, never scored.
+            deltas[-1] = MetricDelta(
+                name=name, label=_METRIC_LABELS[name], before=b, after=a,
+                pct_change=None, improved=None,
+            )
+            continue
+        if improved is not None and pct is not None:
+            # Cap each metric's contribution so one wild percentage (a cost
+            # that went 0.01 -> 0.03) cannot dominate the headline score.
+            contribution = min(abs(pct) / 50.0, 1.0) * weight
+            weighted += contribution if improved else -contribution
+
+    # A refused reply outweighs every average: it means the new version
+    # claimed work it had not done.
+    new_blocks = sum(r.reply_blocks for r in new)
+    if new_blocks:
+        weighted = min(weighted, -float(_SCORE_WEIGHTS["compliance_rate"]))
+
+    enough = len(old) >= _MIN_RUNS_FOR_VERDICT and len(new) >= _MIN_RUNS_FOR_VERDICT
+    if not enough:
+        verdict = "inconclusive"
+    elif new_blocks:
+        verdict = "regressed"
+    else:
+        directions = {d.improved for d in deltas if d.improved is not None}
+        if not directions:
+            verdict = "mixed"
+        elif directions == {True}:
+            verdict = "improved"
+        elif directions == {False}:
+            verdict = "regressed"
+        else:
+            verdict = "improved" if weighted > 0.5 else "regressed" if weighted < -0.5 else "mixed"
+
+    score = 0 if verdict == "inconclusive" else max(-5, min(5, round(weighted)))
+    return VersionComparison(
+        task_id=card.task_id,
+        before_version=before_v, after_version=after_v,
+        before_runs=len(old), after_runs=len(new),
+        verdict=verdict, score=score,
+        headline=_describe(tuple(deltas), verdict),
+        deltas=tuple(deltas),
+    )
+
+
+def _events_between(
+    events: list[dict], start_ts: str | None, end_ts: str, task_id: str = "",
+) -> list[dict]:
     """Events with ts in (start_ts, end_ts] — start_ts=None means
-    "since the beginning of the log"."""
+    "since the beginning of the log".
+
+    A time window alone is not attribution. The heartbeat interleaves tasks,
+    and a reflection tick looping on one skill once put 214 guard fires inside
+    every other task's window, which reads as three unrelated skills all
+    regressing at once. So when a task id is given, events carrying a
+    different `task` are excluded.
+
+    Events with no `task` at all predate that stamping. They are kept, because
+    dropping them would silently rewrite every historical metric — but they
+    are exactly the ones that cannot be trusted for per-task attribution, and
+    `attributed_events` below reports how much of a window is affected.
+    """
     out = []
     for e in events:
         ts = str(e.get("ts", ""))
@@ -351,21 +585,75 @@ def _events_between(events: list[dict], start_ts: str | None, end_ts: str) -> li
             continue
         if start_ts is not None and ts <= start_ts:
             continue
+        owner = str(e.get("task") or "")
+        if task_id and owner and owner != task_id:
+            continue
         out.append(e)
     return out
 
 
+def version_timeline(memory_root: Path, skill_name: str) -> tuple[tuple[str, int], ...]:
+    """When each version of a skill went live, oldest first.
+
+    `Skills.save` writes the new body and records that version's timestamp in
+    the same call, so version N was the live body from its timestamp until the
+    next version's. That makes the history reconstructable for runs recorded
+    before version stamping existed.
+    """
+    from homunculus.skills import Skills
+
+    try:
+        versions = Skills(memory_root).versions(skill_name)
+    except (OSError, json.JSONDecodeError):
+        return ()
+    out = [
+        (str(v.get("timestamp") or ""), int(v.get("version") or 0))
+        for v in versions
+        if v.get("timestamp") and v.get("version")
+    ]
+    return tuple(sorted(out))
+
+
+def infer_skill_version(timeline: tuple[tuple[str, int], ...], run_ts: str) -> int:
+    """Which version was live when a run happened. 0 when it predates them all.
+
+    A run older than the first recorded version ran under a body that was never
+    archived, so it belongs to no known version — 0, never version 1. Both
+    timestamps are naive local ISO-8601, which compares correctly as text.
+    """
+    live = 0
+    for ts, version in timeline:
+        if ts <= run_ts:
+            live = version
+        else:
+            break
+    return live
+
+
 def score_skill(
     task_id: str, contract: Contract, runs: list[dict], events: list[dict],
+    timeline: tuple[tuple[str, int], ...] = (),
 ) -> SkillScorecard:
     """Score every run in a task's `last_runs` history against its
-    skill's contract, windowing events between consecutive runs."""
+    skill's contract, windowing events between consecutive runs.
+
+    `timeline` backfills the skill version for runs recorded before it was
+    stamped, from the version history's own timestamps. Without it a scorecard
+    would have to wait days to say anything, while the answer to "did any of
+    these twelve edits help" is already sitting on disk.
+    """
     ordered = sorted(runs, key=lambda r: str(r.get("ts", "")))
+    if timeline:
+        ordered = [
+            r if r.get("skill_version") else
+            {**r, "skill_version": infer_skill_version(timeline, str(r.get("ts", "")))}
+            for r in ordered
+        ]
     scores = []
     prev_ts: str | None = None
     for run in ordered:
         end_ts = str(run.get("ts", ""))
-        window = _events_between(events, prev_ts, end_ts)
+        window = _events_between(events, prev_ts, end_ts, task_id)
         scores.append(score_run(contract, run, window))
         prev_ts = end_ts
     return SkillScorecard(task_id=task_id, contract_kind=contract.kind, run_scores=tuple(scores))
@@ -382,7 +670,10 @@ def score_all(
         if not skill_name:
             continue
         contract = load_contract(memory_root, skill_name)
-        out[task["id"]] = score_skill(task["id"], contract, task.get("last_runs") or [], events)
+        out[task["id"]] = score_skill(
+            task["id"], contract, task.get("last_runs") or [], events,
+            timeline=version_timeline(memory_root, skill_name),
+        )
     return out
 
 

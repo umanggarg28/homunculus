@@ -127,6 +127,41 @@ export interface EvalModelSlice {
   avg_cost_cents: number | null;
 }
 
+export type EvalVerdict = "improved" | "regressed" | "mixed" | "inconclusive";
+
+export interface EvalVersionSlice {
+  runs: number;
+  compliance_rate: number | null;
+  avg_guard_fires: number | null;
+  reply_blocks: number;
+  avg_cost_cents: number | null;
+}
+
+export interface EvalMetricDelta {
+  name: string;
+  label: string;
+  before: number | null;
+  after: number | null;
+  /** null when `before` is 0 — percent change from zero is undefined. */
+  pct_change: number | null;
+  improved: boolean | null;
+}
+
+/** Whether the most recent skill edit actually helped. Computed from recorded
+ *  runs, never model-generated: the agent proposes the edit, so it cannot be
+ *  the one to grade it. */
+export interface EvalComparison {
+  before_version: number;
+  after_version: number;
+  before_runs: number;
+  after_runs: number;
+  verdict: EvalVerdict;
+  /** -5..+5, negative meaning the newer version is worse. */
+  score: number;
+  headline: string;
+  deltas: EvalMetricDelta[];
+}
+
 export interface EvalScorecard {
   contract_kind: EvalContractKind;
   runs: number;
@@ -136,6 +171,11 @@ export interface EvalScorecard {
   reply_blocks: number;
   avg_cost_cents: number | null;
   trend: EvalTrend;
+  /** Keyed by skill version number as a string; "0" = runs from before
+   *  version stamping, excluded from comparisons. */
+  by_version: Record<string, EvalVersionSlice>;
+  /** null until the skill has runs under two different versions. */
+  comparison: EvalComparison | null;
   /** Keyed by model_id ("unknown" = predates model-tracking). One entry
    *  per model this skill has ever run under — lets a model swap show up
    *  as two comparable slices instead of one blended average. */

@@ -11,10 +11,37 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
+from homunculus import evals
 from homunculus.evals import load_events, score_all
 from homunculus.transports import web_api as wa
 
 router = APIRouter()
+
+
+def _comparison_payload(card: evals.SkillScorecard) -> dict | None:
+    """Serialize the before/after verdict for a skill's most recent edit."""
+    c = evals.compare_versions(card)
+    if c is None:
+        return None
+    return {
+        "before_version": c.before_version,
+        "after_version": c.after_version,
+        "before_runs": c.before_runs,
+        "after_runs": c.after_runs,
+        "verdict": c.verdict,
+        "score": c.score,
+        "headline": c.headline,
+        "deltas": [
+            {
+                "name": d.name, "label": d.label,
+                "before": None if d.before is None else round(d.before, 4),
+                "after": None if d.after is None else round(d.after, 4),
+                "pct_change": None if d.pct_change is None else round(d.pct_change, 1),
+                "improved": d.improved,
+            }
+            for d in c.deltas
+        ],
+    }
 
 
 @router.get("/api/evals", dependencies=[Depends(wa.require_web_auth)])
@@ -38,6 +65,23 @@ def evals_scorecards() -> JSONResponse:
                 round(card.avg_cost_cents, 4) if card.avg_cost_cents is not None else None
             ),
             "trend": card.trend,
+            # Which skill version produced which runs, and whether the most
+            # recent edit actually helped. `comparison` is null until a skill
+            # has runs under two different versions.
+            "by_version": {
+                str(v): {
+                    "runs": slice_.runs,
+                    "compliance_rate": slice_.compliance_rate,
+                    "avg_guard_fires": slice_.avg_guard_fires,
+                    "reply_blocks": slice_.reply_blocks,
+                    "avg_cost_cents": (
+                        round(slice_.avg_cost_cents, 4)
+                        if slice_.avg_cost_cents is not None else None
+                    ),
+                }
+                for v, slice_ in card.by_version.items()
+            },
+            "comparison": _comparison_payload(card),
             # Keyed by model_id ("" = recorded before model-tracking
             # shipped, rendered "unknown"). One entry per model a run
             # ever executed under — a swap shows up as two slices to
