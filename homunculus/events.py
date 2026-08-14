@@ -22,6 +22,8 @@ import os
 from datetime import datetime, UTC
 from pathlib import Path
 
+from homunculus.security import redact_secrets
+
 
 # Where the JSONL lives. Sits in workspace/ next to the agent's other
 # runtime state. Single shared file across all services.
@@ -46,8 +48,14 @@ def emit(event: str, **fields) -> None:
         **fields,
     }
     try:
+        # Redact the serialized line rather than each field: tool args and
+        # results nest arbitrarily, and one pass over the final text cannot be
+        # bypassed by a credential buried a few levels down. The marker
+        # substituted in carries no quotes or backslashes, so the line stays
+        # valid JSON.
+        line = redact_secrets(json.dumps(record, ensure_ascii=False))
         with _EVENTS_PATH.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            f.write(line + "\n")
     except Exception:
         # Logging must never break the caller. Drop the event silently.
         pass

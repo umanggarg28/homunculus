@@ -81,7 +81,10 @@ inside that directory, not `uv`.
   - `failures.py`, `heartbeat.py:_is_infra_error` — separates transient infra
     outages (retried/alerted, kept out of reflection) from genuine agent failures.
   - `security.py` — prompt-injection canaries; untrusted web/RSS content is
-    wrapped before reaching the model.
+    wrapped before reaching the model; `redact_secrets` scrubs provider
+    credentials from every line `events.emit` writes (the log is public-facing
+    via console screenshots). Match on each provider's key prefix — note Google
+    has two live shapes, legacy `AIza…` and current `AQ.…`.
   - `llm.py` — per-tick iteration budget, opt-in daily cost ceiling, multi-provider
     fallback chain.
 - **Persistence** — everything durable is a plain file on the shared `workspace/`
