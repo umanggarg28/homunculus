@@ -13,8 +13,13 @@ open-weight model useful unattended: durable memory, scheduled tasks, a
 background autonomy loop, self-authored skills, and chat across web / Telegram /
 Discord. There is **no agent framework** — the loop is raw `httpx` + JSON. The
 central design bet is that **reliability is a property of the harness, not the
-model**: a small open model drifts, claims work it didn't do, and occasionally
-invents data, so the harness verifies, gates, and audits everything around it.
+model**: nothing reads any individual unattended run, so an unverified claim
+ships and a silently broken task is indistinguishable from a quiet one. The
+harness therefore verifies, gates, and audits everything around the model. Note
+that this bet is about the *operating mode*, not the model's strength — the
+current primary is mid-pack against frontier models on public benchmarks and
+well above the median for its size and price, and §5.1 reports which guards it
+actually trips in production.
 Quality-critical judgment calls (e.g. drafting job-application answers, see
 §3 `tools/career.py`) can route to a stronger paid model per-call via
 `HOMUNCULUS_DRAFTING_MODEL` while the routine loop stays on the cheap primary.
@@ -115,8 +120,10 @@ over five named phases:
 
 The loop repeats call→dispatch until the model returns a plain text answer that
 clears the guard. Tool *I/O* is deterministic code (`tools/`); the model only
-supplies semantic parameters — a key reliability pattern for weak models (the
-model never builds URLs/links itself).
+supplies semantic parameters (the model never builds URLs/links itself). This
+is the highest-leverage reliability pattern in the codebase and it does not
+scale away with model strength: a stronger model composes a plausible URL more
+convincingly, not less.
 
 ## 5. The reliability harness (the actual thesis)
 
@@ -174,6 +181,34 @@ judgment lives:
   warned once per process). Paid models missing from the pricing table are
   costed at conservative default rates so the cap fails closed. A
   multi-provider fallback chain handles provider failures.
+
+### 5.1 Which guards actually fire
+
+The event log makes the harness auditable against itself, so the claim above is
+checkable rather than asserted. Over 13.5 days of production (9,375 events,
+2026-08-01 → 08-14, primary `deepseek-v4-flash-0731`):
+
+| Guard | Fires | Reading |
+|---|---:|---|
+| Delivery verifier (`output_guard.py`) | 0 | across 59 assistant replies |
+| Stuck-loop | 236 | same call repeated within a tick |
+| Duplicate-call cache | 147 | result served without re-running |
+| `tool_choice` violation | 1 | provider returned no call when one was required |
+
+Two things follow. First, the model's observed failure mode is **repetition,
+not invention** — 211 of the loop-guard fires are one skill re-proposing an
+identical edit, which is what motivated the proposal dedupe and the criteria
+floor. Second, the zero is weak evidence on its own: 59 replies is a small
+sample, and a guard that never fires is indistinguishable from one whose
+condition never arose. It is reported as *not yet load-bearing*, not as proof
+of a model that never fabricates — the guard's own tests, not production
+counts, are what establish it works.
+
+Read the current numbers off the log rather than trusting this table:
+`homunculus/evals.py` computes them, and it already accounts for `output_guard`
+being an overloaded event name — `core.py` emits it for tool-dispatch guards
+and `output_guard.py` for reply blocks, and only the latter carries a
+`violations` field.
 
 ## 6. Persistence model
 
