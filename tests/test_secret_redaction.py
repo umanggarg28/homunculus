@@ -121,3 +121,32 @@ def test_secret_nested_deep_in_args_is_still_caught(tmp_path, monkeypatch):
 
     monkeypatch.undo()
     importlib.reload(events)
+
+
+# ---- task attribution survives a generator resumed elsewhere -------------
+
+
+def test_task_context_restores_without_a_token(tmp_path, monkeypatch):
+    """A streamed run-now yields from inside task_context and is resumed in a
+    different context. Restoring by token raises there; the work has already
+    succeeded, so the run must not die on the way out."""
+    import contextvars
+    from homunculus import events
+
+    def enter_and_exit_in_another_context():
+        with events.task_context("some-task"):
+            assert events._current_task.get() == "some-task"
+            # Simulate the server resuming the generator elsewhere.
+            contextvars.copy_context().run(lambda: None)
+
+    contextvars.copy_context().run(enter_and_exit_in_another_context)
+
+
+def test_nested_task_contexts_restore_the_outer_task(tmp_path, monkeypatch):
+    from homunculus import events
+
+    with events.task_context("outer"):
+        with events.task_context("inner"):
+            assert events._current_task.get() == "inner"
+        assert events._current_task.get() == "outer"
+    assert events._current_task.get() == ""

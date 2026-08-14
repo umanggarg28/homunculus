@@ -49,12 +49,21 @@ _current_task: ContextVar[str] = ContextVar("homunculus_current_task", default="
 
 @contextmanager
 def task_context(task_id: str) -> Iterator[None]:
-    """Stamp every event emitted inside this block with `task_id`."""
-    token = _current_task.set(str(task_id or ""))
+    """Stamp every event emitted inside this block with `task_id`.
+
+    Restores by assignment rather than by token. A streamed run-now yields
+    from inside this block, and the server resumes that generator in a
+    different context than the one that entered it — resetting a token there
+    raises "created in a different Context" and kills the run after the work
+    already succeeded. Assignment restores the previous value in whichever
+    context the block actually exits in, which is the one that matters.
+    """
+    previous = _current_task.get()
+    _current_task.set(str(task_id or ""))
     try:
         yield
     finally:
-        _current_task.reset(token)
+        _current_task.set(previous)
 
 
 def emit(event: str, **fields) -> None:
