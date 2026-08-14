@@ -205,10 +205,16 @@ of a model that never fabricates — the guard's own tests, not production
 counts, are what establish it works.
 
 Read the current numbers off the log rather than trusting this table:
-`homunculus/evals.py` computes them, and it already accounts for `output_guard`
-being an overloaded event name — `core.py` emits it for tool-dispatch guards
-and `output_guard.py` for reply blocks, and only the latter carries a
-`violations` field.
+`homunculus/evals.py` computes them. Note that `output_guard` is an
+**overloaded event name** — `core.py` emits it for five tool-dispatch guards
+and `output_guard.py` for a blocked reply — so every emitter tags itself with
+`kind` (`cache_hit`, `stuck_loop`, `permission_denied`, `args_corrected`,
+`name_syntax_leak`, `reply_blocked`). Filter on that tag, never on the
+human-readable `text`: the scorecard's `guard_fires` excludes only `cache_hit`
+(the harness saved a round trip; that is not a model defect), and deciding
+that by substring meant rewording a log line silently moved a metric used to
+compare models. Events written before the tag existed fall back to the old
+text match so historical runs keep their original scores.
 
 ## 6. Persistence model
 
