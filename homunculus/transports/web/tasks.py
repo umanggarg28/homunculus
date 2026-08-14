@@ -135,6 +135,7 @@ async def tasks_run_stream(task_id: str, request: Request):
     # settle_task_* does the same close-out. The only differences are
     # streaming and forced=True — the task's due_at is its next recurrence, so
     # without that note the model would skip it as "not due".
+    from homunculus import events
     from homunculus.heartbeat import (
         prepare_task_run,
         settle_task_failure,
@@ -180,11 +181,16 @@ async def tasks_run_stream(task_id: str, request: Request):
                 # expected_completions=1: a run-now drives exactly ONE task,
                 # so exit the loop the moment it's closed; state_sequence pins
                 # a state-machine skill's tool order, same as a scheduled tick.
-                for chunk in fresh_agent.chat_stream(
-                    prompt, source="heartbeat",
-                    state_sequence=state_sequence, expected_completions=1,
-                ):
-                    yield wa._format_sse_data(chunk)
+                #
+                # Same task stamp the scheduled tick applies: a run-now emits
+                # the same events, and an unattributed one is indistinguishable
+                # from another task's when a scorecard windows the log.
+                with events.task_context(str(task.get("id") or "")):
+                    for chunk in fresh_agent.chat_stream(
+                        prompt, source="heartbeat",
+                        state_sequence=state_sequence, expected_completions=1,
+                    ):
+                        yield wa._format_sse_data(chunk)
             except Exception as e:
                 err = f"{type(e).__name__}: {e}"
                 yield wa._format_sse_data(f"[loop error: {err}]")
