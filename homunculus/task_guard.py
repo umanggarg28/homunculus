@@ -11,6 +11,8 @@ criteria.
 import re
 from typing import Any
 
+from homunculus.output_guard import tool_result_indicates_failure
+
 
 _URL_RE = re.compile(r"https?://[^\s<>\"'\)\]}]+")
 # Trailing punctuation that commonly clings to a URL in prose/markdown but
@@ -125,6 +127,9 @@ class TaskGuard:
         # result). The notify_links_grounded criterion checks delivered URLs
         # against this — a link the agent didn't get from a tool is fabricated.
         self._tool_result_text: list[str] = []
+        # Tools whose result this tick signalled failure. Feeds
+        # every_required_source_failed.
+        self._failed_tools: set[str] = set()
 
     def on_tool_call(self, name: str, arguments: dict) -> str | None:
         """The Agent's pre_execute_hook for this run.
@@ -220,6 +225,17 @@ class TaskGuard:
             # receiving nothing. The result string must start with
             # "ERROR" — core.py's terminal-tool accounting treats any
             # other prefix as a successful close and exits the loop.
+            dead_sources = self.every_required_source_failed(task_id)
+            if dead_sources:
+                return (
+                    "ERROR: complete_task blocked — every data source this "
+                    "task depends on failed this run ("
+                    + ", ".join(dead_sources)
+                    + "), so there is nothing real to deliver. This is an "
+                    "outage, not a completed job: call record_failure(task_id, "
+                    "reason) naming the failing source. Do not close the task "
+                    "on a message that only reports the failure."
+                )
             failures = self.criteria_failures(task_id)
             if failures:
                 return (
@@ -289,6 +305,8 @@ class TaskGuard:
         if name == "notify" or not result:
             return
         self._tool_result_text.append(result)
+        if tool_result_indicates_failure(result):
+            self._failed_tools.add(name)
 
     def _grounded_blob(self) -> str:
         """All tool-result text seen this tick, for link-provenance checks."""
@@ -302,6 +320,30 @@ class TaskGuard:
         completion."""
         attempted = set(self._tool_trace)
         return [t for t in self._required_calls.get(task_id, []) if t not in attempted]
+
+    def every_required_source_failed(self, task_id: str) -> list[str]:
+        """The task's required data sources, when EVERY one of them failed.
+
+        Empty list means there is still something real to deliver — which
+        includes the case of a task that declares no required sources.
+
+        `missing_required_calls` deliberately treats an attempt as enough, so
+        a multi-source skill degrades gracefully when one feed is down. That
+        is right until *all* of them are down: then the only thing left to
+        send is the apology, and a run that delivers nothing but an outage
+        notice is not a success. Six consecutive days of "Email not connected"
+        were recorded as successful deliveries before this existed.
+        """
+        required = self._required_calls.get(task_id, [])
+        if not required:
+            return []
+        attempted = set(self._tool_trace)
+        exercised = [t for t in required if t in attempted]
+        if not exercised or len(exercised) != len(required):
+            return []  # a skipped source is missing_required_calls' business
+        if all(t in self._failed_tools for t in required):
+            return list(required)
+        return []
 
     def criteria_failures(self, task_id: str) -> list[str]:
         """Failure descriptions for ONE task's criteria, checked against

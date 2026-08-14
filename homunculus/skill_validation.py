@@ -172,6 +172,7 @@ def validate_skill_body(
                         f"unknown success_criteria type {c.get('type')!r}; "
                         f"allowed: {sorted(_KNOWN_CRITERIA)}"
                     )
+            errors += criteria_strength_errors(sc, where="frontmatter success_criteria")
 
     return ValidationResult(
         ok=not errors,
@@ -181,6 +182,68 @@ def validate_skill_body(
         states_tools=states_tools,
         requires_tools=requires_tools,
     )
+
+
+
+# Minimum notify_min_chars for a delivery job. A scheduled run that fetches,
+# summarises and sends is not satisfied by a sentence — and a criterion set
+# that a failure notice can satisfy is not a criterion set. AGENTS.md gives
+# authors the same number as prose; this is the enforced form.
+_DELIVERY_MIN_CHARS_FLOOR = 120
+
+
+def criteria_strength_errors(criteria: list, *, where: str) -> list[str]:
+    """Reject success_criteria too weak to tell a delivery from a failure.
+
+    Shape validation asks "can TaskGuard evaluate this". This asks the
+    question that actually matters: if the run's data sources all failed and
+    the agent sent a one-line apology, would these criteria still pass? When
+    the answer is yes the task reports success forever, the skill never looks
+    broken, and an outage stays invisible.
+
+    Observed: a task declaring `notify_min_chars: 15` + `notify_contains:
+    "Event watch"` recorded six consecutive days of success while delivering
+    "Email not connected; cannot scan for events."
+
+    Reminders are exempt by construction — they are created with `create_task`
+    and never reach this path, which validates only skill-backed delivery jobs.
+    """
+    errors: list[str] = []
+    norm = normalize_criteria(criteria)
+    if not norm:
+        return errors
+
+    types = {c.get("type") for c in norm}
+    content_checks = types - {"notify_called"}
+    if not content_checks:
+        errors.append(
+            f"{where}: 'notify_called' alone cannot distinguish a delivery "
+            f"from a failure notice — any notify() satisfies it. Add a check "
+            f"on the content itself (notify_min_chars >= "
+            f"{_DELIVERY_MIN_CHARS_FLOOR}, notify_contains, notify_matches, "
+            f"notify_links_grounded)."
+        )
+
+    for c in norm:
+        if c.get("type") != "notify_min_chars":
+            continue
+        raw = c.get("n")
+        if not isinstance(raw, (int, str)) or isinstance(raw, bool):
+            errors.append(f"{where}: 'notify_min_chars' needs an integer 'n'")
+            continue
+        try:
+            n = int(raw)
+        except ValueError:
+            errors.append(f"{where}: 'notify_min_chars' needs an integer 'n'")
+            continue
+        if n < _DELIVERY_MIN_CHARS_FLOOR:
+            errors.append(
+                f"{where}: 'notify_min_chars: {n}' is below the "
+                f"{_DELIVERY_MIN_CHARS_FLOOR}-character floor for a delivery "
+                f"job — a tool-failure notice is shorter than that and would "
+                f"pass as a success."
+            )
+    return errors
 
 
 # success_criteria types the TaskGuard understands. A new-skill proposal
@@ -258,4 +321,5 @@ def validate_task_spec(task_spec: dict) -> list[str]:
                     f"unknown success_criteria type {c.get('type')!r}; allowed: "
                     f"{sorted(_KNOWN_CRITERIA)}"
                 )
+        errors += criteria_strength_errors(criteria, where="task success_criteria")
     return errors
