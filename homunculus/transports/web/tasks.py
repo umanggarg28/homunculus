@@ -118,10 +118,16 @@ async def tasks_run_stream(task_id: str, request: Request):
     we use during scheduled runs. The post-execution housekeeping (record
     failure / advance due_at) is identical to heartbeat.tick().
 
+    Pass `?dry_run=1` to exercise the whole path without messaging anyone:
+    the loop, guard, criteria and settlement all run for real, only outbound
+    delivery is suppressed. The run is marked so it stays out of the eval
+    scorecards — a rehearsal must not move the numbers a verdict reads.
+
     This is T1.4 of docs/CAPABILITY_ROADMAP.md — the "click ARMED → stream
     in place" UX that removes the trip to Traces for ad-hoc task runs.
     """
     wa._check_chat_rate(request)
+    dry = str(request.query_params.get("dry_run", "")).lower() in {"1", "true", "yes"}
     store = wa._task_store()
     task = store.get(task_id)
     if task is None:
@@ -135,7 +141,10 @@ async def tasks_run_stream(task_id: str, request: Request):
     # settle_task_* does the same close-out. The only differences are
     # streaming and forced=True — the task's due_at is its next recurrence, so
     # without that note the model would skip it as "not due".
+    from contextlib import ExitStack
+
     from homunculus import events
+    from homunculus.tools import notify as notify_tool
     from homunculus.heartbeat import (
         prepare_task_run,
         settle_task_failure,
@@ -185,12 +194,20 @@ async def tasks_run_stream(task_id: str, request: Request):
                 # Same task stamp the scheduled tick applies: a run-now emits
                 # the same events, and an unattributed one is indistinguishable
                 # from another task's when a scorecard windows the log.
-                with events.task_context(str(task.get("id") or "")):
+                with ExitStack() as stack:
+                    stack.enter_context(events.task_context(str(task.get("id") or "")))
+                    outbox = stack.enter_context(notify_tool.dry_run()) if dry else None
                     for chunk in fresh_agent.chat_stream(
                         prompt, source="heartbeat",
                         state_sequence=state_sequence, expected_completions=1,
                     ):
                         yield wa._format_sse_data(chunk)
+                    if outbox is not None:
+                        yield wa._format_sse_data(
+                            f"[dry run — {len(outbox)} message(s) composed, none sent]"
+                        )
+                        for message in outbox:
+                            yield wa._format_sse_data(f"[would have sent]\n{message}")
             except Exception as e:
                 err = f"{type(e).__name__}: {e}"
                 yield wa._format_sse_data(f"[loop error: {err}]")
@@ -215,6 +232,9 @@ async def tasks_run_stream(task_id: str, request: Request):
                 started_utc=started_utc,
                 fire_escalation_notify=False,
             )
+            if dry:
+                # After settlement, so it lands on the run the tool layer wrote.
+                store.mark_last_run_dry(task_id)
             yield wa._format_sse_data("[run-now finished]")
         finally:
             yield "event: done\ndata: end\n\n"
