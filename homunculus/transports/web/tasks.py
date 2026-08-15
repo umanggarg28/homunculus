@@ -144,7 +144,6 @@ async def tasks_run_stream(task_id: str, request: Request):
     from contextlib import ExitStack
 
     from homunculus import events
-    from homunculus.tools import notify as notify_tool
     from homunculus.heartbeat import (
         prepare_task_run,
         settle_task_failure,
@@ -172,6 +171,9 @@ async def tasks_run_stream(task_id: str, request: Request):
         pre_execute_hook=guard.on_tool_call,
         post_execute_hook=guard.observe_tool_result,
         pre_turn_hook=guard.on_pre_turn,
+        # Withheld in the agent loop, not in the tool: tools run in an MCP
+        # stdio subprocess that no in-process flag can reach.
+        suppressed_tools={"notify"} if dry else None,
     )
     due_at_before = task.get("due_at")
     started = datetime.now()
@@ -196,18 +198,19 @@ async def tasks_run_stream(task_id: str, request: Request):
                 # from another task's when a scorecard windows the log.
                 with ExitStack() as stack:
                     stack.enter_context(events.task_context(str(task.get("id") or "")))
-                    outbox = stack.enter_context(notify_tool.dry_run()) if dry else None
                     for chunk in fresh_agent.chat_stream(
                         prompt, source="heartbeat",
                         state_sequence=state_sequence, expected_completions=1,
                     ):
                         yield wa._format_sse_data(chunk)
-                    if outbox is not None:
+                    if dry:
+                        withheld = fresh_agent.suppressed_calls
                         yield wa._format_sse_data(
-                            f"[dry run — {len(outbox)} message(s) composed, none sent]"
+                            f"[dry run — {len(withheld)} call(s) withheld, nothing sent]"
                         )
-                        for message in outbox:
-                            yield wa._format_sse_data(f"[would have sent]\n{message}")
+                        for name, call_args in withheld:
+                            body = str(call_args.get("text") or call_args)
+                            yield wa._format_sse_data(f"[would have sent via {name}]\n{body}")
             except Exception as e:
                 err = f"{type(e).__name__}: {e}"
                 yield wa._format_sse_data(f"[loop error: {err}]")
