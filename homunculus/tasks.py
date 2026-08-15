@@ -582,6 +582,27 @@ class TaskStore:
     # growth of tasks.json.
     DELIVERED_KEYS_CAP = 200
 
+    def mark_last_run_dry(self, task_id: str) -> None:
+        """Flag the most recent run as a rehearsal.
+
+        A dry run exercises the whole path for real -- guard, criteria,
+        settlement -- so it produces a genuine run record. It just never
+        reached the user, which makes it evidence about the code and not about
+        the skill's delivery record. Scoring it would let rehearsals move the
+        numbers that skill-edit verdicts are read from.
+        """
+        with self._locked():
+            tasks = self.all()
+            try:
+                task = self._find(tasks, task_id)
+            except KeyError:
+                return
+            runs = task.get("last_runs") or []
+            if not runs:
+                return
+            runs[-1]["dry_run"] = True
+            self._write(tasks)
+
     def record_delivery(self, task_id: str, key: str) -> dict[str, Any]:
         """Append a delivery key to the task's ledger.
 

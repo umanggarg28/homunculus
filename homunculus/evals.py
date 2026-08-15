@@ -642,6 +642,9 @@ def score_skill(
     would have to wait days to say anything, while the answer to "did any of
     these twelve edits help" is already sitting on disk.
     """
+    # A dry run never reached the user, so it is evidence about the code, not
+    # about the skill. Scoring it would let a rehearsal move a verdict.
+    runs = [r for r in runs if not r.get("dry_run")]
     ordered = sorted(runs, key=lambda r: str(r.get("ts", "")))
     if timeline:
         ordered = [

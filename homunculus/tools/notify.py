@@ -19,7 +19,9 @@ import os
 import re
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from threading import Lock
 
@@ -52,6 +54,46 @@ _TELEGRAM_ALLOWED_TAGS = {"b", "i", "u", "s", "code", "pre", "a", "tg-spoiler"}
 
 _send_history: deque[float] = deque(maxlen=NOTIFY_MAX_PER_WINDOW * 4)
 _send_lock = Lock()
+
+
+# Dry run — exercise a task end to end without messaging anyone.
+#
+# There was no way to run a task for real without it reaching the user's phone,
+# so verifying the delivery path meant actually delivering. Testing against a
+# live task sent three unwanted GitHub summaries before this existed.
+#
+# The switch sits in `deliver()` because that is the single choke point every
+# channel passes through: notify(), the heartbeat's autonomous fallback, and
+# any future channel all inherit it, and none of them can route around it.
+_dry_run: ContextVar[bool] = ContextVar("homunculus_notify_dry_run", default=False)
+_dry_run_outbox: ContextVar[list[str] | None] = ContextVar(
+    "homunculus_notify_outbox", default=None,
+)
+
+
+@contextmanager
+def dry_run() -> Iterator[list[str]]:
+    """Suppress outbound delivery inside this block; yield what was captured.
+
+    Restores by assignment rather than by ContextVar token: callers enter this
+    around a streamed run, and a generator resumed in another context cannot
+    reset a token created in the one that entered it.
+    """
+    previous_flag = _dry_run.get()
+    previous_outbox = _dry_run_outbox.get()
+    outbox: list[str] = []
+    _dry_run.set(True)
+    _dry_run_outbox.set(outbox)
+    try:
+        yield outbox
+    finally:
+        _dry_run.set(previous_flag)
+        _dry_run_outbox.set(previous_outbox)
+
+
+def dry_run_active() -> bool:
+    """Whether delivery is currently suppressed."""
+    return _dry_run.get()
 
 
 def _rate_limit_check() -> str | None:
@@ -117,6 +159,14 @@ def deliver(text: str) -> dict:
     (duplicate=True) and reaches no channel, so the user never gets the same
     message twice no matter how many times this is called.
     """
+    if _dry_run.get():
+        outbox = _dry_run_outbox.get()
+        if outbox is not None:
+            outbox.append(text)
+        return {
+            "recorded": False, "delivered": [], "failed": [],
+            "duplicate": False, "dry_run": True,
+        }
     if _recently_delivered(text):
         return {"recorded": False, "delivered": [], "failed": [], "duplicate": True}
     recorded = _record_to_feed(text)
@@ -191,6 +241,14 @@ def _format_delivery(text: str, result: dict) -> str:
     like "failed"/"timed out"/"ERROR" from a best-effort channel read as "the
     call failed, retry me". Those go to the logs instead (see deliver()). A hard
     ERROR is returned only when the message reached nothing at all."""
+    if result.get("dry_run"):
+        # Say plainly that nothing was sent. Reporting success here would teach
+        # the model that a dry run delivers, and the output guard would be
+        # right to call the resulting "I sent it" a false claim.
+        return (
+            "DRY RUN — the message was composed but deliberately NOT sent to any "
+            "channel, and the user has not seen it. Continue the task as normal."
+        )
     if result.get("duplicate"):
         return (
             "ALREADY DELIVERED — this exact message was just sent, so this call "
