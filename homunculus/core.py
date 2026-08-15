@@ -554,6 +554,7 @@ class Agent:
         pre_execute_hook: Callable[[str, dict], str | None] | None = None,
         post_execute_hook: Callable[[str, str], None] | None = None,
         pre_turn_hook: Callable[[int, list], dict | None] | None = None,
+        suppressed_tools: frozenset[str] | set[str] | None = None,
         permissions: PermissionPolicy | None = None,
     ) -> None:
         self.memory = memory
@@ -579,6 +580,12 @@ class Agent:
         #       optional synthetic message to inject before an LLM call.
         # The module-global setters in tools/ remain as a test-only fallback.
         self._pre_execute_hook = pre_execute_hook
+        # Tools whose execution is withheld for this run. Run-scoped, like the
+        # hooks above: a dry run must not leak into a sibling Agent.
+        self._suppressed_tools = frozenset(suppressed_tools or ())
+        #: (name, args) for every call withheld, so the caller can show what
+        #: would have gone out.
+        self.suppressed_calls: list[tuple[str, dict]] = []
         self._post_execute_hook = post_execute_hook
         self._pre_turn_hook = pre_turn_hook
         # Per-session active tool set. Starts with the always-loaded
@@ -1241,6 +1248,27 @@ class Agent:
                             pass
                 if blocked is not None:
                     result = blocked
+                elif name in self._suppressed_tools:
+                    # Rehearsal: run everything except the part the outside
+                    # world sees. This sits AFTER the pre-execute hook on
+                    # purpose — the guard has already observed the arguments,
+                    # so success criteria are evaluated exactly as in a real
+                    # run and only the side effect is withheld.
+                    #
+                    # It cannot live in the permission gate (that runs before
+                    # the guard, which would starve the criteria) and it cannot
+                    # live in the tool itself: tools execute in an MCP stdio
+                    # subprocess, so no in-process flag reaches them.
+                    self.suppressed_calls.append((name, args))
+                    result = (
+                        f"DRY RUN — '{name}' was called with real arguments but "
+                        "deliberately NOT executed, so nothing left this machine "
+                        "and the user has not seen anything. Continue as normal."
+                    )
+                    events.emit(
+                        "output_guard", kind="outbound_suppressed", name=name,
+                        text=f"dry run: {name} suppressed",
+                    )
                 else:
                     result = tools.execute(name, args)
                     # Observe only real executions — a blocked call produced
