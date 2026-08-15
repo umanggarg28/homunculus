@@ -145,6 +145,7 @@ async def tasks_run_stream(task_id: str, request: Request):
 
     from homunculus import events
     from homunculus.heartbeat import (
+        build_task_permissions,
         prepare_task_run,
         settle_task_failure,
         settle_task_outcome,
@@ -171,6 +172,9 @@ async def tasks_run_stream(task_id: str, request: Request):
         pre_execute_hook=guard.on_tool_call,
         post_execute_hook=guard.observe_tool_result,
         pre_turn_hook=guard.on_pre_turn,
+        # Same policy the scheduled tick runs under, so run-now cannot be
+        # steered somewhere the heartbeat could not go.
+        permissions=build_task_permissions(),
         # Withheld in the agent loop, not in the tool: tools run in an MCP
         # stdio subprocess that no in-process flag can reach.
         suppressed_tools={"notify"} if dry else None,

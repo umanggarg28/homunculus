@@ -25,12 +25,15 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from dataclasses import replace
+
 from homunculus import agent_controls, REPO_ROOT
 from homunculus import events
 from homunculus import tools
 from homunculus.core import Agent, measure_llm_usage_since
 from homunculus.failures import is_transient_failure
 from homunculus.memory import Memory
+from homunculus.permissions import PermissionPolicy, pin_operator_identity, policy_from_mode
 from homunculus.skills import current_skill_version
 from homunculus.tasks import TaskStore, clear_scratchpad
 from homunculus.tools.notify import deliver
@@ -479,6 +482,7 @@ def _run_task_isolated(
         pre_execute_hook=guard.on_tool_call,
         post_execute_hook=guard.observe_tool_result,
         pre_turn_hook=guard.on_pre_turn,
+        permissions=build_task_permissions(),
     )
     if task_total > 1:
         log.info(
@@ -578,6 +582,25 @@ def prepare_task_run(
         due_tasks_block += "\n\n" + "\n\n".join(playbooks)
     prompt = HEARTBEAT_PROMPT_TEMPLATE.format(now_iso=now_iso, due_tasks=due_tasks_block)
     return state_sequence, prompt, build_task_guard(task)
+
+
+def build_task_permissions() -> PermissionPolicy:
+    """The permission policy an unattended task run executes under.
+
+    Same posture as any other run, plus one normalizer: identity arguments are
+    pinned to the operator's configured handle. Chat keeps the flexibility to
+    ask about someone else's profile, because there a human actually asked.
+    A scheduled run has nobody to have asked, so a handle it supplies can only
+    have been inferred.
+    """
+    from homunculus.config import get_config
+    from homunculus.tools.github import default_user
+
+    base = policy_from_mode(get_config().permission.mode)
+    return replace(
+        base,
+        normalizers=(*base.normalizers, pin_operator_identity(default_user())),
+    )
 
 
 def build_task_guard(task: dict[str, Any]) -> TaskGuard:

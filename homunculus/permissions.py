@@ -124,6 +124,38 @@ def clean_tool_name(name: str) -> str:
     return name.split(_MARKUP_SENTINEL, 1)[0].strip() or name
 
 
+# Identity arguments a scheduled run must never take from the model. The tool
+# layer deliberately allows looking up other people ("how is torvalds doing?"),
+# which is legitimate in chat and never legitimate in an unattended task: there
+# is no user there to have asked. A weekly run once called
+# github_profile(user="system") -- a real account -- and reported that
+# stranger's 72 followers as the operator's. Nothing downstream could catch it,
+# because the numbers were genuinely fetched; only the identity was invented.
+_IDENTITY_ARGS: dict[str, str] = {"github_profile": "user"}
+
+
+def pin_operator_identity(operator: str) -> Normalizer:
+    """Correct an identity argument back to the operator's configured handle.
+
+    A normalizer, not a rule: substituting a known-correct identity for a
+    guessed one is repairing the call, not refusing it, so it applies in every
+    permission mode. Returns None (no change) when the argument is absent or
+    already correct, so a run that got it right is untouched.
+    """
+    wanted = (operator or "").strip()
+
+    def _pin(name: str, args: dict) -> dict[str, Any] | None:
+        field = _IDENTITY_ARGS.get(name)
+        if not field or not wanted:
+            return None
+        supplied = str(args.get(field) or "").strip()
+        if not supplied or supplied.lower() == wanted.lower():
+            return None
+        return {**args, field: wanted}
+
+    return _pin
+
+
 DEFAULT_NORMALIZERS: tuple[Normalizer, ...] = (strip_channel_markup,)
 
 
