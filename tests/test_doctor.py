@@ -136,3 +136,110 @@ def test_structural_proof_counts_regardless_of_length():
             "success_criteria": [{"type": "notify_called"}, {"type": proof}],
         }])
         assert findings == [], proof
+
+
+# ---- a dependency nothing declared is a dependency nothing gates ---------
+#
+# every_required_source_failed returns immediately when a skill declares no
+# required sources. A skill that calls one tool on every successful run and
+# declares nothing therefore has no source gate at all — the same shape as the
+# six days of "Email not connected" recorded as six successful deliveries.
+
+
+def _run(trace, status="success", **extra):
+    return {"ts": "t", "status": status, "tool_trace": trace, **extra}
+
+
+def _skilled(tid, skill, runs):
+    return {"id": tid, "skill": skill, "status": "active", "last_runs": runs}
+
+
+def test_a_source_used_every_run_but_undeclared_is_reported(tmp_path, monkeypatch):
+    import homunculus.doctor as doctor
+    monkeypatch.setattr("homunculus.skills.load_skill_requires_tools", lambda r, s: [])
+    task = _skilled("github-health", "skill_github_health",
+                    [_run("github_profile, notify, complete_task")] * 4)
+    findings = doctor.audit_undeclared_sources([task], tmp_path)
+    assert len(findings) == 1
+    assert "github_profile" in findings[0].detail
+    assert findings[0].check == "undeclared_source"
+
+
+def test_a_declared_source_is_not_reported(tmp_path, monkeypatch):
+    import homunculus.doctor as doctor
+    monkeypatch.setattr("homunculus.skills.load_skill_requires_tools",
+                        lambda r, s: ["github_profile"])
+    task = _skilled("github-health", "skill_github_health",
+                    [_run("github_profile, notify")] * 4)
+    assert doctor.audit_undeclared_sources([task], tmp_path) == []
+
+
+def test_harness_tools_are_never_treated_as_data_sources(tmp_path, monkeypatch):
+    """notify and complete_task appear in every run of every skill. Declaring
+    them would say nothing about where the content came from."""
+    import homunculus.doctor as doctor
+    monkeypatch.setattr("homunculus.skills.load_skill_requires_tools", lambda r, s: [])
+    task = _skilled("t", "skill_x", [_run("notify, complete_task, load_tool")] * 5)
+    assert doctor.audit_undeclared_sources([task], tmp_path) == []
+
+
+def test_a_tool_used_in_only_some_runs_is_not_a_dependency(tmp_path, monkeypatch):
+    """Intersection, not frequency: a tool the skill sometimes reaches for is
+    not something to gate a delivery on."""
+    import homunculus.doctor as doctor
+    monkeypatch.setattr("homunculus.skills.load_skill_requires_tools", lambda r, s: [])
+    task = _skilled("t", "skill_x", [
+        _run("quiz_pick, notify"), _run("quiz_pick, notify"), _run("notify"),
+    ])
+    assert doctor.audit_undeclared_sources([task], tmp_path) == []
+
+
+def test_too_few_runs_is_coincidence_not_a_pattern(tmp_path, monkeypatch):
+    import homunculus.doctor as doctor
+    monkeypatch.setattr("homunculus.skills.load_skill_requires_tools", lambda r, s: [])
+    task = _skilled("t", "skill_x", [_run("quiz_pick, notify")] * 2)
+    assert doctor.audit_undeclared_sources([task], tmp_path) == []
+
+
+def test_rehearsals_and_failures_do_not_establish_a_dependency(tmp_path, monkeypatch):
+    import homunculus.doctor as doctor
+    monkeypatch.setattr("homunculus.skills.load_skill_requires_tools", lambda r, s: [])
+    task = _skilled("t", "skill_x", [
+        _run("quiz_pick, notify", dry_run=True),
+        _run("quiz_pick, notify", status="failure"),
+        _run("quiz_pick, notify"),
+    ])
+    assert doctor.audit_undeclared_sources([task], tmp_path) == []
+
+
+def test_repeat_counts_in_a_trace_are_parsed(tmp_path, monkeypatch):
+    """A trace records repeats as 'tool ×4'; the name is still the tool."""
+    import homunculus.doctor as doctor
+    monkeypatch.setattr("homunculus.skills.load_skill_requires_tools", lambda r, s: [])
+    task = _skilled("t", "skill_x", [_run("github_profile ×4, notify")] * 3)
+    findings = doctor.audit_undeclared_sources([task], tmp_path)
+    assert len(findings) == 1 and "github_profile" in findings[0].detail
+
+
+def test_tasks_without_a_skill_are_skipped(tmp_path):
+    import homunculus.doctor as doctor
+    task = {"id": "t", "status": "active", "last_runs": [_run("x, notify")] * 4}
+    assert doctor.audit_undeclared_sources([task], tmp_path) == []
+
+
+def test_no_memory_root_means_no_findings_rather_than_a_crash(tmp_path):
+    import homunculus.doctor as doctor
+    task = _skilled("t", "skill_x", [_run("quiz_pick, notify")] * 4)
+    assert doctor.audit_undeclared_sources([task], None) == []
+
+
+def test_both_checks_run_and_one_failing_does_not_hide_the_other(monkeypatch, caplog):
+    """The isolation contract, now that there is more than one check."""
+    import homunculus.doctor as doctor
+    monkeypatch.setattr(doctor, "audit_task_criteria",
+                        lambda _t: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(doctor, "audit_undeclared_sources",
+                        lambda _t, _r: [doctor.Finding("undeclared_source", "t", "d")])
+    with caplog.at_level(logging.WARNING):
+        out = doctor.run_startup_audit([], None)
+    assert len(out) == 1, "a broken check must not suppress a working one"

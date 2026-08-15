@@ -255,6 +255,13 @@ Most of the work here is refusing to answer when the data cannot support one:
   `inconclusive`. Not significance — just the point under which one slow API
   dominates the result.
 
+The startup audit (`doctor.py`) carries a second check for the same class of
+problem one level down: a skill that calls a data-source tool on *every*
+successful run but declares it in no `requires_tools` has no source gate at
+all, because `every_required_source_failed` returns immediately when nothing
+is declared. That is the six-day mail outage's shape, waiting to happen to a
+different skill.
+
 Backfill: version history records when each version went live, so runs
 recorded before stamping are attributed by timestamp
 (`infer_skill_version`). Runs older than the first archived version belong to

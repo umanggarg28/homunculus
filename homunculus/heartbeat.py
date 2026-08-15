@@ -1273,7 +1273,7 @@ def main() -> None:
     # Findings are logged, never enforced — see doctor.py.
     try:
         from homunculus.doctor import run_startup_audit
-        run_startup_audit(_task_store.all())
+        run_startup_audit(_task_store.all(), memory_dir)
     except Exception as _audit_err:
         log.warning(f"[heartbeat] startup audit skipped: {_audit_err}")
 
