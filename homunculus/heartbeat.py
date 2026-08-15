@@ -669,6 +669,22 @@ def _stamp_skill_version(usage: dict[str, Any], task: dict[str, Any], memory: Me
     return usage
 
 
+def _attribute_success_artifacts(
+    tasks: TaskStore, task_id: str, guard: TaskGuard, usage: dict[str, Any],
+) -> None:
+    """Attach what the tool layer could not know to the success run it wrote.
+
+    complete_task appends the run from inside the loop, before usage, the
+    delivered text and the tool trace are measurable. Every success needs all
+    three: without the trace a run scores as non-compliant against its own
+    contract, and without usage it has no model, cost or skill version — so an
+    unattributed success silently drags down the scorecard it belongs to.
+    """
+    tasks.attribute_usage_to_last_run(task_id, usage)
+    tasks.attribute_delivered_text_to_last_run(task_id, guard.combined_notify_text())
+    tasks.attribute_tool_trace_to_last_run(task_id, guard.tool_trace())
+
+
 def settle_task_outcome(
     memory: Memory,
     tasks: TaskStore,
@@ -706,9 +722,7 @@ def settle_task_outcome(
             # complete_task ran, due_at advanced. Retrofit usage and the
             # delivered text onto the success run the tool layer appended
             # (the latter feeds the reflection's quality self-critique).
-            tasks.attribute_usage_to_last_run(task_id, usage)
-            tasks.attribute_delivered_text_to_last_run(task_id, guard.combined_notify_text())
-            tasks.attribute_tool_trace_to_last_run(task_id, guard.tool_trace())
+            _attribute_success_artifacts(tasks, task_id, guard, usage)
             _settle_quiz_pending(task, delivered=True)
             _rate_task_skill(memory, task, "success")
             return
@@ -718,9 +732,20 @@ def settle_task_outcome(
             # any quiz pending so the CHAT badge never lights for a question
             # the user never received. Rate the skill a failure only when the
             # recorded run is an actual failure (not a cancel / deferral).
-            _settle_quiz_pending(task, delivered=False)
             last_runs = current.get("last_runs") or []
-            if last_runs and last_runs[-1].get("status") == "failure":
+            last_status = last_runs[-1].get("status") if last_runs else None
+            if last_status == "success":
+                # A forced run (run-now) completes a task that was not due, so
+                # due_at deliberately does not advance and the branch above is
+                # skipped. The run still delivered and still needs its
+                # artifacts, or every manual run would score as a contract
+                # violation with no model, cost or version recorded.
+                _attribute_success_artifacts(tasks, task_id, guard, usage)
+                _settle_quiz_pending(task, delivered=True)
+                _rate_task_skill(memory, task, "success")
+                return
+            _settle_quiz_pending(task, delivered=False)
+            if last_status == "failure":
                 tasks.attribute_tool_trace_to_last_run(task_id, guard.tool_trace())
                 _rate_task_skill(memory, task, "failure")
             return

@@ -163,3 +163,70 @@ def test_escalation_notify_fires_for_scheduled_when_escalated(tmp_path, monkeypa
         )
         task = store.get(task["id"])
     assert calls, "scheduled path should escalate to the user after repeated failures"
+
+
+# ── a forced run completes a task that was never due ──────────────────────
+
+
+def test_forced_run_success_still_gets_its_artifacts(tmp_path):
+    """run-now completes a task that is not due, so `due_at` deliberately does
+    not advance and the "due_at moved" branch is skipped. The run still
+    delivered, and without its tool_trace it scores as a contract violation
+    with no model, cost or skill version recorded — an unattributed success
+    silently drags down the scorecard it belongs to.
+    """
+    from homunculus.heartbeat import build_task_guard, settle_task_outcome
+
+    store = _store(tmp_path)
+    future = (datetime.now() + timedelta(days=6)).isoformat(timespec="seconds")
+    task = store.create(
+        title="github health", due_at=future, recurrence="weekly",
+        success_criteria=[{"type": "notify_called"}],
+    )
+    due_at_before = task["due_at"]
+
+    guard = build_task_guard(task)
+    guard.on_tool_call("notify", {"text": "Quiet week — totals: 1 star, 9 followers."})
+    guard.on_tool_call("complete_task", {"task_id": task["id"]})
+    # The tool layer appends the success run from inside the loop. `complete`
+    # advances due_at only past `now`, so a task already due in the future
+    # keeps its date — which is what skips the branch above.
+    store.complete(task["id"], "Quiet week — no change.")
+
+    settle_task_outcome(
+        None, store, task, guard,
+        due_at_before=due_at_before,
+        started=datetime.now(), started_utc=datetime.now(UTC),
+        fire_escalation_notify=False,
+    )
+
+    updated = store.get(task["id"])
+    assert updated["due_at"] == due_at_before, "a forced run must not skip a real cycle"
+    last = (updated.get("last_runs") or [])[-1]
+    assert last["status"] == "success"
+    assert last.get("tool_trace"), "no trace → scored as a contract violation"
+    assert "notify" in last["tool_trace"]
+
+
+def test_forced_run_failure_is_still_recorded_as_a_failure(tmp_path):
+    """The success branch must not swallow the failure case that shared it."""
+    from homunculus.heartbeat import build_task_guard, settle_task_outcome
+
+    store = _store(tmp_path)
+    future = (datetime.now() + timedelta(days=6)).isoformat(timespec="seconds")
+    task = store.create(
+        title="github health", due_at=future, recurrence="weekly",
+        success_criteria=[{"type": "notify_called"}],
+    )
+    guard = build_task_guard(task)
+    guard.on_tool_call("record_failure", {"task_id": task["id"], "reason": "api down"})
+    store.record_failure(task["id"], "api down")
+
+    settle_task_outcome(
+        None, store, task, guard,
+        due_at_before=task["due_at"],
+        started=datetime.now(), started_utc=datetime.now(UTC),
+        fire_escalation_notify=False,
+    )
+    last = (store.get(task["id"]).get("last_runs") or [])[-1]
+    assert last["status"] == "failure"
