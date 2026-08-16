@@ -28,7 +28,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from homunculus.skill_validation import criteria_strength_errors
+from homunculus.skill_validation import _DELIVERY_MIN_CHARS_FLOOR, criteria_strength_errors
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +78,24 @@ def _has_discriminating_marker(criteria: list[dict], task: dict) -> bool:
     return False
 
 
+def _shortest_successful_delivery(task: dict) -> int | None:
+    """Length of the shortest delivery this task ever made successfully.
+
+    A length floor assumes a failure notice is shorter than real content. For a
+    watch-style task the opposite holds: "Nothing new to flag" is a legitimate
+    65-character delivery, while the outage notices it must be told apart from
+    ran 120-146 characters. Recommending a floor there would reject the real
+    deliveries and admit every apology — so the task's own history gets a say
+    before the advice is given.
+    """
+    lengths = [
+        len(str(run.get("delivered_text") or ""))
+        for run in task.get("last_runs") or []
+        if run.get("status") == "success" and run.get("delivered_text")
+    ]
+    return min(lengths) if lengths else None
+
+
 def audit_task_criteria(tasks: list[dict]) -> list[Finding]:
     """Report scheduled tasks whose success criteria cannot fail.
 
@@ -110,6 +128,17 @@ def audit_task_criteria(tasks: list[dict]) -> list[Finding]:
         if _has_discriminating_marker(criteria, task):
             continue
         task_id = str(task.get("id") or "?")
+        # Drop a length-floor complaint the task's own deliveries contradict.
+        floor_note = ""
+        shortest = _shortest_successful_delivery(task)
+        if shortest is not None and "notify_min_chars" in weak[0]:
+            if shortest < _DELIVERY_MIN_CHARS_FLOOR:
+                floor_note = (
+                    f" Note: raising the length floor is NOT the fix here — this "
+                    f"task's shortest successful delivery is {shortest} characters, "
+                    f"so the floor would reject real deliveries. It needs a marker "
+                    f"only a successful run can produce, or its data-source gate."
+                )
         # `skill` implies declared `requires_tools`, which the TaskGuard gates.
         if task.get("skill"):
             findings.append(Finding(
@@ -118,7 +147,7 @@ def audit_task_criteria(tasks: list[dict]) -> list[Finding]:
                 "criteria alone cannot distinguish a delivery from a failure "
                 "notice; the task is currently protected only by its "
                 f"data-source gate ({task['skill']}). "
-                + weak[0].split(": ", 1)[-1],
+                + weak[0].split(": ", 1)[-1] + floor_note,
             ))
         else:
             findings.append(Finding(
@@ -126,7 +155,7 @@ def audit_task_criteria(tasks: list[dict]) -> list[Finding]:
                 task_id,
                 "criteria cannot distinguish a delivery from a failure notice, "
                 "and the task declares no data source to gate on. "
-                + weak[0].split(": ", 1)[-1],
+                + weak[0].split(": ", 1)[-1] + floor_note,
             ))
     return findings
 

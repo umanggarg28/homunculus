@@ -243,3 +243,47 @@ def test_both_checks_run_and_one_failing_does_not_hide_the_other(monkeypatch, ca
     with caplog.at_level(logging.WARNING):
         out = doctor.run_startup_audit([], None)
     assert len(out) == 1, "a broken check must not suppress a working one"
+
+
+# ---- advice the task's own history contradicts --------------------------
+
+
+def test_a_length_floor_contradicted_by_real_deliveries_is_flagged_as_wrong():
+    """The floor assumes a failure notice is shorter than real content. For
+    email-event-watch the opposite held: "Nothing new to flag" is a legitimate
+    65-char delivery while the outage notices it must be told apart from ran
+    120-146. Following the advice would reject the real deliveries and admit
+    every apology."""
+    task = {
+        "id": "email-event-watch", "title": "Email event watch", "status": "active",
+        "skill": "skill_email_event_reminders",
+        "success_criteria": [{"type": "notify_called"}, {"type": "notify_min_chars", "n": 60}],
+        "last_runs": [
+            {"status": "success", "delivered_text": "x" * 65},
+            {"status": "success", "delivered_text": "x" * 142},
+        ],
+    }
+    findings = audit_task_criteria([task])
+    assert len(findings) == 1
+    assert "NOT the fix here" in findings[0].detail
+    assert "65 characters" in findings[0].detail
+
+
+def test_the_floor_advice_stands_when_history_supports_it():
+    task = {
+        "id": "brief", "title": "Brief", "status": "active", "skill": "skill_brief",
+        "success_criteria": [{"type": "notify_called"}, {"type": "notify_min_chars", "n": 60}],
+        "last_runs": [{"status": "success", "delivered_text": "x" * 400}],
+    }
+    findings = audit_task_criteria([task])
+    assert len(findings) == 1
+    assert "NOT the fix here" not in findings[0].detail
+
+
+def test_no_delivery_history_leaves_the_advice_unqualified():
+    task = {
+        "id": "new", "title": "New", "status": "active", "skill": "skill_new",
+        "success_criteria": [{"type": "notify_called"}, {"type": "notify_min_chars", "n": 60}],
+    }
+    findings = audit_task_criteria([task])
+    assert len(findings) == 1 and "NOT the fix here" not in findings[0].detail
