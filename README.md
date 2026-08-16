@@ -54,10 +54,22 @@ end to end — including against itself. Two weeks of production traces (9,375
 events) show which guards actually earn their keep: the delivery verifier
 blocked nothing across 59 replies, while the loop guards fired 383 times (236
 stuck-loop, 147 duplicate-call), 211 of them a single skill re-proposing an
-identical edit. The observed failure mode is repetition under an autonomy
-budget, not invention — so the loop guards are load-bearing today and the
-delivery verifier is insurance. Which of those two a reviewer should weigh more
-is a question the event log answers, not the README.
+identical edit.
+
+That zero is narrower than it looks, and the difference matters. The delivery
+verifier checks a reply's claims against the run's tool outcomes; it does not
+inspect the *arguments* the model sent. A weekly run called
+`github_profile(user="system")` — a real GitHub account — and reported that
+stranger's follower count as the operator's. Every check passed, because the
+numbers were genuinely fetched and the criteria found what they looked for.
+Only the identity was invented, one call in eleven.
+
+So: no fabricated *claims* in two weeks, one fabricated *identifier*. The
+lesson is not that a guard failed but that each guard covers exactly what it
+inspects — which is why identity arguments are now pinned by the permission
+gate on unattended runs, and why the harness owns delivery verdicts,
+success criteria, and failure evidence rather than accepting the model'"'"'s word
+for any of them.
 
 ## What it does
 

@@ -195,14 +195,23 @@ checkable rather than asserted. Over 13.5 days of production (9,375 events,
 | Duplicate-call cache | 147 | result served without re-running |
 | `tool_choice` violation | 1 | provider returned no call when one was required |
 
-Two things follow. First, the model's observed failure mode is **repetition,
+Three things follow. First, the model's observed failure mode is **repetition,
 not invention** — 211 of the loop-guard fires are one skill re-proposing an
 identical edit, which is what motivated the proposal dedupe and the criteria
 floor. Second, the zero is weak evidence on its own: 59 replies is a small
 sample, and a guard that never fires is indistinguishable from one whose
 condition never arose. It is reported as *not yet load-bearing*, not as proof
-of a model that never fabricates — the guard's own tests, not production
-counts, are what establish it works.
+of a model that never fabricates.
+
+Third, and most important for reading any of these numbers: **a guard covers
+exactly what it inspects.** The delivery verifier checks a reply's claims
+against tool outcomes and does not look at the arguments the model sent. A
+weekly run called `github_profile(user="system")` — a real account — and
+reported that stranger's followers as the operator's; every check passed
+because the data was genuinely fetched and only the identifier was invented.
+Zero verifier blocks means no fabricated *claims*, not no fabrication. Identity
+arguments are pinned by the permission gate on unattended runs (§5) precisely
+because no downstream check can see that class of error.
 
 Read the current numbers off the log rather than trusting this table:
 `homunculus/evals.py` computes them. Note that `output_guard` is an
