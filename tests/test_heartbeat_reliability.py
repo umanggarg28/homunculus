@@ -63,3 +63,4 @@ def test_4xx_message_is_not_transient():
 
 def test_random_runtime_error_is_not_transient():
     assert not _is_transient_network_error(RuntimeError("something broke"))
+

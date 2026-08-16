@@ -43,18 +43,38 @@ def test_blocks_workspace_writes_and_shell():
 def test_blocks_create_task_status_notes():
     """Live misuse (07-14→22): reflection minted junk tasks as status
     notes — 'reflection-completed-2026-07-15' (active forever, due=None),
-    'all-skill-deliveries-succeeded-…'. Reflection records real
-    commitments via record_commitment; create_task there is always junk."""
+    'all-skill-deliveries-succeeded-…'."""
     refusal = _guard()("create_task", {"title": "reflection completed 2026-07-15"})
-    assert refusal is not None and "record_commitment" in refusal
+    assert refusal is not None and "reminder tasks" in refusal
+
+
+def test_the_create_task_refusal_does_not_advertise_another_door():
+    """This refusal used to end "...use record_commitment", which moved the
+    misuse instead of stopping it: the model filed the same junk through the
+    other door. A refusal that names an alternative is an instruction to use
+    it."""
+    refusal = _guard()("create_task", {"title": "x"})
+    assert refusal is not None and "record_commitment" not in refusal
+
+
+def test_reflection_cannot_record_commitments():
+    """Both commitments reflection ever recorded were misuse: an agent status
+    note ("prop-0041 still pending approval") and a behavioural rule
+    ("Reminder to not send unsolicited messages") — the latter scheduled to
+    arrive as an unsolicited message. A commitment is something the user
+    undertook, recorded where it is observed, not inferred a day later."""
+    refusal = _guard()("record_commitment", {"what": "prop-0041 still pending approval"})
+    assert refusal is not None and refusal.startswith("BLOCKED:")
+    assert "observed" in refusal
 
 
 def test_allows_the_tools_reflection_actually_needs():
-    # Skill review + memory hygiene must pass straight through —
-    # including record_commitment, the sanctioned follow-up mechanism.
+    # Skill review + memory hygiene must pass straight through. Scheduling is
+    # deliberately not on this list: reflection reviews and proposes, and the
+    # harness surfaces what it filed.
     guard = _guard()
     for name in ("read_file", "recall", "list_proposals", "propose_skill",
-                 "remember", "forget", "record_commitment"):
+                 "remember", "forget"):
         assert guard(name, {}) is None, name
 
 

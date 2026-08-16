@@ -232,8 +232,23 @@ _REFLECTION_FORBIDDEN = {
     "record_failure": "Reflection doesn't run tasks. Skip task-lifecycle calls.",
     "create_task": "Reflection doesn't create reminder tasks — observed misuse: "
                    "status-note tasks like 'reflection-completed-<date>' that "
-                   "pollute the store and never fire. For a REAL commitment "
-                   "found in the log, use record_commitment.",
+                   "pollute the store and never fire. Note what you found in "
+                   "your final reply instead.",
+    # Banning create_task while pointing at record_commitment moved the misuse
+    # rather than stopping it: the model dutifully filed the same junk through
+    # the other door — "prop-0041 still pending approval" (agent status, not a
+    # commitment) and "Reminder to not send unsolicited messages" (a
+    # behavioural rule, scheduled as an unsolicited message). Both of the two
+    # commitments reflection ever recorded were misuse.
+    #
+    # A commitment is something the USER undertook, observed where it is
+    # actually made — an email scan, a chat turn. Reflection reviews yesterday
+    # and files proposals; it is not a place to infer new obligations.
+    "record_commitment": "Reflection doesn't schedule anything. A commitment is "
+                         "recorded where it is observed (an email scan, a chat "
+                         "turn), not inferred afterwards. If yesterday's log "
+                         "shows a real commitment that was missed, say so in "
+                         "your final reply.",
     "write_file": "Reflection must not write workspace files. Use propose_skill, "
                   "remember, or forget.",
     "append_file": "Reflection must not write workspace files. Use propose_skill, "
@@ -662,6 +677,9 @@ def settle_task_failure(
             )
         else:
             updated = tasks.record_failure(task_id, err, duration_s=duration_s, usage=usage)
+            # The exception string says what raised; this says what the harness
+            # watched fail on the way there, which is often the actual cause.
+            tasks.attribute_failure_evidence_to_last_run(task_id, guard.failed_tools())
             events.emit(
                 "task_failure",
                 name=task_id,
@@ -741,36 +759,31 @@ def settle_task_outcome(
         current = tasks.get(task_id)
         if current is None:
             return
-        if current.get("due_at") != due_at_before:
-            # complete_task ran, due_at advanced. Retrofit usage and the
-            # delivered text onto the success run the tool layer appended
-            # (the latter feeds the reflection's quality self-critique).
-            _attribute_success_artifacts(tasks, task_id, guard, usage)
-            _settle_quiz_pending(task, delivered=True)
-            _rate_task_skill(memory, task, "success")
-            return
+        # What happened is decided by the run the tool layer recorded, not by
+        # whether due_at moved. due_at looked like a completion signal, but
+        # record_failure advances it too on a recurring task (so a failing task
+        # does not re-fire every tick) — which settled recorded failures as
+        # successes, rating the skill a success on a run that delivered
+        # nothing. `silently_dropped` is the honest discriminator: false means
+        # the model called complete_task or record_failure this tick, so the
+        # last run is this tick's.
         if not silently_dropped:
-            # Agent explicitly closed the task (record_failure / cancel_task /
-            # continue_task) — respect its decision. A non-delivered run drops
-            # any quiz pending so the CHAT badge never lights for a question
-            # the user never received. Rate the skill a failure only when the
-            # recorded run is an actual failure (not a cancel / deferral).
             last_runs = current.get("last_runs") or []
             last_status = last_runs[-1].get("status") if last_runs else None
             if last_status == "success":
-                # A forced run (run-now) completes a task that was not due, so
-                # due_at deliberately does not advance and the branch above is
-                # skipped. The run still delivered and still needs its
-                # artifacts, or every manual run would score as a contract
-                # violation with no model, cost or version recorded.
                 _attribute_success_artifacts(tasks, task_id, guard, usage)
                 _settle_quiz_pending(task, delivered=True)
                 _rate_task_skill(memory, task, "success")
                 return
+            # A non-delivered run drops any quiz pending so the CHAT badge
+            # never lights for a question the user never received.
             _settle_quiz_pending(task, delivered=False)
             if last_status == "failure":
                 tasks.attribute_tool_trace_to_last_run(task_id, guard.tool_trace())
+                tasks.attribute_failure_evidence_to_last_run(task_id, guard.failed_tools())
                 _rate_task_skill(memory, task, "failure")
+            # cancel_task / continue_task are deliberate closes that are
+            # neither: respect them and record nothing further.
             return
         _settle_silent_drop(
             tasks,

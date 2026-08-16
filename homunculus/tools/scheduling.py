@@ -265,7 +265,7 @@ def record_failure(task_id: str, reason: str = "") -> str:
     store = _task_store()
     if not (store.get(task_id)):
         return f"ERROR: no task '{task_id}' to record a failure against."
-    task = store.record_failure(task_id, reason or "agent reported failure")
+    task = store.record_failure(task_id, reason or "no reason given by the agent")
     clear_scratchpad(store.root, task_id)
     if task.get("status") == "cancelled":
         return f"Recorded failure for {task_id}; auto-cancelled after repeated failures."

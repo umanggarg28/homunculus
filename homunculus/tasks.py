@@ -682,6 +682,32 @@ class TaskStore:
             runs[-1]["delivered_text"] = text[: self.DELIVERED_TEXT_CAP]
             self._write(tasks)
 
+    def attribute_failure_evidence_to_last_run(
+        self, task_id: str, failed_tools: list[str],
+    ) -> None:
+        """Record which tools the harness observed failing during this run.
+
+        `record_failure` takes a model-supplied reason, and the model is free
+        to give none -- one run closed with the placeholder "agent reported
+        failure", which cannot be diagnosed afterwards and gives the reflection
+        loop nothing to learn from. The guard watched every tool result, so the
+        harness can state what actually broke instead of relying on the model
+        to describe its own failure. No-op when nothing was observed.
+        """
+        if not failed_tools:
+            return
+        with self._locked():
+            tasks = self.all()
+            try:
+                task = self._find(tasks, task_id)
+            except KeyError:
+                return
+            runs = task.get("last_runs") or []
+            if not runs:
+                return
+            runs[-1]["failed_tools"] = sorted(set(failed_tools))
+            self._write(tasks)
+
     def attribute_tool_trace_to_last_run(self, task_id: str, trace: str) -> None:
         """Retrofit the run's tool-call trace (the sequence of tools the agent
         invoked) onto the most recent run. The daily reflection reads this to

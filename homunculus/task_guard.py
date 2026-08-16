@@ -312,6 +312,17 @@ class TaskGuard:
         """All tool-result text seen this tick, for link-provenance checks."""
         return "\n".join(self._tool_result_text)
 
+    def failed_tools(self) -> list[str]:
+        """Tools whose results this run showed as failures, observed by the
+        harness rather than reported by the model.
+
+        A failure the model closes with an empty reason becomes the placeholder
+        "agent reported failure", which is unrecoverable a day later and
+        teaches the reflection loop nothing. This is the evidence that was
+        available all along.
+        """
+        return sorted(self._failed_tools)
+
     def missing_required_calls(self, task_id: str) -> list[str]:
         """Required tools (the skill's `requires_tools`) not yet attempted
         this run, in declaration order. An attempt is any call — success or
