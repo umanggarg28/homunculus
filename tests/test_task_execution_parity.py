@@ -230,3 +230,91 @@ def test_forced_run_failure_is_still_recorded_as_a_failure(tmp_path):
     )
     last = (store.get(task["id"]).get("last_runs") or [])[-1]
     assert last["status"] == "failure"
+
+
+# ── a failure must say what actually broke ────────────────────────────────
+
+
+def test_a_failure_records_the_tools_the_harness_saw_fail(tmp_path):
+    """record_failure takes a model-supplied reason and the model may give
+    none — one real run closed as "agent reported failure", which cannot be
+    diagnosed afterwards and teaches the reflection loop nothing. The guard
+    watched every tool result, so the harness states what broke itself."""
+    from homunculus.heartbeat import build_task_guard, settle_task_outcome
+
+    store = _store(tmp_path)
+    task = store.create(title="hn summary", due_at=_overdue(), recurrence="weekly",
+                        success_criteria=[{"type": "notify_called"}])
+    guard = build_task_guard(task)
+    guard.on_tool_call("news_headlines", {})
+    guard.observe_tool_result("news_headlines", "NEWS_UNAVAILABLE: all feeds failed")
+    guard.on_tool_call("record_failure", {"task_id": task["id"], "reason": ""})
+    store.record_failure(task["id"], "no reason given by the agent")
+
+    settle_task_outcome(
+        None, store, task, guard,
+        due_at_before=task["due_at"],
+        started=datetime.now(), started_utc=datetime.now(UTC),
+        fire_escalation_notify=False,
+    )
+    last = (store.get(task["id"])["last_runs"])[-1]
+    assert last["status"] == "failure"
+    assert last.get("failed_tools") == ["news_headlines"], (
+        "the reason was empty; the evidence must come from what the harness observed"
+    )
+
+
+def test_a_clean_failure_records_no_phantom_evidence(tmp_path):
+    """Nothing observed failing means nothing is claimed — the record must not
+    invent a culprit."""
+    from homunculus.heartbeat import build_task_guard, settle_task_outcome
+
+    store = _store(tmp_path)
+    task = store.create(title="t", due_at=_overdue(), recurrence="daily",
+                        success_criteria=[{"type": "notify_called"}])
+    guard = build_task_guard(task)
+    guard.on_tool_call("record_failure", {"task_id": task["id"], "reason": "user cancelled"})
+    store.record_failure(task["id"], "user cancelled")
+
+    settle_task_outcome(
+        None, store, task, guard,
+        due_at_before=task["due_at"],
+        started=datetime.now(), started_utc=datetime.now(UTC),
+        fire_escalation_notify=False,
+    )
+    assert "failed_tools" not in (store.get(task["id"])["last_runs"])[-1]
+
+
+def test_a_recurring_tasks_failure_is_not_settled_as_a_success(tmp_path, monkeypatch):
+    """record_failure advances due_at on a recurring task so it does not
+    re-fire every tick. Settlement used to read any due_at movement as
+    "complete_task ran", so a recorded failure was rated a skill SUCCESS on a
+    run that delivered nothing."""
+    from homunculus import heartbeat
+    from homunculus.heartbeat import build_task_guard, settle_task_outcome
+
+    rated: list[str] = []
+    monkeypatch.setattr(heartbeat, "_rate_task_skill",
+                        lambda _m, _t, verdict: rated.append(verdict))
+
+    store = _store(tmp_path)
+    task = store.create(title="hn", due_at=_overdue(), recurrence="weekly",
+                        success_criteria=[{"type": "notify_called"}])
+    due_at_before = task["due_at"]
+
+    guard = build_task_guard(task)
+    guard.on_tool_call("news_headlines", {})
+    guard.observe_tool_result("news_headlines", "NEWS_UNAVAILABLE: all feeds failed")
+    guard.on_tool_call("record_failure", {"task_id": task["id"], "reason": "feeds down"})
+    store.record_failure(task["id"], "feeds down")
+
+    updated = store.get(task["id"])
+    assert updated["due_at"] != due_at_before, "precondition: record_failure moved due_at"
+
+    settle_task_outcome(
+        None, store, task, guard,
+        due_at_before=due_at_before,
+        started=datetime.now(), started_utc=datetime.now(UTC),
+        fire_escalation_notify=False,
+    )
+    assert rated == ["failure"], f"a failed run must not rate the skill a success: {rated}"
