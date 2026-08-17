@@ -25,6 +25,7 @@ from datetime import datetime, UTC
 from pathlib import Path
 from collections.abc import Iterator
 
+from homunculus.locking import file_lock
 from homunculus.security import redact_secrets
 
 
@@ -36,6 +37,17 @@ _EVENTS_PATH = Path(os.environ.get("HOMUNCULUS_EVENTS_PATH", "_events.jsonl"))
 # so the feed UI can label each line. Falls back to "unknown" so missing
 # env doesn't crash anything.
 _SERVICE = os.environ.get("HOMUNCULUS_SERVICE", "unknown")
+
+# Sidecar lock for the log. Appends and the periodic rewrite race across five
+# services on one volume: rotate() truncates the file before rewriting it, so a
+# concurrent reader saw a partial log — and a second rotate that then wrote its
+# partial view back destroyed the difference permanently. Nine days of history
+# went that way, discovered only because a task's failure could not be
+# explained afterwards.
+#
+# locking.py is the canonical primitive for exactly this and every other store
+# already delegates to it; the audit log, of all things, did not.
+_LOCK_PATH = _EVENTS_PATH.with_suffix(_EVENTS_PATH.suffix + ".lock")
 
 
 # Which task's run is executing on this thread, if any. Events are otherwise
@@ -88,8 +100,12 @@ def emit(event: str, **fields) -> None:
         # substituted in carries no quotes or backslashes, so the line stays
         # valid JSON.
         line = redact_secrets(json.dumps(record, ensure_ascii=False))
-        with _EVENTS_PATH.open("a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        # Held only for the append: rotate() rewrites the whole file under the
+        # same lock, so an event emitted mid-rotation waits rather than landing
+        # in a copy that is about to be replaced.
+        with file_lock(_LOCK_PATH):
+            with _EVENTS_PATH.open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
     except Exception:
         # Logging must never break the caller. Drop the event silently.
         pass
@@ -107,6 +123,15 @@ def rotate(keep_days: int = 14) -> int:
     try:
         from datetime import timedelta
         cutoff = (datetime.now(UTC) - timedelta(days=keep_days)).isoformat(timespec="seconds")
+        with file_lock(_LOCK_PATH):
+            return _rotate_locked(cutoff)
+    except Exception:
+        return 0
+
+
+def _rotate_locked(cutoff: str) -> int:
+    """The read-modify-write itself, with the lock already held."""
+    try:
         lines = _EVENTS_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
         kept: list[str] = []
         dropped = 0
@@ -131,7 +156,13 @@ def rotate(keep_days: int = 14) -> int:
                     continue
             kept.append(line)
         if dropped:
-            _EVENTS_PATH.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+            # Write a temp file and rename it into place: write_text truncates
+            # first, and any reader in that window sees an empty or partial
+            # log. os.replace is atomic, so a reader sees either the old file
+            # or the new one, never a half-written one.
+            tmp = _EVENTS_PATH.with_suffix(_EVENTS_PATH.suffix + ".tmp")
+            tmp.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+            os.replace(tmp, _EVENTS_PATH)
         return dropped
     except Exception:
         return 0
