@@ -72,8 +72,9 @@ inside that directory, not `uv`.
     deny (the reason becomes the tool result, so a refusal steers the model), or
     allow-on-corrected-arguments. Modes (`default`/`readonly`/`autonomous`/
     `bypass`) set a run's posture; rules are per-tool, first-match-wins.
-    Normalizers run in every mode — repairing a malformed argument is
-    correctness, not permission. Distinct from `Agent._pre_execute_hook`, which
+    Normalizers (repair) and validators (refuse what can't be repaired, e.g.
+    an unfilled skill-template placeholder) run in every mode — a malformed
+    argument is correctness, not permission. Distinct from `Agent._pre_execute_hook`, which
     is run-scoped and dynamic (TaskGuard); the policy is static and runs first.
   - `output_guard.py` — cross-checks an assistant reply's action-claims against
     the turn's actual tool outcomes; refuses/self-corrects fabricated claims or links.
