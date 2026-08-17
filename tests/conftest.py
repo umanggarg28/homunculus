@@ -7,8 +7,20 @@ them out before any test module is imported, so tests that don't need the
 real implementations can run locally without Docker.
 """
 
+import os
 import sys
+import tempfile
 import types
+
+# `events` resolves its path at import time and defaults to a cwd-relative
+# `_events.jsonl`, so an unset variable makes the suite append real events to
+# whatever directory pytest was launched from. Point it at a throwaway file
+# before any homunculus module is imported. Same class of stray-state bug as
+# the repo-root `proposals.json`.
+os.environ.setdefault(
+    "HOMUNCULUS_EVENTS_PATH",
+    os.path.join(tempfile.mkdtemp(prefix="homunculus-test-events-"), "_events.jsonl"),
+)
 
 
 def _stub_module(name: str, **attrs):

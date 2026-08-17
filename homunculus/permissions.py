@@ -9,6 +9,11 @@ three things, and the third is the one that matters:
   * **allow with corrected arguments** — the call runs, but on arguments the
     harness fixed first.
 
+Two families of callable shape the first and third cases. A *normalizer*
+repairs arguments it understands; a *validator* refuses arguments it knows are
+malformed, such as a skill template's unfilled placeholder. Both run in every
+mode, including `bypass`, because neither is a permission question.
+
 That third case is the point of the module. Everywhere else in the harness a
 malformed tool call costs a round trip: the guard rejects it, the model reads
 the rejection, and the model tries again — three LLM calls to fix something
@@ -29,6 +34,7 @@ judges the assistant's *reply* after the fact rather than the call before it.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
@@ -159,6 +165,57 @@ def pin_operator_identity(operator: str) -> Normalizer:
 DEFAULT_NORMALIZERS: tuple[Normalizer, ...] = (strip_channel_markup,)
 
 
+# A validator inspects one call and returns a refusal reason, or None when the
+# call is fine. Validators are the counterpart to normalizers: a normalizer
+# repairs what it understands, a validator refuses what it cannot. Both run in
+# every mode, because a malformed call is a correctness question rather than a
+# permission one.
+Validator = Callable[[str, dict], "str | None"]
+
+
+# A skill's example call is written with angle-bracket slots (`<Event title>`)
+# and the model sometimes sends the slot instead of the value it stands for.
+# Capitalised, so ordinary prose containing a comparison ("a < b") and lowercase
+# markup never match.
+_PLACEHOLDER_RE = re.compile(r"<[A-Z][A-Za-z0-9 _-]{1,38}>")
+
+# Tools whose arguments legitimately carry authored text, where an angle-bracket
+# token is content rather than an unfilled slot (JSX, HTML, a skill's own
+# examples). Their output is read by a person or gated by approval, so a
+# placeholder that slips through here is visible rather than silently durable.
+_TEMPLATE_EXEMPT_TOOLS = frozenset({"write_file", "append_file", "propose_skill"})
+
+
+def reject_template_placeholders(name: str, args: dict) -> str | None:
+    """Refuse a call whose arguments still hold a skill template's slot markers.
+
+    An unfilled placeholder is worse than an error: `record_commitment(
+    what="<Event title>", event_at="<ISO datetime>")` only failed because the
+    date could not parse. Give it a parseable date and the harness stores a junk
+    commitment that looks exactly like a real one.
+    """
+    if name in _TEMPLATE_EXEMPT_TOOLS:
+        return None
+    hits = [
+        f"{key}={match.group(0)}"
+        for key, value in args.items()
+        if isinstance(value, str)
+        for match in [_PLACEHOLDER_RE.search(value)]
+        if match
+    ]
+    if not hits:
+        return None
+    return (
+        f"BLOCKED: '{name}' was called with an unfilled template placeholder "
+        f"({', '.join(hits)}). That is the example from the skill, not a value. "
+        "Substitute what you actually found; if you did not find it, say so "
+        "instead of calling this tool."
+    )
+
+
+DEFAULT_VALIDATORS: tuple[Validator, ...] = (reject_template_placeholders,)
+
+
 _CONFIRM_MESSAGE = (
     "BLOCKED: '{tool}' needs the user's approval before it can run. "
     "Explain what you intend to do and ask them to confirm; call it again "
@@ -180,6 +237,7 @@ class PermissionPolicy:
     mode: PermissionMode = "default"
     rules: tuple[PermissionRule, ...] = ()
     normalizers: tuple[Normalizer, ...] = field(default=DEFAULT_NORMALIZERS)
+    validators: tuple[Validator, ...] = field(default=DEFAULT_VALIDATORS)
 
     def with_mode(self, mode: PermissionMode) -> PermissionPolicy:
         """Return a copy in a different mode, sharing rules and normalizers."""
@@ -210,6 +268,17 @@ class PermissionPolicy:
             if fixed is not None:
                 working = fixed
                 corrected = True
+
+        # Validators run next, ahead of the mode checks and even under
+        # `bypass`: an unfilled placeholder is a malformed call, and no
+        # permission posture makes executing one correct.
+        for validate in self.validators:
+            try:
+                refusal = validate(name, working)
+            except Exception:
+                continue
+            if refusal:
+                return Decision(False, working, refusal, corrected)
 
         if self.mode == "bypass":
             return Decision(True, working, corrected=corrected)

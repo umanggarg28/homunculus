@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .venv/
 _events.jsonl
+_events.jsonl.lock
 
 # Personal build-from-scratch learning guide — kept local, not published.
 LEARN.md

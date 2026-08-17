@@ -136,7 +136,12 @@ judgment lives:
   **allow it on corrected arguments**. That third outcome is the reason the
   module exists: elsewhere a malformed call costs a round trip — guard rejects,
   model reads, model retries — whereas a normalizer repairs a known-shape defect
-  in place and the call proceeds. Modes (`default` / `readonly` / `autonomous` /
+  in place and the call proceeds. A *validator* is its counterpart for defects
+  code cannot repair — an unfilled skill-template placeholder like
+  `record_commitment(what="<Event title>")` is refused with a reason the model
+  reads, because deterministic code can substitute a correct handle but not a
+  fact the model never looked up. Both run in every mode, `bypass` included:
+  neither is a permission question. Modes (`default` / `readonly` / `autonomous` /
   `bypass`) set the posture for a whole run; rules are per-tool and first-match-
   wins. Distinct from `Agent._pre_execute_hook`, which is run-scoped and dynamic
   (the TaskGuard asking whether *this* run has met its criteria) — the policy is

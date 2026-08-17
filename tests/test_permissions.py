@@ -171,3 +171,60 @@ def test_decision_is_hashable_and_frozen():
     d = Decision(True, {}, "")
     assert d.allowed
     assert d.message == ""
+
+
+# --- validators: refusing unfilled skill-template placeholders --------------
+
+
+def test_unfilled_placeholder_is_refused():
+    # The live failure: the model sent the skill's example verbatim, and only
+    # the unparseable date stopped a junk commitment from being stored.
+    decision = PermissionPolicy().check(
+        "record_commitment",
+        {"what": "<Event title> (1 day)", "event_at": "<ISO datetime>"},
+    )
+    assert not decision.allowed
+    assert "<Event title>" in decision.message
+    assert "record_commitment" in decision.message
+
+
+def test_placeholder_refusal_applies_under_bypass():
+    # Not a permission question: no posture makes executing a malformed call
+    # correct, so bypass does not exempt it.
+    decision = PermissionPolicy(mode="bypass").check(
+        "record_commitment", {"what": "<Event title>"}
+    )
+    assert not decision.allowed
+
+
+def test_filled_arguments_pass():
+    decision = PermissionPolicy().check(
+        "record_commitment",
+        {"what": "Interview with Discovered Labs", "event_at": "2026-08-18T22:00:00"},
+    )
+    assert decision.allowed
+
+
+def test_prose_and_lowercase_markup_are_not_placeholders():
+    # Only capitalised angle-bracket slots match, so comparisons and ordinary
+    # markup keep working.
+    for value in ("a < b and c > d", "wrapped in <em>emphasis</em>", "<>"):
+        assert PermissionPolicy().check("remember", {"text": value}).allowed
+
+
+def test_content_carrying_tools_are_exempt():
+    # JSX and a skill's own examples are content, not unfilled slots.
+    decision = PermissionPolicy().check(
+        "write_file", {"path": "App.tsx", "content": "<Button>Save</Button>"}
+    )
+    assert decision.allowed
+
+
+def test_normalizer_runs_before_the_validator():
+    # The refusal quotes what the model meant, not what it mistyped.
+    decision = PermissionPolicy().check(
+        "record_commitment", {"what": "<Event title><|channel|>commentary"}
+    )
+    assert not decision.allowed
+    assert decision.corrected
+    assert "<|channel|>" not in decision.message
