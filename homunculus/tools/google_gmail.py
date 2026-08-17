@@ -44,6 +44,14 @@ def _digest(query: str, limit: int) -> str:
     if not ids:
         return f"No messages match: {query}"
 
+    # A scan that hit the cap covers less of the window than it was asked for.
+    # Silently returning the newest N makes a partial scan indistinguishable
+    # from a complete one: a "newer_than:3d" search of a busy mailbox really
+    # covers the last several hours, and a skill reading it will report
+    # "nothing new" for events it never saw. One missed interview invitation
+    # is what this line exists to prevent.
+    truncated = len(ids) >= limit
+
     lines: list[str] = []
     for mid in ids:
         msg = api_get(f"{_BASE}/messages/{mid}", {
@@ -53,6 +61,13 @@ def _digest(query: str, limit: int) -> str:
         if msg is None:
             continue
         lines.extend(_format_message(msg))
+    if truncated:
+        lines.append(
+            f"\n[TRUNCATED: showing the {len(ids)} most recent matches only — "
+            f"older messages inside this query's window were NOT scanned. "
+            f"Narrow the query (add keywords or a shorter window) before "
+            f"concluding anything about what it does not contain.]"
+        )
     return "\n".join(lines) if lines else UNAVAILABLE
 
 
