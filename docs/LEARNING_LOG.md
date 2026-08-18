@@ -188,3 +188,34 @@ returning non-zero.**
 Five of those seven expensive calls were `load_tool` round-trips loading **one tool
 each** — full ~11.5K-token prompt per call to enable a schema. That is a cost
 multiplier independent of the pricing bug, and it belongs to Level 2.
+
+---
+
+## Pattern — a fallback chain assumes providers are interchangeable
+
+Two separate incidents, one root assumption. Worth naming, because the next
+instance will look unrelated again.
+
+**Cost.** Fallback ids missing from the pricing table were billed at the
+fail-closed default — 25x and 66x real price — and blocked a day's work on ~7c
+of actual spend. (#307)
+
+**Message shape.** Gemini decorates tool_calls with
+`extra_content.google.thought_signature` and *requires* it back; OpenRouter
+rejects the same message outright. Once a turn falls over to a second provider,
+the accumulated history is malformed for somebody no matter where it goes next,
+and every retry replays the same poisoned message. (#308)
+
+The two 400s in the traces read as unrelated —
+`extra_content is unsupported` and `missing a thought_signature` — and are one
+bug seen from either end. **Whenever a fix makes you say "provider X does Y
+differently", ask what else you assumed was uniform.** So far: price, and the
+wire shape of a tool call.
+
+The fix shape generalises too: **tag data with its origin and normalise only
+when it crosses a boundary.** Stripping the decoration unconditionally would
+have traded one 400 for the other; a message keeps its dialect when it goes home
+and is reduced to the common shape for everyone else. Unknown origin is treated
+as foreign, because the two errors are not symmetric — a stripped call is
+universally valid, a foreign decoration universally fatal. When failure modes
+are asymmetric, the default belongs on the recoverable side.
