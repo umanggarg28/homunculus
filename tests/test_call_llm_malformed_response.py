@@ -84,7 +84,11 @@ def test_call_llm_falls_through_on_missing_choices(monkeypatch):
             messages=[{"role": "user", "content": "x"}],
             tool_schemas=None,
         )
-    assert msg == {"role": "assistant", "content": "ok"}
+    assert msg["role"] == "assistant"
+    assert msg["content"] == "ok"
+    # The answering provider is stamped on the message so a later replay can
+    # tell its dialect from a foreign one (see test_cross_provider_tool_calls).
+    assert msg["_origin"] == "prov2.example"
 
 
 def test_call_llm_falls_through_on_non_json_200(monkeypatch):
