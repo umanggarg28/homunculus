@@ -144,6 +144,14 @@ _MODEL_PRICING_CENTS: dict[str, tuple[float, float]] = {
     # OpenRouter list price as of 2026-08; provider competition has cut it
     # several times, so refresh when the budget report looks inflated.
     "openai/gpt-oss-120b":                      (3.7,   17.0),
+    # Every id the fallback chain can actually route to must appear here, in
+    # the exact spelling the provider reports back. The same model reached
+    # through two providers is two ids: Cerebras answers as "gpt-oss-120b",
+    # OpenRouter as "openai/gpt-oss-120b". A missing id is not a missing
+    # number — it is billed at _DEFAULT_PAID_PRICING_CENTS, which is 25-65x
+    # these rates and exhausts a day's ceiling in a couple of minutes.
+    "gpt-oss-120b":                             (3.7,   17.0),
+    "gemini-flash-lite-latest":                 (10.0,  40.0),
 }
 
 # Module-level cooldown cache: url|model -> wall-clock expiry timestamp.
@@ -707,6 +715,22 @@ def _build_payload(
     return payload
 
 
+def _emit_provider_cooled(model_id: str, url: str, reason: str) -> None:
+    """Record that a provider was benched, whatever benched it.
+
+    Every cooling path must emit. A silent cool is indistinguishable in the
+    log from a provider that was simply never tried, so the next call being
+    served by a fallback looks like a routing choice rather than a failure —
+    and the fallback's cost lands on the budget with nothing explaining why.
+    """
+    try:
+        events.emit(
+            "provider_cooled", name=model_id, host=_url_host(url), result=reason,
+        )
+    except Exception:
+        pass
+
+
 def _emit_budget_blocked(model_id: str, url: str, reason: str) -> None:
     try:
         events.emit(
@@ -760,6 +784,7 @@ def _attempt_chain(
         except httpx.HTTPError as e:
             last_err = f"{type(e).__name__}: {e}"
             _cool_provider(url, model_id)
+            _emit_provider_cooled(model_id, url, type(e).__name__)
             continue
 
         if response.status_code == 429:
@@ -803,6 +828,7 @@ def _attempt_chain(
         if _is_transient_provider_error(response):
             last_err = response.text
             _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
+            _emit_provider_cooled(model_id, url, f"{response.status_code} · cooling 10m")
             log.info(
                 f"[call_llm] {model_id} unavailable ({response.status_code}) "
                 "→ cooling 10m, trying next",
