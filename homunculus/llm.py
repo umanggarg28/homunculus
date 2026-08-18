@@ -562,7 +562,16 @@ def _is_transient_provider_error(response: httpx.Response) -> bool:
 # want to leak into the LLM request. Providers vary on strictness — most
 # OpenAI-compatible endpoints tolerate extras, but Anthropic-via-OpenRouter
 # and some others reject unknown keys outright.
-_INTERNAL_MESSAGE_KEYS = frozenset({"source", "ts"})
+#
+# `_origin` records which provider host produced an assistant message. It
+# exists only so `_sanitize_tool_calls_for` can tell a message's own provider
+# from a foreign one; see there for why that matters.
+_INTERNAL_MESSAGE_KEYS = frozenset({"source", "ts", "_origin"})
+
+#: The tool_call shape every OpenAI-compatible provider accepts. Anything a
+#: provider adds beyond this is its own dialect.
+_CANONICAL_TOOL_CALL_KEYS = frozenset({"id", "type", "function"})
+_CANONICAL_FUNCTION_KEYS = frozenset({"name", "arguments"})
 
 
 def _strip_internal_fields(messages: list[dict]) -> list[dict]:
@@ -570,6 +579,50 @@ def _strip_internal_fields(messages: list[dict]) -> list[dict]:
         {k: v for k, v in m.items() if k not in _INTERNAL_MESSAGE_KEYS}
         for m in messages
     ]
+
+
+def _sanitize_tool_calls_for(messages: list[dict], url: str) -> list[dict]:
+    """Reduce foreign tool_calls to the shape every provider accepts.
+
+    A fallback chain assumes providers are interchangeable. For tool_calls
+    they are not: each one may decorate a call with its own dialect, and the
+    decoration is simultaneously *required* by the provider that wrote it and
+    *rejected* by the next one. Gemini attaches
+    `extra_content.google.thought_signature` and refuses to continue a
+    conversation whose function calls lack it; replay that same message to
+    OpenRouter and it 400s with "property ... extra_content is unsupported".
+
+    Both failures are the same bug seen from either end, and both were live:
+    one turn falls over to a second provider, and from then on the accumulated
+    history is malformed for somebody no matter where it is sent.
+
+    So a message keeps its decorations only when it goes back to the provider
+    that produced it, and is reduced to the canonical shape for anyone else.
+    A message with no `_origin` (restored from disk, or written by the harness)
+    counts as foreign — the safe direction, since a stripped call is universally
+    valid while a foreign decoration is universally fatal.
+    """
+    host = _url_host(url)
+    out: list[dict] = []
+    for m in messages:
+        calls = m.get("tool_calls")
+        if not calls or m.get("_origin") == host:
+            out.append(m)
+            continue
+        cleaned_calls = []
+        for call in calls:
+            if not isinstance(call, dict):
+                cleaned_calls.append(call)
+                continue
+            fn = call.get("function")
+            slim = {k: v for k, v in call.items() if k in _CANONICAL_TOOL_CALL_KEYS}
+            if isinstance(fn, dict):
+                slim["function"] = {
+                    k: v for k, v in fn.items() if k in _CANONICAL_FUNCTION_KEYS
+                }
+            cleaned_calls.append(slim)
+        out.append({**m, "tool_calls": cleaned_calls})
+    return out
 
 
 # Providers whose backend supports OpenAI-style ephemeral cache_control
@@ -699,7 +752,7 @@ def _build_payload(
     payload: dict[str, Any] = {
         "model": model_id,
         "messages": _maybe_add_cache_control(
-            _strip_internal_fields(messages), url,
+            _strip_internal_fields(_sanitize_tool_calls_for(messages, url)), url,
         ),
     }
     if stream:
@@ -713,6 +766,13 @@ def _build_payload(
     _apply_provider_constraints(payload, url, provider_constraints)
     _apply_max_tokens(payload, url, model_id)
     return payload
+
+
+def _stamp_origin(msg: dict, url: str) -> dict:
+    """Record which provider host produced this assistant message."""
+    if msg is not None:
+        msg["_origin"] = _url_host(url)
+    return msg
 
 
 def _emit_provider_cooled(model_id: str, url: str, reason: str) -> None:
@@ -811,7 +871,7 @@ def _attempt_chain(
                         msg = _extract_assistant_message(rj)
                         if msg is not None:
                             _emit_llm_call(model_id, url, messages, rj.get("usage"))
-                            return msg, last_err
+                            return _stamp_origin(msg, url), last_err
                         last_err = f"malformed 200 response: {retry_resp.text[:200]}"
                     # Retry also failed — fall through to cool + continue.
                     retry_after = _parse_retry_after(retry_resp)
@@ -855,7 +915,7 @@ def _attempt_chain(
             continue
         # Emit which model actually answered, so the live feed shows it.
         _emit_llm_call(model_id, url, messages, rj.get("usage"))
-        return msg, last_err
+        return _stamp_origin(msg, url), last_err
     return None, last_err
 
 
@@ -1247,7 +1307,7 @@ def call_llm_stream(
         assistant_msg["content"] = "".join(content_acc)
     if tool_calls_acc:
         assistant_msg["tool_calls"] = [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
-    yield ("done", assistant_msg)
+    yield ("done", _stamp_origin(assistant_msg, used_url))
 
 
 def _parse_retry_after(response: httpx.Response) -> float | None:

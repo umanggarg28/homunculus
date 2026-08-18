@@ -1929,6 +1929,13 @@ class Agent:
                 cleaned["content"] = _strip_citation_artifacts(assistant_msg["content"])
             if assistant_msg.get("tool_calls"):
                 cleaned["tool_calls"] = assistant_msg["tool_calls"]
+                # Carry which provider produced these calls. A tool_call may
+                # arrive decorated in one provider's dialect, which the next
+                # provider in the chain rejects outright; llm._sanitize_tool_calls_for
+                # uses this to keep the decoration only when the message goes
+                # home. Stripped from the request body like any internal key.
+                if assistant_msg.get("_origin"):
+                    cleaned["_origin"] = assistant_msg["_origin"]
             if "content" not in cleaned and "tool_calls" not in cleaned:
                 cleaned["content"] = ""
             # Inherit source from the user turn so the unified chat log
