@@ -254,8 +254,95 @@ finding in the repo.
 | 5 | Tasks & heartbeat | raise heartbeat coverage (5.2); settlement paths |
 | 6 | Skills & self-improvement | wire up or delete `skill_contracts.py` (4.2) |
 | 7 | Transports & web | de-duplicate the notification drain (3.7); routers → deps module (6.web_api) |
-| 8 | Operations | frontend in CI (5.1); degradation events (1.1); share provider cooldown (6.llm) |
+| 8 | Operations | frontend in CI (5.1); degradation events (1.1); share provider cooldown (6.llm); cadence-aware health window (8.1) |
 
 Unassigned but tracked: 1.3 (stale prompt tool list) and 3.1 (`call_llm_stream`) are worth
 doing before their levels come up — the first because it actively misleads the model, the
-second because it is untested duplication in the money path.
+second because it is untested duplication in the money path. From the second pass: 8.2 (the
+HN skill) is a skill fix rather than a harness fix and can happen any time; 8.3 (`load_tool`
+batching) belongs with Level 2.
+
+---
+
+## 8. Second pass — 2026-08-18
+
+Findings from two investigations run after the initial read: "why is the budget exhausted"
+and "why are these tasks failing". Two defects surfaced and were fixed immediately because
+they were actively blocking the agent; they are recorded here because the *pattern* behind
+them is not fixed, and because the review should carry the whole trail.
+
+### 8.0 The pattern behind both — the fallback chain assumes providers are interchangeable
+
+Not a finding to fix in one place; a lens to apply. Two incidents, one assumption:
+
+- **Price** (RESOLVED, #307). Two of three configured fallback ids were missing from
+  `_MODEL_PRICING_CENTS` and billed at the fail-closed default — 25x
+  (`gemini-flash-lite-latest`) and 66x (`gpt-oss-120b`, the spelling Cerebras reports back).
+  31.16c charged against a 30c ceiling on ~7c of real spend; every paid model blocked for a
+  day. Note the shape of the miss: *the same model through two providers is two ids.*
+- **Wire shape** (RESOLVED, #308). Gemini decorates tool_calls with
+  `extra_content.google.thought_signature` and requires it back; OpenRouter rejects the same
+  message. Once a turn falls over to a second provider the accumulated history is malformed
+  for somebody no matter where it goes next, and every retry replays the poisoned message.
+  The two 400s read as unrelated (`extra_content is unsupported` /
+  `missing a thought_signature`) and are one bug from either end.
+
+**Whenever a fix makes you say "provider X does Y differently", ask what else was assumed
+uniform.** So far: price, and the wire shape of a tool call. Candidates not yet examined —
+token accounting fields (`prompt_tokens_details.cached_tokens` is not universal), `max_tokens`
+semantics, streaming chunk shape, and which parameters cause a 400 rather than being ignored.
+
+The fix shape generalises: **tag data with its origin, normalise only at the boundary.** And
+where the two failure directions are asymmetric — a stripped call is universally valid, a
+foreign decoration universally fatal — the default belongs on the recoverable side.
+
+### 8.1 Task health is a fixed 12-run window regardless of cadence — MED
+
+The tasks page shows the last 12 runs per task. For a daily task that is 12 days; for a weekly
+task it is roughly three months, so `weekly-nudge`'s red bars are from **2026-06-20 and
+2026-08-01** and read as current failure. Measured across the active tasks: `weekly-nudge`
+covers 55 days, `weekly-hacker-news-ai-summary` 54, `github-health` 22, the dailies 7-9.
+
+A run count is the wrong window when tasks have different cadences. The number also conflates
+two questions an operator asks separately: *is this task healthy now* and *has it ever been
+reliable*.
+
+*Fix:* window by time (last 30 days) or show both — a recent-N health figure alongside the
+lifetime ratio. Requires the API to expose run timestamps the UI can bucket.
+
+### 8.2 `weekly-hacker-news-ai-summary` is genuinely unreliable — MED
+
+10/20 lifetime, and unlike every other task its failures are not one repeated cause: HN API
+HTTP errors with an oversized unprocessed response (2026-06-21, twice), `NEWS_UNAVAILABLE`
+with every configured feed failing (2026-08-02), and one `agent reported failure` with no
+reason at all (2026-08-14). This is a skill problem, not a harness problem — the only task in
+the set where that is true.
+
+The empty-reason case is the interesting one: "agent reported failure" is the placeholder
+written when the model closes a failure without saying why, and it is unrecoverable a day
+later. `attribute_failure_evidence_to_last_run` now captures the failing tools independently,
+so a repeat should carry evidence.
+
+*Fix:* read the run traces for the three distinct failures, then a `propose_skill` edit —
+almost certainly a fallback source and an explicit degradation path when feeds are down.
+
+### 8.3 `load_tool` loads exactly one tool per call — MED
+
+Five of the seven calls in the tick that consumed the day's budget were `load_tool`
+round-trips, one tool each, each paying the full ~11.5K-token prompt to enable a single
+schema. The lazy-schema design is sound (it is what keeps per-call input near 1K instead of
+5K), but the loading itself costs a full round-trip per tool, so a run that needs four tools
+spends four LLM calls before doing any work.
+
+*Fix:* accept a list (`load_tool(names=[...])`), and consider auto-loading the tools a
+skill's `requires_tools` already declares — the harness knows them before the run starts.
+
+### 8.4 Silent drops cluster on the model-swap date — LOW (evidence, not a defect)
+
+The `silent drop — agent didn't call complete_task / continue_task / cancel_task` failures on
+`github-health` and `weekly-nudge` all land on **2026-08-01**, the day the primary model
+changed. The harness handled it correctly (three partial retries, then settlement), and the
+`on_pre_turn` last-iteration directive exists for exactly this shape.
+
+Worth recording as operational knowledge: **a model swap is a change that deserves a watch
+window.** The failures were not random; they were a new model meeting old prompts.
