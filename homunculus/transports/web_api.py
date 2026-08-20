@@ -546,7 +546,7 @@ def _list_memory_entries() -> list[dict]:
         source = provenance.get(path.name, {})
         try:
             body = path.read_text(encoding="utf-8")
-            links = sorted({m.group(1).lower() for m in _WIKILINK_RE.finditer(body)})
+            links = _entry_links(body, meta)
         except OSError:
             links = []
         entries.append({
@@ -563,6 +563,31 @@ def _list_memory_entries() -> list[dict]:
         })
     entries.sort(key=lambda e: e["mtime"], reverse=True)
     return entries
+
+
+def _entry_links(body: str, meta: dict) -> list[str]:
+    """Outbound links for one memory entry, from BOTH places they are written.
+
+    A `[[wikilink]]` in the body is the form the agent uses in prose; the
+    `related:` frontmatter list is the form `remember(related=[...])` writes.
+    Reading only the first halves the graph — on this vault it is 6 edges
+    against 14 — and the omission is invisible, because an entry with no
+    rendered links looks exactly like an entry with none written.
+
+    Slugs are normalised so `feedback-tone` and `feedback_tone` resolve to
+    one node: the two conventions are both in use across the vault.
+    """
+    found = {m.group(1) for m in _WIKILINK_RE.finditer(body)}
+    related = meta.get("related") or []
+    if isinstance(related, str):
+        related = [related]
+    found.update(str(r) for r in related)
+    return sorted({_slug(x) for x in found if str(x).strip()})
+
+
+def _slug(value: str) -> str:
+    """Canonical form of a memory reference — lowercase, `-` and `_` unified."""
+    return str(value).strip().lower().replace("-", "_")
 
 
 def _memory_write_provenance() -> dict[str, dict]:

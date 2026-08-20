@@ -4,7 +4,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
 import { BrutalistEmpty } from "@/components/ui/BrutalistEmpty";
 import { MemoryGrid } from "@/components/memory/MemoryGrid";
-import { MemoryConstellation } from "@/components/memory/MemoryConstellation";
+import { MemoryMind } from "@/components/memory/MemoryMind";
 import { MemoryHero } from "@/components/ui/HeroBand";
 import type { MemoryEntry } from "@/lib/types";
 
@@ -79,7 +79,7 @@ export function MemoryPage() {
         </div>
       )}
       {entries && entries.length > 0 && <MemoryHero entries={entries} />}
-      {entries && entries.length > 0 && <MemoryConstellation entries={entries} />}
+      {entries && entries.length > 0 && <MemoryMind entries={entries} />}
       {entries === null ? null
         : entries.length === 0 ? (
             <BrutalistEmpty
