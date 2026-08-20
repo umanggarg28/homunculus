@@ -75,7 +75,12 @@ const slug = (v: string) => v.trim().toLowerCase().replace(/-/g, "_");
 /** stem a memory name for display */
 function shortName(nm: string) {
   const s = nm.replace(/^(project|feedback|reference|user|skill)[-_]/, "");
-  return s.length > 20 ? s.slice(0, 20) + "…" : s;
+  // Dropping the prefix off `user_name` leaves "name", which labels the node
+  // with a word that describes every node. Keep the full slug when the stem
+  // is too short or too generic to identify anything.
+  const useful = s.length >= 5 && !["name", "role", "notes", "state", "log"].includes(s);
+  const out = useful ? s : nm;
+  return out.length > 20 ? out.slice(0, 20) + "…" : out;
 }
 function fmtAge(mtime: number, now: number) {
   const d = (now - mtime) / DAY;
@@ -261,12 +266,33 @@ export function MemoryMind({ entries, height = 560 }: Props) {
       cv.height = Math.max(2, Math.floor(r.height * DPR));
       VW = cv.width; VH = cv.height;
     };
-    fit();
-    const ro = new ResizeObserver(fit);
+    // The layout is built in fixed world units, but the panel is far wider
+    // than it is tall. At zoom 1 the outermost band falls off the top and
+    // bottom, so the "older" ring — the whole point of the age axis — was
+    // never visible. Derive a base zoom that fits the full extent, and treat
+    // the user's zoom as a multiplier on top of it.
+    const WORLD_R = 440;          // outermost band + a little margin
+    const SQUASH = 0.72;          // the ellipse flattening used by the layout
+    let baseZoom = 1;
+    const fitZoom = () => {
+      if (!VW || !VH) return;
+      baseZoom = Math.min(
+        VW / (2 * WORLD_R * DPR),
+        VH / (2 * WORLD_R * SQUASH * DPR),
+      ) * 0.94;                   // breathing room inside the panel edge
+    };
+    const measure = () => { fit(); fitZoom(); };
+    measure();
+    const ro = new ResizeObserver(measure);
     if (wrapRef.current) ro.observe(wrapRef.current);
 
+    /** User zoom folded with the fit-to-panel zoom. Every screen-space
+     *  calculation must use this, never cam.z alone, or hit-testing drifts
+     *  away from what is drawn. */
+    const Z = () => st.cam.z * baseZoom;
+
     const toScreen = (wx: number, wy: number): [number, number] =>
-      [VW / 2 + (wx - st.cam.x) * st.cam.z * DPR, VH / 2 + (wy - st.cam.y) * st.cam.z * DPR];
+      [VW / 2 + (wx - st.cam.x) * Z() * DPR, VH / 2 + (wy - st.cam.y) * Z() * DPR];
 
     const EDGE_CAP = 900;
     const MONO = '"JetBrains Mono", ui-monospace, monospace';
@@ -293,27 +319,33 @@ export function MemoryMind({ entries, height = 560 }: Props) {
       ([[95, "now"], [200, "this week"], [320, "this month"], [425, "older"]] as [number, string][])
         .forEach(([r, label]) => {
           g.save(); g.translate(ccx, ccy); g.scale(1, 0.72);
-          g.beginPath(); g.arc(0, 0, r * cam.z * DPR, 0, Math.PI * 2);
-          g.strokeStyle = "rgba(23,50,39,.9)"; g.lineWidth = DPR;
+          g.beginPath(); g.arc(0, 0, r * Z() * DPR, 0, Math.PI * 2);
+          g.strokeStyle = "rgba(30,66,51,.95)"; g.lineWidth = DPR;
           g.setLineDash([2 * DPR, 5 * DPR]); g.stroke();
           g.restore(); g.setLineDash([]);
-          const [lx, ly] = toScreen(0, -r * 0.72);
-          g.fillStyle = "rgba(72,119,96,.8)";
+          const [lx, ly] = toScreen(0, -r * SQUASH);
+          const cap = label.toUpperCase();
           g.font = `${8 * DPR}px ${MONO}`;
           g.textAlign = "center";
-          g.fillText(label.toUpperCase(), lx, ly - 5 * DPR);
+          // Knock the ring out behind the caption — the band line and a node
+          // label crossing the same pixels made both unreadable.
+          const w = g.measureText(cap).width;
+          g.fillStyle = "#060A08";
+          g.fillRect(lx - w / 2 - 4 * DPR, ly - 13 * DPR, w + 8 * DPR, 11 * DPR);
+          g.fillStyle = "rgba(88,140,113,.95)";
+          g.fillText(cap, lx, ly - 5 * DPR);
         });
 
       // the core — the agent's attention
       const cp = 0.5 + 0.5 * Math.sin(st.T * 1.5);
-      const gr = g.createRadialGradient(ccx, ccy, 0, ccx, ccy, 88 * cam.z * DPR);
+      const gr = g.createRadialGradient(ccx, ccy, 0, ccx, ccy, 88 * Z() * DPR);
       gr.addColorStop(0, `rgba(${ACCENT},${0.16 + cp * 0.09})`);
       gr.addColorStop(0.45, `rgba(${ACCENT},.05)`);
       gr.addColorStop(1, `rgba(${ACCENT},0)`);
       g.fillStyle = gr;
-      g.beginPath(); g.arc(ccx, ccy, 88 * cam.z * DPR, 0, Math.PI * 2); g.fill();
+      g.beginPath(); g.arc(ccx, ccy, 88 * Z() * DPR, 0, Math.PI * 2); g.fill();
       g.fillStyle = `rgba(${ACCENT_HOT},${0.7 + cp * 0.3})`;
-      const cs = 3.4 * cam.z * DPR;
+      const cs = 3.4 * Z() * DPR;
       g.fillRect(ccx - cs / 2, ccy - cs / 2, cs, cs);
       g.fillStyle = "rgba(72,119,96,.85)";
       g.font = `${7.5 * DPR}px ${MONO}`;
@@ -331,7 +363,7 @@ export function MemoryMind({ entries, height = 560 }: Props) {
       });
 
       // edges (LOD: when zoomed out on a big vault, only lit/hot edges)
-      const sparse = edges.length > EDGE_CAP && cam.z < 1.1;
+      const sparse = edges.length > EDGE_CAP && Z() < 1.1;
       edges.forEach(([a, b]) => {
         const A = nodes[a], B = nodes[b];
         if (!A || !B) return;
@@ -340,7 +372,7 @@ export function MemoryMind({ entries, height = 560 }: Props) {
         if (sparse && !lit && heat < 0.1) return;
         const [x1, y1] = toScreen(A.x, A.y);
         const [x2, y2] = toScreen(B.x, B.y);
-        let op = active === -1 ? 0.32 : lit ? 0.9 : 0.07;
+        let op = active === -1 ? 0.46 : lit ? 0.95 : 0.1;
         op = Math.min(1, op + heat * 0.5);
         g.strokeStyle = (lit || heat > 0.1) ? `rgba(${ACCENT},${op})` : `rgba(${EDGE_COLD},${op})`;
         g.lineWidth = (lit ? 1.3 : 1) * DPR;
@@ -358,7 +390,7 @@ export function MemoryMind({ entries, height = 560 }: Props) {
         const fade = Math.sin(p.t * Math.PI);
         g.shadowColor = `rgb(${ACCENT})`; g.shadowBlur = 11 * DPR;
         g.fillStyle = `rgba(${ACCENT_HOT},${fade})`;
-        const s = 3.2 * cam.z * DPR;
+        const s = 3.2 * Z() * DPR;
         g.fillRect(px - s / 2, py - s / 2, s, s);
         g.shadowBlur = 0;
       }
@@ -371,10 +403,14 @@ export function MemoryMind({ entries, height = 560 }: Props) {
         const dimmed = active >= 0 && !neighbors.has(n.i);
         const rec = 1 - n.ageN;
         const base = TYPE_COLOR[n.e.type] ?? "147,199,167";
-        let s = (3.1 + Math.min(degree[n.i], 6) * 0.62 + rec * 1.5) * cam.z * DPR;
+        let s = (3.4 + Math.min(degree[n.i], 6) * 0.62 + rec * 1.5) * Z() * DPR;
         if (n.born > 0) s *= 1 + n.born * 2.2;
-        let op = 0.36 + rec * 0.5;
-        if (dimmed) op *= 0.2;
+        // A cold entry must still read as a point of light. The original
+        // floor was tuned for a full-screen black page; inside a panel at
+        // this size the oldest two thirds of the vault disappeared and the
+        // map looked empty.
+        let op = 0.62 + rec * 0.34;
+        if (dimmed) op *= 0.28;
         op = Math.min(1, op + n.heat * 0.7);
         const isHot = n.heat > 0.08 || n.i === active;
         g.fillStyle = isHot ? `rgba(${ACCENT_HOT},${Math.min(1, op + 0.25)})` : `rgba(${base},${op})`;
@@ -385,13 +421,17 @@ export function MemoryMind({ entries, height = 560 }: Props) {
         if (n.heat > 0.02) {
           g.strokeStyle = `rgba(${ACCENT},${n.heat * 0.55})`;
           g.lineWidth = DPR;
-          g.beginPath(); g.arc(x, y, (9 + (1 - n.heat) * 26) * cam.z * DPR, 0, Math.PI * 2); g.stroke();
+          g.beginPath(); g.arc(x, y, (9 + (1 - n.heat) * 26) * Z() * DPR, 0, Math.PI * 2); g.stroke();
         }
-        if ((degree[n.i] >= labelBudget && !dimmed && cam.z > 0.7) || n.i === active || n.heat > 0.25) {
+        if ((degree[n.i] >= labelBudget && !dimmed && Z() > 0.55) || n.i === active || n.heat > 0.25) {
+          const label = shortName(n.e.name);
           g.font = `${8.4 * DPR}px ${MONO}`;
           g.textAlign = "center";
-          g.fillStyle = (n.i === active || n.heat > 0.25) ? "rgba(140,253,97,.98)" : "rgba(72,119,96,.88)";
-          g.fillText(shortName(n.e.name), x, y + s / 2 + 11 * DPR);
+          const lw = g.measureText(label).width;
+          g.fillStyle = "rgba(6,10,8,.82)";
+          g.fillRect(x - lw / 2 - 3 * DPR, y + s / 2 + 3 * DPR, lw + 6 * DPR, 11 * DPR);
+          g.fillStyle = (n.i === active || n.heat > 0.25) ? "rgba(140,253,97,.98)" : "rgba(104,158,128,.95)";
+          g.fillText(label, x, y + s / 2 + 11 * DPR);
         }
       });
 
@@ -403,31 +443,40 @@ export function MemoryMind({ entries, height = 560 }: Props) {
     const toWorld = (sx: number, sy: number): [number, number] => {
       const r = cv.getBoundingClientRect();
       const px = (sx - r.left) * DPR, py = (sy - r.top) * DPR;
-      return [(px - VW / 2) / (st.cam.z * DPR) + st.cam.x, (py - VH / 2) / (st.cam.z * DPR) + st.cam.y];
+      return [(px - VW / 2) / (Z() * DPR) + st.cam.x, (py - VH / 2) / (Z() * DPR) + st.cam.y];
     };
     const onDown = (e: MouseEvent) => { st.drag = true; st.dragged = false; st.lx = e.clientX; st.ly = e.clientY; };
     const onUp = () => { st.drag = false; };
+    /** The node under a viewport coordinate, or -1. */
+    const pick = (clientX: number, clientY: number): number => {
+      const [wx, wy] = toWorld(clientX, clientY);
+      let best = -1, bd = Infinity;
+      nodes.forEach((n) => {
+        const d = Math.hypot(n.x - wx, n.y - wy);
+        if (d < bd && d < 26 / Z()) { bd = d; best = n.i; }
+      });
+      return best;
+    };
+
     const onMove = (e: MouseEvent) => {
       if (st.drag) {
         const dx = e.clientX - st.lx, dy = e.clientY - st.ly;
         if (Math.abs(dx) + Math.abs(dy) > 3) st.dragged = true;
-        st.cam.tx -= dx / st.cam.z; st.cam.ty -= dy / st.cam.z;
-        st.cam.x -= dx / st.cam.z; st.cam.y -= dy / st.cam.z;
+        st.cam.tx -= dx / Z(); st.cam.ty -= dy / Z();
+        st.cam.x -= dx / Z(); st.cam.y -= dy / Z();
         st.lx = e.clientX; st.ly = e.clientY;
         return;
       }
-      const [wx, wy] = toWorld(e.clientX, e.clientY);
-      let best = -1, bd = Infinity;
-      nodes.forEach((n) => {
-        const d = Math.hypot(n.x - wx, n.y - wy);
-        if (d < bd && d < 26 / st.cam.z) { bd = d; best = n.i; }
-      });
-      st.hover = best;
-      cv.style.cursor = best >= 0 ? "pointer" : "crosshair";
+      st.hover = pick(e.clientX, e.clientY);
+      cv.style.cursor = st.hover >= 0 ? "pointer" : "crosshair";
     };
-    const onClick = () => {
+
+    const onClick = (e: MouseEvent) => {
       if (st.dragged) return;
-      const i = st.hover;
+      // Hit-test the click's OWN coordinates rather than trusting the hover
+      // the last mousemove left behind. A touch device never produces that
+      // move, so tapping a node did nothing at all on tablets and phones.
+      const i = pick(e.clientX, e.clientY);
       if (i >= 0) {
         setFocus(i);
         st.cam.tx = nodes[i].x; st.cam.ty = nodes[i].y; st.cam.tz = 1.5;
