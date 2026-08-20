@@ -24,6 +24,7 @@ current schema). Both converge on: report, don't enforce.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,25 @@ from pathlib import Path
 from homunculus.skill_validation import _DELIVERY_MIN_CHARS_FLOOR, criteria_strength_errors
 
 log = logging.getLogger(__name__)
+
+_WIKILINK_RE = re.compile(r"\[\[([a-z0-9][a-z0-9\-_]*)\]\]", re.IGNORECASE)
+_RELATED_RE = re.compile(r"^related:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+_NAME_RE = re.compile(r"^name:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+
+
+def _slug(value: str) -> str:
+    """Canonical memory reference — the vault uses both `-` and `_`."""
+    return value.strip().strip("\"'").lower().replace("-", "_")
+
+
+def _related_targets(text: str) -> set[str]:
+    """Slugs named by a `related:` frontmatter line, inline or list form."""
+    out: set[str] = set()
+    m = _RELATED_RE.search(text)
+    if m:
+        raw = m.group(1).strip().strip("[]")
+        out.update(p for p in (x.strip() for x in raw.split(",")) if p)
+    return out
 
 
 @dataclass(frozen=True)
@@ -245,6 +265,94 @@ def audit_undeclared_sources(tasks: list[dict], memory_root: Path | None) -> lis
     return findings
 
 
+def audit_memory_links(memory_root: Path | None) -> list[Finding]:
+    """Report memories nothing links to, and links that point nowhere.
+
+    This is the lint step of the wiki pattern the vault is modelled on: a
+    knowledge base earns its name through cross-references, and without them
+    it is a pile of notes with an index. The check is advisory because the
+    remedy is the agent's to apply as it writes, not something to enforce at
+    boot.
+
+    Two failure shapes, and they are different problems. An **orphan** has no
+    inbound link — nothing will ever lead the agent to it, so it is written
+    and then effectively lost. A **dangling** link names a slug that does not
+    exist — usually a memory that was renamed or never written, and the edge
+    it promises is a lie the map would happily draw.
+    """
+    if memory_root is None or not memory_root.exists():
+        return []
+
+    entries: dict[str, set[str]] = {}
+    # An entry answers to its filename stem AND its `name:` field, and the two
+    # differ often enough to matter: `user_user_name.md` declares
+    # `name: user_name`, which is the form the agent sees in the index and so
+    # the form it links by. Resolving on the stem alone reports live links as
+    # dangling — the lint has to agree with what the reader resolves.
+    alias: dict[str, str] = {}
+    for path in sorted(memory_root.glob("*.md")):
+        if path.name in {"MEMORY.md", "README.md"} or path.name.startswith("_"):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        key = _slug(path.stem)
+        entries[key] = {
+            _slug(t)
+            for t in set(_WIKILINK_RE.findall(text)) | _related_targets(text)
+        }
+        alias[key] = key
+        declared = _NAME_RE.search(text)
+        if declared:
+            alias[_slug(declared.group(1))] = key
+    if not entries:
+        return []
+
+    inbound: dict[str, int] = dict.fromkeys(entries, 0)
+    dangling: dict[str, set[str]] = {}
+    for src, targets in entries.items():
+        for t in targets:
+            resolved = alias.get(t)
+            if resolved == src:
+                continue
+            if resolved is not None:
+                inbound[resolved] += 1
+            else:
+                dangling.setdefault(src, set()).add(t)
+
+    findings: list[Finding] = []
+    orphans = sorted(k for k, n in inbound.items() if n == 0)
+    # A vault where nearly everything is an orphan is a systemic problem worth
+    # one finding, not one finding per entry.
+    if orphans and len(orphans) > len(entries) // 2:
+        findings.append(Finding(
+            check="memory_links",
+            subject="vault",
+            detail=(
+                f"{len(orphans)} of {len(entries)} memories have no inbound link. "
+                "New facts are being written without being connected to what is "
+                "already known, so recall cannot travel between them."
+            ),
+        ))
+    elif orphans:
+        for name in orphans[:10]:
+            findings.append(Finding(
+                check="memory_links", subject=name,
+                detail="no other memory links to this one — it will be hard to rediscover",
+            ))
+    for src, targets in sorted(dangling.items())[:10]:
+        findings.append(Finding(
+            check="memory_links", subject=src,
+            detail=(
+                "links to "
+                + ", ".join(sorted(targets)[:4])
+                + " which do not exist — rename the link or write the entry"
+            ),
+        ))
+    return findings
+
+
 def run_startup_audit(
     tasks: list[dict], memory_root: Path | None = None,
 ) -> list[Finding]:
@@ -259,6 +367,7 @@ def run_startup_audit(
         # substitute one and still exercise the isolation below.
         ("audit_task_criteria", lambda: audit_task_criteria(tasks)),
         ("audit_undeclared_sources", lambda: audit_undeclared_sources(tasks, memory_root)),
+        ("audit_memory_links", lambda: audit_memory_links(memory_root)),
     )
     for name, check in checks:
         try:
