@@ -96,6 +96,15 @@ class LoopConfig(BaseModel):
             "Per-tool overrides in core._PER_TOOL_RESULT_CAPS win."
         ),
     )
+    memory_index_entries: PositiveInt = Field(
+        default=60,
+        description=(
+            "How many memory entries appear in the system prompt's index. "
+            "An entry the agent cannot see is one it cannot cross-reference, "
+            "so this bounds how connected the vault can become. One line each, "
+            "and the block sits in the cached prefix."
+        ),
+    )
     read_file_max_chars: PositiveInt = Field(
         default=16_000,
         description=(

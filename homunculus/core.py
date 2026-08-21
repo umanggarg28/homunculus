@@ -61,6 +61,7 @@ from homunculus.security import (
     _make_canary,
     _UNTRUSTED_CONTENT_TOOLS,
     _wrap_untrusted_content,
+    loggable_tool_result,
 )
 # The output guard — checks, phrase tables, and correction prompts — lives in
 # homunculus/output_guard.py; Agent._output_guard/_self_correct delegate to it:
@@ -352,6 +353,12 @@ Memory:
   Nothing is injected automatically — you decide when context is needed.
 - Before remember(), check if an entry already covers the fact. Reuse the same
   `name` to overwrite rather than create a duplicate.
+- Link what you write. The index above lists everything you know; when a new
+  fact connects to an existing entry, pass those slugs as `related=[...]` so
+  the two are joined. A memory nothing links to is one you will not find again
+  — the value of the vault is in the connections, not the count. When a new
+  fact CHANGES an older entry rather than merely relating to it, update that
+  entry too instead of leaving the contradiction on disk.
 - If a memory is contradicted or obsolete, forget() it.
 - Types: user · feedback · project · reference · skill (learned procedures)
 
@@ -896,7 +903,15 @@ class Agent:
             parts.append("# Pinned facts (user profile + key rules)\n\n" + core_block)
         # Index: one-line-per-entry so the agent knows what memories exist.
         # Full bodies fetched on demand via recall(query).
-        parts.append("# Memory index\n\n" + self.memory.load_index(max_entries=8))
+        # The whole index, not a recent slice. The agent can only link a new
+        # fact to entries it can see, and cross-references are what turn a pile
+        # of notes into a wiki — at 8 of 29 entries visible, two thirds of the
+        # vault was unreachable and unlinkable. One line each, in the cached
+        # prefix, so the cost is a rounding error against a ~6K prompt.
+        parts.append(
+            "# Memory index\n\n"
+            + self.memory.load_index(max_entries=get_config().loop.memory_index_entries)
+        )
         block = "\n\n".join(parts)
         self._memory_block_cache = (mtime, block)
         return block
@@ -1324,7 +1339,9 @@ class Agent:
             events.emit(
                 "tool_result",
                 name=name,
-                result=events.truncate_preview(result, limit=2000),
+                result=events.truncate_preview(
+                    loggable_tool_result(name, result), limit=2000
+                ),
             )
             # Record the outcome for the output guard's claim-consistency
             # check. We deliberately record raw args (not canonicalized)
@@ -1360,6 +1377,11 @@ class Agent:
                 "role": "tool",
                 "tool_call_id": call["id"],
                 "content": content_for_history,
+                # Which tool produced this. An internal key (stripped before the
+                # request is sent), carried so the llm_call trace can apply the
+                # same personal-data rule the tool_result event does — a tool
+                # message otherwise identifies itself only by tool_call_id.
+                "_tool": name,
             })
         return closed
 
