@@ -22,6 +22,7 @@ data, fetch is code.
 """
 
 from __future__ import annotations
+from homunculus.sentinels import LEETCODE_NEXT_UNAVAILABLE
 
 import json
 import os
@@ -172,7 +173,7 @@ def leetcode_next_problem(task_id: str = "") -> str:
     problems = _ordered_problems()
     if not problems:
         return (
-            "LEETCODE_NEXT_UNAVAILABLE: could not load the Top Interview 150 list "
+            f"{LEETCODE_NEXT_UNAVAILABLE}: could not load the Top Interview 150 list "
             "from LeetCode (API unreachable and no cached copy). Skip the LeetCode "
             "delivery this run and record a failure."
         )

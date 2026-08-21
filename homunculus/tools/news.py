@@ -19,6 +19,7 @@ A feed that fails to fetch or parse is skipped, not fatal.
 """
 
 from __future__ import annotations
+from homunculus.sentinels import NEWS_UNAVAILABLE
 
 import re
 from datetime import datetime, UTC
@@ -65,7 +66,7 @@ def news_headlines(topic: str = "", limit: int = 5) -> str:
     limit = max(1, min(int(limit), 15))
     feeds = news_feeds.select_feeds(topic)
     if not feeds:
-        return "NEWS_UNAVAILABLE: no feeds configured. Omit the news section."
+        return f"{NEWS_UNAVAILABLE}: no feeds configured. Omit the news section."
 
     # A topic that resolves to exactly one feed has no redundancy — any
     # other topic just loses that one source and keeps going, but here a
@@ -86,13 +87,13 @@ def news_headlines(topic: str = "", limit: int = 5) -> str:
 
     if not items:
         return (
-            "NEWS_UNAVAILABLE: every configured feed failed to fetch or parse. "
+            f"{NEWS_UNAVAILABLE}: every configured feed failed to fetch or parse. "
             "Omit the news section."
         )
 
     chosen = _rank_and_select(items, limit)
     if not chosen:
-        return "NEWS_UNAVAILABLE: no fresh headlines right now. Omit the news section."
+        return f"{NEWS_UNAVAILABLE}: no fresh headlines right now. Omit the news section."
     return "\n".join(f"- [{it['title']}]({it['link']})" for it in chosen)
 
 

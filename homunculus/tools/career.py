@@ -28,11 +28,17 @@ from datetime import datetime as _dt
 from pathlib import Path
 
 import httpx
+from homunculus.sentinels import (
+    CAREER_CONTEXT_UNAVAILABLE,
+    POSTING_UNAVAILABLE as _POSTING_UNAVAILABLE,
+)
 
 log = logging.getLogger("homunculus")
 
-CONTEXT_UNAVAILABLE = "CAREER CONTEXT UNAVAILABLE"
-POSTING_UNAVAILABLE = "POSTING UNAVAILABLE"
+# Re-exported under the names this module has always used; the tokens
+# themselves live in the shared registry.
+CONTEXT_UNAVAILABLE = CAREER_CONTEXT_UNAVAILABLE
+POSTING_UNAVAILABLE = _POSTING_UNAVAILABLE
 
 #: Files read from the career repo, in order. CAREER-CONTEXT.md is the
 #: wiki; cv.md is the factual record forms get filled from.

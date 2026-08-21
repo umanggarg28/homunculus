@@ -1324,9 +1324,12 @@ class Agent:
                 "get_world_state", "update_world_state"
             ):
                 step = call_counts.get(call_key, 1)
-                succeeded = not (
-                    isinstance(result, str) and result.startswith("ERROR")
-                )
+                # Same definition of failure the output guard and task guard
+                # use. A prefix check alone counts a sentinel result and an
+                # {"ok": false} body as successes, so world_state.last_ok —
+                # which exists so the agent resumes correctly after a restart
+                # — would record a failed call as a good one.
+                succeeded = not tool_result_indicates_failure(result)
                 try:
                     self.memory.world_state.update({
                         "last_action": name,

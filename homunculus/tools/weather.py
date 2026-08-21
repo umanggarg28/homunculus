@@ -16,6 +16,7 @@ from __future__ import annotations
 import httpx
 
 from homunculus.user_location import get_user_location
+from homunculus.sentinels import WEATHER_UNAVAILABLE
 
 # WMO weather interpretation codes → short human text.
 # https://open-meteo.com/en/docs (WMO Weather interpretation codes)
@@ -75,7 +76,7 @@ def get_weather() -> str:
     loc = get_user_location()
     if not loc:
         return (
-            "WEATHER UNAVAILABLE: no home location is configured. Set it on "
+            f"{WEATHER_UNAVAILABLE}: no home location is configured. Set it on "
             "the web app (it's captured once from your browser) — until then, "
             "omit weather from the brief rather than guessing."
         )
@@ -98,9 +99,9 @@ def get_weather() -> str:
         lo = daily["temperature_2m_min"][0]
         code = int(daily["weather_code"][0])
     except httpx.HTTPError as e:
-        return f"WEATHER UNAVAILABLE: forecast request failed ({e}). Omit weather rather than guessing."
+        return f"{WEATHER_UNAVAILABLE}: forecast request failed ({e}). Omit weather rather than guessing."
     except (KeyError, IndexError, TypeError, ValueError) as e:
-        return f"WEATHER UNAVAILABLE: unexpected forecast response ({e}). Omit weather rather than guessing."
+        return f"{WEATHER_UNAVAILABLE}: unexpected forecast response ({e}). Omit weather rather than guessing."
     condition = _WMO.get(code, "unknown conditions")
     where = f" in {label}" if label else ""
     return f"Weather{where}: {condition}, high {round(hi)}°C, low {round(lo)}°C."

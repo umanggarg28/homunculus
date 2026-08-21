@@ -14,6 +14,7 @@ import re
 
 from homunculus import events
 from homunculus.permissions import MUTATING_TOOLS
+from homunculus.sentinels import starts_with_sentinel
 
 log = logging.getLogger(__name__)
 
@@ -315,13 +316,37 @@ def _claim_target_inconsistencies(reply: str, tool_outcomes: list[dict]) -> list
     return inconsistent
 
 
-# Data-source tools report "the source is not reachable" with an uppercase
-# sentinel rather than an ERROR prefix — GMAIL_UNAVAILABLE, NEWS_UNAVAILABLE,
-# CALENDAR_UNAVAILABLE, and so on. The sentinel is ANCHORED to the start of
-# the result: a tool that merely quotes one (read_file returning a log line,
-# recall returning a memory entry that mentions an outage) is reporting
-# content, not failing, and must not be misread as a failure.
-_UNAVAILABLE_SENTINEL_RE = re.compile(r"^[A-Z][A-Z_]{3,}_UNAVAILABLE\b")
+
+
+_TOOL_SYNTAX_MARKERS = ("<|start|>", "<|channel|>", "<|message|>", "to=functions.")
+
+
+def scan_text_leaks(text: str, *, file_search_active: bool = False) -> list[str]:
+    """Leak checks that need only the text, shared by every outbound channel.
+
+    A final reply runs these inside `run_output_guard`. A scheduled delivery
+    never reaches that function — notify() sends straight out of the tool
+    call — so TaskGuard runs the same scanner on the notify body. Both
+    channels are user-facing, and there is no reason for the more automated
+    one to be the less checked one.
+
+    `file_search_active` suppresses the path checks: when the agent has
+    deliberately searched or listed files, filenames are the answer rather
+    than a leak.
+    """
+    violations: list[str] = []
+    if not file_search_active and _GUARD_MEMORY_FILENAME_RE.search(text):
+        violations.append("memory_filename_leak")
+    if not file_search_active and any(p in text for p in _GUARD_INTERNAL_PATHS):
+        violations.append("internal_path_leak")
+    if text.lstrip().startswith("ERROR:") or "ERROR running " in text:
+        violations.append("error_echo")
+    # Harmony channel markup written as TEXT instead of emitted as a real
+    # tool call: the call never executed, and the prose around it typically
+    # claims the work happened anyway.
+    if any(m in text for m in _TOOL_SYNTAX_MARKERS):
+        violations.append("tool_syntax_leak")
+    return violations
 
 
 def tool_result_indicates_failure(result) -> bool:
@@ -334,7 +359,8 @@ def tool_result_indicates_failure(result) -> bool:
     case where the agent said "I've filed a proposal" after propose_skill
     returned {"ok": false}.
 
-    The third family is the *_UNAVAILABLE sentinel. Without it a six-day
+    The third family is the failure sentinel, recognised from the shared
+    registry in `sentinels.py` rather than by shape. Without it a six-day
     provider outage reads as a string of successful runs: the tool "worked",
     the agent relayed the notice, and every downstream check agreed.
     """
@@ -343,7 +369,7 @@ def tool_result_indicates_failure(result) -> bool:
     s = result.lstrip()
     if s.startswith(("ERROR", "Error", "BLOCKED:")):
         return True
-    if _UNAVAILABLE_SENTINEL_RE.match(s):
+    if starts_with_sentinel(s):
         return True
     compact = s.replace(" ", "")
     return '"ok":false' in compact
@@ -396,23 +422,7 @@ def run_output_guard(
     # searched or listed files — those results belong in the reply.
     file_search_active = bool(tool_names_used & {"search_files", "list_files"})
 
-    if not file_search_active and _GUARD_MEMORY_FILENAME_RE.search(reply):
-        violations.append("memory_filename_leak")
-
-    if not file_search_active and any(p in reply for p in _GUARD_INTERNAL_PATHS):
-        violations.append("internal_path_leak")
-
-    if reply.lstrip().startswith("ERROR:") or "ERROR running " in reply:
-        violations.append("error_echo")
-
-    # Raw tool-call syntax in a final reply: the model wrote its harmony
-    # channel markup as TEXT instead of emitting a real tool call — the
-    # call never executed, and the prose around it typically claims the
-    # work happened (observed live: "<|start|>assistant<|channel|>
-    # commentary to=functions.job_posting …" followed by "the complete
-    # application is now saved" with zero calls made).
-    if any(m in reply for m in ("<|start|>", "<|channel|>", "<|message|>", "to=functions.")):
-        violations.append("tool_syntax_leak")
+    violations.extend(scan_text_leaks(reply, file_search_active=file_search_active))
 
     # "Everything is drafted/saved" while this turn's own tool results
     # still listed open questions. The weak model quits a long drafting
