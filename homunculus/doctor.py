@@ -29,6 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from homunculus.memory import link_slug, parse_related_field
 from homunculus.skill_validation import _DELIVERY_MIN_CHARS_FLOOR, criteria_strength_errors
 
 log = logging.getLogger(__name__)
@@ -40,17 +41,20 @@ _NAME_RE = re.compile(r"^name:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
 
 def _slug(value: str) -> str:
     """Canonical memory reference — the vault uses both `-` and `_`."""
-    return value.strip().strip("\"'").lower().replace("-", "_")
+    return link_slug(value)
 
 
 def _related_targets(text: str) -> set[str]:
-    """Slugs named by a `related:` frontmatter line, inline or list form."""
-    out: set[str] = set()
+    """Slugs named by a `related:` frontmatter line, in any shape it is written.
+
+    Shares `parse_related_field` with the reader that builds the memory graph.
+    These were two implementations that disagreed: the lint split the flow form
+    `related: [a, b]` correctly while the API reader took it as one literal
+    target, so the same entry read as linked in one place and broken in the
+    other.
+    """
     m = _RELATED_RE.search(text)
-    if m:
-        raw = m.group(1).strip().strip("[]")
-        out.update(p for p in (x.strip() for x in raw.split(",")) if p)
-    return out
+    return parse_related_field(m.group(1)) if m else set()
 
 
 @dataclass(frozen=True)

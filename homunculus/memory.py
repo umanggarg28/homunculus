@@ -121,6 +121,44 @@ configure locally without polluting the repo.
 """
 
 
+def link_slug(value: str) -> str:
+    """Canonical form of a memory reference.
+
+    The vault uses both `-` and `_`, and an entry answers to its `name:` as
+    well as its filename, so references must be compared in one normalised
+    form or live links read as broken.
+    """
+    return str(value).strip().strip("[]\"'").lower().replace("-", "_")
+
+
+def parse_related_field(value: object) -> set[str]:
+    """Slugs named by a `related:` frontmatter value, in every shape it is written.
+
+    YAML gives a real list when the field is a block sequence, but the agent
+    writes the flow form — `related: [user_name, favourite_editor]` — and a
+    frontmatter reader that splits on lines hands that back as ONE string.
+    Taken literally it becomes a single target named
+    "[user_name, favourite_editor]", which resolves to nothing: two live links
+    reported as one broken one. Wikilink brackets appear here too.
+
+    So every shape is flattened the same way: list or string, bracketed or
+    bare, comma-separated or single.
+    """
+    if value is None:
+        return set()
+    items = value if isinstance(value, (list, tuple, set)) else [value]
+    out: set[str] = set()
+    for item in items:
+        raw = str(item).strip()
+        raw = raw.removeprefix("[[").removesuffix("]]")
+        raw = raw.strip().removeprefix("[").removesuffix("]")
+        for part in raw.split(","):
+            slug = link_slug(part)
+            if slug:
+                out.add(slug)
+    return out
+
+
 class Memory:
     """Disk-backed memory store. One instance per agent."""
 

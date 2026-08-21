@@ -31,7 +31,7 @@ from fastapi.staticfiles import StaticFiles
 
 from homunculus import tools
 from homunculus.core import Agent
-from homunculus.memory import Memory
+from homunculus.memory import Memory, link_slug, parse_related_field
 from homunculus.tasks import TaskStore
 # Pricing lives in stats.py — shared with the agent's own week_in_review
 # tool so both surfaces report identical per-model cost numbers.
@@ -546,7 +546,7 @@ def _list_memory_entries() -> list[dict]:
         source = provenance.get(path.name, {})
         try:
             body = path.read_text(encoding="utf-8")
-            links = sorted({m.group(1).lower() for m in _WIKILINK_RE.finditer(body)})
+            links = _entry_links(body, meta)
         except OSError:
             links = []
         entries.append({
@@ -563,6 +563,28 @@ def _list_memory_entries() -> list[dict]:
         })
     entries.sort(key=lambda e: e["mtime"], reverse=True)
     return entries
+
+
+def _entry_links(body: str, meta: dict) -> list[str]:
+    """Outbound links for one memory entry, from BOTH places they are written.
+
+    A `[[wikilink]]` in the body is the form the agent uses in prose; the
+    `related:` frontmatter list is the form `remember(related=[...])` writes.
+    Reading only the first halves the graph — on this vault it is 6 edges
+    against 14 — and the omission is invisible, because an entry with no
+    rendered links looks exactly like an entry with none written.
+
+    Slugs are normalised so `feedback-tone` and `feedback_tone` resolve to
+    one node: the two conventions are both in use across the vault.
+    """
+    found = {_slug(m.group(1)) for m in _WIKILINK_RE.finditer(body)}
+    found.update(parse_related_field(meta.get("related")))
+    return sorted(x for x in found if x)
+
+
+def _slug(value: str) -> str:
+    """Canonical form of a memory reference — lowercase, `-` and `_` unified."""
+    return link_slug(value)
 
 
 def _memory_write_provenance() -> dict[str, dict]:
