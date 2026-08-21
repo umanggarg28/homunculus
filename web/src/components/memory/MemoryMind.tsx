@@ -426,9 +426,13 @@ export function MemoryMind({ entries, height = 560 }: Props) {
         if (isHot || rec > 0.72) { g.shadowColor = `rgb(${ACCENT})`; g.shadowBlur = (6 + n.heat * 16) * DPR; }
         else g.shadowBlur = 0;
         if (orphan && !isHot) {
-          // Hollow: nothing is holding onto this one. A filled square reads as
-          // "a thing"; an outline reads as "a thing that is not attached", and
-          // that difference is the whole point of the view right now.
+          // Hollow: this entry is attached to nothing in either direction. A
+          // filled square reads as "a thing"; an outline reads as "a thing that
+          // is not attached", and that difference is the point of the view.
+          //
+          // Deliberately a weaker claim than doctor's lint, which counts only
+          // INBOUND links and so reports more. Edges here are undirected, so
+          // degree 0 is the honest thing this picture can assert.
           g.strokeStyle = `rgba(${base},${Math.min(1, op + 0.15)})`;
           g.lineWidth = Math.max(1, DPR);
           g.strokeRect(x - s / 2, y - s / 2, s, s);
@@ -570,7 +574,7 @@ export function MemoryMind({ entries, height = 560 }: Props) {
         <div>
           <div className="brut-label" style={{ color: "var(--color-text)" }}>the mind</div>
           <div className="brut-meta mt-1" style={{ color: "var(--color-text-muted)" }}>
-            age is radius · hollow = nothing links to it
+            age is radius · hollow = not connected to anything
           </div>
         </div>
         <div className="ml-auto flex gap-5 items-baseline">
