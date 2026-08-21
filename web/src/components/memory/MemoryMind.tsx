@@ -119,6 +119,13 @@ export function MemoryMind({ entries, height = 560 }: Props) {
     }));
     const degree = entries.map(() => 0);
     edges.forEach(([a, b]) => { degree[a]++; degree[b]++; });
+    // Links naming an entry that does not exist. The graph silently drops
+    // these, which is precisely how a broken reference stays invisible — the
+    // page looks linked and leads nowhere. Counted per entry so the map can
+    // say so.
+    const dangling = entries.map((e) =>
+      (e.links ?? []).filter((l) => byKey.get(slug(l)) === undefined).length,
+    );
 
     // deterministic seed from the vault contents
     let sd = entries.length * 7919;
@@ -169,7 +176,7 @@ export function MemoryMind({ entries, height = 560 }: Props) {
     }
     nodes.forEach((n) => { n.x = Math.cos(n.ang) * n.radius; n.y = Math.sin(n.ang) * n.radius * 0.72; });
 
-    return { nodes, edges, degree, byKey, now };
+    return { nodes, edges, degree, dangling, byKey, now };
   }, [entries]);
 
   // mutable render state kept out of React
@@ -255,6 +262,7 @@ export function MemoryMind({ entries, height = 560 }: Props) {
     const g = cv.getContext("2d");
     if (!g) return;
     const { nodes, edges, degree } = graph;
+    const graphDangling = graph.dangling;
     const st = stateRef.current;
     let raf = 0;
     let VW = 0, VH = 0, DPR = 1;
@@ -413,11 +421,34 @@ export function MemoryMind({ entries, height = 560 }: Props) {
         if (dimmed) op *= 0.28;
         op = Math.min(1, op + n.heat * 0.7);
         const isHot = n.heat > 0.08 || n.i === active;
+        const orphan = degree[n.i] === 0;
         g.fillStyle = isHot ? `rgba(${ACCENT_HOT},${Math.min(1, op + 0.25)})` : `rgba(${base},${op})`;
         if (isHot || rec > 0.72) { g.shadowColor = `rgb(${ACCENT})`; g.shadowBlur = (6 + n.heat * 16) * DPR; }
         else g.shadowBlur = 0;
-        g.fillRect(x - s / 2, y - s / 2, s, s);
+        if (orphan && !isHot) {
+          // Hollow: nothing is holding onto this one. A filled square reads as
+          // "a thing"; an outline reads as "a thing that is not attached", and
+          // that difference is the whole point of the view right now.
+          g.strokeStyle = `rgba(${base},${Math.min(1, op + 0.15)})`;
+          g.lineWidth = Math.max(1, DPR);
+          g.strokeRect(x - s / 2, y - s / 2, s, s);
+        } else {
+          g.fillRect(x - s / 2, y - s / 2, s, s);
+        }
         g.shadowBlur = 0;
+        // A dangling reference gets a stub pointing out of the node — the link
+        // the entry claims, drawn going nowhere.
+        if (graphDangling[n.i] > 0 && !dimmed) {
+          g.strokeStyle = `rgba(255,184,77,${0.5 + n.heat * 0.4})`;
+          g.lineWidth = DPR;
+          g.setLineDash([2 * DPR, 2 * DPR]);
+          const out = 11 * Z() * DPR;
+          g.beginPath();
+          g.moveTo(x + s / 2, y - s / 2);
+          g.lineTo(x + s / 2 + out, y - s / 2 - out);
+          g.stroke();
+          g.setLineDash([]);
+        }
         if (n.heat > 0.02) {
           g.strokeStyle = `rgba(${ACCENT},${n.heat * 0.55})`;
           g.lineWidth = DPR;
@@ -507,6 +538,15 @@ export function MemoryMind({ entries, height = 560 }: Props) {
     };
   }, [graph]);
 
+  const orphanCount = useMemo(
+    () => graph.degree.filter((d) => d === 0).length,
+    [graph],
+  );
+  const danglingCount = useMemo(
+    () => graph.dangling.reduce((a, b) => a + b, 0),
+    [graph],
+  );
+
   const focused = focus >= 0 ? graph.nodes[focus] : null;
   const focusedNeighbors = useMemo(() => {
     if (focus < 0) return [];
@@ -530,13 +570,14 @@ export function MemoryMind({ entries, height = 560 }: Props) {
         <div>
           <div className="brut-label" style={{ color: "var(--color-text)" }}>the mind</div>
           <div className="brut-meta mt-1" style={{ color: "var(--color-text-muted)" }}>
-            age is radius · recall travels the links
+            age is radius · hollow = nothing links to it
           </div>
         </div>
         <div className="ml-auto flex gap-5 items-baseline">
           <Stat k="state" v={banner?.state ?? "RESTING"} hot={!!banner} />
           <Stat k="entries" v={String(entries.length)} />
           <Stat k="links" v={String(graph.edges.length)} />
+          <Stat k="orphaned" v={String(orphanCount)} warn={orphanCount > entries.length / 3} />
           <Stat k="recalls" v={String(recallCount)} />
         </div>
       </div>
@@ -586,6 +627,21 @@ export function MemoryMind({ entries, height = 560 }: Props) {
             <Meta k="links" v={String(graph.degree[focus])} />
             <Meta k="recalls" v={String(focused.recalls)} />
           </div>
+          {(graph.degree[focus] === 0 || graph.dangling[focus] > 0) && (
+            <div className="px-3.5 py-2.5" style={{ borderTop: "1px solid var(--color-border)" }}>
+              {graph.degree[focus] === 0 && (
+                <div className="brut-meta" style={{ color: "var(--color-amber)" }}>
+                  ⚠ orphaned — nothing links here, so recall will not reach it
+                </div>
+              )}
+              {graph.dangling[focus] > 0 && (
+                <div className="brut-meta mt-1" style={{ color: "var(--color-amber)" }}>
+                  ⚠ {graph.dangling[focus]} link
+                  {graph.dangling[focus] === 1 ? "" : "s"} to an entry that does not exist
+                </div>
+              )}
+            </div>
+          )}
           {focusedNeighbors.length > 0 && (
             <div className="px-3.5 py-2.5" style={{ borderTop: "1px solid var(--color-border)" }}>
               <div className="brut-meta mb-1.5" style={{ color: "var(--color-text-faint)" }}>── linked to</div>
@@ -611,7 +667,9 @@ export function MemoryMind({ entries, height = 560 }: Props) {
       {/* controls */}
       <div className="absolute bottom-3 right-4 flex gap-1.5 items-center">
         <span className="brut-meta mr-3 whitespace-nowrap hidden xl:inline" style={{ color: "var(--color-text-faint)" }}>
-          drag to pan · scroll to zoom
+          {danglingCount > 0
+            ? `${orphanCount} orphaned · ${danglingCount} broken link${danglingCount === 1 ? "" : "s"}`
+            : `${orphanCount} orphaned · drag to pan, scroll to zoom`}
         </span>
         <button
           onClick={() => {
@@ -626,12 +684,12 @@ export function MemoryMind({ entries, height = 560 }: Props) {
   );
 }
 
-function Stat({ k, v, hot }: { k: string; v: string; hot?: boolean }) {
+function Stat({ k, v, hot, warn }: { k: string; v: string; hot?: boolean; warn?: boolean }) {
   return (
     <span className="brut-meta whitespace-nowrap" style={{ color: "var(--color-text-faint)" }}>
       {k}
       <b style={{
-        color: hot ? "var(--color-accent)" : "var(--color-text-dim)",
+        color: hot ? "var(--color-accent)" : warn ? "var(--color-amber)" : "var(--color-text-dim)",
         fontWeight: 500, marginLeft: 6, fontVariantNumeric: "tabular-nums",
         textShadow: hot ? "0 0 9px var(--color-accent-glow)" : "none",
       }}>{v}</b>

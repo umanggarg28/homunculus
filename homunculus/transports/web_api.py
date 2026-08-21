@@ -31,7 +31,7 @@ from fastapi.staticfiles import StaticFiles
 
 from homunculus import tools
 from homunculus.core import Agent
-from homunculus.memory import Memory
+from homunculus.memory import Memory, link_slug, parse_related_field
 from homunculus.tasks import TaskStore
 # Pricing lives in stats.py — shared with the agent's own week_in_review
 # tool so both surfaces report identical per-model cost numbers.
@@ -577,17 +577,14 @@ def _entry_links(body: str, meta: dict) -> list[str]:
     Slugs are normalised so `feedback-tone` and `feedback_tone` resolve to
     one node: the two conventions are both in use across the vault.
     """
-    found = {m.group(1) for m in _WIKILINK_RE.finditer(body)}
-    related = meta.get("related") or []
-    if isinstance(related, str):
-        related = [related]
-    found.update(str(r) for r in related)
-    return sorted({_slug(x) for x in found if str(x).strip()})
+    found = {_slug(m.group(1)) for m in _WIKILINK_RE.finditer(body)}
+    found.update(parse_related_field(meta.get("related")))
+    return sorted(x for x in found if x)
 
 
 def _slug(value: str) -> str:
     """Canonical form of a memory reference — lowercase, `-` and `_` unified."""
-    return str(value).strip().lower().replace("-", "_")
+    return link_slug(value)
 
 
 def _memory_write_provenance() -> dict[str, dict]:
