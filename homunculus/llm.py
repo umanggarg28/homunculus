@@ -23,6 +23,7 @@ import httpx
 
 from homunculus import events
 from homunculus.config import get_config
+from homunculus.security import loggable_tool_result
 
 log = logging.getLogger(__name__)
 
@@ -566,7 +567,7 @@ def _is_transient_provider_error(response: httpx.Response) -> bool:
 # `_origin` records which provider host produced an assistant message. It
 # exists only so `_sanitize_tool_calls_for` can tell a message's own provider
 # from a foreign one; see there for why that matters.
-_INTERNAL_MESSAGE_KEYS = frozenset({"source", "ts", "_origin"})
+_INTERNAL_MESSAGE_KEYS = frozenset({"source", "ts", "_origin", "_tool"})
 
 #: The tool_call shape every OpenAI-compatible provider accepts. Anything a
 #: provider adds beyond this is its own dialect.
@@ -1075,6 +1076,11 @@ def _serialize_messages(messages: list[dict]) -> str:
     for m in messages[-6:]:
         entry: dict = {"role": m.get("role", "?")}
         content = m.get("content")
+        # The request trace is the second way a tool result reaches the event
+        # log. Withholding it from the `tool_result` event alone leaves the
+        # payload sitting in the very next `llm_call` record.
+        if isinstance(content, str) and m.get("_tool"):
+            content = loggable_tool_result(str(m["_tool"]), content)
         if isinstance(content, str) and len(content) > _MAX_CONTENT:
             entry["content"] = content[:_MAX_CONTENT] + f"…[+{len(content)-_MAX_CONTENT}]"
         elif content is not None:

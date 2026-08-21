@@ -168,6 +168,45 @@ _SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
+# Tools whose RESULT is first-party personal data rather than working
+# material. `redact_secrets` below cannot help here: it matches credential
+# prefixes, and a name, employer, or phone number has no prefix to match.
+#
+# The event log is not a private file — it renders in the web console, and
+# screenshots of that console are committed to a public repository. A CV
+# arriving there is not a leak of a secret; it is a leak of a person. So the
+# payload is withheld from the LOG only. The model still receives the full
+# result, and conversation history still carries it — withholding it there
+# would break the very work the tool exists to do.
+#
+# `job_posting` is deliberately absent: a job advert is public text, and its
+# content is exactly what makes an application trace debuggable.
+SENSITIVE_RESULT_TOOLS = frozenset({
+    "career_context",
+    "prepare_application",
+    "draft_all_answers",
+    "draft_answer",
+})
+
+
+def loggable_tool_result(name: str, result: object) -> str:
+    """What may be written to the event log for this tool's result.
+
+    Returns a size-only placeholder for a tool whose output is personal data,
+    and the result unchanged for everything else. The placeholder keeps the
+    trace honest — you can still see the call happened and how much came
+    back — without putting the contents on a public screen.
+    """
+    text = result if isinstance(result, str) else str(result)
+    if name not in SENSITIVE_RESULT_TOOLS:
+        return text
+    return (
+        f"[withheld from the log — {name} returned {len(text):,} chars of "
+        "personal data. The agent received it in full; it is kept out of the "
+        "event log because the console is screenshotted into a public repo.]"
+    )
+
+
 def redact_secrets(text: str) -> str:
     """Replace anything shaped like a provider credential with a marker.
 

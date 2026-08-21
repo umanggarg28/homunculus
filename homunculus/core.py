@@ -61,6 +61,7 @@ from homunculus.security import (
     _make_canary,
     _UNTRUSTED_CONTENT_TOOLS,
     _wrap_untrusted_content,
+    loggable_tool_result,
 )
 # The output guard — checks, phrase tables, and correction prompts — lives in
 # homunculus/output_guard.py; Agent._output_guard/_self_correct delegate to it:
@@ -1338,7 +1339,9 @@ class Agent:
             events.emit(
                 "tool_result",
                 name=name,
-                result=events.truncate_preview(result, limit=2000),
+                result=events.truncate_preview(
+                    loggable_tool_result(name, result), limit=2000
+                ),
             )
             # Record the outcome for the output guard's claim-consistency
             # check. We deliberately record raw args (not canonicalized)
@@ -1374,6 +1377,11 @@ class Agent:
                 "role": "tool",
                 "tool_call_id": call["id"],
                 "content": content_for_history,
+                # Which tool produced this. An internal key (stripped before the
+                # request is sent), carried so the llm_call trace can apply the
+                # same personal-data rule the tool_result event does — a tool
+                # message otherwise identifies itself only by tool_call_id.
+                "_tool": name,
             })
         return closed
 
