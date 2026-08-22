@@ -72,6 +72,61 @@ def load_client() -> tuple[str, str] | None:
     return cid, secret
 
 
+#: Why the most recent refresh failed, for `doctor` and for the operator.
+#: A dead grant and a flaky network both surface to the model as the same
+#: GMAIL_UNAVAILABLE sentinel -- correctly, since neither is the model's
+#: business -- but they need opposite responses from the human: one is
+#: "wait", the other is "re-consent, nothing will heal on its own".
+_LAST_FAILURE: dict[str, str] = {}
+
+REVOKED_REMEDY = (
+    "the stored Google refresh token has been revoked or expired, so no "
+    "retry will recover it. Re-consent on the host with: "
+    "uv run python scripts/google_auth.py"
+)
+
+
+def _note_grant_state(resp: httpx.Response) -> None:
+    """Classify a 400 from the token endpoint.
+
+    Google answers a dead grant with `invalid_grant`, which is permanent
+    until a human re-consents -- the same shape as a 404 from a withdrawn
+    model slug, and it deserves the same treatment: say so once, loudly,
+    instead of retrying forever and reporting "not connected" every day.
+    """
+    try:
+        body = resp.json()
+    except ValueError:
+        body = {}
+    error = str(body.get("error") or "")
+    if error == "invalid_grant":
+        _LAST_FAILURE["reason"] = "revoked"
+        log.error(f"[google_auth] {REVOKED_REMEDY}")
+    else:
+        _LAST_FAILURE["reason"] = error or "bad_request"
+        log.warning(f"[google_auth] token refresh rejected: {error or resp.status_code}")
+
+
+def unavailable_suffix() -> str:
+    """Text appended to a Google tool's sentinel when the cause is known.
+
+    The sentinel says the source is unreachable, which is all the MODEL needs
+    -- it omits the section either way. But the message is relayed to a PERSON
+    when the whole run is an outage notice, and "Google account not connected"
+    told them nothing they could act on: it reads as a transient glitch when in
+    fact nothing will change until they re-consent. Naming the remedy turns a
+    daily nuisance into a one-time chore.
+    """
+    if _LAST_FAILURE.get("reason") != "revoked":
+        return ""
+    return f" Cause: {REVOKED_REMEDY}"
+
+
+def grant_failure_reason() -> str | None:
+    """'revoked', 'transient', or a provider error code; None if healthy."""
+    return _LAST_FAILURE.get("reason")
+
+
 def get_access_token() -> str | None:
     """A live access token, refreshed from the stored refresh token.
 
@@ -100,13 +155,18 @@ def get_access_token() -> str | None:
             "refresh_token": refresh_token,
             "grant_type": "refresh_token",
         }, timeout=15)
+        if resp.status_code == 400:
+            _note_grant_state(resp)
+            return None
         resp.raise_for_status()
         payload = resp.json()
         token = payload["access_token"]
         expires_in = float(payload.get("expires_in", 3600))
     except (httpx.HTTPError, KeyError, ValueError) as e:
         log.warning(f"[google_auth] token refresh failed: {e}")
+        _LAST_FAILURE["reason"] = "transient"
         return None
+    _LAST_FAILURE.pop("reason", None)
 
     _access_cache = (now + expires_in - 60, token)
     return token

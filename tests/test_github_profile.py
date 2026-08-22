@@ -117,11 +117,12 @@ def test_invalid_usernames_rejected(gh_env, bad):
 def test_no_user_and_no_config_asks_instead_of_guessing(gh_env, monkeypatch):
     # Empty arg + nothing configured/learned: refuse and tell the agent
     # to ask the operator and remember — never guess.
-    import sys
-    import types
-    fake_state = types.ModuleType("homunculus.tools._state")
-    fake_state.get_memory = lambda: None
-    monkeypatch.setitem(sys.modules, "homunculus.tools._state", fake_state)
+    # Patch the real module's function rather than swapping sys.modules:
+    # `default_user` does `from . import _state`, which resolves through the
+    # PACKAGE ATTRIBUTE, so a sys.modules swap silently does nothing once any
+    # other test has imported _state for real.
+    _state = load_real_tool_submodule("_state")
+    monkeypatch.setattr(_state, "get_memory", lambda: None)
     out = _gh.github_profile()
     assert out.startswith("ERROR: I don't know the operator's GitHub handle")
     assert "ASK the user" in out
@@ -129,15 +130,12 @@ def test_no_user_and_no_config_asks_instead_of_guessing(gh_env, monkeypatch):
 
 
 def test_learned_handle_in_world_state_is_used(gh_env, monkeypatch):
-    import sys
-    import types
     monkeypatch.delenv("HOMUNCULUS_GITHUB_USER", raising=False)
     fake_mem = type("M", (), {
         "world_state": type("W", (), {"read": lambda self: {"github_user": "umanggarg28"}})()
     })()
-    fake_state = types.ModuleType("homunculus.tools._state")
-    fake_state.get_memory = lambda: fake_mem
-    monkeypatch.setitem(sys.modules, "homunculus.tools._state", fake_state)
+    _state = load_real_tool_submodule("_state")
+    monkeypatch.setattr(_state, "get_memory", lambda: fake_mem)
     assert _gh.default_user() == "umanggarg28"
 
 
