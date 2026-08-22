@@ -84,16 +84,25 @@ MODEL_FALLBACK = os.environ.get(
     # When the primary (paid gpt-oss-120b) is throttled or unreachable,
     # fall through these in order. All free-tier OpenRouter routes; all
     # support tool calling.
-    #   openai/gpt-oss-120b:free  — free tier of the same model as primary
-    #                               (different rate-limit pool, useful when
-    #                               paid hits a transient 429)
-    #   meta-llama/llama-3.3-70b-instruct:free — 131K ctx, Meta-hosted
-    # Deliberately excluded (don't re-add):
-    #   moonshotai/kimi-k2.6:free — slug is paid-only, returns 404
-    #     ("unavailable for free").
-    #   qwen/qwen3-coder:free — OpenRouter routes it to a deprecated upstream
-    #     model (Venice qwen3-coder-480b-a35b-instruct); returns 404.
-    "openai/gpt-oss-120b:free,meta-llama/llama-3.3-70b-instruct:free",
+    #   z-ai/glm-5.2:free — 256K ctx, declares tool support
+    #   nvidia/nemotron-3-super-120b-a12b:free — 262K ctx, declares tool support
+    #
+    # Verify a slug against GET https://openrouter.ai/api/v1/models before
+    # adding it, and require "tools" in its supported_parameters — a model
+    # that cannot call tools is useless here no matter how capable, and a
+    # slug that merely looks plausible is how dead entries get in.
+    #
+    # Free slugs are withdrawn and paywalled routinely, so this list ages.
+    # A 404 now retires the slug for the process and emits `provider_retired`
+    # rather than cooling it forever (see `_retire_provider`), and doctor
+    # reports it — the chain announces its own rot instead of silently
+    # spending a round-trip per fallback on a model that no longer exists.
+    #
+    # Deliberately excluded (don't re-add): moonshotai/kimi-k2.6:free and
+    # qwen/qwen3-coder:free are paid-only/deprecated upstream; the :free
+    # variants of openai/gpt-oss-120b and meta-llama/llama-3.3-70b-instruct
+    # have been withdrawn (their paid slugs remain).
+    "z-ai/glm-5.2:free,nvidia/nemotron-3-super-120b-a12b:free",
 )
 
 API_URL_FALLBACK_2 = os.environ.get(
@@ -159,6 +168,16 @@ _MODEL_PRICING_CENTS: dict[str, tuple[float, float]] = {
 # A provider/model pair is "cooled" if time.time() < its expiry.
 _PROVIDER_COOLDOWN: dict[str, float] = {}
 
+# Models the provider says do not exist. A 404 is not a transient condition:
+# the slug was removed, paywalled, or deprecated upstream, and it will still
+# be absent in ten minutes. Cooling it means re-requesting a known-missing
+# model on every fallback for the life of the process — observed live, two
+# retired free slugs cost twelve doomed round-trips in two days while the
+# chain still reported them as merely "cooling". Retirement is per-process
+# rather than persisted: a slug that comes back is picked up on restart, and
+# nothing on disk needs hand-editing when it does.
+_PROVIDER_RETIRED: dict[str, str] = {}
+
 
 # --- HTTP layer -----------------------------------------------------------
 
@@ -192,8 +211,11 @@ def _providers(model_override: str | None) -> list[tuple[str, str, str]]:
     ]
     have_keys = [p for p in raw if p[1]]
     now = time.time()
-    fresh = [p for p in have_keys if _PROVIDER_COOLDOWN.get(_provider_key(p[0], p[2]), 0) <= now]
-    return fresh or have_keys[:1]  # never return empty if any keys are set
+    live = [p for p in have_keys if _provider_key(p[0], p[2]) not in _PROVIDER_RETIRED]
+    fresh = [p for p in live if _PROVIDER_COOLDOWN.get(_provider_key(p[0], p[2]), 0) <= now]
+    # Retired slugs are dropped before the cooldown filter, but the
+    # last-resort fallback still prefers a live provider over a dead one.
+    return fresh or live[:1] or have_keys[:1]  # never return empty if any keys are set
 
 
 def _expand_model_spec(model_spec: str) -> list[str]:
@@ -776,6 +798,39 @@ def _stamp_origin(msg: dict, url: str) -> dict:
     return msg
 
 
+def _retire_provider(url: str, model_id: str, body: str = "") -> None:
+    """Drop a model from the chain for this process after a 404.
+
+    Emitted as its own event rather than folded into `provider_cooled`: a
+    cooled provider is expected to come back and needs no attention, whereas
+    a retired one means the configured chain names a model that no longer
+    exists, which is a config defect only a human can repair. `doctor`
+    reports it so the chain cannot quietly shrink to nothing.
+    """
+    key = _provider_key(url, model_id)
+    if key in _PROVIDER_RETIRED:
+        return
+    _PROVIDER_RETIRED[key] = (body or "").strip()[:200]
+    log.warning(
+        f"[call_llm] {model_id} returned 404 — retiring it from the fallback "
+        "chain for this process; the model slug no longer exists upstream",
+    )
+    try:
+        events.emit(
+            "provider_retired",
+            name=model_id,
+            host=_url_host(url),
+            result="404 · model does not exist upstream; dropped from the chain",
+        )
+    except Exception:
+        pass
+
+
+def retired_providers() -> dict[str, str]:
+    """Models retired this process, for doctor's advisory audit."""
+    return dict(_PROVIDER_RETIRED)
+
+
 def _emit_provider_cooled(model_id: str, url: str, reason: str) -> None:
     """Record that a provider was benched, whatever benched it.
 
@@ -888,12 +943,15 @@ def _attempt_chain(
             continue
         if _is_transient_provider_error(response):
             last_err = response.text
-            _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
-            _emit_provider_cooled(model_id, url, f"{response.status_code} · cooling 10m")
-            log.info(
-                f"[call_llm] {model_id} unavailable ({response.status_code}) "
-                "→ cooling 10m, trying next",
-            )
+            if response.status_code == 404:
+                _retire_provider(url, model_id, response.text)
+            else:
+                _cool_provider(url, model_id, get_config().provider.unavailable_cooldown_seconds)
+                _emit_provider_cooled(model_id, url, f"{response.status_code} · cooling 10m")
+                log.info(
+                    f"[call_llm] {model_id} unavailable ({response.status_code}) "
+                    "→ cooling 10m, trying next",
+                )
             continue
         if response.status_code >= 400:
             raise RuntimeError(f"API error {response.status_code}: {response.text}")

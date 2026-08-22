@@ -240,17 +240,62 @@ def test_model_fallback_excludes_hermes():
     )
 
 
-def test_model_fallback_contains_verified_models():
+#: Slugs the provider has withdrawn, paywalled, or routed to a deprecated
+#: upstream. `llm.py` documents each one; this list is the executable half of
+#: that comment. A model that 404s costs a doomed round-trip on every fallback
+#: until someone notices, so re-adding one must fail CI rather than production.
+RETIRED_SLUGS = (
+    "moonshotai/kimi-k2.6:free",
+    "qwen/qwen3-coder:free",
+    "openai/gpt-oss-120b:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+)
+
+
+def test_model_fallback_is_not_empty():
     from homunculus import llm
-    verified = [
-        "meta-llama/llama-3.3-70b-instruct",
-        "openai/gpt-oss-120b",
-        "moonshotai/kimi-k2.6",
-        "qwen/qwen3-coder",
-    ]
-    assert any(m in llm.MODEL_FALLBACK for m in verified), (
-        f"MODEL_FALLBACK '{llm.MODEL_FALLBACK}' has none of the verified tool-calling models"
+    models = [m for m in llm.MODEL_FALLBACK.split(",") if m.strip()]
+    assert models, "MODEL_FALLBACK is empty — the chain has no fallback slot 1"
+
+
+def test_model_fallback_holds_no_retired_slug():
+    """The previous version of this test pinned a hardcoded 'verified' list,
+    which itself went stale — it still named two slugs llm.py documents as
+    dead. Asserting the negative is what stays true: whatever the chain
+    contains, it must not contain a model known not to exist."""
+    from homunculus import llm
+    chain = {m.strip() for m in llm.MODEL_FALLBACK.split(",") if m.strip()}
+    dead = sorted(chain & set(RETIRED_SLUGS))
+    assert not dead, (
+        f"MODEL_FALLBACK names withdrawn model(s) {dead}. Verify a slug against "
+        "GET https://openrouter.ai/api/v1/models and require 'tools' in its "
+        "supported_parameters before adding it."
     )
+
+
+def test_a_404_retires_a_model_instead_of_cooling_it_forever(monkeypatch):
+    """A 404 means the slug does not exist; retrying it in ten minutes is
+    pointless. Retirement drops it from selection and tells doctor."""
+    from homunculus import llm
+    monkeypatch.setattr(llm, "_PROVIDER_RETIRED", {}, raising=False)
+    monkeypatch.setenv("HOMUNCULUS_API_KEY_FALLBACK", "test-key")
+    offered = {m for _, _, m in llm._providers(None)}
+    assert offered, "no providers offered with a fallback key set"
+    victim = sorted(offered)[0]
+    llm._retire_provider(llm.API_URL_FALLBACK, victim, "No endpoints found")
+    assert victim not in {m for _, _, m in llm._providers(None)}
+    assert victim in {k.split("|")[-1] for k in llm.retired_providers()}
+
+
+def test_retirement_never_empties_the_chain(monkeypatch):
+    """The last provider standing is still offered — a chain that retires to
+    nothing would take the agent offline, which is worse than one bad call."""
+    from homunculus import llm
+    monkeypatch.setattr(llm, "_PROVIDER_RETIRED", {}, raising=False)
+    monkeypatch.setenv("HOMUNCULUS_API_KEY_FALLBACK", "test-key")
+    for _, url, model in [(0, u, m) for u, _, m in llm._providers(None)]:
+        llm._retire_provider(url, model, "gone")
+    assert llm._providers(None), "every provider retired — the agent has no route"
 
 
 # ---------------------------------------------------------------------------

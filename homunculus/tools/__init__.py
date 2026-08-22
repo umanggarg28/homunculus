@@ -171,6 +171,11 @@ ALWAYS_LOADED: frozenset[str] = frozenset({
     "get_current_time",
     # The meta-tool itself — agent must always be able to load others.
     "load_tool",
+    # The escape hatch for a forced turn. It has to be here rather than
+    # loadable: a turn that demands a tool call cannot spend that call on
+    # load_tool("no_action"), so if it were loadable it would be unreachable
+    # exactly when it is needed.
+    "no_action",
 })
 
 

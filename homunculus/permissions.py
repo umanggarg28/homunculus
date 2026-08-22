@@ -43,8 +43,10 @@ from typing import Any, Literal
 # because permission decisions are the lower-level concern — the guard imports
 # this set for its own mutation-promise check so the two can never disagree.
 MUTATING_TOOLS = frozenset({
-    "propose_skill", "create_task", "update_task", "delete_task", "cancel_task",
-    "complete_task", "record_failure", "write_file", "append_file", "remember",
+    "propose_skill", "propose_memory_consolidation",
+    "create_task", "schedule_task", "cancel_task", "complete_task",
+    "continue_task", "record_failure", "record_commitment",
+    "write_file", "append_file", "remember", "forget",
     "schedule_next_tick", "update_world_state", "quiz_pick",
 })
 

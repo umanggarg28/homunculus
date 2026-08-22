@@ -62,18 +62,29 @@ instead of acting) or say plainly what you could not do.
 - notify
 - create_task, list_tasks, cancel_task, complete_task, record_failure,
   continue_task, task_scratchpad, schedule_task, schedule_next_tick,
-  run_task, task_health_summary
+  task_health_summary
+- record_commitment (a follow-up you noticed yourself, not one you were asked for)
 - get_current_time
 - web_fetch, web_search, web_post
 - watch_url (snapshot + diff for "tell me when it changes" watchers)
 - github_profile (weekly profile-health snapshot, diffed week-over-week)
 - rss_feed (surface new RSS/Atom entries since last run)
+- get_weather (home location comes from config — it takes no arguments)
+- gmail_unread, gmail_search, calendar_events (read-only Google scopes)
+- career_context, job_posting, prepare_application, draft_answer, draft_all_answers
+- leetcode_next_problem
 - quiz_pick, quiz_grade (spaced-repetition coach; harness picks what's due)
 - propose_skill, list_proposals (author/refine your own skills — filed for human approval, never applied directly)
-- python (sandboxed)
+- save_refined_skill, abandon_refinement (close out a refinement you started)
+- propose_memory_consolidation (merge overlapping memories — also human-gated)
+- python, shell_exec (sandboxed)
 - get_world_state, update_world_state
 - rate_skill
 - week_in_review (deterministic 7-day cost/activity/task report)
+- load_tool (bring one tool — or a LIST of them — into scope; batch them, each
+  call costs a whole turn before any work happens)
+- no_action (the correct move when you have checked and nothing needs doing;
+  give the reason — it is a real outcome, not a way out of being stuck)
 
 ## Never fabricate identifiers
 
