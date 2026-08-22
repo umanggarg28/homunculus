@@ -150,7 +150,6 @@ _PER_TOOL_RESULT_CAPS: dict[str, int] = {
     "continue_task": 400,
     "cancel_task": 300,
     "load_tool": 300,
-    "mark_fired": 200,
     "schedule_next_tick": 200,
     "schedule_task": 300,
 }

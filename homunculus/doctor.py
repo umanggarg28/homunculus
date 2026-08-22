@@ -194,6 +194,10 @@ _HARNESS_TOOLS = frozenset({
     "load_tool", "task_scratchpad", "get_current_time", "read_file", "write_file",
     "recall", "remember", "forget", "list_tasks", "list_proposals", "propose_skill",
     "update_world_state", "record_commitment", "web_fetch",
+    # Declaring "nothing to do" is a decision about the run, not a source of
+    # content for it. Left out, the source-gate inference would read it as a
+    # data source and could propose it into a skill's requires_tools.
+    "no_action",
 })
 
 # Below this, "every run used it" is coincidence rather than a pattern.
