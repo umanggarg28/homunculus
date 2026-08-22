@@ -8,13 +8,14 @@ snippet is a bounded prompt-injection surface, a body is not).
 """
 
 from __future__ import annotations
+from homunculus.sentinels import GMAIL_UNAVAILABLE
 
 from datetime import datetime, UTC
 
 from .google_auth import api_get
 
 UNAVAILABLE = (
-    "GMAIL_UNAVAILABLE: Google account not connected (or the request "
+    f"{GMAIL_UNAVAILABLE}: Google account not connected (or the request "
     "failed). Omit email information rather than guessing."
 )
 

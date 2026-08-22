@@ -11,7 +11,8 @@ criteria.
 import re
 from typing import Any
 
-from homunculus.output_guard import tool_result_indicates_failure
+from homunculus.output_guard import scan_text_leaks, tool_result_indicates_failure
+from homunculus.sentinels import SENTINELS, find_sentinel
 
 
 _URL_RE = re.compile(r"https?://[^\s<>\"'\)\]}]+")
@@ -37,7 +38,7 @@ def _extract_urls(text: str) -> list[str]:
 # user-facing content: a delivery carrying one means the model pasted a
 # failure token verbatim — or hallucinated the failure branch without
 # calling the tool at all — instead of omitting the section.
-_FAILURE_SENTINELS = ("NEWS_UNAVAILABLE", "WEATHER UNAVAILABLE")
+_FAILURE_SENTINELS = SENTINELS
 
 
 class TaskGuard:
@@ -145,7 +146,7 @@ class TaskGuard:
             # either a verbatim paste of a failure or (the observed case) a
             # fabricated failure branch — the model wrote the sentinel
             # without calling the tool at all.
-            leaked = next((s for s in _FAILURE_SENTINELS if s in text), None)
+            leaked = find_sentinel(text)
             if leaked is not None:
                 return (
                     f"BLOCKED: notify() not sent — the text contains the "
@@ -155,6 +156,23 @@ class TaskGuard:
                     f"produces this data, call it now and use its real "
                     f"output. If the tool itself failed, resend the message "
                     f"with that section omitted entirely."
+                )
+            # The same leak checks a final reply gets. notify() never passes
+            # through run_output_guard, so without this the most automated
+            # user-facing channel is also the least checked one.
+            leaks = scan_text_leaks(
+                text,
+                file_search_active=bool(
+                    {"search_files", "list_files"} & set(self._tool_trace)
+                ),
+            )
+            if leaks:
+                return (
+                    "BLOCKED: notify() not sent — the message contains "
+                    + ", ".join(sorted(leaks))
+                    + ". Rewrite it as plain user-facing prose: no internal "
+                    "file paths or memory filenames, no raw ERROR text, no "
+                    "tool-call markup. Then call notify again."
                 )
             # An odd number of ``` fences means an unclosed code block —
             # the message was cut off mid-generation. Observed live

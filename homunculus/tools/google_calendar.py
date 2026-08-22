@@ -6,6 +6,7 @@ all parsing, timezone handling, and truncation happen here.
 """
 
 from __future__ import annotations
+from homunculus.sentinels import CALENDAR_UNAVAILABLE
 
 from datetime import datetime, timedelta
 
@@ -14,7 +15,7 @@ from homunculus.user_tz import now_user_tz
 from .google_auth import api_get
 
 UNAVAILABLE = (
-    "CALENDAR_UNAVAILABLE: Google account not connected (or the request "
+    f"{CALENDAR_UNAVAILABLE}: Google account not connected (or the request "
     "failed). Omit calendar information rather than guessing."
 )
 
