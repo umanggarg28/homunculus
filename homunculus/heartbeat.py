@@ -781,12 +781,19 @@ def settle_task_outcome(
             # A non-delivered run drops any quiz pending so the CHAT badge
             # never lights for a question the user never received.
             _settle_quiz_pending(task, delivered=False)
+            # Attribute the guard's observations to ANY non-success close, not
+            # just record_failure. A source outage most often ends in
+            # continue_task (status "partial"), and attributing only on
+            # "failure" meant the commonest failure mode left no evidence — a
+            # task could go partial for days with nothing recording WHICH
+            # source was down, which is exactly what the next run needs to
+            # know (see `_recent_run_summary`).
+            tasks.attribute_tool_trace_to_last_run(task_id, guard.tool_trace())
+            tasks.attribute_failure_evidence_to_last_run(task_id, guard.failed_tools())
             if last_status == "failure":
-                tasks.attribute_tool_trace_to_last_run(task_id, guard.tool_trace())
-                tasks.attribute_failure_evidence_to_last_run(task_id, guard.failed_tools())
                 _rate_task_skill(memory, task, "failure")
-            # cancel_task / continue_task are deliberate closes that are
-            # neither: respect them and record nothing further.
+            # cancel_task / continue_task are deliberate closes: the evidence
+            # above is recorded, but they are not rated as skill failures.
             return
         _settle_silent_drop(
             tasks,
@@ -1129,6 +1136,52 @@ def _settle_silent_drop(
             )
 
 
+#: How many past runs a task carries into its own next run. Small on purpose:
+#: the point is "is this source flaky right now", which the last handful
+#: answers, and every line costs prompt budget on a $5/month ceiling.
+_RECENT_RUNS_WINDOW = 5
+
+
+def _recent_run_summary(task: dict) -> str:
+    """What this task's own recent runs did, for the run about to start.
+
+    A scheduled run began cold: it saw its scratchpad and its delivery ledger,
+    but nothing about how the last few attempts actually went. So a source
+    that had failed three mornings running was, to the model, failing for the
+    first time — the skill would lead with it again, and the same section
+    would collapse again.
+
+    This is the "retrieve" stage that Letta and Hermes both put in front of
+    execution, kept deliberately thin: the harness counts, the model judges.
+    Handing the model raw run history to tally itself is the antipattern
+    `week_in_review` and `_format_due_tasks` already exist to avoid.
+    """
+    runs = (task.get("last_runs") or [])[-_RECENT_RUNS_WINDOW:]
+    if not runs:
+        return ""
+    statuses = [str(r.get("status") or "?") for r in reversed(runs)]
+    out = f"recent_runs (newest first): {' · '.join(statuses)}"
+
+    # Which sources the GUARD observed failing — not the model's account of
+    # its own failure, which one run recorded as "agent reported failure".
+    failing: dict[str, int] = {}
+    for r in runs:
+        for tool in r.get("failed_tools") or []:
+            failing[tool] = failing.get(tool, 0) + 1
+    if failing:
+        worst = sorted(failing.items(), key=lambda kv: (-kv[1], kv[0]))
+        out += "\n  recently failing sources: " + ", ".join(
+            f"{tool} (failed {n} of last {len(runs)} runs)" for tool, n in worst
+        )
+        out += (
+            "\n  Treat these as likely to fail again: still CALL them — a "
+            "recovered source must be noticed — but plan the delivery so it "
+            "stands without them, and never present a remembered value as "
+            "fresh."
+        )
+    return out
+
+
 def _format_due_tasks(tasks: list[dict], forced: bool = False) -> str:
     import json as _json
     from homunculus.tasks import read_scratchpad
@@ -1172,6 +1225,9 @@ def _format_due_tasks(tasks: list[dict], forced: bool = False) -> str:
         partials = int(task.get("consecutive_partials", 0))
         if partials > 0:
             block += f"\n  RESUMING — consecutive_partials: {partials}"
+        recent = _recent_run_summary(task)
+        if recent:
+            block += "\n  " + recent.replace("\n", "\n  ")
         scratch = read_scratchpad(tasks_root, task.get("id", ""))
         if scratch.strip():
             # Inline the scratchpad so the agent sees it in the same
