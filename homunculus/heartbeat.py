@@ -267,6 +267,11 @@ _REFLECTION_FORBIDDEN = {
 #: paraphrases of the same daily summary. The cap makes "at most 2" real.
 _REFLECTION_CALL_CAPS = {"remember": 2, "forget": 2}
 
+#: Attribution owner for events the daily reflection emits. Not a task id --
+#: nothing schedules it -- but the per-task event window needs SOME owner to
+#: exclude it by, and "unstamped" means "belongs to everyone".
+REFLECTION_OWNER = "reflection"
+
 
 class _ReflectionToolGuard:
     """The reflection Agent's pre_execute_hook for one tick.
@@ -372,7 +377,14 @@ def _run_reflection_or_idle(
         .replace("{yesterday_path}", yesterday_path)
         .replace("{recent_deliveries}", _format_recent_deliveries(tasks))
     )
-    response = agent.chat(prompt, source="heartbeat")
+    # Stamp the reflection's events with an owner. `events.emit` attributes an
+    # event to whatever task context is active, and reflection is not a task —
+    # so its events went out unstamped, and `_events_between` keeps unstamped
+    # events in EVERY task's window. Six reflection tool-choice violations were
+    # being charged to all seven skills at once, which read as six of seven
+    # skills degrading simultaneously when nothing about them had changed.
+    with events.task_context(REFLECTION_OWNER):
+        response = agent.chat(prompt, source="heartbeat")
     memory.reflection.mark(today)
     log.info(f"[agent] {response}")
 
