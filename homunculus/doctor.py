@@ -357,6 +357,34 @@ def audit_memory_links(memory_root: Path | None) -> list[Finding]:
     return findings
 
 
+def audit_provider_chain() -> list[Finding]:
+    """Report fallback models the provider retired after a 404.
+
+    Write-time validation cannot catch this: the chain was valid when it was
+    configured, and a free slug being withdrawn upstream happens later and
+    silently. Without a report the chain shrinks one model at a time until a
+    single outage takes the agent offline, and the log shows only that a
+    fallback was "tried".
+    """
+    try:
+        from homunculus.llm import retired_providers
+    except Exception:
+        return []
+    return [
+        Finding(
+            check="provider_chain",
+            subject=model_key.split("|")[-1],
+            detail=(
+                "returned 404 and was dropped from the fallback chain — the "
+                "model slug no longer exists upstream. Replace it in "
+                "HOMUNCULUS_MODEL_FALLBACK* with a slug listed by the "
+                "provider's models endpoint that supports tool calling."
+            ),
+        )
+        for model_key in sorted(retired_providers())
+    ]
+
+
 def run_startup_audit(
     tasks: list[dict], memory_root: Path | None = None,
 ) -> list[Finding]:
@@ -372,6 +400,7 @@ def run_startup_audit(
         ("audit_task_criteria", lambda: audit_task_criteria(tasks)),
         ("audit_undeclared_sources", lambda: audit_undeclared_sources(tasks, memory_root)),
         ("audit_memory_links", lambda: audit_memory_links(memory_root)),
+        ("audit_provider_chain", audit_provider_chain),
     )
     for name, check in checks:
         try:

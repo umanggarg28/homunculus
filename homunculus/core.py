@@ -169,6 +169,30 @@ _TAIL_PRESERVING_TOOLS = frozenset({"python"})
 # infrastructure failure (record_failure). The heartbeat loop uses a
 # count of successful terminal calls to decide when to exit early —
 # without this, tool_choice=required spins the model past its work.
+#: How many times one tool may run in a single turn, regardless of arguments.
+#:
+#: The exact-args STUCK_LOOP below cannot see the failure mode this catches.
+#: Its key includes the serialized arguments, so a model that rewords its way
+#: around the loop resets the counter on every attempt — observed live as 11
+#: `remember()` calls in one reflection tick, every one a paraphrase of the
+#: same summary. Repetition, not fabrication, is this model's real production
+#: failure mode, and identity matching is blind to most of it.
+#:
+#: Only durable-write tools are capped, and generously. A turn that reads
+#: twenty files or searches six times is doing legitimate work, so a blanket
+#: per-tool budget would break normal behaviour to fix an abnormal one; a turn
+#: that writes the same memory six times is thrashing under any reading.
+#: `heartbeat` passes a stricter policy for reflection ticks, where the prompt
+#: already says "at most 2".
+DEFAULT_TOOL_TURN_CAPS: dict[str, int] = {
+    "remember": 5,
+    "forget": 5,
+    "propose_skill": 3,
+    # Two lead-time reminders for one event is the documented pattern
+    # (a day before AND minutes before), so this sits well above it.
+    "record_commitment": 6,
+}
+
 _TERMINAL_TASK_TOOLS = frozenset({
     "complete_task",
     "continue_task",
@@ -563,9 +587,15 @@ class Agent:
         pre_turn_hook: Callable[[int, list], dict | None] | None = None,
         suppressed_tools: frozenset[str] | set[str] | None = None,
         permissions: PermissionPolicy | None = None,
+        tool_turn_caps: dict[str, int] | None = None,
     ) -> None:
         self.memory = memory
         self.model = model or MODEL
+        # Per-turn, argument-blind call budget per tool. Callers with a
+        # stricter contract (reflection ticks) pass their own.
+        self.tool_turn_caps = (
+            DEFAULT_TOOL_TURN_CAPS if tool_turn_caps is None else tool_turn_caps
+        )
         # Declarative gate on tool execution (permissions.py). Static for the
         # life of the Agent, unlike the run-scoped hooks below: it answers
         # "may this tool run at all", not "has this run met its criteria".
@@ -966,7 +996,15 @@ class Agent:
             else []
         )
         if loadable:
-            lines = ["", "# Loadable tools (call load_tool('name') to enable)", ""]
+            lines = [
+                "",
+                "# Loadable tools",
+                "",
+                "Enable with load_tool('name'), or several at once with",
+                "load_tool(['name_a', 'name_b']). Loading them one at a time "
+                "costs a model turn each — batch everything the task needs.",
+                "",
+            ]
             for row in loadable:
                 desc = row["description"].split("\n", 1)[0][:120]
                 lines.append(f"- `{row['name']}` — {desc}")
@@ -1113,6 +1151,7 @@ class Agent:
         call_counts: dict,
         tool_result_cache: dict,
         tool_outcomes: list[dict],
+        per_tool_counts: dict | None = None,
     ) -> int:
         """Execute one batch of tool calls from an assistant message.
 
@@ -1123,6 +1162,10 @@ class Agent:
         place; returns the number of terminal-task tools that *succeeded* this
         batch so the caller can advance its early-exit counter.
         """
+        # A caller that does not track per-tool counts (a focused test, a
+        # single-batch dispatch) gets a throwaway tally rather than a
+        # different code path, so the cap logic below is never bypassed.
+        _per_tool = per_tool_counts if per_tool_counts is not None else {}
         closed = 0
         for call in tool_calls:
             raw_name = call["function"]["name"]
@@ -1170,6 +1213,8 @@ class Agent:
             canon_args = json.dumps(args, sort_keys=True)
             call_key = (name, canon_args)
             call_counts[call_key] = call_counts.get(call_key, 0) + 1
+            # Argument-blind tally, so paraphrase cannot reset it.
+            _per_tool[name] = _per_tool.get(name, 0) + 1
             # Per-turn cache hit: read-only tools with the same args this
             # turn return the cached result with a hint. Saves wasted
             # round trips and prevents read_file/recall thrashing —
@@ -1206,6 +1251,27 @@ class Agent:
                     text=f"cache hit: {name} × {call_counts[call_key]}",
                     result=canon_args[:120],
                 )
+            elif (
+                name in self.tool_turn_caps
+                and _per_tool[name] > self.tool_turn_caps[name]
+            ):
+                # Reworded repetition: the exact-args counter below never
+                # fires because each attempt is textually new.
+                cap = self.tool_turn_caps[name]
+                result = (
+                    f"STUCK_LOOP: '{name}' has already run {cap} time(s) this "
+                    f"turn, which is its limit — further calls are refused "
+                    f"however the arguments are worded. Rewording the same "
+                    f"request does not make it a new one. Move on to the next "
+                    f"step, or finish and explain what you could not do."
+                )
+                events.emit(
+                    "output_guard",
+                    kind="stuck_loop",
+                    name=name,
+                    text=f"per-tool cap: {name} × {_per_tool[name]} > {cap}",
+                    result=canon_args[:120],
+                )
             elif call_counts[call_key] >= 3:
                 result = (
                     f"STUCK_LOOP: '{name}' has been called with these exact arguments "
@@ -1234,14 +1300,21 @@ class Agent:
                 # tool function itself just returns a confirmation
                 # string; the side effect is here on the Agent.
                 if name == "load_tool" and self._active_tool_names is not None:
-                    requested = (args or {}).get("name", "").strip()
+                    raw = (args or {}).get("name")
+                    # A list loads several tools in one round-trip. Each
+                    # separate load_tool call costs a whole model turn before
+                    # any work happens, and it was the single most-called tool
+                    # in production — more than read_file.
+                    wanted = [raw] if isinstance(raw, str) else list(raw or [])
                     known = (
                         tools.tool_names()
                         if hasattr(tools, "tool_names")
                         else set()
                     )
-                    if requested and requested in known:
-                        self._active_tool_names.add(requested)
+                    for one in wanted:
+                        one = str(one).strip()
+                        if one and one in known:
+                            self._active_tool_names.add(one)
                 _t_start = time.monotonic()
                 # Run-scoped guard: a non-None return blocks the call and
                 # becomes the tool result (the TaskGuard criteria check, the
@@ -1852,6 +1925,7 @@ class Agent:
 
         tool_names_used: set[str] = set()
         call_counts: dict[tuple[str, str], int] = {}
+        per_tool_counts: dict[str, int] = {}
         # Per-turn cache for READ_ONLY_CACHEABLE_TOOLS — same (name, args) → same
         # result, no need to re-execute. Cleared at the start of every turn.
         tool_result_cache: dict[tuple[str, str], str] = {}
@@ -1996,7 +2070,7 @@ class Agent:
 
             terminal_completions += self._dispatch_tool_calls(
                 tool_calls, tool_names_used, call_counts,
-                tool_result_cache, tool_outcomes,
+                tool_result_cache, tool_outcomes, per_tool_counts,
             )
 
             # Early exit: the agent has closed out every due task the caller

@@ -141,7 +141,10 @@ For EACH delivery above:
        - thin, empty, repetitive, or off-topic content;
        - anything a human reader would call low-quality or wrong even though
          it technically passed.
-     If the delivery is genuinely good → no action. If NOT → read_file the
+     If the delivery is genuinely good → call no_action(reason=...) saying
+     what you reviewed and why nothing needs changing. That IS the correct
+     answer for a good day; do not invent an edit to have something to file.
+     If NOT → read_file the
      skill, find the ROOT cause (e.g. a brittle data source the model has to
      guess from), and propose_skill(kind="skill_edit", edits=[{"old": ...,
      "new": ...}]): fix the procedure (prefer a reliable structured data

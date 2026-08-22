@@ -833,9 +833,9 @@ def continue_task(
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def load_tool(
-    name: Annotated[str, Field(description="Name of the tool to load (from the 'Loadable tools' list in your system prompt).")],
+    name: Annotated[str | list[str], Field(description="Tool name, or a LIST of tool names to load together (from the 'Loadable tools' list in your system prompt). Always pass every tool the task needs in ONE call.")],
 ) -> str:
-    """Load a tool's full schema into the active set for this session.
+    """Load one or more tools' full schemas into the active set for this session.
 
     Most tools are listed by name + one-line description in your
     system prompt under "Loadable tools" — sending their full
@@ -843,9 +843,36 @@ def load_tool(
     Call load_tool('foo') to bring 'foo' into your tool catalogue for
     the next LLM call, then invoke it normally.
 
+    Pass a LIST to load several at once: load_tool(['get_weather',
+    'news_headlines']). Each name costs a whole model round-trip when
+    loaded on its own, so batch everything the task needs up front —
+    a task that loads three tools one at a time spends three turns
+    before doing any work.
+
     Idempotent — re-loading a tool that's already active is a no-op.
     """
     return _meta.load_tool(name)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def no_action(
+    reason: Annotated[str, Field(description="Why there is nothing to do — what you checked and what you found.")],
+) -> str:
+    """Declare that the correct outcome of this turn is to do nothing.
+
+    Some turns require a tool call, which leaves no legal way to say
+    "I looked, and no action is warranted". Without this tool the only
+    options are to invent work or to answer in prose, and prose in a
+    forced turn is discarded as a violation — so a correct decision
+    reads as a failure.
+
+    Call this when you have genuinely checked and found nothing to
+    change: every delivery was good, no skill needs an edit, nothing
+    needs remembering. State what you checked in `reason` — that is
+    the record of the decision, and it is a real outcome, not a
+    fallback for when you are stuck.
+    """
+    return _meta.no_action(reason)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))

@@ -20,7 +20,19 @@ from typing import cast
 from . import _state
 
 
-def load_tool(name: str) -> str:
+def no_action(reason: str) -> str:
+    """Record a deliberate decision to do nothing this turn."""
+    reason = (reason or "").strip()
+    if not reason:
+        return (
+            "ERROR: no_action requires a reason — say what you checked and "
+            "why nothing needs doing. An unexplained no-op is indistinguishable "
+            "from giving up."
+        )
+    return f"No action taken, by decision: {reason}"
+
+
+def load_tool(name: str | list[str]) -> str:
     """Add a tool's full schema to the active set for this session.
 
     Idempotent. Returns a confirmation string the LLM sees as the
@@ -31,15 +43,23 @@ def load_tool(name: str) -> str:
     # Forward-compat hook: if a tool registry is ever injected on _state, use it
     # to validate the name; otherwise this stays a no-op (the Agent's hook owns
     # the real active-set mutation).
+    requested = [n.strip() for n in ([name] if isinstance(name, str) else list(name)) if str(n).strip()]
+    if not requested:
+        return "ERROR: load_tool needs a tool name, or a list of them."
     _known = getattr(_state, "get_known_tool_names", None)
     available: set[str] = cast("set[str]", _known()) if callable(_known) else set()
-    if available and name not in available:
-        return (
-            f"ERROR: no tool named '{name}'. Available tools are listed "
-            f"in your system prompt under 'Loadable tools'. Names are "
-            f"case-sensitive."
-        )
+    if available:
+        unknown = [n for n in requested if n not in available]
+        if unknown:
+            return (
+                f"ERROR: no tool named {', '.join(repr(u) for u in unknown)}. "
+                f"Available tools are listed in your system prompt under "
+                f"'Loadable tools'. Names are case-sensitive."
+            )
+    listed = ", ".join(f"'{n}'" for n in requested)
     return (
-        f"Loaded tool '{name}'. Its full schema is in effect on the next "
-        f"LLM call, so call it normally on your next turn."
+        f"Loaded {'tool' if len(requested) == 1 else 'tools'} {listed}. "
+        f"{'Its' if len(requested) == 1 else 'Their'} full schema is in effect "
+        f"on the next LLM call, so call {'it' if len(requested) == 1 else 'them'} "
+        f"normally on your next turn."
     )
