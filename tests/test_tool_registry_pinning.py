@@ -136,3 +136,63 @@ def test_no_action_is_reachable_without_loading_it():
     """The escape hatch for a forced turn cannot itself require a tool call."""
     always = _string_set_literal(REPO / "homunculus/tools/__init__.py", "ALWAYS_LOADED")
     assert "no_action" in always
+
+
+# ------------------------------------------------------- the persona layer
+
+def _agents_md_inventory() -> set[str]:
+    """Tool names named anywhere in AGENTS.md.
+
+    Deliberately whole-file rather than section-scoped: an operator disables a
+    tool by commenting the line out, and a commented-out entry is still a
+    conscious decision about that tool. What must not happen is a tool nobody
+    ever mentioned.
+    """
+    import re
+
+    text = (REPO / "AGENTS.md").read_text()
+    return set(re.findall(r"\b[a-z][a-z0-9_]{2,}\b", text))
+
+
+def test_agents_md_names_no_tool_that_does_not_exist():
+    """AGENTS.md is injected into the system prompt every turn, so a phantom
+    name there is a capability the model believes it has."""
+    registered = _registered_tool_names()
+    inventory_section = (REPO / "AGENTS.md").read_text()
+    section = inventory_section.split("- read_file, write_file", 1)[1].split("\n\n", 1)[0]
+    import re
+
+    claimed = {
+        n for n in re.findall(r"\b[a-z][a-z0-9_]{2,}\b", section)
+        if n.endswith((
+            "_task", "_file", "_files", "_search", "_url", "_feed", "_pick",
+            "_grade", "_profile", "_insert", "_time", "_fetch", "_post",
+            "_tick", "_summary", "_scratchpad", "_state", "_skill", "_review",
+            "_commitment", "_context", "_answer", "_answers", "_problem",
+            "_events", "_unread", "_application", "_weather", "_action",
+            "_tool", "_consolidation", "_refinement", "_exec", "_proposals",
+        ))
+    }
+    phantom = sorted(claimed - registered)
+    assert not phantom, (
+        f"AGENTS.md names tool(s) that do not exist: {phantom}. The model "
+        "reads this list as authoritative and will try to call them."
+    )
+
+
+def test_every_tool_is_mentioned_in_agents_md():
+    """The other direction, and the one that bit hardest.
+
+    A registered tool absent from AGENTS.md is a tool the model is never told
+    about — observed live, it denied having `record_commitment`, reciting
+    exactly the set this file listed. Adding a tool means deciding whether the
+    agent should know about it; this makes that decision explicit rather than
+    forgotten.
+    """
+    missing = sorted(_registered_tool_names() - _agents_md_inventory())
+    assert not missing, (
+        f"These tools exist but AGENTS.md never mentions them: {missing}. "
+        "Add them to the inventory (or comment them out deliberately) — "
+        "AGENTS.md is injected into the system prompt every turn, and the "
+        "model treats its list as the set of things it can do."
+    )
