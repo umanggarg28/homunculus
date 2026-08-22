@@ -281,14 +281,25 @@ class TaskGuard:
                 # required tool exercised means the run succeeded by the
                 # task's own definition (observed close-out mode: deliver
                 # fine, then pick record_failure as a generic "wrap up"
-                # tool and stamp a false failure on a delivered run). Only
-                # blocked when complete_task would definitely be allowed,
-                # so the model can never be refused by both gates at once.
+                # tool and stamp a false failure on a delivered run).
+                #
+                # The block condition must be the EXACT complement of the
+                # complete_task gate, or both verbs refuse at once and the
+                # run has no honest exit. Every condition complete_task
+                # blocks on is therefore checked here too — including
+                # every_required_source_failed, whose omission produced a
+                # real deadlock: a task whose only source failed but whose
+                # criteria were satisfied by the outage notice itself was
+                # refused by complete_task ("nothing real to deliver, call
+                # record_failure") and by record_failure ("the delivery
+                # went out, call complete_task"), with each refusal naming
+                # the other. `test_no_deadlock_*` pins the invariant.
                 criteria = self._criteria.get(task_id) or []
                 if (
                     criteria
                     and not self.criteria_failures(task_id)
                     and not self.missing_required_calls(task_id)
+                    and not self.every_required_source_failed(task_id)
                 ):
                     return (
                         "ERROR: record_failure blocked — this run already "
