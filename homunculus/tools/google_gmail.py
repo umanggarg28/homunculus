@@ -12,7 +12,7 @@ from homunculus.sentinels import GMAIL_UNAVAILABLE
 
 from datetime import datetime, UTC
 
-from .google_auth import api_get
+from .google_auth import api_get, unavailable_suffix
 
 UNAVAILABLE = (
     f"{GMAIL_UNAVAILABLE}: Google account not connected (or the request "
@@ -40,7 +40,7 @@ def _digest(query: str, limit: int) -> str:
     limit = max(1, min(int(limit or 5), _MAX_RESULTS))
     listing = api_get(f"{_BASE}/messages", {"q": query, "maxResults": str(limit)})
     if listing is None:
-        return UNAVAILABLE
+        return UNAVAILABLE + unavailable_suffix()
     ids = [m["id"] for m in (listing.get("messages") or []) if m.get("id")]
     if not ids:
         return f"No messages match: {query}"
@@ -69,7 +69,7 @@ def _digest(query: str, limit: int) -> str:
             f"Narrow the query (add keywords or a shorter window) before "
             f"concluding anything about what it does not contain.]"
         )
-    return "\n".join(lines) if lines else UNAVAILABLE
+    return "\n".join(lines) if lines else UNAVAILABLE + unavailable_suffix()
 
 
 def _format_message(msg: dict) -> list[str]:
