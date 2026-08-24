@@ -389,6 +389,35 @@ def audit_provider_chain() -> list[Finding]:
     ]
 
 
+def audit_unsatisfiable_criteria(tasks: list[dict]) -> list[Finding]:
+    """Tasks carrying a success criterion no delivery could ever meet.
+
+    The guard drops these at evaluation so a run is not failed by a
+    contradiction, but dropping is not the same as reporting: the task still
+    has a criterion someone wrote and nobody can satisfy, and only a person
+    can decide whether to fix the title or the criterion. Imported from
+    `task_guard` rather than restated so the audit and the evaluator can never
+    disagree about what "unsatisfiable" means.
+    """
+    from homunculus.task_guard import unsatisfiable_criteria
+
+    findings: list[Finding] = []
+    for task in tasks:
+        bad = unsatisfiable_criteria(task.get("success_criteria") or [])
+        for c in bad:
+            findings.append(Finding(
+                check="unsatisfiable_criteria",
+                subject=str(task.get("id") or "?"),
+                detail=(
+                    f"notify_contains requires {str(c.get('text'))[:60]!r}, which "
+                    "holds a failure sentinel the notify gate refuses to deliver. "
+                    "The criterion is ignored at run time; reword the task title "
+                    "or the criterion to clear this."
+                ),
+            ))
+    return findings
+
+
 def run_startup_audit(
     tasks: list[dict], memory_root: Path | None = None,
 ) -> list[Finding]:

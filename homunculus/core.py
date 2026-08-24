@@ -190,6 +190,10 @@ DEFAULT_TOOL_TURN_CAPS: dict[str, int] = {
     # Two lead-time reminders for one event is the documented pattern
     # (a day before AND minutes before), so this sits well above it.
     "record_commitment": 6,
+    # Declaring "nothing to do" twice is a contradiction, not a retry. The
+    # loop exits on the first call; this is the backstop for any path that
+    # somehow does not, because the failure it prevents is unbounded.
+    "no_action": 1,
 }
 
 _TERMINAL_TASK_TOOLS = frozenset({
@@ -2071,6 +2075,25 @@ class Agent:
                 tool_calls, tool_names_used, call_counts,
                 tool_result_cache, tool_outcomes, per_tool_counts,
             )
+
+            # `no_action` ends the turn. It means "I checked and nothing needs
+            # doing", which is only true if the turn then STOPS — otherwise
+            # tool_choice=required immediately demands another call and the
+            # only honest answer available is the same one again. Observed
+            # live: 14 no_action calls in one reflection tick, the model
+            # rephrasing "nothing further to do" eight times in a minute. An
+            # escape hatch that does not open is a loop.
+            if "no_action" in tool_names_used:
+                events.emit(
+                    "loop_exit_on_completion",
+                    text=f"no_action declared at iter {_turn_idx + 1}; exiting",
+                )
+                done_reply = "✓ Nothing to do."
+                if self.memory is not None:
+                    self.memory.log_turn("assistant", done_reply)
+                events.emit("assistant_reply", text=events.full_text(done_reply))
+                yield done_reply
+                return
 
             # Early exit: the agent has closed out every due task the caller
             # declared. Without this, tool_choice=required keeps prodding the

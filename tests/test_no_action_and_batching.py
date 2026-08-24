@@ -159,3 +159,51 @@ class TestLoopActivatesBatchedTools:
             set(), {}, {}, [],
         )
         assert "get_weather" in agent._active_tool_names
+
+
+class TestNoActionTerminatesTheTurn:
+    """An escape hatch that does not open is a loop.
+
+    Shipping `no_action` without ending the turn traded one failure for
+    another: under tool_choice=required the model declared "nothing further to
+    do", the loop demanded another call, and the only honest answer available
+    was the same one again. Observed live on 2026-08-22 — fourteen no_action
+    calls in one reflection tick, eight of them inside a single minute.
+    """
+
+    def test_it_is_capped_at_one_call_per_turn(self):
+        from homunculus.core import DEFAULT_TOOL_TURN_CAPS
+
+        assert DEFAULT_TOOL_TURN_CAPS.get("no_action") == 1
+
+    def test_a_second_call_is_refused(self, monkeypatch):
+        import json
+
+        from homunculus import core
+
+        monkeypatch.setattr(core, "_validate_tool_args", lambda n, a: None)
+        monkeypatch.setattr(core.tools, "execute", lambda n, a: "noted", raising=False)
+        agent = core.Agent(memory=None)
+        per_tool: dict[str, int] = {}
+        outcomes: list[dict] = []
+        for reason in ("nothing to do", "still nothing to do, rephrased"):
+            agent._dispatch_tool_calls(
+                [{"id": "c", "function": {
+                    "name": "no_action",
+                    "arguments": json.dumps({"reason": reason}),
+                }}],
+                set(), {}, {}, outcomes, per_tool,
+            )
+        blocked = [o for o in outcomes if "STUCK_LOOP" in str(o.get("result") or "")]
+        assert len(blocked) == 1, "the second declaration must be refused"
+
+    def test_the_loop_exits_on_it(self):
+        """The primary mechanism: the turn ends, so a second call never arises."""
+        from pathlib import Path
+
+        src = (Path(__file__).resolve().parent.parent / "homunculus" / "core.py").read_text()
+        assert 'if "no_action" in tool_names_used:' in src
+        exit_at = src.index('if "no_action" in tool_names_used:')
+        # It must precede the due-task early exit, which cannot fire for a
+        # reflection tick (no due tasks means expected_completions is None).
+        assert exit_at < src.index("expected_completions is not None")
