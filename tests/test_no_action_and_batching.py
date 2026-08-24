@@ -14,39 +14,13 @@ production (98 calls, ahead of read_file's 63) against a $5/month ceiling.
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
+
+from tests.conftest import load_real_tool_submodule
 
 _TOOLS = Path(__file__).resolve().parent.parent / "homunculus" / "tools"
 
-
-def _load_by_path(name: str, path: Path):
-    """Import a tools submodule directly, bypassing the conftest stub that
-    replaces `homunculus.tools` with an empty module for the whole suite.
-
-    Registered under a real package name so the module's own relative
-    imports (`from . import _state`) resolve.
-    """
-    import sys
-    import types
-
-    pkg_name = "tools_real_pkg"
-    if pkg_name not in sys.modules:
-        pkg = types.ModuleType(pkg_name)
-        pkg.__path__ = [str(_TOOLS)]
-        sys.modules[pkg_name] = pkg
-    full = f"{pkg_name}.{name}"
-    if full in sys.modules:
-        return sys.modules[full]
-    spec = importlib.util.spec_from_file_location(full, path)
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[full] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-_meta = _load_by_path("_meta", _TOOLS / "_meta.py")
+_meta = load_real_tool_submodule("_meta")
 
 #: Read from source rather than imported: the package __init__ pulls in the
 #: MCP stack, which is container-only.

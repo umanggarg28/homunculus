@@ -91,6 +91,10 @@ def test_access_token_is_cached_across_calls(tmp_path, monkeypatch):
     posts = []
 
     class _Resp:
+        # get_access_token inspects status_code before raise_for_status so it
+        # can tell a dead grant (400 invalid_grant) from a transient error.
+        status_code = 200
+
         def raise_for_status(self): ...
         def json(self): return {"access_token": "at-1", "expires_in": 3600}
 

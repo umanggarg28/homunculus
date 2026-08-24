@@ -389,6 +389,25 @@ def audit_provider_chain() -> list[Finding]:
     ]
 
 
+def audit_google_grant() -> list[Finding]:
+    """Report a Google grant that has been revoked rather than merely flaky.
+
+    A revoked refresh token is indistinguishable, from inside a run, from a
+    network blip: both surface as the same sentinel and both degrade the same
+    way. The difference only matters to the operator, and only they can act on
+    it -- so it belongs here rather than in the model's context. Without it the
+    agent reports "Google account not connected" every morning and no one
+    learns that re-consent is the fix.
+    """
+    try:
+        from homunculus.tools.google_auth import REVOKED_REMEDY, grant_failure_reason
+    except Exception:
+        return []
+    if grant_failure_reason() != "revoked":
+        return []
+    return [Finding(check="google_grant", subject="gmail/calendar", detail=REVOKED_REMEDY)]
+
+
 def audit_unsatisfiable_criteria(tasks: list[dict]) -> list[Finding]:
     """Tasks carrying a success criterion no delivery could ever meet.
 
@@ -434,6 +453,7 @@ def run_startup_audit(
         ("audit_undeclared_sources", lambda: audit_undeclared_sources(tasks, memory_root)),
         ("audit_memory_links", lambda: audit_memory_links(memory_root)),
         ("audit_provider_chain", audit_provider_chain),
+        ("audit_google_grant", audit_google_grant),
         ("audit_unsatisfiable_criteria", lambda: audit_unsatisfiable_criteria(tasks)),
     )
     for name, check in checks:

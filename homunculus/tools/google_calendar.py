@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 
 from homunculus.user_tz import now_user_tz
 
-from .google_auth import api_get
+from .google_auth import api_get, unavailable_suffix
 
 UNAVAILABLE = (
     f"{CALENDAR_UNAVAILABLE}: Google account not connected (or the request "
@@ -36,7 +36,7 @@ def calendar_events(days: int = 1) -> str:
         "maxResults": str(_MAX_EVENTS),
     })
     if data is None:
-        return UNAVAILABLE
+        return UNAVAILABLE + unavailable_suffix()
     lines = _format_events(data.get("items") or [])
     if not lines:
         return f"No calendar events in the next {days} day(s)."
