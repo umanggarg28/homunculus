@@ -434,6 +434,7 @@ def run_startup_audit(
         ("audit_undeclared_sources", lambda: audit_undeclared_sources(tasks, memory_root)),
         ("audit_memory_links", lambda: audit_memory_links(memory_root)),
         ("audit_provider_chain", audit_provider_chain),
+        ("audit_unsatisfiable_criteria", lambda: audit_unsatisfiable_criteria(tasks)),
     )
     for name, check in checks:
         try:

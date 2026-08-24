@@ -196,3 +196,32 @@ def test_every_tool_is_mentioned_in_agents_md():
         "AGENTS.md is injected into the system prompt every turn, and the "
         "model treats its list as the set of things it can do."
     )
+
+
+# ------------------------------------------------------------- doctor audits
+
+def test_every_defined_audit_is_registered():
+    """An audit that is never called is worse than one that does not exist.
+
+    `run_startup_audit` holds the check list by hand, so adding an `audit_*`
+    function is two edits, not one. Miss the second and the audit is dead
+    code that fails silently: nothing raises, the finding simply never
+    appears, and the config it was written to catch ships unaudited. This
+    pins the list to what the module actually defines.
+    """
+    src = (REPO / "homunculus" / "doctor.py").read_text()
+    tree = ast.parse(src)
+    defined = {
+        n.name for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name.startswith("audit_")
+    }
+    registered = {
+        n.value for n in ast.walk(tree)
+        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        and n.value.startswith("audit_")
+    }
+    missing = sorted(defined - registered)
+    assert not missing, (
+        f"doctor defines {missing} but never registers them in "
+        "run_startup_audit's check list, so they never run"
+    )
