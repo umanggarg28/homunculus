@@ -81,28 +81,24 @@ API_URL_FALLBACK = os.environ.get(
 )
 MODEL_FALLBACK = os.environ.get(
     "HOMUNCULUS_MODEL_FALLBACK",
-    # When the primary (paid gpt-oss-120b) is throttled or unreachable,
-    # fall through these in order. All free-tier OpenRouter routes; all
-    # support tool calling.
-    #   z-ai/glm-5.2:free — 256K ctx, declares tool support
-    #   nvidia/nemotron-3-super-120b-a12b:free — 262K ctx, declares tool support
+    # Reached when the primary is throttled or unreachable. Shares the
+    # primary's OpenRouter key, so this slot buys a different MODEL, not a
+    # different provider — slots 2 and 3 do that.
     #
-    # Verify a slug against GET https://openrouter.ai/api/v1/models before
-    # adding it, and require "tools" in its supported_parameters — a model
-    # that cannot call tools is useless here no matter how capable, and a
-    # slug that merely looks plausible is how dead entries get in.
+    # Keep it paid. Free routes are rate-limited harder than the primary
+    # whose throttling sends us here, and the free tool-calling models
+    # observed so far answer `tool_choice=required` with prose.
     #
-    # Free slugs are withdrawn and paywalled routinely, so this list ages.
-    # A 404 now retires the slug for the process and emits `provider_retired`
-    # rather than cooling it forever (see `_retire_provider`), and doctor
-    # reports it — the chain announces its own rot instead of silently
-    # spending a round-trip per fallback on a model that no longer exists.
+    # Verify a slug against GET https://openrouter.ai/api/v1/models and
+    # require "tools" in supported_parameters before adding it. That is
+    # necessary, not sufficient: declared tool support is not observed tool
+    # support, so watch `required_tool_violation` after any change.
     #
     # Deliberately excluded (don't re-add): moonshotai/kimi-k2.6:free and
     # qwen/qwen3-coder:free are paid-only/deprecated upstream; the :free
     # variants of openai/gpt-oss-120b and meta-llama/llama-3.3-70b-instruct
     # have been withdrawn (their paid slugs remain).
-    "z-ai/glm-5.2:free,nvidia/nemotron-3-super-120b-a12b:free",
+    "inclusionai/ling-3.0-flash",
 )
 
 API_URL_FALLBACK_2 = os.environ.get(
@@ -151,6 +147,7 @@ _MODEL_PRICING_CENTS: dict[str, tuple[float, float]] = {
     "deepseek/deepseek-v4-flash-0731":          (14.0,  28.0),
     "deepseek/deepseek-v4-pro":                 (43.5,  87.0),
     "qwen/qwen3.7-flash":                       (3.0,   13.0),
+    "inclusionai/ling-3.0-flash":               (2.1,   6.3),
     # OpenRouter list price as of 2026-08; provider competition has cut it
     # several times, so refresh when the budget report looks inflated.
     "openai/gpt-oss-120b":                      (3.7,   17.0),
