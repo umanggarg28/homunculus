@@ -75,6 +75,26 @@ def unsatisfiable_criteria(criteria: list[dict[str, Any]]) -> list[dict[str, Any
     return bad
 
 
+def _time_forms(event_at: str) -> list[str]:
+    """The ways a wall-clock time is plausibly written in prose.
+
+    A person writes "3pm IST", a calendar API writes "15:00", and the model
+    hands the tool "2026-08-26T15:00:00+05:30". Grounding has to accept all
+    three or it rejects real events.
+    """
+    m = re.match(r"\s*\d{4}-\d{2}-\d{2}[T ](\d{2}):(\d{2})", str(event_at))
+    if not m:
+        return []
+    hour, minute = int(m.group(1)), int(m.group(2))
+    h12 = hour % 12 or 12
+    ampm = "am" if hour < 12 else "pm"
+    forms = [f"{hour:02d}:{minute:02d}", f"{hour}:{minute:02d}",
+             f"{h12}:{minute:02d}{ampm}"]
+    if minute == 0:
+        forms += [f"{h12}{ampm}", f"{h12}:00{ampm}", f"{h12}.00{ampm}"]
+    return forms
+
+
 class TaskGuard:
     """Pi-style output guard for scheduled task delivery.
 
@@ -250,6 +270,37 @@ class TaskGuard:
             # The MCP subprocess does the actual Telegram send.
             self._notify_texts.append(text)
             return None
+
+        if name == "record_commitment":
+            # A committed time is a FACT about the world, and the only facts
+            # this run has are the ones its tools returned. The same rule the
+            # notify_links_grounded criterion applies to URLs: a value the
+            # agent could not have read is one it invented.
+            #
+            # Observed live: gmail_search returned one real invitation ("the
+            # call for 26th August at 3pm IST") plus a truncated snippet of an
+            # unrelated company's interview thread with no time in it. The
+            # agent recorded the real 15:00 event AND a second reminder at
+            # 05:30 — midnight UTC, a timezone artifact rather than anything
+            # anyone wrote — for a job title that appears in no email.
+            #
+            # Only checked when a data tool actually ran: a commitment made
+            # from the task description or from chat has no blob to ground
+            # against, and refusing those would break the ordinary case.
+            grounded = self._grounded_blob()
+            event_at = str(arguments.get("event_at") or "")
+            forms = _time_forms(event_at)
+            if grounded and forms:
+                haystack = grounded.lower().replace(" ", "")
+                if not any(f in haystack for f in forms):
+                    return (
+                        f"BLOCKED: record_commitment refused — nothing this run "
+                        f"read says {forms[0]}. The time of an event is a fact "
+                        f"from the source, not something to infer: quote the "
+                        f"text that states it (e.g. \"3pm IST\") and use that "
+                        f"time, or omit the commitment. Do not convert or guess "
+                        f"a time that was never written down."
+                    )
 
         if name == "complete_task":
             task_id = arguments.get("task_id", "")
