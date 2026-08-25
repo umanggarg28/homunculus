@@ -201,6 +201,28 @@ def record_commitment(
         if _slug(existing["title"]) == slug:
             store.schedule(existing["id"], check_at or existing.get("due_at") or "", "none")
             return f"Updated existing commitment {existing['id']}: {existing['title']}"
+    # A rephrase is not a new commitment. The title loop above is deliberate --
+    # it is what lets one event carry several lead times -- but it keys on the
+    # words the model chose, so the same event described differently slips
+    # through. Two live check-ins of the same kind firing at the same instant
+    # are redundant whatever they are called, and the check-in time is DERIVED
+    # here rather than supplied: it is the one part of the identity the model
+    # cannot perturb by rewording. A distinct lead time still yields a distinct
+    # check_at, so the multi-reminder case above is unaffected.
+    if check_at:
+        for existing in store.list("all"):
+            if (
+                existing.get("status") == "active"
+                and existing.get("due_at") == check_at
+                and f"[commitment:{kind}]" in (existing.get("description") or "")
+            ):
+                return (
+                    f"Already tracked by {existing['id']}: {existing['title']} — a "
+                    f"{kind} check-in for this event already fires at {check_at}. "
+                    "Not recording a duplicate. To add a DIFFERENT lead time for "
+                    "the same event, pass lead_hours."
+                )
+
     desc = f"[commitment:{kind}] Proactive check-in the agent inferred, not a user reminder. {what}"
     task = store.create(
         what, desc, check_at, "none", notify=True, source="inferred",
