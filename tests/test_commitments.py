@@ -132,47 +132,37 @@ def test_record_commitment_rejects_bad_kind(tmp_path, monkeypatch):
 
 
 def test_a_rephrased_commitment_is_not_a_second_reminder(tmp_path, monkeypatch):
-    """The same event, described twice in different words, is one commitment.
+    """One event described twice in different words is one commitment.
 
-    Title dedup is deliberate — it is what lets one event carry both a
+    Title dedup is deliberate — it is what lets an event carry both a
     day-before and a 15-min-before check-in — but it keys on text the model
-    wrote. Observed live: the agent read one invitation on two consecutive
-    days and phrased it "Next Steps call with Juniper Square" and then "Next
-    Steps with Juniper Square", producing four active reminders that all
-    fired at the same instant for a single call.
-
-    Two check-ins of the same kind that fire at the same moment are redundant
-    by construction, whatever they are called. The derived time is the
-    harness's, not the model's, so it is the honest identity to dedup on.
+    wrote, so a reword reads as a new commitment. The derived check-in time
+    is the harness's, and two live check-ins of one kind firing at the same
+    instant are redundant whatever they are called.
     """
     monkeypatch.setenv("HOMUNCULUS_TASKS_DIR", str(tmp_path))
     sched = load_real_tool_submodule("scheduling")
     _freeze_now(monkeypatch, sched, "2026-08-25T00:00:00")
     first = sched.record_commitment(
-        "Next Steps call with Juniper Square", "2026-08-26T15:00:00", "event_check_in",
+        "Next Steps call with Acme", "2026-08-26T15:00:00", "event_check_in",
     )
     second = sched.record_commitment(
-        "Next Steps with Juniper Square", "2026-08-26T15:00:00", "event_check_in",
+        "Next Steps with Acme", "2026-08-26T15:00:00", "event_check_in",
     )
     assert "Recorded commitment" in first
     assert "Recorded commitment" not in second, second
-    tasks = [t for t in sched._task_store().list("all") if t["status"] == "active"]
-    assert len(tasks) == 1, [t["title"] for t in tasks]
+    active = [t for t in sched._task_store().list("all") if t["status"] == "active"]
+    assert len(active) == 1, [t["title"] for t in active]
 
 
 def test_dedup_ignores_a_cancelled_commitment(tmp_path, monkeypatch):
-    """A cancelled check-in must not block recording the event again.
-
-    Dedup exists to stop redundant live reminders, not to make a mistake
-    permanent — if the earlier one was cancelled, nothing is going to fire.
-    """
+    """Dedup stops redundant live reminders; it must not make a mistake
+    permanent. A cancelled check-in is not going to fire."""
     monkeypatch.setenv("HOMUNCULUS_TASKS_DIR", str(tmp_path))
     sched = load_real_tool_submodule("scheduling")
     _freeze_now(monkeypatch, sched, "2026-08-25T00:00:00")
     sched.record_commitment("Call with Acme", "2026-08-26T15:00:00", "event_check_in")
     store = sched._task_store()
     store.cancel(store.list("all")[0]["id"], "no longer needed")
-    out = sched.record_commitment(
-        "Acme sync", "2026-08-26T15:00:00", "event_check_in",
-    )
+    out = sched.record_commitment("Acme sync", "2026-08-26T15:00:00", "event_check_in")
     assert "Recorded commitment" in out, out

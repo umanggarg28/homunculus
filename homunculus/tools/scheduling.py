@@ -196,25 +196,26 @@ def record_commitment(
         )
     check_at = _derive_check_at(event_at, kind, lead_hours)
     store = _task_store()
+    # One read: `list` re-parses the whole task file on every call.
+    known = store.list("all")
     slug = _slug(what)
-    for existing in store.list("all"):
+    for existing in known:
         if _slug(existing["title"]) == slug:
             store.schedule(existing["id"], check_at or existing.get("due_at") or "", "none")
             return f"Updated existing commitment {existing['id']}: {existing['title']}"
-    # A rephrase is not a new commitment. The title loop above is deliberate --
-    # it is what lets one event carry several lead times -- but it keys on the
-    # words the model chose, so the same event described differently slips
-    # through. Two live check-ins of the same kind firing at the same instant
-    # are redundant whatever they are called, and the check-in time is DERIVED
-    # here rather than supplied: it is the one part of the identity the model
-    # cannot perturb by rewording. A distinct lead time still yields a distinct
-    # check_at, so the multi-reminder case above is unaffected.
+    # Title dedup above keys on words the model chose, so a reword reads as a
+    # new commitment. `check_at` is derived here rather than supplied, which
+    # makes it the part of the identity a reword cannot perturb: two live
+    # check-ins of one kind firing at the same instant are redundant whatever
+    # they are called. A distinct lead time still yields a distinct check_at,
+    # so recording several reminders for one event is unaffected.
     if check_at:
-        for existing in store.list("all"):
+        marker = f"[commitment:{kind}]"
+        for existing in known:
             if (
                 existing.get("status") == "active"
                 and existing.get("due_at") == check_at
-                and f"[commitment:{kind}]" in (existing.get("description") or "")
+                and marker in (existing.get("description") or "")
             ):
                 return (
                     f"Already tracked by {existing['id']}: {existing['title']} — a "
