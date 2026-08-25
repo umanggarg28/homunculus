@@ -8,11 +8,14 @@ heartbeat.build_task_guard, so scheduled and manual runs enforce the same
 criteria.
 """
 
+import logging
 import re
 from typing import Any
 
 from homunculus.output_guard import scan_text_leaks, tool_result_indicates_failure
 from homunculus.sentinels import SENTINELS, find_sentinel
+
+log = logging.getLogger(__name__)
 
 
 _URL_RE = re.compile(r"https?://[^\s<>\"'\)\]}]+")
@@ -39,6 +42,37 @@ def _extract_urls(text: str) -> list[str]:
 # failure token verbatim — or hallucinated the failure branch without
 # calling the tool at all — instead of omitting the section.
 _FAILURE_SENTINELS = SENTINELS
+
+
+def unsatisfiable_criteria(criteria: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Criteria no delivery could ever satisfy, whoever wrote them.
+
+    A `notify_contains` demands a substring in the delivered text; the notify
+    gate refuses any delivered text carrying a failure sentinel. A criterion
+    whose required substring holds a sentinel therefore contradicts the gate:
+    include it and the send is blocked, omit it and the criterion fails. The
+    task is impossible before it runs, and it burns its retries proving so.
+
+    Observed live: `record_commitment` derives the substring from the task
+    title, and the thing worth following up on was an outage -- "check whether
+    gmail is working (persistent GMAIL_UNAVAILABLE)".
+
+    This lives with the evaluator rather than with any producer on purpose.
+    Criteria arrive from three places -- `_default_reminder_criteria`, a
+    skill's `success_criteria` frontmatter, and the `_plan_tick` fold -- and
+    fixing the one that happened to fail leaves the same trap in the other
+    two, plus in every task already on disk. Checking where they are USED
+    covers all of them at once, the same reason `output_guard` imports
+    MUTATING_TOOLS from `permissions` instead of restating it.
+    """
+    bad = []
+    for c in criteria:
+        if c.get("type") != "notify_contains":
+            continue
+        needle = str(c.get("text") or "")
+        if needle and find_sentinel(needle) is not None:
+            bad.append(c)
+    return bad
 
 
 class TaskGuard:
@@ -506,6 +540,18 @@ class TaskGuard:
         (for the silent-drop fallback path); pre-send checking passes
         an explicit candidate list. `task_id` keys the delivered-ledger
         lookup for notify_unique."""
+        # Drop criteria that contradict the delivery gate before evaluating.
+        # Keeping them would fail the run for not containing text the gate
+        # would refuse to send -- see `unsatisfiable_criteria`.
+        impossible = unsatisfiable_criteria(criteria)
+        if impossible:
+            criteria = [c for c in criteria if c not in impossible]
+            for c in impossible:
+                log.warning(
+                    "[task_guard] ignoring unsatisfiable criterion for "
+                    f"{task_id or '?'}: notify_contains {c.get('text')!r} "
+                    "requires a failure sentinel the notify gate blocks"
+                )
         if texts is None:
             texts = self._notify_texts
         combined = " ".join(texts)

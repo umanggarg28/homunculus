@@ -572,11 +572,23 @@ def _is_transient_provider_error(response: httpx.Response) -> bool:
     if response.status_code == 400:
         # Model capability failures — not a bug in our request, but the
         # model on this slot can't output valid tool JSON. Try next.
+        #
+        # `thought_signature` belongs to the same family and is the one case
+        # no amount of request-fixing can resolve. Gemini signs its own
+        # function calls and refuses any history whose calls lack the
+        # signature; the signature cannot be fabricated, and keeping a foreign
+        # provider's decoration is fatal everywhere else (see
+        # `_sanitize_tool_calls_for`). So a conversation that has already
+        # passed through another provider is simply not routable to Gemini —
+        # which makes it a this-slot problem, exactly what the chain exists
+        # for. Raising instead killed the run outright: five quiz-coach ticks
+        # died this way while healthy providers sat unused.
         body = response.text.lower()
         return (
             "output_parse_failed" in body
             or "tool_use_failed" in body
             or "tool call validation failed" in body
+            or "thought_signature" in body
         )
     return False
 

@@ -318,3 +318,50 @@ def test_empty_api_key_slot_is_skipped(monkeypatch):
     assert not empty_key_entries, (
         f"Provider slots with empty keys must be filtered out, got: {empty_key_entries}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Cross-provider dialect: a 400 the request cannot be fixed to satisfy
+# ---------------------------------------------------------------------------
+
+def _resp400(body: str):
+    import httpx
+    return httpx.Response(
+        400, text=body, request=httpx.Request("POST", "https://x/chat/completions")
+    )
+
+
+def test_gemini_thought_signature_400_falls_through_to_the_next_provider():
+    """Five quiz-coach ticks died on this before it was classified.
+
+    Gemini signs its own function calls and refuses any history whose calls
+    lack the signature. The signature cannot be fabricated, and keeping a
+    foreign provider's decoration is fatal on every other provider — so once a
+    conversation has passed through another provider it is simply not routable
+    to Gemini. That is a this-slot problem, which is what the fallback chain
+    is for; raising killed the whole run while healthy providers sat unused.
+    """
+    from homunculus import llm
+
+    body = (
+        '{"error": {"code": 400, "message": "Function call is missing a '
+        'thought_signature in functionCall parts. This is required for tools '
+        'to work correctly."}}'
+    )
+    assert llm._is_transient_provider_error(_resp400(body)) is True
+
+
+def test_a_genuinely_bad_request_still_raises():
+    """The classification must stay narrow: a real client error is a bug to
+    surface, not a reason to burn the rest of the chain."""
+    from homunculus import llm
+
+    body = '{"error": {"code": 400, "message": "API key not valid"}}'
+    assert llm._is_transient_provider_error(_resp400(body)) is False
+
+
+def test_the_other_capability_400s_are_unchanged():
+    from homunculus import llm
+
+    for marker in ("output_parse_failed", "tool_use_failed", "tool call validation failed"):
+        assert llm._is_transient_provider_error(_resp400(marker)) is True
