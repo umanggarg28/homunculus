@@ -273,15 +273,31 @@ def test_model_fallback_holds_no_retired_slug():
     )
 
 
+def test_model_fallback_holds_no_free_tier_slug():
+    """The fallback slot exists because the primary is rate-limited; a free
+    route is rate-limited harder, and reproduces the problem it is there to
+    solve. Asserting the negative stays true as slugs come and go."""
+    from homunculus import llm
+    chain = {m.strip() for m in llm.MODEL_FALLBACK.split(",") if m.strip()}
+    free = sorted(m for m in chain if m.endswith(":free"))
+    assert not free, f"MODEL_FALLBACK names free-tier slug(s) {free}"
+
+
 def test_a_404_retires_a_model_instead_of_cooling_it_forever(monkeypatch):
     """A 404 means the slug does not exist; retrying it in ten minutes is
     pointless. Retirement drops it from selection and tells doctor."""
     from homunculus import llm
     monkeypatch.setattr(llm, "_PROVIDER_RETIRED", {}, raising=False)
+    # Retirement keys on (url, model), so name the victim from slot 1 rather
+    # than by sorting the offered set — that can pick another slot's model,
+    # which then survives retirement under the wrong URL. A live primary also
+    # keeps the never-return-empty branch from handing back the only model.
+    monkeypatch.setenv("HOMUNCULUS_API_KEY", "test-key-primary")
     monkeypatch.setenv("HOMUNCULUS_API_KEY_FALLBACK", "test-key")
-    offered = {m for _, _, m in llm._providers(None)}
-    assert offered, "no providers offered with a fallback key set"
-    victim = sorted(offered)[0]
+    victim = llm._expand_model_spec(llm.MODEL_FALLBACK)[0]
+    assert victim in {m for _, _, m in llm._providers(None)}, (
+        "slot 1's first model should be offered when its key is set"
+    )
     llm._retire_provider(llm.API_URL_FALLBACK, victim, "No endpoints found")
     assert victim not in {m for _, _, m in llm._providers(None)}
     assert victim in {k.split("|")[-1] for k in llm.retired_providers()}
