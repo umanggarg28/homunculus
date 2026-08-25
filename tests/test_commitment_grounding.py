@@ -1,16 +1,12 @@
 """A committed event time must come from something a tool actually returned.
 
-Live failure, 2026-08-24. `gmail_search` returned one real invitation —
-"I have scheduled the call for 26th August at 3pm IST" — alongside a
-truncated snippet of a different company's interview thread that contained no
-time at all. The agent recorded the real 15:00 event, and then recorded a
-SECOND reminder at 05:30 for "Interview with Juniper Square — Technical Lead":
-a job title in no email, at midnight UTC, which is a timezone artifact rather
-than anything anyone wrote.
+A search returns several threads, only some of which state a time. Given a
+thread that states none, the model supplies one anyway — typically midnight
+in the source's timezone, which surfaces as an odd-looking local hour. Once
+stored, a fabricated reminder is indistinguishable from a real one.
 
-Four reminders, two of them fabricated, all indistinguishable from real ones
-once stored. This is the same rule `notify_links_grounded` applies to URLs: a
-value the agent could not have read is one it invented.
+This is the rule `notify_links_grounded` applies to URLs, applied to times:
+a value the agent could not have read is one it invented.
 """
 
 from __future__ import annotations
@@ -26,15 +22,15 @@ if "homunculus.tools.notify" not in sys.modules:
 
 from homunculus.task_guard import TaskGuard, _time_forms  # noqa: E402
 
-# The real snippet, as gmail_search returned it.
-REAL_EMAIL = (
-    "- Muskan Nankani <mnankani@junipersquare.com> · Re: Next Steps with "
-    "Juniper Square · 8h ago Hi Umang, Thank You for providing your "
-    "availability. I have scheduled the call for 26th August at 3pm IST."
+# A search result in the shape gmail_search returns: sender, subject, snippet.
+SOURCE_EMAIL = (
+    "- Dana Reyes <dreyes@acme.example> · Re: Next Steps with Acme · 8h ago "
+    "Thank you for providing your availability. I have scheduled the call "
+    "for 26th August at 3pm IST."
 )
 
 
-def _guard_with_email(blob: str = REAL_EMAIL) -> TaskGuard:
+def _guard_with_email(blob: str = SOURCE_EMAIL) -> TaskGuard:
     g = TaskGuard({"t": []})
     g.on_tool_call("gmail_search", {"query": "interview"})
     g.observe_tool_result("gmail_search", blob)
@@ -45,7 +41,7 @@ def test_the_real_event_is_allowed():
     """3pm IST is written down, so 15:00+05:30 is grounded."""
     g = _guard_with_email()
     assert g.on_tool_call("record_commitment", {
-        "what": "Next Steps call with Juniper Square",
+        "what": "Next Steps call with Acme",
         "event_at": "2026-08-26T15:00:00+05:30",
     }) is None
 
@@ -54,7 +50,7 @@ def test_the_fabricated_event_is_refused():
     """05:30 appears nowhere — it is midnight UTC, not a stated time."""
     g = _guard_with_email()
     blocked = g.on_tool_call("record_commitment", {
-        "what": "Interview with Juniper Square — Technical Lead",
+        "what": "Interview with Acme — Technical Lead",
         "event_at": "2026-08-26T05:30:00+05:30",
     })
     assert blocked is not None and blocked.startswith("BLOCKED")
