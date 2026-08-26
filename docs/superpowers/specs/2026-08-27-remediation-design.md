@@ -6,15 +6,34 @@ Approach: **B — seams first, then unify**
 
 ## Why this exists
 
-The package grew 27% in under two months and has never had a consolidation
-pass. Of the last 60 commits touching `homunculus/`, **56 grew it and 4 shrank
-it**; the largest reduction in its history is 27 lines, the largest addition
-412.
+**This continues an existing programme rather than starting a new one.**
+`docs/CORE_REFACTOR_PLAN.md` (June 2026) decomposed the god-modules across four
+phases, all merged as PRs #237–#240, on top of the repackaging in #210. It
+worked:
+
+| | June | Now |
+|---|---|---|
+| `core.py` | 3,509 | 2,375 |
+| `web_api.py` | 2,011 | 741 |
+| `_run_loop` | 771 | 271 |
+| `heartbeat.py` | 1,624 | 1,540 |
+
+What followed is the problem. Since that pass, of the last 60 commits touching
+`homunculus/`, **56 grew the package and 4 shrank it**; the largest reduction is
+27 lines against a largest addition of 412. The package went 19,356 → 24,662
+lines in under two months. Accretion resumed the moment the consolidation
+stopped, and `heartbeat.py` was barely touched by it in the first place.
+
+So the goal is not to invent an approach. It is to finish the decomposition on
+the terms the June plan already established — mechanical moves first, one phase
+per PR, behaviour preserved, `LEARN.md` in lockstep — and to close the findings
+that a full review already recorded.
 
 The code is not careless — the system-prompt cache layering and the
-per-iteration injections are both deliberate and well argued. The problem is
-accretion: every trace-driven fix added a mechanism and none ever retired one.
-That single fact accounts for all four symptoms:
+per-iteration injections are both deliberate and well argued. Nor is it
+unmaintained. The problem is that consolidation happens in occasional campaigns
+while accretion happens continuously, so the gap between them is where every
+symptom lives:
 
 - **Hard to follow** — 24,662 lines, 5,300 of them in three files; 22 functions
   over 100 lines, the largest being `_dispatch_tool_calls` at 315.
@@ -50,6 +69,39 @@ central robustness goal here.
 7. **Dead-code removal needs sign-off.** Inventory with usage evidence first;
    cuts ride inside the PR touching that file.
 
+## Inherited findings — triage of the 2026-08-18 review
+
+`docs/CODE_REVIEW_2026_08_18.md` is a full read-through with severities. Checked
+against current code on 2026-08-27:
+
+**Closed since the review**
+- 1.2 — three disagreeing failure recognisers. `sentinels.py` now owns the
+  grammar (PR #311).
+- 2.1 — ten hardcoded tool lists unpinned from the registry.
+  `tests/test_tool_registry_pinning.py` now pins them, 7 tests.
+
+**Still open, and folded into the phases below**
+| # | Finding | Sev | Phase |
+|---|---|---|---|
+| 1.1 | Semantic recall is silently dead; `_embed()` returns `None` with no key, every `recall()` degrades to keyword overlap, nothing says so | HIGH | 3 |
+| 1.3 | `SYSTEM_PROMPT` still hardcodes a tool enumeration. It was updated, not fixed — it will go stale again | HIGH | 3 |
+| 3.1 | `call_llm_stream` re-implements the provider chain; two `_providers()` loops have already drifted | HIGH | 1 |
+| 3.2 | No `paths` module | HIGH | 1 |
+| 5.1 | CI never touches the frontend — 16,698 lines of TS with no build check | HIGH | 0 |
+| 4.1 | `messages.py`, 279 lines, one external reference | MED | inventory |
+| 3.3 | `TaskStore._locked()` is the last hand-rolled flock | MED | 1 |
+| 3.6 | Two parallel hook mechanisms | MED | 2 |
+| 4.2 | `skill_contracts.py`, 49 lines, one external reference | MED | inventory |
+| 8.1 | Task health uses a fixed window regardless of cadence | MED | 4 |
+
+Finding 1.1 is the same failure signature as the two bugs found on 2026-08-26 —
+a mechanism that stopped working and said nothing. It is the third instance, and
+the reason Phase 3 exists.
+
+Finding 2.1 predicted that class exactly: *"rename or remove a tool and a guard
+silently stops guarding, with a green suite."* The fix it proposed was applied
+to tool lists only; Phase 3 generalises it.
+
 ## How this is planned
 
 This document specifies the whole programme; it is deliberately **not** one
@@ -74,16 +126,23 @@ The fault is that they share one 2,375-line file and two exceed 250 lines.
 CLAUDE.md directs that further extraction follow the existing pattern rather
 than introduce a new one.
 
+The June plan named the phases **plan / call / dispatch / guard / settle**, and
+`heartbeat.py` already demonstrates the shape with `prepare_task_run` /
+`build_task_guard` / `settle_task_outcome`. That vocabulary is kept — inventing
+a second naming scheme for the same idea is precisely the accretion this
+programme exists to stop.
+
 ```
 homunculus/agent/
     __init__.py      Agent — construction and public API only
     turn.py          TurnContext: the typed state a turn carries
     loop.py          the orchestrator, readable top to bottom
-    prompt.py        system-prompt assembly and cache layering
-    dispatch.py      tool dispatch
-    injections.py    per-iteration context maintenance
-    reply.py         finalisation
+    plan.py          messages, system prompt, tool choice
+    dispatch.py      tool execution, history eviction and trimming
+    settle.py        finalisation and compaction
 ```
+
+`call` stays in `llm.py`; `guard` becomes the registry in Phase 2.
 
 The load-bearing move is `TurnContext`. Phases currently communicate through
 mutations on `self` plus passed-around locals. The state is smaller than it
@@ -231,10 +290,16 @@ is pinned before the move that threatens it.
   programme changes it.
 - **Coverage of moved code.** Package coverage is 70.8%. Any PR moving code must
   not lower coverage of the files it touches.
+- **The June verification protocol applies unchanged.** After every step:
+  pytest at parity, ruff clean, `tsc --noEmit` clean, a container smoke test
+  (build, `/api/config` 200, a real chat turn completes, a clean heartbeat
+  tick), and `git log --follow` on moved files to confirm history survived.
 
 ## Non-goals
 
-- The React console (`web/`, ~16.7k lines of TS/TSX) is out of scope.
+- The React console (`web/`, ~16.7k lines of TS/TSX) is not refactored. Adding
+  a build check to CI is in scope and cheap — finding 5.1 — because 16,698
+  lines currently ship with no automated check at all.
 - No capability, tool, skill or transport is removed.
 - `security.py` and `doctor.py` keep their current shape.
 - No model or provider-chain change. The chain is settled.
