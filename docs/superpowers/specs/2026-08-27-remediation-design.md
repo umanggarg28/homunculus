@@ -102,6 +102,34 @@ Finding 2.1 predicted that class exactly: *"rename or remove a tool and a guard
 silently stops guarding, with a green suite."* The fix it proposed was applied
 to tool lists only; Phase 3 generalises it.
 
+## New finding — grounded but not localised (HIGH)
+
+Observed live 2026-08-27. A calendar invitation reached `gmail_search` rendered
+in the organiser's timezone:
+
+```
+Online Interview (CGJOB937) @ Thu Aug 27, 2026 3:30am
+```
+
+The model recorded `event_at: "2026-08-27T03:30:00"` — no offset. The grounding
+guard passed correctly, because `3:30` genuinely appears in the source. The
+harness then interpreted the naive timestamp as user-local, so an event at
+13:00 IST became a check-in at 01:30 IST, nine and a half hours early, and the
+task closed itself as complete. No reminder remained for the real event.
+
+The delivered text compounded it: "coming up in about 2 hours (03:30 IST)". The
+harness asserted a timezone it had never established.
+
+**Grounding verifies provenance, not frame of reference.** A time is meaningless
+without a zone, and `record_commitment` accepts naive datetimes. The fix belongs
+with the other time handling: require an offset, or derive one from the source
+and refuse when neither is available — a naive time from an external document is
+not a fact, it is half a fact. Nothing downstream should stamp a zone it did not
+read.
+
+Assigned to Phase 5 alongside the other time and guard work, and a regression
+test belongs in Phase 0 since it is reproducible from the recorded trace.
+
 ## How this is planned
 
 This document specifies the whole programme; it is deliberately **not** one
