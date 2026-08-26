@@ -4,6 +4,19 @@ Working state for resuming the remediation programme. The design lives in
 `2026-08-27-remediation-design.md`; this file records where we stopped and the
 conventions in force.
 
+## Required reading before resuming
+
+The repo already contains the diagnosis and most of the backlog. Read these
+before touching anything:
+
+- `docs/CODE_REVIEW_2026_08_18.md` — severity-graded review of the package.
+  Eight findings still open; three are HIGH and are folded into the phases.
+- `docs/CORE_REFACTOR_PLAN.md` — the June decomposition, executed as PRs
+  #237–#240. Its phase vocabulary and verification protocol are inherited by
+  this programme rather than replaced.
+- `docs/superpowers/specs/2026-08-27-remediation-design.md` — the design, with
+  the triage mapping every inherited finding to a phase.
+
 ## Where we are
 
 Brainstorming is complete and the outline is approved:
