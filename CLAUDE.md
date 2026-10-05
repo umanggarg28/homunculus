@@ -122,3 +122,17 @@ inside that directory, not `uv`.
   `core.py` (~2.2k lines), `heartbeat.py` (~1.6k lines) — both have thin
   orchestrators over named phases already; further extraction should follow
   that same pattern rather than introducing a different structure.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues for `umanggarg28/homunculus`, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
