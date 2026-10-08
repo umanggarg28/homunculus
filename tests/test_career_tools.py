@@ -16,7 +16,7 @@ def _wiki(tmp_path, monkeypatch):
     monkeypatch.setenv("HOMUNCULUS_CAREER_DIR", str(tmp_path))
     (tmp_path / "CAREER-CONTEXT.md").write_text(
         "# Career Context\n\n## Personal\nName: Umang Garg\n\n"
-        "## Visa\nH1-B cap-exempt, 3 of 6 years used.\n",
+        "## Visa\nFIXTURE-VISA-STATUS, transfer only.\n",
         encoding="utf-8",
     )
     (tmp_path / "cv.md").write_text(
@@ -28,7 +28,7 @@ def _wiki(tmp_path, monkeypatch):
 def test_career_context_reads_both_files(tmp_path, monkeypatch):
     _wiki(tmp_path, monkeypatch)
     out = career.career_context()
-    assert "H1-B cap-exempt" in out
+    assert "FIXTURE-VISA-STATUS" in out
     assert "PictorLabs.ai" in out
     assert "[CAREER-CONTEXT.md]" in out and "[cv.md]" in out
 
@@ -36,7 +36,7 @@ def test_career_context_reads_both_files(tmp_path, monkeypatch):
 def test_career_context_section_filter(tmp_path, monkeypatch):
     _wiki(tmp_path, monkeypatch)
     out = career.career_context("visa")
-    assert "H1-B cap-exempt" in out
+    assert "FIXTURE-VISA-STATUS" in out
     assert "PictorLabs" not in out
 
 
@@ -45,11 +45,11 @@ def test_section_filter_matches_body_not_just_heading(tmp_path, monkeypatch):
     Situation' in the real wiki — a heading-only filter found nothing."""
     monkeypatch.setenv("HOMUNCULUS_CAREER_DIR", str(tmp_path))
     (tmp_path / "CAREER-CONTEXT.md").write_text(
-        "## The Situation\nVisa: H1-B cap-exempt.\n\n## Other\nUnrelated.\n",
+        "## The Situation\nVisa: FIXTURE-VISA-STATUS.\n\n## Other\nUnrelated.\n",
         encoding="utf-8",
     )
     out = career.career_context("visa")
-    assert "H1-B cap-exempt" in out
+    assert "FIXTURE-VISA-STATUS" in out
     assert "Unrelated" not in out
 
 
@@ -137,7 +137,7 @@ def _plan_env(tmp_path, monkeypatch):
         "| | |\n|--|--|\n"
         "| **Name** | Umang Garg |\n"
         "| **Email** | umanggarg28@gmail.com |\n"
-        "| **Phone** | +91 9717182251 |\n"
+        "| **Phone** | +1 555 010 0199 |\n"
         "| **LinkedIn** | linkedin.com/in/umanggarg28 |\n",
         encoding="utf-8",
     )
@@ -235,7 +235,7 @@ def test_draft_answer_select_requires_exact_option(tmp_path, monkeypatch):
 
 
 def test_visa_and_eeo_questions_are_human_only(tmp_path, monkeypatch):
-    """Live failure 2026-07-06: the wiki says 'H1-B transfer, no
+    """Live failure 2026-07-06: the wiki says 'visa transfer, no
     lottery' and the model rounded it to 'No sponsorship required' —
     false on a real form. Legal/EEO questions never enter drafting."""
     _plan_env(tmp_path, monkeypatch)

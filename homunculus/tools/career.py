@@ -233,7 +233,7 @@ _PERSONAL_ROW_RE = re.compile(r"\|\s*\*\*(?P<key>[^*|]+)\*\*\s*\|\s*(?P<val>[^|]
 #: Questions the model must NEVER answer, even with options in hand.
 #: Two categories: (1) visa/work-authorization and EEO/demographic
 #: self-identification — a wrong answer is a legal misrepresentation
-#: (the observed failure: the wiki says "H1-B transfer, no lottery"
+#: (the observed failure: the wiki says "visa transfer, no lottery"
 #: and the model rounded that to "No sponsorship required", which is
 #: false); (2) the applicant's history with this specific company
 #: ("interviewed here before?", "referred by anyone?", "how did you
