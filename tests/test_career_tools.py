@@ -15,12 +15,12 @@ career = load_real_tool_submodule("career")
 def _wiki(tmp_path, monkeypatch):
     monkeypatch.setenv("HOMUNCULUS_CAREER_DIR", str(tmp_path))
     (tmp_path / "CAREER-CONTEXT.md").write_text(
-        "# Career Context\n\n## Personal\nName: Umang Garg\n\n"
+        "# Career Context\n\n## Personal\nName: Jane Doe\n\n"
         "## Visa\nFIXTURE-VISA-STATUS, transfer only.\n",
         encoding="utf-8",
     )
     (tmp_path / "cv.md").write_text(
-        "# CV\n\n## Work Experience\nPictorLabs.ai — Full Stack Developer 2\n",
+        "# CV\n\n## Work Experience\nExample Corp: Software Engineer\n",
         encoding="utf-8",
     )
 
@@ -29,7 +29,7 @@ def test_career_context_reads_both_files(tmp_path, monkeypatch):
     _wiki(tmp_path, monkeypatch)
     out = career.career_context()
     assert "FIXTURE-VISA-STATUS" in out
-    assert "PictorLabs.ai" in out
+    assert "Example Corp" in out
     assert "[CAREER-CONTEXT.md]" in out and "[cv.md]" in out
 
 
@@ -37,7 +37,7 @@ def test_career_context_section_filter(tmp_path, monkeypatch):
     _wiki(tmp_path, monkeypatch)
     out = career.career_context("visa")
     assert "FIXTURE-VISA-STATUS" in out
-    assert "PictorLabs" not in out
+    assert "Example Corp" not in out
 
 
 def test_section_filter_matches_body_not_just_heading(tmp_path, monkeypatch):
@@ -135,14 +135,14 @@ def _plan_env(tmp_path, monkeypatch):
     (tmp_path / "CAREER-CONTEXT.md").write_text(
         "## Personal\n\n"
         "| | |\n|--|--|\n"
-        "| **Name** | Umang Garg |\n"
-        "| **Email** | umanggarg28@gmail.com |\n"
+        "| **Name** | Jane Doe |\n"
+        "| **Email** | jane.doe@example.com |\n"
         "| **Phone** | +1 555 010 0199 |\n"
-        "| **LinkedIn** | linkedin.com/in/umanggarg28 |\n",
+        "| **LinkedIn** | linkedin.com/in/jane-doe-example |\n",
         encoding="utf-8",
     )
     (tmp_path / "resume").mkdir()
-    (tmp_path / "resume" / "UmangGarg-Resume.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "resume" / "JaneDoe-Resume.pdf").write_bytes(b"%PDF-1.4 fake")
     from homunculus.tools import _helpers
 
     monkeypatch.setattr(_helpers, "WORKSPACE_ROOT", tmp_path / "ws")
@@ -179,10 +179,10 @@ def test_prepare_application_fills_facts_never_guesses(tmp_path, monkeypatch):
     import json
     plan = json.loads((tmp_path / "ws" / "applications" / "acme-77.json").read_text())
     by_label = {f["label"]: f for f in plan["fields"]}
-    assert by_label["First Name"]["value"] == "Umang"
+    assert by_label["First Name"]["value"] == "Jane"
     assert by_label["First Name"]["source"] == "wiki"
-    assert by_label["Email"]["value"] == "umanggarg28@gmail.com"
-    assert by_label["Resume/CV"]["value"].endswith("UmangGarg-Resume.pdf")
+    assert by_label["Email"]["value"] == "jane.doe@example.com"
+    assert by_label["Resume/CV"]["value"].endswith("JaneDoe-Resume.pdf")
     assert by_label["Why us?"]["value"] is None             # model's job, later
     assert by_label["Open to office 2 days/week?"]["value"] is None  # model may pre-choose, human confirms
     assert by_label["Open to office 2 days/week?"]["options"] == ["Yes", "No"]
@@ -235,9 +235,9 @@ def test_draft_answer_select_requires_exact_option(tmp_path, monkeypatch):
 
 
 def test_visa_and_eeo_questions_are_human_only(tmp_path, monkeypatch):
-    """Live failure 2026-07-06: the wiki says 'visa transfer, no
-    lottery' and the model rounded it to 'No sponsorship required' —
-    false on a real form. Legal/EEO questions never enter drafting."""
+    """A model can round a nuanced visa status in the career wiki to
+    'No sponsorship required', which is false on a real form. Legal and
+    EEO questions never enter drafting."""
     _plan_env(tmp_path, monkeypatch)
     fixture = dict(_GH_FIXTURE)
     fixture["questions"] = list(fixture["questions"]) + [
@@ -256,11 +256,10 @@ def test_visa_and_eeo_questions_are_human_only(tmp_path, monkeypatch):
 
 
 def test_company_history_questions_are_human_only(tmp_path, monkeypatch):
-    """Live failure 2026-07-06: 'Have you ever interviewed at Anthropic
-    before?' got a confident 'No' from BOTH the weak loop model and the
-    strong drafting model — no document can contain the fact, and the
-    UNKNOWN instruction doesn't hold. Company-history questions are
-    reserved for the human, same as visa/EEO."""
+    """No document can say whether the applicant has interviewed at a
+    company before, yet models answer that question confidently.
+    Company-history questions are reserved for the human, same as
+    visa and EEO."""
     _plan_env(tmp_path, monkeypatch)
     fixture = dict(_GH_FIXTURE)
     fixture["questions"] = list(fixture["questions"]) + [
