@@ -16,8 +16,8 @@ from homunculus.security import (
 )
 
 CV = (
-    "# Umang Garg — Career Context\n## Personal\nEmail: someone@example.com\n"
-    "## Work History\n### PictorLabs.ai — Full Stack Developer 2\n"
+    "# Jane Doe: Career Context\n## Personal\nEmail: someone@example.com\n"
+    "## Work History\n### Example Corp: Software Engineer\n"
 )
 
 
@@ -28,8 +28,8 @@ def test_redact_secrets_does_not_touch_personal_data():
 
 def test_career_context_result_is_withheld_from_the_log():
     out = loggable_tool_result("career_context", CV)
-    assert "Umang" not in out
-    assert "PictorLabs" not in out
+    assert "Jane Doe" not in out
+    assert "Example Corp" not in out
     assert "example.com" not in out
 
 
@@ -77,8 +77,8 @@ def test_request_trace_withholds_a_sensitive_tool_message():
         {"role": "user", "content": "what is my title?"},
         {"role": "tool", "tool_call_id": "c1", "content": CV, "_tool": "career_context"},
     ])
-    assert "PictorLabs" not in out
-    assert "Umang" not in out
+    assert "Example Corp" not in out
+    assert "Jane Doe" not in out
     assert "withheld from the log" in out
 
 
