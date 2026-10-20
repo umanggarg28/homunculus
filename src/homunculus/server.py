@@ -10,7 +10,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from homunculus import loop
+from homunculus.activity import ActivityLog
 from homunculus.model import Message, Model, ModelError
+from homunculus.tools import Tool
 
 
 class ChatRequest(BaseModel):
@@ -22,7 +24,7 @@ def sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-def create_app(model: Model) -> FastAPI:
+def create_app(model: Model, tools: list[Tool], activity: ActivityLog) -> FastAPI:
     app = FastAPI(title="Homunculus")
     # One operator, one conversation, kept in memory for the life of the process.
     history: list[Message] = []
@@ -35,7 +37,7 @@ def create_app(model: Model) -> FastAPI:
         async def events() -> AsyncIterator[str]:
             async with turn:
                 try:
-                    async for chunk in loop.run(model, history, request.message):
+                    async for chunk in loop.run(model, tools, activity, history, request.message):
                         yield sse("delta", {"text": chunk})
                 except ModelError as error:
                     yield sse("error", {"message": str(error)})

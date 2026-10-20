@@ -2,7 +2,7 @@
 
 An always-on personal agent that works toward your goals in its own sandbox and asks before anything leaves it.
 
-> **Status:** early build. The first slice is in place: chat with the model over an HTTP API, streamed word by word. The plan and its progress are tracked in the [spec](https://github.com/umanggarg28/homunculus/issues/2) and its tickets.
+> **Status:** early build. In place: chat with the model over an HTTP API, streamed word by word, and file tools in the agent's own workspace, each call checked by the gate. The plan and its progress are tracked in the [spec](https://github.com/umanggarg28/homunculus/issues/2) and its tickets.
 
 ## How it works
 
@@ -11,7 +11,11 @@ flowchart LR
   You -->|POST /api/chat| server
   server --> loop
   loop -->|conversation| model
-  model -->|streamed reply| loop
+  model -->|streamed reply or tool call| loop
+  loop -->|every tool call| gate
+  gate -->|allowed| tools["file tools"]
+  tools -->|result| loop
+  loop -->|every step| activity["activity log"]
   loop -->|chunks| server
   server -->|server-sent events| You
   model <-->|HTTPS| OpenRouter
@@ -20,16 +24,21 @@ flowchart LR
 | Module | Job |
 |---|---|
 | `server` | HTTP API. Turns the reply into a stream of server-sent events. |
-| `loop` | Builds the conversation for the model and streams back its reply. |
+| `loop` | Asks the model, runs the tools it asks for, repeats until it answers in words. |
 | `model` | One streaming call to the model through OpenRouter. |
+| `gate` | Decides for every tool call whether it may run. Anything it cannot read is refused. |
+| `tools` | `read`, `write`, `edit`, `list` and `search`, inside the agent's workspace only. |
+| `activity` | An append-only record of every step, written by code, out of reach of every tool. |
 
-The full design, including the modules still to come (gate, sandbox, skills, wiki, waker), is in [ARCHITECTURE.md](ARCHITECTURE.md). [LEARN.md](LEARN.md) teaches the code one module at a time.
+The full design, including the modules still to come (sandbox, skills, wiki, waker), is in [ARCHITECTURE.md](ARCHITECTURE.md). [LEARN.md](LEARN.md) teaches the code one module at a time.
 
 ## Privacy
 
 Every model request asks OpenRouter to route only to providers that keep no copy of the request and do not train on it (`provider: {"zdr": true, "data_collection": "deny"}`). It is fixed in code with no setting to turn it off, and a test fails if it is ever missing.
 
 The server listens on `127.0.0.1` only, so nothing else on your network can reach it.
+
+The agent's files live in a data directory outside this repository, `~/homunculus-data` by default (set `HOMUNCULUS_HOME` to change it). Its tools can only touch the `workspace` folder inside it: any path that leads outside, including through `..` or a symbolic link, is refused.
 
 ## Quick start
 
@@ -63,6 +72,8 @@ data: {}
 ```
 
 If the request fails, the stream ends with an `error` event that says why, for example `Model request failed (401): ...` for a wrong key.
+
+To see a tool in use, send `"Save a note called tea.md that says I like green tea."`. The file appears in `~/homunculus-data/workspace/`, and the step is recorded in `~/homunculus-data/activity.jsonl`.
 
 ## Development
 

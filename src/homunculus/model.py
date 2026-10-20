@@ -2,12 +2,23 @@
 
 import json
 from collections.abc import AsyncIterator
-from typing import Protocol
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 import httpx
 
-# A chat message in the OpenAI-compatible format: {"role": ..., "content": ...}.
-Message = dict[str, str]
+# A chat message in the Chat Completions format: {"role": ..., "content": ...}, plus
+# "tool_calls" on an assistant message and "tool_call_id" on a tool result.
+Message = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """The model asking to use a tool. `arguments` is JSON text, exactly as the model wrote it."""
+
+    id: str
+    name: str
+    arguments: str
 
 
 class ModelError(Exception):
@@ -15,8 +26,13 @@ class ModelError(Exception):
 
 
 class Model(Protocol):
-    def stream(self, messages: list[Message]) -> AsyncIterator[str]:
-        """Send the conversation and yield the reply as it arrives, chunk by chunk."""
+    def stream(
+        self, messages: list[Message], tools: list[dict[str, Any]]
+    ) -> AsyncIterator[str | ToolCall]:
+        """Send the conversation and the tools on offer.
+
+        Yields the reply text as it arrives, chunk by chunk, and each complete tool call.
+        """
         ...
 
 
@@ -33,13 +49,17 @@ class OpenRouterModel:
         self._api_key = api_key
         self._client = client or httpx.AsyncClient(timeout=120)
 
-    async def stream(self, messages: list[Message]) -> AsyncIterator[str]:
-        body = {
+    async def stream(
+        self, messages: list[Message], tools: list[dict[str, Any]]
+    ) -> AsyncIterator[str | ToolCall]:
+        body: dict[str, Any] = {
             "model": MODEL_ID,
             "messages": messages,
             "stream": True,
             "provider": PRIVACY_ROUTING,
         }
+        if tools:
+            body["tools"] = tools
         headers = {"Authorization": f"Bearer {self._api_key}"}
         async with self._client.stream(
             "POST", OPENROUTER_CHAT_URL, json=body, headers=headers
@@ -49,6 +69,10 @@ class OpenRouterModel:
                 raise ModelError(
                     f"Model request failed ({response.status_code}): {_error_message(response)}"
                 )
+            # A tool call arrives in fragments spread over several chunks, keyed by its
+            # index: the id and name first, then the arguments a few characters at a time.
+            # They are joined here and handed over whole once the stream ends.
+            calls: dict[int, dict[str, str]] = {}
             # The reply arrives as server-sent events: "data: {json}" lines, ending
             # with "data: [DONE]". Lines starting with ":" are keep-alive comments.
             async for line in response.aiter_lines():
@@ -56,13 +80,24 @@ class OpenRouterModel:
                     continue
                 data = line.removeprefix("data: ")
                 if data == "[DONE]":
-                    return
+                    break
                 chunk = json.loads(data)
                 if "error" in chunk:
                     raise ModelError(f"Model stopped mid-reply: {chunk['error']['message']}")
                 for choice in chunk["choices"]:
-                    if text := choice["delta"].get("content"):
+                    delta = choice["delta"]
+                    if text := delta.get("content"):
                         yield text
+                    for fragment in delta.get("tool_calls") or []:
+                        call = calls.setdefault(
+                            fragment["index"], {"id": "", "name": "", "arguments": ""}
+                        )
+                        call["id"] = fragment.get("id") or call["id"]
+                        function = fragment.get("function") or {}
+                        call["name"] = function.get("name") or call["name"]
+                        call["arguments"] += function.get("arguments") or ""
+            for _, call in sorted(calls.items()):
+                yield ToolCall(id=call["id"], name=call["name"], arguments=call["arguments"])
 
 
 def _error_message(response: httpx.Response) -> str:
