@@ -6,18 +6,56 @@ There is one chapter per module, in the order the modules were built. Every chap
 
 1. **The problem**: why the module exists.
 2. **The idea**: the technique it uses and where that comes from.
-3. **A picture**: one diagram.
+3. **A picture**: one plain-text diagram.
 4. **One value, traced**: a real input followed through every function, with each argument and return value shown.
 5. **The test**: the test that defines what the module must do, read in plain English.
 6. **Change it yourself**: one small edit you make by hand, to prove to yourself that you understand it.
 
 Read a chapter with the code open beside it. Each one takes about fifteen minutes.
 
+Diagrams are plain text, so they read the same in any editor.
+
 ## Contents
 
+0. [The whole journey](#0-the-whole-journey)
 1. [The loop](#1-the-loop)
 2. [The model](#2-the-model)
 3. [The server](#3-the-server)
+
+---
+
+## 0. The whole journey
+
+Before the chapters, here is one message, `"Hello"`, going all the way through the program and back.
+
+```
+  you (curl)
+     │  POST /api/chat   {"message": "Hello"}
+     ▼
+┌──────────────┐
+│  server.py   │  chat()   takes the request, holds the lock
+└──────┬───────┘
+       │  "Hello"
+       ▼
+┌──────────────┐
+│   loop.py    │  run()    builds the list the model will read
+└──────┬───────┘
+       │  [system message, user message "Hello"]
+       ▼
+┌──────────────┐           HTTPS
+│   model.py   │  stream() ───────────►  OpenRouter  ──►  glm-5.3-flash
+└──────┬───────┘  ◄───────────────────  "Good ", "morning."
+       │  "Good ", "morning."   (one piece at a time)
+       ▼
+    loop.py  ──►  server.py  ──►  you
+                                  event: delta  {"text": "Good "}
+                                  event: delta  {"text": "morning."}
+                                  event: done   {}
+```
+
+An everyday picture. The **server** is the waiter: it takes your order at the door and brings the food back. The **loop** is the head chef: it decides what the cook needs to know, including everything you ordered before. The **model** is the phone line to an outside cook: it reads each dish out as soon as it is ready. The waiter never phones the cook, and the cook never sees you.
+
+The chapters follow the build order (loop, model, server). Each one ends with a table or trace of exactly what its code does to this message.
 
 ---
 
@@ -47,13 +85,18 @@ The full agent loop has a second half, which comes in a later chapter. The model
 
 ### A picture
 
-```mermaid
-flowchart TD
-  A["text from you"] --> B["build messages:<br/>system + history + your message"]
-  B --> C["model.stream(messages)"]
-  C -->|"each chunk"| D["yield chunk to the caller<br/>and keep a copy"]
-  D --> C
-  C -->|"stream ends"| E["add your message and the full reply to history"]
+```
+  text from you
+       │
+       ▼
+  build messages:  system + history + your message
+       │
+       ▼
+  model.stream(messages) ──► each chunk ──► keep a copy in parts, yield it to the caller
+       │                         ▲                    │
+       │                         └────── next? ───────┘
+       ▼  (stream ends)
+  add your message and the full reply to history
 ```
 
 ### One value, traced
@@ -91,6 +134,28 @@ model.stream(messages) -> "Noted."      # yields 1 chunk, then ends
 ```
 
 **Inside the `async for`:** for that chunk, `parts.append("Noted.")` keeps a copy, so `parts == ["Noted."]`, a list of str. Then `yield "Noted."` hands the chunk to whoever called `run`. That is the server, in chapter 3. The chunk leaves the loop **before** the reply is finished. This is what makes the words appear as they are written.
+
+**Who pulls from whom.** `run` is a generator (it contains `yield`), and so is `model.stream`. A generator does nothing until someone asks it for its next value. Three generators are chained, and each asks the one below:
+
+```
+FastAPI ──"next?"──► events()   (server)
+                       │ "next?"
+                       ▼
+                     run()      (loop)
+                       │ "next?"
+                       ▼
+                     stream()   (model) ──► OpenRouter
+```
+
+When a reply arrives in two pieces, `"Good "` and `"morning."`, each pull goes like this:
+
+| Pull | `chunk` | `parts` after `append` | `yield` sends up |
+|---|---|---|---|
+| 1st | `"Good "` | `["Good "]` | `"Good "`, which the server turns into a `delta` event |
+| 2nd | `"morning."` | `["Good ", "morning."]` | `"morning."`, a second `delta` event |
+| 3rd | stream ends | unchanged | nothing; the `async for` finishes |
+
+`parts` is the loop's private notepad. It exists only so the full reply can be glued together at the end, and nothing outside `run` ever sees it.
 
 **Last line: `history += [user_message, {"role": "assistant", "content": "".join(parts)}]`**
 
@@ -195,20 +260,19 @@ Both become a `ModelError`, whose message is written to be shown to you.
 
 ### A picture
 
-```mermaid
-sequenceDiagram
-  participant L as loop
-  participant M as OpenRouterModel
-  participant O as OpenRouter
-  L->>M: stream(messages)
-  M->>O: POST /chat/completions (stream, provider routing)
-  O-->>M: ": OPENROUTER PROCESSING"
-  O-->>M: data: {"choices":[{"delta":{"content":"Good "}}]}
-  M-->>L: "Good "
-  O-->>M: data: {"choices":[{"delta":{"content":"morning."}}]}
-  M-->>L: "morning."
-  O-->>M: data: [DONE]
-  M-->>L: (iterator ends)
+```
+ loop                      OpenRouterModel                    OpenRouter
+  │  stream(messages)            │                                 │
+  │ ───────────────────────────► │  POST /chat/completions         │
+  │                              │  (stream, provider routing)     │
+  │                              │ ──────────────────────────────► │
+  │                              │ ◄── : OPENROUTER PROCESSING ─── │
+  │                              │ ◄── data: {...content: "Good "} │
+  │ ◄────────── "Good " ──────── │                                 │
+  │                              │ ◄── data: {...content: "morning."}
+  │ ◄───────── "morning." ────── │                                 │
+  │                              │ ◄── data: [DONE] ────────────── │
+  │ ◄──── (iterator ends) ────── │                                 │
 ```
 
 ### One value, traced
@@ -240,7 +304,25 @@ body = {
 | `'data: {"choices": [{"delta": {"content": "morning."}}]}'` | same | `"morning."` |
 | `"data: [DONE]"` | `data == "[DONE]"`, so `return` | iterator ends |
 
-Look at the third row closely. `json.loads(data)` returns `{"choices": [{"delta": {"content": "Good "}}]}`, so `chunk["choices"][0]["delta"]["content"]` is `"Good "`. The code reads it with `.get("content")` because some chunks carry a delta with no text, such as the final one. `if text := ...` skips those.
+Look at the third row closely:
+
+```
+line                        -> 'data: {"choices": [{"delta": {"content": "Good "}}]}'   a str
+line.removeprefix("data: ") -> '{"choices": [{"delta": {"content": "Good "}}]}'        a str, still text
+json.loads(data)            -> {"choices": [{"delta": {"content": "Good "}}]}          a dict, now Python
+```
+
+The shape of `chunk`, and how the code walks into it:
+
+```
+chunk                       dict
+ └─ "choices"               list of 1
+     └─ [0]                 dict          one `choice` in the for loop
+         └─ "delta"         dict          what is new since the last chunk
+             └─ "content"   "Good "       the text
+```
+
+So `chunk["choices"][0]["delta"]["content"]` is `"Good "`. `"choices"` is a list because the API can return several alternative replies at once. This project never asks for more than one. Real chunks also carry fields such as `id`, `model` and `created`, which the code does not read. The code reads it with `.get("content")` because some chunks carry a delta with no text, such as the final one. `if text := ...` skips those.
 
 **Back in the loop**, `"Good "` and then `"morning."` arrive one at a time, and each is passed on to the server the moment it arrives.
 
@@ -314,20 +396,18 @@ A stream ends with exactly one `done` or one `error`, never both.
 
 ### A picture
 
-```mermaid
-sequenceDiagram
-  participant You
-  participant S as server
-  participant L as loop
-  You->>S: POST /api/chat {"message": "Hello"}
-  S->>S: wait for the lock
-  S->>L: run(model, history, "Hello")
-  L-->>S: "Good "
-  S-->>You: event: delta / data: {"text": "Good "}
-  L-->>S: "morning."
-  S-->>You: event: delta / data: {"text": "morning."}
-  S-->>You: event: done / data: {}
-  S->>S: release the lock
+```
+ you                         server                         loop
+  │ POST /api/chat              │                              │
+  │ {"message": "Hello"}        │                              │
+  │ ──────────────────────────► │ wait for the lock            │
+  │                             │ run(model, history, "Hello") │
+  │                             │ ───────────────────────────► │
+  │                             │ ◄──────── "Good " ────────── │
+  │ ◄─ event: delta "Good " ─── │                              │
+  │                             │ ◄──────── "morning." ─────── │
+  │ ◄─ event: delta "morning." ─│                              │
+  │ ◄─ event: done ──────────── │ release the lock             │
 ```
 
 ### One value, traced
@@ -400,3 +480,30 @@ The other server tests say: a reply is streamed as `delta` events followed by `d
 4. Undo the change.
 
 Then try a second change that keeps the tests green. Add a fourth kind of event, `start`, sent once before the first `delta`. Write the test first: copy `test_chat_streams_the_reply_then_signals_done` and expect `("start", {})` at the front of the list. Watch it fail, make it pass, then run the whole suite. You have now changed the API's behaviour the way every change in this project is made.
+
+---
+
+## The whole trip in one table
+
+`"Hello"` and its reply, from creation to the end, across all three modules. Line numbers are in the module named on the left.
+
+```
+where            value                                                what happens to it
+───────────────  ───────────────────────────────────────────────────  ─────────────────────────────
+curl             '{"message": "Hello"}'  (bytes)                      sent
+server  chat     ChatRequest(message="Hello")                         checked; .message read
+server  events   "Hello"                                              handed to loop.run, lock held
+loop    run      {"role": "user", "content": "Hello"}                 wrapped as a message
+loop    run      [system, user]  list of 2                            handed to model.stream
+model   stream   body dict                                            sent as JSON to OpenRouter
+model   stream   {"choices": [{"delta": {"content": "Good "}}]}       parsed from one data line
+model   stream   "Good "                                              yielded up
+loop    run      parts = ["Good "]; yields "Good "                    noted and passed up
+server  events   'event: delta\ndata: {"text": "Good "}\n\n'          sent to your terminal
+   ... the same for "morning." ...
+model   stream   data: [DONE]                                         generator ends
+loop    run      history = [user "Hello", assistant "Good morning."]  saved, only now
+server  events   'event: done\ndata: {}\n\n'                          sent; lock released
+```
+
+Never stored: `SYSTEM_PROMPT` is rebuilt every turn. Gone when `run` ends: `parts`. Never read by the server: `history`, which only the loop writes.
