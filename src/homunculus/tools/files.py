@@ -14,6 +14,11 @@ def _path_parameter(description: str) -> dict[str, Any]:
 MAX_SEARCH_RESULTS = 50
 
 
+def file_tools(workspace: Path) -> list[Tool]:
+    """The five file tools, each confined to `workspace`."""
+    return Files(workspace).tools()
+
+
 class Files:
     def __init__(self, workspace: Path) -> None:
         self._root = workspace.resolve()
@@ -55,7 +60,7 @@ class Files:
                     },
                     "required": ["path"],
                 },
-                self.list,
+                self.list_folder,
             ),
             Tool(
                 "search",
@@ -109,7 +114,7 @@ class Files:
         lines = self._existing_file(arguments["path"]).read_text().splitlines()
         return "\n".join(f"{number}\t{line}" for number, line in enumerate(lines, start=1))
 
-    def list(self, arguments: dict[str, Any]) -> str:
+    def list_folder(self, arguments: dict[str, Any]) -> str:
         folder = self._resolve(arguments["path"])
         if not folder.is_dir():
             raise ToolError(f"{arguments['path']} is not a folder.")

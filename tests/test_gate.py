@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from homunculus.gate import Answer, decide
@@ -23,3 +25,12 @@ def test_a_call_the_gate_cannot_read_is_refused() -> None:
 
 def test_a_file_action_without_a_path_is_refused() -> None:
     assert decide(call("write", '{"content": "hello"}')) is Answer.REFUSE
+
+
+@pytest.mark.parametrize("path", ["../activity.jsonl", "/etc/passwd", "notes/../../secrets.md"])
+def test_a_file_action_aimed_outside_the_workspace_is_refused(path: str) -> None:
+    assert decide(call("write", json.dumps({"path": path, "content": "x"}))) is Answer.REFUSE
+
+
+def test_arguments_that_are_not_an_object_are_refused() -> None:
+    assert decide(call("read", "[]")) is Answer.REFUSE

@@ -2,6 +2,7 @@
 
 import json
 from enum import Enum
+from pathlib import PurePosixPath
 
 from homunculus.model import ToolCall
 
@@ -14,8 +15,7 @@ class Answer(Enum):
     REFUSE = "refuse"  # never run it
 
 
-# Tools that only touch files inside the agent's workspace. The tools themselves
-# refuse any path that leads outside it.
+# Tools that only touch files inside the agent's workspace.
 WORKSPACE_FILE_TOOLS = {"read", "write", "edit", "list", "search"}
 
 
@@ -29,8 +29,18 @@ def decide(call: ToolCall) -> Answer:
 
 def _decide(call: ToolCall) -> Answer:
     arguments = json.loads(call.arguments)
+    if not isinstance(arguments, dict):
+        return Answer.REFUSE
     if call.name in WORKSPACE_FILE_TOOLS:
-        if not isinstance(arguments.get("path"), str):
+        path = arguments.get("path")
+        if not isinstance(path, str) or not _stays_in_workspace(path):
             return Answer.REFUSE
         return Answer.ACT
     return Answer.ASK
+
+
+def _stays_in_workspace(path: str) -> bool:
+    """A relative path with no '..' in it. The file tools also resolve symbolic links,
+    which only they can see, so a path that passes here can still be refused there."""
+    parts = PurePosixPath(path)
+    return not parts.is_absolute() and ".." not in parts.parts

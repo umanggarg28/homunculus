@@ -2,7 +2,6 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 
@@ -34,9 +33,3 @@ class Tool:
                 "parameters": self.parameters,
             },
         }
-
-
-def file_tools(workspace: Path) -> list[Tool]:
-    from homunculus.tools.files import Files
-
-    return Files(workspace).tools()

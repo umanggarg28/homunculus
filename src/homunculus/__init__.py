@@ -9,7 +9,7 @@ import uvicorn
 from homunculus.activity import ActivityLog
 from homunculus.model import OpenRouterModel
 from homunculus.server import create_app
-from homunculus.tools import file_tools
+from homunculus.tools.files import file_tools
 
 PORT = 8765
 

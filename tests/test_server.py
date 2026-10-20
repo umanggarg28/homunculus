@@ -11,7 +11,8 @@ from scripted_model import ScriptedModel, SlowScriptedModel
 from homunculus.activity import ActivityLog
 from homunculus.model import Model, OpenRouterModel
 from homunculus.server import create_app
-from homunculus.tools import Tool, file_tools
+from homunculus.tools import Tool
+from homunculus.tools.files import file_tools
 
 
 def parse_events(body: str) -> list[tuple[str, dict[str, Any]]]:

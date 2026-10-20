@@ -23,6 +23,7 @@ Diagrams are plain text, so they read the same in any editor.
 3. [The server](#3-the-server)
 4. [Tools](#4-tools)
 5. [The gate](#5-the-gate)
+6. [The activity log](#6-the-activity-log)
 
 ---
 
@@ -498,7 +499,7 @@ Then try a second change that keeps the tests green. Add a fourth kind of event,
 
 ## 4. Tools
 
-Code: `src/homunculus/tools/`, and the second half of `src/homunculus/loop.py`. Tests: `tests/test_tools.py`.
+Code: `src/homunculus/tools/` (the `Tool` type in `__init__.py`, the file tools in `files.py`), and the second half of `src/homunculus/loop.py`. Tests: `tests/test_tools.py`.
 
 ### The problem
 
@@ -526,7 +527,7 @@ Then it calls the model again with both added to the list. That is the loop's se
 
 **Few, general tools.** Homunculus has five file tools: `read`, `write`, `edit`, `list` and `search`. Their behaviour follows Anthropic's published memory-tool interface (view a file with numbered lines, create, replace text that appears exactly once). `search` is plain text search, the approach Claude Code takes with its Grep tool, instead of a pre-built index. Anthropic's "Seeing like an agent" notes that every extra tool is one more option the model has to weigh, so the bar for adding one is high. This project caps itself at 20.
 
-**The workspace is a fence.** Every path the model gives is resolved to its real location, following `..` and symbolic links, and refused if it lands outside the workspace folder. The activity log lives outside the workspace, so no tool can reach it.
+**The workspace is a fence, with two layers.** The gate (chapter 5) refuses any path that is absolute or contains `..` before a tool runs. Then the tool resolves the path to its real location, following symbolic links, which only the tool can see, and refuses it if it lands outside the workspace folder. One mistake in either layer is not enough to get out. The activity log lives outside the workspace, so no tool can reach it.
 
 ### A picture
 
@@ -609,7 +610,8 @@ The arguments only become valid JSON once every fragment has arrived. That is wh
 | What happened | What the model sees |
 |---|---|
 | File does not exist | `Error: nope.md does not exist.` |
-| Path leads outside the workspace | `Error: ../outside.md is outside the workspace.` |
+| Path is absolute or contains `..` | `Not done: the gate answered 'refuse' for this action.` |
+| Symbolic link leads outside the workspace | `Error: shortcut.md is outside the workspace.` |
 | Text to edit appears twice | `Error: the text appears 2 times in plan.md; it must appear once.` |
 | A required argument is missing | `Error: write needs the argument 'content'.` |
 | A bug inside the tool | `Error: write failed unexpectedly (TypeError: ...).` |
@@ -617,26 +619,29 @@ The arguments only become valid JSON once every fragment has arrived. That is wh
 ### The test
 
 ```python
-async def test_a_path_outside_the_workspace_is_refused(tmp_path: Path, path: str) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    model = ScriptedModel([[tool_call("write", path=path, content="escaped")], ["Done."]])
+async def test_a_link_that_leads_outside_the_workspace_is_refused(
+    tmp_path: Path, workspace: Path
+) -> None:
+    (tmp_path / "private.md").write_text("secret")
+    (workspace / "shortcut.md").symlink_to(tmp_path / "private.md")
+    model = ScriptedModel([[tool_call("read", path="shortcut.md")], ["Refused."]])
 
-    await run_job(model, workspace, "Write outside")
+    await run_job(model, workspace, "Read the shortcut")
 
-    assert tool_result(model) == f"Error: {path} is outside the workspace."
-    assert not (tmp_path / "outside.md").exists()
+    assert tool_result(model) == "Error: shortcut.md is outside the workspace."
 ```
 
-It runs three times, with `path` set to `../outside.md`, `/tmp/outside.md` and `notes/../../outside.md`. In plain English: "When the model asks to write to a path that leads out of the workspace, nothing is written there and the model is told why."
+In plain English: "If the workspace holds a shortcut that points to a file outside it, reading through the shortcut is refused, and the model is told why." `shortcut.md` looks harmless to the gate, since it has no `..` and is not absolute, so this is the case only the tool's own fence can catch.
 
-`tool_result(model)` reads the last message the model was shown on its second call, which is the `tool` message. So the test checks what the model actually saw, through the loop, the same way it happens for real. A related test makes a symbolic link inside the workspace that points outside it, and checks that reading through the link is refused too.
+`workspace` is a pytest fixture: an empty folder made fresh for each test, with the activity log beside it. `tool_result(model)` reads the last message the model was shown on its second call, which is the `tool` message. So the test checks what the model actually saw, through the loop, the same way it happens for real.
+
+Other tool tests cover each tool, each error in the table above, the gate refusing `../` and absolute paths, the tools refusing them again on their own when called directly, and an attempt to overwrite the activity log through `../activity.jsonl`.
 
 ### Change it yourself
 
 1. In `tools/files.py`, find `_resolve` and change `(self._root / path).resolve()` to `self._root / path`, so the path is no longer resolved.
 2. Run `uv run pytest tests/test_tools.py`.
-3. Three tests fail, including the symbolic-link one. Without resolving, `notes/../../outside.md` looks as if it starts inside the workspace, and the check is fooled. This line is the whole fence.
+3. Three tests fail: the symbolic-link test, and the direct fence test for `../outside.md` and `notes/../../outside.md`. Without resolving, those paths look as if they start inside the workspace, and the check is fooled. The loop tests with the same paths still pass, because the gate refuses them first. That is the two layers working: you broke one, and the other still held.
 4. Undo the change.
 
 ---
@@ -667,7 +672,7 @@ The first four mirror the approval behaviours OpenAI documents for its always-on
 
 **Unknown means ask.** An action that is not in the table is answered `ASK`. New tools are safe by default until someone writes a rule for them.
 
-Today the table has one row with real content: the five workspace file tools are answered `ACT`, because they can only touch the workspace. Approvals for `ASK` arrive in a later ticket. Until then the loop tells the model the action was not done.
+Today the table has one row with real content: the five workspace file tools are answered `ACT` when their path stays in the workspace, and `REFUSE` when it does not. A path stays in the workspace if it is relative and has no `..` part. The tools check again on their own, following symbolic links (chapter 4). Approvals for `ASK` arrive in a later ticket. Until then the loop tells the model the action was not done.
 
 ### A picture
 
@@ -675,13 +680,16 @@ Today the table has one row with real content: the five workspace file tools are
   ToolCall(name, arguments)
            │
            ▼
-   arguments are valid JSON? ── no ──► REFUSE
+   arguments are a valid JSON object? ── no ──► REFUSE
            │ yes
            ▼
-   a workspace file tool? ── yes ──► has a "path" string? ── no ──► REFUSE
+   a workspace file tool? ── yes ──► "path" is a string? ── no ──► REFUSE
            │ no                               │ yes
            ▼                                  ▼
-          ASK                                ACT
+          ASK                     relative, with no ".." part? ── no ──► REFUSE
+                                              │ yes
+                                              ▼
+                                             ACT
 ```
 
 ### One value, traced
@@ -692,13 +700,16 @@ Three calls, three answers:
 decide(ToolCall("call_1", "write", '{"path": "tea.md", "content": "Green"}'))  -> Answer.ACT
 decide(ToolCall("call_2", "send_email", '{"to": "someone@example.com"}'))     -> Answer.ASK
 decide(ToolCall("call_3", "write", '{not json'))                              -> Answer.REFUSE
+decide(ToolCall("call_4", "write", '{"path": "../activity.jsonl", "content": "x"}')) -> Answer.REFUSE
 ```
 
-Following the first: `json.loads` gives `{"path": "tea.md", "content": "Green"}`, a dict. `"write"` is in `WORKSPACE_FILE_TOOLS`, a set of 5 names. `arguments.get("path")` is `"tea.md"`, a str. The answer is `ACT`.
+Following the first: `json.loads` gives `{"path": "tea.md", "content": "Green"}`, a dict. `"write"` is in `WORKSPACE_FILE_TOOLS`, a set of 5 names. `arguments.get("path")` is `"tea.md"`, a str. `_stays_in_workspace("tea.md")` builds `PurePosixPath("tea.md")`, whose `.parts` is `("tea.md",)`, a tuple of 1 with no `".."` and not absolute, so it returns `True`. The answer is `ACT`.
 
 The second: valid JSON, but `"send_email"` is not in the set. The answer is `ASK`. Back in the loop, `_carry_out` skips running it, and the model is shown `Not done: the gate answered 'ask' for this action.`
 
 The third: `json.loads('{not json')` raises `json.JSONDecodeError` inside `_decide`. The `except` in `decide` catches it, and the answer is `REFUSE`.
+
+The fourth: valid JSON and a file tool, but `PurePosixPath("../activity.jsonl").parts` is `("..", "activity.jsonl")`, which contains `".."`. The answer is `REFUSE`, and the activity log is never touched.
 
 **Where answers are used.** The loop reads the answer, and the activity log stores it as text (`answer.value`, such as `"act"`). The model only ever sees the effect: a result, or a "Not done" message.
 
@@ -711,7 +722,7 @@ def test_a_call_the_gate_cannot_read_is_refused() -> None:
 
 In plain English: "If the gate cannot read a request, the request is refused." It is one line, and it guards the most important property of the whole module.
 
-The other gate tests say: each of the five workspace file tools is allowed; an action not in the table asks first; and a file action without a path is refused.
+The other gate tests say: each of the five workspace file tools is allowed; an action not in the table asks first; a file action without a path is refused; a path that is absolute or contains `..` is refused; and arguments that are valid JSON but not an object, such as `[]`, are refused.
 
 ### Change it yourself
 
@@ -719,6 +730,85 @@ The other gate tests say: each of the five workspace file tools is allowed; an a
 2. Run `uv run pytest tests/test_gate.py`.
 3. The cannot-read test fails. Think about what you just did: a request the gate cannot understand would now wait for approval instead of being refused outright, and once approvals exist it could be approved by accident.
 4. Undo the change. Then add a real row: make the gate answer `HAND_OFF` for any tool named `pay`. Write the test first in `tests/test_gate.py`, watch it fail, then add the rule above `return Answer.ASK`.
+
+---
+
+## 6. The activity log
+
+Code: `src/homunculus/activity.py`. Tests: `tests/test_tools.py` and `tests/test_loop.py` (the tests that mention the activity log).
+
+### The problem
+
+An agent that works while you are away has to leave a record you can trust. If the model could write that record, it could also write a wrong one: claim it did something it did not, or leave out something it did. The record has to be written by plain code, at the moment each thing happens, somewhere the model's tools cannot reach.
+
+### The idea
+
+**Append-only JSON Lines.** The log is one file, `activity.jsonl`. Each line is one JSON object, one event. New events are only ever added at the end, and nothing is rewritten. JSON Lines is a common format for logs because it can be read one line at a time and a half-written last line never damages the lines before it.
+
+**Written by code, out of reach.** Only `loop.py` calls `activity.record`. The file sits in the data directory, next to the workspace and outside it, so the file tools' fence (chapters 4 and 5) keeps every tool away from it.
+
+**Record what happened, not what was meant.** An entry is written after the thing it describes: a tool entry after the gate answered and the tool ran or did not, a reply entry after the reply is complete, an error entry when the model call failed.
+
+### A picture
+
+```
+ ~/homunculus-data/
+ ├─ activity.jsonl      written only by loop.py, one line per event
+ └─ workspace/          everything the file tools can touch
+     └─ tea.md
+```
+
+### One value, traced
+
+You send `"Note that I like green tea."` (the trace from chapter 4). Three calls to `activity.record` happen, in this order:
+
+```
+record("message", text="Note that I like green tea.")                        line 30 of loop.py
+record("tool", name="write", arguments='{"path": "tea.md", "content": "Green"}',
+       answer="act", result="Wrote tea.md.")                                 in _carry_out
+record("reply", text="Saved.")                                               line 54 of loop.py
+```
+
+`record(kind, **details)` builds one dict: the current time in UTC, the kind, then every detail passed in. For the second call:
+
+```
+entry = {"time": "2026-10-21T09:15:02.481Z", "kind": "tool", "name": "write",
+         "arguments": "{\"path\": \"tea.md\", \"content\": \"Green\"}",
+         "answer": "act", "result": "Wrote tea.md."}
+```
+
+`json.dumps(entry) + "\n"` turns it into one line of text, and the file is opened in append mode (`"a"`) so the line goes after everything already there. After the turn the file holds 3 lines.
+
+`entries()` reads them back: it splits the file into lines and parses each with `json.loads`, giving a list of 3 dicts. Read `entries()[1]` aloud: "at this time, the tool write was proposed with these arguments; the gate said act; the result was Wrote tea.md."
+
+If the model call had failed instead, the third line would be `{"kind": "error", "error": "Model stopped mid-reply: ..."}`, and there would be no reply line.
+
+### The test
+
+```python
+async def test_no_tool_can_reach_the_activity_log(tmp_path: Path, workspace: Path) -> None:
+    model = ScriptedModel(
+        [[tool_call("write", path="../activity.jsonl", content="forged")], ["Done."]]
+    )
+
+    await run_job(model, workspace, "Rewrite the log")
+
+    entries = ActivityLog(tmp_path / "activity.jsonl").entries()
+    assert [(entry["kind"], entry.get("answer")) for entry in entries] == [
+        ("message", None),
+        ("tool", "refuse"),
+        ("reply", None),
+    ]
+```
+
+In plain English: "If the model tries to overwrite the activity log through the workspace, the gate refuses, and the log still holds exactly the three entries the code wrote, including a record of the refused attempt." The attempt itself is in the log, so you would see that it happened.
+
+### Change it yourself
+
+1. Send a message through the real program (README quick start), then open `~/homunculus-data/activity.jsonl` and read each line aloud the way the trace above does.
+2. In `loop.py`, find `activity.record("error", error=str(error))` inside the `except ModelError` block and delete that line, keeping the `raise`.
+3. Run `uv run pytest tests/test_loop.py`. The failed-reply test fails: the log now shows your message and then nothing, so a reader could not tell the job failed. That silence is exactly what this line exists to prevent.
+4. Undo the change.
 
 ---
 
