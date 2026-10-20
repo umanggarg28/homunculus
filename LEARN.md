@@ -21,6 +21,9 @@ Diagrams are plain text, so they read the same in any editor.
 1. [The loop](#1-the-loop)
 2. [The model](#2-the-model)
 3. [The server](#3-the-server)
+4. [Tools](#4-tools)
+5. [The gate](#5-the-gate)
+6. [The activity log](#6-the-activity-log)
 
 ---
 
@@ -81,7 +84,7 @@ Chat models do not take one string. They take a **list of messages**, each with 
 
 The model reads the whole list every time and writes the next `assistant` message. That is how it "remembers": the program sends the earlier turns again. Nothing is stored inside the model. This message format comes from OpenAI's Chat Completions API, and most providers now accept it, OpenRouter included.
 
-The full agent loop has a second half, which comes in a later chapter. The model can reply with a request to use a tool instead of words. The loop runs the tool, adds the result to the list, and asks again, repeating until the model answers in words. This design is often called a ReAct-style loop, after the paper that named it ("ReAct: Synergizing Reasoning and Acting in Language Models", Yao et al., 2022). Today there are no tools, so the loop runs exactly one model turn and stops. **The stopping rule is already the real one: the loop is done when the model replies in words.**
+The loop has a second half. The model can reply with a request to use a tool instead of words. The loop runs the tool, adds the result to the list, and asks again, repeating until the model answers in words. This design is often called a ReAct-style loop, after the paper that named it ("ReAct: Synergizing Reasoning and Acting in Language Models", Yao et al., 2022). **The stopping rule: the loop is done when the model replies in words.** This chapter follows a message that needs no tool, so the loop goes round once. Chapter 4 follows one that does.
 
 ### A picture
 
@@ -96,29 +99,36 @@ The full agent loop has a second half, which comes in a later chapter. The model
        │                         ▲                    │
        │                         └────── next? ───────┘
        ▼  (stream ends)
-  add your message and the full reply to history
+  did the model ask for tools? ── yes ──► run them, add results, ask the model again (chapter 4)
+       │ no
+       ▼
+  add the whole turn to history
 ```
 
 ### One value, traced
 
 Suppose this is your first message, and you send `"I like tea."`.
 
-**`run(model, history, text)`** is called with:
+**`run(model, tools, activity, history, text)`** is called with:
 
 ```python
+tools = [...]                 # the tools on offer (chapter 4); this message will not use them
+activity = <ActivityLog>      # where every step is recorded (chapter 4)
 history = []                  # a list of message dicts; empty, since this is the first turn
 text = "I like tea."          # a str
 ```
 
-**Line: `user_message = {"role": "user", "content": text}`**
+**Line 29: `turn = [{"role": "user", "content": text}]`**
 
 ```python
-user_message = {"role": "user", "content": "I like tea."}    # one message: a dict with two str keys
+turn = [{"role": "user", "content": "I like tea."}]    # a list of 1 message, a dict with two str keys
 ```
 
-**Line: `messages = [{"role": "system", ...}, *history, user_message]`**
+`turn` collects everything that happens in this one exchange. With tools, it grows to hold the tool calls and their results too.
 
-`*history` spreads the earlier turns into the list. There are none yet, so `messages` is a list of 2 dicts:
+**Line 35: `messages = [{"role": "system", ...}, *history, *turn]`**
+
+`*history` and `*turn` spread their contents into the new list. `history` is empty, so `messages` is a list of 2 dicts:
 
 ```python
 messages[0] = {"role": "system", "content": "You are Homunculus, a personal agent working on behalf of your operator."}
@@ -127,13 +137,13 @@ messages[1] = {"role": "user",   "content": "I like tea."}
 
 Read `messages[1]` aloud: "the user said: I like tea."
 
-**`model.stream(messages)`** returns an async iterator of `str`. Suppose the model's reply arrives in one piece:
+**Line 36: `model.stream(messages, schemas)`** returns an async iterator. Each item is either a piece of text (`str`) or a finished tool request (`ToolCall`, chapter 4). Suppose the model's reply arrives as one piece of text:
 
 ```python
-model.stream(messages) -> "Noted."      # yields 1 chunk, then ends
+model.stream(messages, schemas) -> "Noted."      # yields 1 str, then ends
 ```
 
-**Inside the `async for`:** for that chunk, `parts.append("Noted.")` keeps a copy, so `parts == ["Noted."]`, a list of str. Then `yield "Noted."` hands the chunk to whoever called `run`. That is the server, in chapter 3. The chunk leaves the loop **before** the reply is finished. This is what makes the words appear as they are written.
+**Inside the `async for`:** the item is a `str`, so `parts.append("Noted.")` keeps a copy, so `parts == ["Noted."]`, a list of str. Then `yield "Noted."` hands the chunk to whoever called `run`. That is the server, in chapter 3. The chunk leaves the loop **before** the reply is finished. This is what makes the words appear as they are written.
 
 **Who pulls from whom.** `run` is a generator (it contains `yield`), and so is `model.stream`. A generator does nothing until someone asks it for its next value. Three generators are chained, and each asks the one below:
 
@@ -157,9 +167,13 @@ When a reply arrives in two pieces, `"Good "` and `"morning."`, each pull goes l
 
 `parts` is the loop's private notepad. It exists only so the full reply can be glued together at the end, and nothing outside `run` ever sees it.
 
-**Last line: `history += [user_message, {"role": "assistant", "content": "".join(parts)}]`**
+**Line 42: `reply = {"role": "assistant", "content": "".join(parts)}`**
 
-`"".join(["Noted."])` is `"Noted."`. `history` was `[]` and is now a list of 2 dicts:
+`"".join(["Noted."])` is `"Noted."`, so `reply` is `{"role": "assistant", "content": "Noted."}`. Line 45 appends it, and `turn` is now a list of 2.
+
+**Lines 46-47: `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
+
+**Line 55: `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
 
 ```python
 history[0] = {"role": "user",      "content": "I like tea."}
@@ -179,19 +193,19 @@ messages[3] == {"role": "user",      "content": "What do I like?"}
 
 The model sees the whole exchange and can answer "tea". That is the entire mechanism of conversation memory.
 
-**Where each piece is used.** `parts` exists only inside one call to `run`. `history` outlives the call: the server owns it, and `run` only adds to it. `SYSTEM_PROMPT` is read by `run` and never stored anywhere.
+**Where each piece is used.** `parts` and `calls` are rebuilt on every pass of the `while` loop. `turn` lives for one call to `run`. `history` outlives the call: the server owns it, and `run` only adds to it. `SYSTEM_PROMPT` is read by `run` and never stored anywhere.
 
-**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so the final line never runs and `history` stays as it was. A failed turn leaves no half-finished reply in the conversation.
+**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so line 55 never runs and `history` stays as it was. On the way out, lines 51-53 record the error in the activity log and pass it on. A failed turn leaves no half-finished reply in the conversation.
 
 ### The test
 
 ```python
-async def test_the_next_message_carries_the_earlier_exchange() -> None:
+async def test_the_next_message_carries_the_earlier_exchange(activity: ActivityLog) -> None:
     model = ScriptedModel([["Noted."], ["You said you like tea."]])
     history: list[Message] = []
 
-    await collect(model, history, "I like tea.")
-    await collect(model, history, "What do I like?")
+    await collect(model, history, "I like tea.", activity)
+    await collect(model, history, "What do I like?", activity)
 
     second_call = model.received[1]
     assert [(m["role"], m["content"]) for m in second_call[1:]] == [
@@ -205,11 +219,11 @@ In plain English: "Given a model that will answer 'Noted.' and then 'You said yo
 
 `ScriptedModel` (in `tests/scripted_model.py`) is a stand-in for the real model. It replies from a script and records every message list it receives in `received`. Tests use it so they are instant, free and give the same result every run. It is the only thing faked. The loop under test is the real code.
 
-The other two loop tests say: the loop streams the reply and calls the model exactly once when the model answers in words; and a reply that fails partway leaves `history` empty.
+The other loop tests say: the loop streams the reply and calls the model exactly once when the model answers in words; a reply that fails partway leaves `history` empty; and that failure is recorded in the activity log.
 
 ### Change it yourself
 
-1. In `loop.py`, move the history update so that it runs **before** the model is called. Add `history.append(user)` just above `parts: list[str] = []`.
+1. In `loop.py`, make the history update happen **before** the model is called. Add `history += turn` on a new line just above `try:`.
 2. Run `uv run pytest tests/test_loop.py`.
 3. Two tests fail. Read their failure messages. One shows your message appearing twice in the list sent to the model. The other shows a failed turn leaving your message behind in `history`.
 4. Undo the change and run the tests again to see them pass.
@@ -480,6 +494,321 @@ The other server tests say: a reply is streamed as `delta` events followed by `d
 4. Undo the change.
 
 Then try a second change that keeps the tests green. Add a fourth kind of event, `start`, sent once before the first `delta`. Write the test first: copy `test_chat_streams_the_reply_then_signals_done` and expect `("start", {})` at the front of the list. Watch it fail, make it pass, then run the whole suite. You have now changed the API's behaviour the way every change in this project is made.
+
+---
+
+## 4. Tools
+
+Code: `src/homunculus/tools/` (the `Tool` type in `__init__.py`, the file tools in `files.py`), and the second half of `src/homunculus/loop.py`. Tests: `tests/test_tools.py`.
+
+### The problem
+
+A model on its own can only write text. It cannot save a note, read a file, or look anything up. To be useful as an agent it needs hands. Tools are those hands: ordinary Python functions the model can ask the program to run for it.
+
+The model never runs anything itself. It writes a **request**, and the program decides whether to carry it out (chapter 5), runs it, and shows the model the result.
+
+### The idea
+
+**Tool calling** (also called function calling) is part of the Chat Completions API. Each request can carry a `tools` list. Each tool has a name, a description in plain words, and a JSON Schema saying which arguments it takes. The model reads the descriptions the same way it reads the conversation. When it decides a tool would help, it replies with a `tool_calls` entry instead of, or as well as, text:
+
+```
+{"role": "assistant", "content": "", "tool_calls": [
+   {"id": "call_1", "type": "function",
+    "function": {"name": "write", "arguments": "{\"path\": \"tea.md\", \"content\": \"Green\"}"}}]}
+```
+
+`arguments` is JSON **text**, written by the model. The program answers with a message of a fourth role, `tool`, which points back to the request by its id:
+
+```
+{"role": "tool", "tool_call_id": "call_1", "content": "Wrote tea.md."}
+```
+
+Then it calls the model again with both added to the list. That is the loop's second half.
+
+**Few, general tools.** Homunculus has five file tools: `read`, `write`, `edit`, `list` and `search`. Their behaviour follows Anthropic's published memory-tool interface (view a file with numbered lines, create, replace text that appears exactly once). `search` is plain text search, the approach Claude Code takes with its Grep tool, instead of a pre-built index. Anthropic's "Seeing like an agent" notes that every extra tool is one more option the model has to weigh, so the bar for adding one is high. This project caps itself at 20.
+
+**The workspace is a fence, with two layers.** The gate (chapter 5) refuses any path that is absolute or contains `..` before a tool runs. Then the tool resolves the path to its real location, following symbolic links, which only the tool can see, and refuses it if it lands outside the workspace folder. One mistake in either layer is not enough to get out. The activity log lives outside the workspace, so no tool can reach it.
+
+### A picture
+
+```
+ loop                         model                 gate             tool
+  │ stream(messages, tools)     │                     │                │
+  │ ──────────────────────────► │                     │                │
+  │ ◄── ToolCall(write, ...) ── │                     │                │
+  │ decide(call) ────────────────────────────────────►│                │
+  │ ◄──────────────────────────────────────── ACT ─── │                │
+  │ call({"path": "tea.md", "content": "Green"}) ─────────────────────►│
+  │ ◄──────────────────────────────────────────────── "Wrote tea.md." ─│
+  │ record the step in the activity log               │                │
+  │ stream(messages + call + result, tools)           │                │
+  │ ──────────────────────────► │                     │                │
+  │ ◄──────── "Saved." ──────── │   no tool calls: the loop stops      │
+```
+
+### One value, traced
+
+You send `"Note that I like green tea."`. `tools` holds the five file tools for the workspace `~/homunculus-data/workspace`.
+
+**Lines 27-28** prepare the tools two ways:
+
+```
+by_name = {"read": <Tool>, "write": <Tool>, "edit": <Tool>, "list": <Tool>, "search": <Tool>}   a dict, name to Tool
+schemas = [{"type": "function", "function": {"name": "read", ...}}, ...]                          a list of 5 dicts
+```
+
+`schemas` is what the model sees. `by_name` is how the loop finds the real function later. The model never sees `by_name`.
+
+**First pass of the `while` loop.** `model.stream(messages, schemas)` does not send text this time. The real model streams the request in fragments, and `model.py` glues them together (see the table below). The loop receives one item:
+
+```
+ToolCall(id="call_1", name="write", arguments='{"path": "tea.md", "content": "Green"}')
+```
+
+`isinstance(item, ToolCall)` is true, so it goes into `calls` (line 38), not `parts`. Nothing is yielded to you. `parts` stays `[]`.
+
+**Lines 42-45** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
+
+**Line 46:** `calls` is not empty, so no `break`. **Line 49** hands the call to `_carry_out`:
+
+```
+gate.decide(call)                    -> Answer.ACT                      (chapter 5)
+json.loads(call.arguments)           -> {"path": "tea.md", "content": "Green"}    a dict
+by_name["write"].call({...})         -> "Wrote tea.md."                 a str
+```
+
+`Tool.call` first checks every required argument is present. A missing `content` would come back as `"Error: write needs the argument 'content'."`. Then `Files.write` resolves `tea.md` to `<workspace>/tea.md`, confirms it is inside the workspace, and writes `Green`.
+
+`activity.record("tool", name="write", arguments=..., answer="act", result="Wrote tea.md.")` appends one line to the activity log, and `_carry_out` returns the result.
+
+**Line 50** adds the tool message. `turn` is now a list of 3:
+
+```
+turn[0] = {"role": "user",      "content": "Note that I like green tea."}
+turn[1] = {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", ...}]}
+turn[2] = {"role": "tool",      "tool_call_id": "call_1", "content": "Wrote tea.md."}
+```
+
+Read `turn[2]` aloud: "the result of request call_1 was: Wrote tea.md."
+
+**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so line 47 breaks out. `turn` ends as a list of 4, and line 55 adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
+
+**How the real model streams a tool call.** OpenRouter sends the request in pieces, each tagged with an `index` saying which call it belongs to:
+
+| Chunk's `delta` | `calls[0]` after it |
+|---|---|
+| `tool_calls: [{index: 0, id: "call_1", function: {name: "write", arguments: ""}}]` | `{"id": "call_1", "name": "write", "arguments": ""}` |
+| `tool_calls: [{index: 0, function: {arguments: '{"path": "tea.md", '}}]` | arguments `'{"path": "tea.md", '` |
+| `tool_calls: [{index: 0, function: {arguments: '"content": "Green"}'}}]` | arguments `'{"path": "tea.md", "content": "Green"}'` |
+| `{}` with `finish_reason: "tool_calls"` | unchanged |
+| `[DONE]` | the loop over lines `break`s; one `ToolCall` is yielded |
+
+The arguments only become valid JSON once every fragment has arrived. That is why `model.py` waits for the end of the stream before handing over any `ToolCall`.
+
+**When something goes wrong**, the model is told and the loop carries on. Each of these becomes the `tool` message's content:
+
+| What happened | What the model sees |
+|---|---|
+| File does not exist | `Error: nope.md does not exist.` |
+| Path is absolute or contains `..` | `Not done: the gate answered 'refuse' for this action.` |
+| Symbolic link leads outside the workspace | `Error: shortcut.md is outside the workspace.` |
+| Text to edit appears twice | `Error: the text appears 2 times in plan.md; it must appear once.` |
+| A required argument is missing | `Error: write needs the argument 'content'.` |
+| A bug inside the tool | `Error: write failed unexpectedly (TypeError: ...).` |
+
+### The test
+
+```python
+async def test_a_link_that_leads_outside_the_workspace_is_refused(
+    tmp_path: Path, workspace: Path
+) -> None:
+    (tmp_path / "private.md").write_text("secret")
+    (workspace / "shortcut.md").symlink_to(tmp_path / "private.md")
+    model = ScriptedModel([[tool_call("read", path="shortcut.md")], ["Refused."]])
+
+    await run_job(model, workspace, "Read the shortcut")
+
+    assert tool_result(model) == "Error: shortcut.md is outside the workspace."
+```
+
+In plain English: "If the workspace holds a shortcut that points to a file outside it, reading through the shortcut is refused, and the model is told why." `shortcut.md` looks harmless to the gate, since it has no `..` and is not absolute, so this is the case only the tool's own fence can catch.
+
+`workspace` is a pytest fixture: an empty folder made fresh for each test, with the activity log beside it. `tool_result(model)` reads the last message the model was shown on its second call, which is the `tool` message. So the test checks what the model actually saw, through the loop, the same way it happens for real.
+
+Other tool tests cover each tool, each error in the table above, the gate refusing `../` and absolute paths, the tools refusing them again on their own when called directly, and an attempt to overwrite the activity log through `../activity.jsonl`.
+
+### Change it yourself
+
+1. In `tools/files.py`, find `_resolve` and change `(self._root / path).resolve()` to `self._root / path`, so the path is no longer resolved.
+2. Run `uv run pytest tests/test_tools.py`.
+3. Three tests fail: the symbolic-link test, and the direct fence test for `../outside.md` and `notes/../../outside.md`. Without resolving, those paths look as if they start inside the workspace, and the check is fooled. The loop tests with the same paths still pass, because the gate refuses them first. That is the two layers working: you broke one, and the other still held.
+4. Undo the change.
+
+---
+
+## 5. The gate
+
+Code: `src/homunculus/gate.py`. Tests: `tests/test_gate.py`.
+
+### The problem
+
+An agent that works by itself will sometimes propose something it should not do: send an email you never approved, or delete a file you need. Hoping the model always chooses well is not a safety plan. Safety needs one place, in plain code, that answers "may this run?" for every action, and that a person can read in a minute.
+
+### The idea
+
+**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs (line 60 of `loop.py`). It returns one of five answers:
+
+| Answer | Meaning |
+|---|---|
+| `ACT` | Run it without asking |
+| `ACT_WHEN_ASKED` | Run it only if the operator asked for this action |
+| `ASK` | Wait for the operator's approval |
+| `HAND_OFF` | The operator must do it themselves, such as passwords and payments |
+| `REFUSE` | Never run it |
+
+The first four mirror the approval behaviours OpenAI documents for its always-on agents, Dots. `REFUSE` is this project's own addition, for calls the gate cannot make sense of.
+
+**Fail closed.** If anything goes wrong while deciding, such as arguments that are not valid JSON or a missing path, the answer is `REFUSE`. A broken safety check must never let an action through. `decide` wraps the real rules in `try`/`except Exception` for exactly this reason.
+
+**Unknown means ask.** An action that is not in the table is answered `ASK`. New tools are safe by default until someone writes a rule for them.
+
+Today the table has one row with real content: the five workspace file tools are answered `ACT` when their path stays in the workspace, and `REFUSE` when it does not. A path stays in the workspace if it is relative and has no `..` part. The tools check again on their own, following symbolic links (chapter 4). Approvals for `ASK` arrive in a later ticket. Until then the loop tells the model the action was not done.
+
+### A picture
+
+```
+  ToolCall(name, arguments)
+           │
+           ▼
+   arguments are a valid JSON object? ── no ──► REFUSE
+           │ yes
+           ▼
+   a workspace file tool? ── yes ──► "path" is a string? ── no ──► REFUSE
+           │ no                               │ yes
+           ▼                                  ▼
+          ASK                     relative, with no ".." part? ── no ──► REFUSE
+                                              │ yes
+                                              ▼
+                                             ACT
+```
+
+### One value, traced
+
+Three calls, three answers:
+
+```
+decide(ToolCall("call_1", "write", '{"path": "tea.md", "content": "Green"}'))  -> Answer.ACT
+decide(ToolCall("call_2", "send_email", '{"to": "someone@example.com"}'))     -> Answer.ASK
+decide(ToolCall("call_3", "write", '{not json'))                              -> Answer.REFUSE
+decide(ToolCall("call_4", "write", '{"path": "../activity.jsonl", "content": "x"}')) -> Answer.REFUSE
+```
+
+Following the first: `json.loads` gives `{"path": "tea.md", "content": "Green"}`, a dict. `"write"` is in `WORKSPACE_FILE_TOOLS`, a set of 5 names. `arguments.get("path")` is `"tea.md"`, a str. `_stays_in_workspace("tea.md")` builds `PurePosixPath("tea.md")`, whose `.parts` is `("tea.md",)`, a tuple of 1 with no `".."` and not absolute, so it returns `True`. The answer is `ACT`.
+
+The second: valid JSON, but `"send_email"` is not in the set. The answer is `ASK`. Back in the loop, `_carry_out` skips running it, and the model is shown `Not done: the gate answered 'ask' for this action.`
+
+The third: `json.loads('{not json')` raises `json.JSONDecodeError` inside `_decide`. The `except` in `decide` catches it, and the answer is `REFUSE`.
+
+The fourth: valid JSON and a file tool, but `PurePosixPath("../activity.jsonl").parts` is `("..", "activity.jsonl")`, which contains `".."`. The answer is `REFUSE`, and the activity log is never touched.
+
+**Where answers are used.** The loop reads the answer, and the activity log stores it as text (`answer.value`, such as `"act"`). The model only ever sees the effect: a result, or a "Not done" message.
+
+### The test
+
+```python
+def test_a_call_the_gate_cannot_read_is_refused() -> None:
+    assert decide(call("write", "{not json")) is Answer.REFUSE
+```
+
+In plain English: "If the gate cannot read a request, the request is refused." It is one line, and it guards the most important property of the whole module.
+
+The other gate tests say: each of the five workspace file tools is allowed; an action not in the table asks first; a file action without a path is refused; a path that is absolute or contains `..` is refused; and arguments that are valid JSON but not an object, such as `[]`, are refused.
+
+### Change it yourself
+
+1. In `gate.py`, change `return Answer.REFUSE` inside `decide`'s `except` to `return Answer.ASK`.
+2. Run `uv run pytest tests/test_gate.py`.
+3. The cannot-read test fails. Think about what you just did: a request the gate cannot understand would now wait for approval instead of being refused outright, and once approvals exist it could be approved by accident.
+4. Undo the change. Then add a real row: make the gate answer `HAND_OFF` for any tool named `pay`. Write the test first in `tests/test_gate.py`, watch it fail, then add the rule above `return Answer.ASK`.
+
+---
+
+## 6. The activity log
+
+Code: `src/homunculus/activity.py`. Tests: `tests/test_tools.py` and `tests/test_loop.py` (the tests that mention the activity log).
+
+### The problem
+
+An agent that works while you are away has to leave a record you can trust. If the model could write that record, it could also write a wrong one: claim it did something it did not, or leave out something it did. The record has to be written by plain code, at the moment each thing happens, somewhere the model's tools cannot reach.
+
+### The idea
+
+**Append-only JSON Lines.** The log is one file, `activity.jsonl`. Each line is one JSON object, one event. New events are only ever added at the end, and nothing is rewritten. JSON Lines is a common format for logs because it can be read one line at a time and a half-written last line never damages the lines before it.
+
+**Written by code, out of reach.** Only `loop.py` calls `activity.record`. The file sits in the data directory, next to the workspace and outside it, so the file tools' fence (chapters 4 and 5) keeps every tool away from it.
+
+**Record what happened, not what was meant.** An entry is written after the thing it describes: a tool entry after the gate answered and the tool ran or did not, a reply entry after the reply is complete, an error entry when the model call failed.
+
+### A picture
+
+```
+ ~/homunculus-data/
+ ├─ activity.jsonl      written only by loop.py, one line per event
+ └─ workspace/          everything the file tools can touch
+     └─ tea.md
+```
+
+### One value, traced
+
+You send `"Note that I like green tea."` (the trace from chapter 4). Three calls to `activity.record` happen, in this order:
+
+```
+record("message", text="Note that I like green tea.")                        line 30 of loop.py
+record("tool", name="write", arguments='{"path": "tea.md", "content": "Green"}',
+       answer="act", result="Wrote tea.md.")                                 in _carry_out
+record("reply", text="Saved.")                                               line 54 of loop.py
+```
+
+`record(kind, **details)` builds one dict: the current time in UTC, the kind, then every detail passed in. For the second call:
+
+```
+entry = {"time": "2026-10-21T09:15:02.481Z", "kind": "tool", "name": "write",
+         "arguments": "{\"path\": \"tea.md\", \"content\": \"Green\"}",
+         "answer": "act", "result": "Wrote tea.md."}
+```
+
+`json.dumps(entry) + "\n"` turns it into one line of text, and the file is opened in append mode (`"a"`) so the line goes after everything already there. After the turn the file holds 3 lines.
+
+`entries()` reads them back: it splits the file into lines and parses each with `json.loads`, giving a list of 3 dicts. Read `entries()[1]` aloud: "at this time, the tool write was proposed with these arguments; the gate said act; the result was Wrote tea.md."
+
+If the model call had failed instead, the third line would be `{"kind": "error", "error": "Model stopped mid-reply: ..."}`, and there would be no reply line.
+
+### The test
+
+```python
+async def test_no_tool_can_reach_the_activity_log(tmp_path: Path, workspace: Path) -> None:
+    model = ScriptedModel(
+        [[tool_call("write", path="../activity.jsonl", content="forged")], ["Done."]]
+    )
+
+    await run_job(model, workspace, "Rewrite the log")
+
+    entries = ActivityLog(tmp_path / "activity.jsonl").entries()
+    assert [(entry["kind"], entry.get("answer")) for entry in entries] == [
+        ("message", None),
+        ("tool", "refuse"),
+        ("reply", None),
+    ]
+```
+
+In plain English: "If the model tries to overwrite the activity log through the workspace, the gate refuses, and the log still holds exactly the three entries the code wrote, including a record of the refused attempt." The attempt itself is in the log, so you would see that it happened.
+
+### Change it yourself
+
+1. Send a message through the real program (README quick start), then open `~/homunculus-data/activity.jsonl` and read each line aloud the way the trace above does.
+2. In `loop.py`, find `activity.record("error", error=str(error))` inside the `except ModelError` block and delete that line, keeping the `raise`.
+3. Run `uv run pytest tests/test_loop.py`. The failed-reply test fails: the log now shows your message and then nothing, so a reader could not tell the job failed. That silence is exactly what this line exists to prevent.
+4. Undo the change.
 
 ---
 

@@ -1,0 +1,154 @@
+"""File tools for the agent's workspace."""
+
+from pathlib import Path
+from typing import Any
+
+from homunculus.tools import Tool, ToolError
+
+
+def _path_parameter(description: str) -> dict[str, Any]:
+    return {"type": "string", "description": description}
+
+
+# Enough to answer most questions without flooding the model's context.
+MAX_SEARCH_RESULTS = 50
+
+
+def file_tools(workspace: Path) -> list[Tool]:
+    """The five file tools, each confined to `workspace`."""
+    return Files(workspace).tools()
+
+
+class Files:
+    def __init__(self, workspace: Path) -> None:
+        self._root = workspace.resolve()
+
+    def tools(self) -> list[Tool]:
+        return [
+            Tool(
+                "read",
+                "Read a text file in the workspace. Lines are numbered from 1.",
+                {
+                    "type": "object",
+                    "properties": {"path": _path_parameter("Path relative to the workspace.")},
+                    "required": ["path"],
+                },
+                self.read,
+            ),
+            Tool(
+                "edit",
+                "Replace a piece of text in a workspace file. "
+                "The old text must appear exactly once.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "path": _path_parameter("Path relative to the workspace."),
+                        "old": {"type": "string", "description": "The exact text to replace."},
+                        "new": {"type": "string", "description": "The text to put in its place."},
+                    },
+                    "required": ["path", "old", "new"],
+                },
+                self.edit,
+            ),
+            Tool(
+                "list",
+                "List the folders and files in a workspace folder. Folders end with '/'.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "path": _path_parameter("Folder relative to the workspace; '.' is the top.")
+                    },
+                    "required": ["path"],
+                },
+                self.list_folder,
+            ),
+            Tool(
+                "search",
+                "Find lines containing some text, in every file under a workspace folder. "
+                "Matching ignores case. Each result is 'file:line: text'.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "path": _path_parameter("Folder to search; '.' is the whole workspace."),
+                        "text": {"type": "string", "description": "The text to look for."},
+                    },
+                    "required": ["path", "text"],
+                },
+                self.search,
+            ),
+            Tool(
+                "write",
+                "Create or overwrite a text file in the workspace.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "path": _path_parameter("Path relative to the workspace."),
+                        "content": {"type": "string", "description": "The full file content."},
+                    },
+                    "required": ["path", "content"],
+                },
+                self.write,
+            ),
+        ]
+
+    def write(self, arguments: dict[str, Any]) -> str:
+        target = self._resolve(arguments["path"])
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(arguments["content"])
+        return f"Wrote {arguments['path']}."
+
+    def _resolve(self, path: str) -> Path:
+        """The real location of `path`, which must be inside the workspace."""
+        target = (self._root / path).resolve()
+        if not target.is_relative_to(self._root):
+            raise ToolError(f"{path} is outside the workspace.")
+        return target
+
+    def _existing_file(self, path: str) -> Path:
+        target = self._resolve(path)
+        if not target.is_file():
+            raise ToolError(f"{path} does not exist.")
+        return target
+
+    def read(self, arguments: dict[str, Any]) -> str:
+        lines = self._existing_file(arguments["path"]).read_text().splitlines()
+        return "\n".join(f"{number}\t{line}" for number, line in enumerate(lines, start=1))
+
+    def list_folder(self, arguments: dict[str, Any]) -> str:
+        folder = self._resolve(arguments["path"])
+        if not folder.is_dir():
+            raise ToolError(f"{arguments['path']} is not a folder.")
+        names = sorted(
+            f"{entry.name}/" if entry.is_dir() else entry.name for entry in folder.iterdir()
+        )
+        return "\n".join(names) or "(empty)"
+
+    def edit(self, arguments: dict[str, Any]) -> str:
+        path, old, new = arguments["path"], arguments["old"], arguments["new"]
+        target = self._existing_file(path)
+        text = target.read_text()
+        count = text.count(old)
+        if count != 1:
+            raise ToolError(f"the text appears {count} times in {path}; it must appear once.")
+        target.write_text(text.replace(old, new))
+        return f"Edited {path}."
+
+    def search(self, arguments: dict[str, Any]) -> str:
+        folder = self._resolve(arguments["path"])
+        wanted = arguments["text"].lower()
+        matches: list[str] = []
+        for file in sorted(folder.rglob("*")):
+            if not file.is_file() or not file.resolve().is_relative_to(self._root):
+                continue
+            try:
+                lines = file.read_text().splitlines()
+            except UnicodeDecodeError:
+                continue  # not a text file
+            relative = file.relative_to(self._root).as_posix()
+            for number, line in enumerate(lines, start=1):
+                if wanted in line.lower():
+                    matches.append(f"{relative}:{number}: {line}")
+        if len(matches) > MAX_SEARCH_RESULTS:
+            shown = matches[:MAX_SEARCH_RESULTS]
+            return "\n".join(shown) + f"\n({len(matches) - MAX_SEARCH_RESULTS} more not shown)"
+        return "\n".join(matches) or "No matches."

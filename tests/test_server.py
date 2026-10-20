@@ -1,14 +1,18 @@
 import asyncio
 import json
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi.testclient import TestClient
 from scripted_model import ScriptedModel, SlowScriptedModel
 
+from homunculus.activity import ActivityLog
 from homunculus.model import Model, OpenRouterModel
 from homunculus.server import create_app
+from homunculus.tools import Tool
+from homunculus.tools.files import file_tools
 
 
 def parse_events(body: str) -> list[tuple[str, dict[str, Any]]]:
@@ -28,8 +32,8 @@ def chat(client: TestClient, text: str) -> list[tuple[str, dict[str, Any]]]:
     return parse_events(response.text)
 
 
-def server(model: Model) -> TestClient:
-    return TestClient(create_app(model))
+def server(model: Model, tmp_path: Path, tools: list[Tool] | None = None) -> TestClient:
+    return TestClient(create_app(model, tools or [], ActivityLog(tmp_path / "activity.jsonl")))
 
 
 def openrouter_model(network: Callable[[httpx.Request], httpx.Response]) -> OpenRouterModel:
@@ -47,8 +51,8 @@ def openrouter_stream(*chunks: str) -> str:
     return "\n\n".join(lines) + "\n\n"
 
 
-def test_chat_streams_the_reply_then_signals_done() -> None:
-    events = chat(server(ScriptedModel([["Good ", "morning."]])), "Hello")
+def test_chat_streams_the_reply_then_signals_done(tmp_path: Path) -> None:
+    events = chat(server(ScriptedModel([["Good ", "morning."]]), tmp_path), "Hello")
 
     assert events == [
         ("delta", {"text": "Good "}),
@@ -57,14 +61,14 @@ def test_chat_streams_the_reply_then_signals_done() -> None:
     ]
 
 
-def test_every_model_request_requires_private_providers() -> None:
+def test_every_model_request_requires_private_providers(tmp_path: Path) -> None:
     sent: list[dict[str, Any]] = []
 
     def network(request: httpx.Request) -> httpx.Response:
         sent.append(json.loads(request.content))
         return httpx.Response(200, text=openrouter_stream("Good ", "morning."))
 
-    client = server(openrouter_model(network))
+    client = server(openrouter_model(network), tmp_path)
     first = chat(client, "Hello")
     chat(client, "And again")
 
@@ -75,16 +79,16 @@ def test_every_model_request_requires_private_providers() -> None:
         assert body["stream"] is True
 
 
-def test_a_rejected_request_ends_the_stream_with_a_readable_error() -> None:
+def test_a_rejected_request_ends_the_stream_with_a_readable_error(tmp_path: Path) -> None:
     def network(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": {"code": 401, "message": "No auth credentials"}})
 
-    events = chat(server(openrouter_model(network)), "Hello")
+    events = chat(server(openrouter_model(network), tmp_path), "Hello")
 
     assert events == [("error", {"message": "Model request failed (401): No auth credentials"})]
 
 
-def test_an_error_partway_through_the_reply_is_reported() -> None:
+def test_an_error_partway_through_the_reply_is_reported(tmp_path: Path) -> None:
     failure = {
         "error": {"code": "server_error", "message": "Provider disconnected unexpectedly"},
         "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "error"}],
@@ -94,7 +98,7 @@ def test_an_error_partway_through_the_reply_is_reported() -> None:
         body = f"{openrouter_chunk('Good ')}\n\ndata: {json.dumps(failure)}\n\n"
         return httpx.Response(200, text=body)
 
-    events = chat(server(openrouter_model(network)), "Hello")
+    events = chat(server(openrouter_model(network), tmp_path), "Hello")
 
     assert events == [
         ("delta", {"text": "Good "}),
@@ -102,9 +106,9 @@ def test_an_error_partway_through_the_reply_is_reported() -> None:
     ]
 
 
-async def test_two_messages_at_once_are_answered_one_after_the_other() -> None:
+async def test_two_messages_at_once_are_answered_one_after_the_other(tmp_path: Path) -> None:
     model = SlowScriptedModel([["Noted."], ["Tea."]])
-    transport = httpx.ASGITransport(app=create_app(model))
+    transport = httpx.ASGITransport(app=server(model, tmp_path).app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         await asyncio.gather(
             client.post("/api/chat", json={"message": "I like tea."}),
@@ -113,3 +117,50 @@ async def test_two_messages_at_once_are_answered_one_after_the_other() -> None:
 
     second_call = model.received[1]
     assert [m["content"] for m in second_call[1:]] == ["I like tea.", "Noted.", "What do I like?"]
+
+
+def openrouter_tool_call_stream() -> str:
+    """A tool call as OpenRouter streams it: the arguments arrive in fragments."""
+    pieces = [
+        {
+            "tool_calls": [
+                {
+                    "index": 0,
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "write", "arguments": ""},
+                }
+            ]
+        },
+        {"tool_calls": [{"index": 0, "function": {"arguments": '{"path": "tea.md", '}}]},
+        {"tool_calls": [{"index": 0, "function": {"arguments": '"content": "Green"}'}}]},
+    ]
+    lines = [f"data: {json.dumps({'choices': [{'delta': piece}]})}" for piece in pieces]
+    lines.append(f"data: {json.dumps({'choices': [{'delta': {}, 'finish_reason': 'tool_calls'}]})}")
+    lines.append("data: [DONE]")
+    return "\n\n".join(lines) + "\n\n"
+
+
+def test_the_real_model_offers_tools_and_runs_the_one_it_asks_for(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sent: list[dict[str, Any]] = []
+
+    def network(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        if len(sent) == 1:
+            return httpx.Response(200, text=openrouter_tool_call_stream())
+        return httpx.Response(200, text=openrouter_stream("Saved."))
+
+    client = server(openrouter_model(network), tmp_path, file_tools(workspace))
+    events = chat(client, "Note that I like green tea.")
+
+    assert (workspace / "tea.md").read_text() == "Green"
+    assert events[-2:] == [("delta", {"text": "Saved."}), ("done", {})]
+    offered = {tool["function"]["name"] for tool in sent[0]["tools"]}
+    assert offered == {"read", "write", "edit", "list", "search"}
+    assert sent[1]["messages"][-1] == {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": "Wrote tea.md.",
+    }
