@@ -17,6 +17,7 @@ Read a chapter with the code open beside it. Each one takes about fifteen minute
 
 1. [The loop](#1-the-loop)
 2. [The model](#2-the-model)
+3. [The server](#3-the-server)
 
 ---
 
@@ -66,13 +67,13 @@ history = []                  # a list of message dicts; empty, since this is th
 text = "I like tea."          # a str
 ```
 
-**Line: `user = {"role": "user", "content": text}`**
+**Line: `user_message = {"role": "user", "content": text}`**
 
 ```python
-user = {"role": "user", "content": "I like tea."}    # one message: a dict with two str keys
+user_message = {"role": "user", "content": "I like tea."}    # one message: a dict with two str keys
 ```
 
-**Line: `messages = [{"role": "system", ...}, *history, user]`**
+**Line: `messages = [{"role": "system", ...}, *history, user_message]`**
 
 `*history` spreads the earlier turns into the list. There are none yet, so `messages` is a list of 2 dicts:
 
@@ -89,9 +90,9 @@ Read `messages[1]` aloud: "the user said: I like tea."
 model.stream(messages) -> "Noted."      # yields 1 chunk, then ends
 ```
 
-**Inside the `async for`:** for that chunk, `parts.append("Noted.")` keeps a copy, so `parts == ["Noted."]`, a list of str. Then `yield "Noted."` hands the chunk to whoever called `run`. That is the server, in the next chapter. The chunk leaves the loop **before** the reply is finished. This is what makes the words appear as they are written.
+**Inside the `async for`:** for that chunk, `parts.append("Noted.")` keeps a copy, so `parts == ["Noted."]`, a list of str. Then `yield "Noted."` hands the chunk to whoever called `run`. That is the server, in chapter 3. The chunk leaves the loop **before** the reply is finished. This is what makes the words appear as they are written.
 
-**Last line: `history += [user, {"role": "assistant", "content": "".join(parts)}]`**
+**Last line: `history += [user_message, {"role": "assistant", "content": "".join(parts)}]`**
 
 `"".join(["Noted."])` is `"Noted."`. `history` was `[]` and is now a list of 2 dicts:
 
@@ -255,19 +256,22 @@ def test_every_model_request_requires_private_providers() -> None:
         sent.append(json.loads(request.content))
         return httpx.Response(200, text=openrouter_stream("Good ", "morning."))
 
-    model = OpenRouterModel("test-key", httpx.AsyncClient(transport=httpx.MockTransport(network)))
+    client = server(openrouter_model(network))
+    first = chat(client, "Hello")
+    chat(client, "And again")
 
-    events = chat(model, "Hello")
-
-    assert [data["text"] for name, data in events if name == "delta"] == ["Good ", "morning."]
-    assert sent[0]["provider"] == {"zdr": True, "data_collection": "deny"}
+    assert [data["text"] for name, data in first if name == "delta"] == ["Good ", "morning."]
+    assert len(sent) == 2
+    for body in sent:
+        assert body["provider"] == {"zdr": True, "data_collection": "deny"}
+        assert body["stream"] is True
 ```
 
-In plain English: "When I chat through the real server and the real model, with only the internet replaced by a fake that answers like OpenRouter, the reply text comes through, and the request that would have gone out asks for private providers."
+In plain English: "When I chat twice through the real server and the real model, with only the internet replaced by a fake that answers like OpenRouter, the reply text comes through, and both requests that would have gone out ask for private providers."
 
-`httpx.MockTransport` replaces only the last step, sending bytes over the network. Everything above it is the real code: building the request, parsing the stream, the loop and the server. Faking only at the outer edge is a deliberate rule in this project (see ARCHITECTURE.md, Testing). It keeps the tests honest about what the program really does.
+`openrouter_model(network)` builds the real `OpenRouterModel` with an `httpx.MockTransport`, which replaces only the last step, sending bytes over the network. Everything above it is the real code: building the request, parsing the stream, the loop and the server. Faking only at the outer edge is a deliberate rule in this project (see ARCHITECTURE.md, Testing). It keeps the tests honest about what the program really does.
 
-The other two model tests say: a rejected request ends the stream with a readable `error` and never `done`; and an error partway through the reply is reported, not hidden behind a `done`.
+The other two model tests say: a rejected request ends the stream with a readable `error` and never `done`; and an error partway through the reply is reported as an `error` and never followed by `done`.
 
 ### Change it yourself
 
@@ -277,3 +281,122 @@ The other two model tests say: a rejected request ends the stream with a readabl
 4. Undo the change.
 
 Then try the real thing. Follow the Quick start in the README with your own key, send `"Hello"` with `curl -N`, and watch the `delta` events arrive one by one. Each one is a row of the table above.
+
+---
+
+## 3. The server
+
+Code: `src/homunculus/server.py`. Tests: `tests/test_server.py`.
+
+### The problem
+
+The loop and the model are Python functions. Your browser, `curl`, and later the web console and Discord cannot call a Python function. They speak HTTP. The server is the doorway: it accepts an HTTP request, runs the loop, and sends the reply back over the same connection as it is written.
+
+It also has to keep one rule the whole agent depends on: one piece of work at a time.
+
+### The idea
+
+**FastAPI** is a Python web framework. You write an ordinary function, mark it with `@app.post("/api/chat")`, and FastAPI calls it whenever a `POST` request arrives at that path. It reads the JSON body into a typed object (`ChatRequest`, which has one field, `message: str`) and rejects anything that does not fit.
+
+**Streaming a response.** A normal HTTP response is built in full, then sent. A `StreamingResponse` is handed a generator instead, and FastAPI sends each piece the generator yields the moment it is yielded. The server's generator is `events()`.
+
+**Server-sent events, from the other side.** In chapter 2 the model module *read* an SSE stream from OpenRouter. Here the server *writes* one for you, in the same standard format: an `event:` line naming the kind of event, a `data:` line with JSON, and a blank line to end it. Three kinds exist:
+
+| Event | Data | Meaning |
+|---|---|---|
+| `delta` | `{"text": "..."}` | The next piece of the reply |
+| `done` | `{}` | The reply is complete |
+| `error` | `{"message": "..."}` | The reply failed, and why |
+
+A stream ends with exactly one `done` or one `error`, never both.
+
+**A lock for one turn at a time.** `asyncio.Lock` is a token only one task can hold. `async with turn:` waits until the token is free, takes it, and gives it back when the block ends, even if an error happens inside. The server holds it for the whole reply.
+
+### A picture
+
+```mermaid
+sequenceDiagram
+  participant You
+  participant S as server
+  participant L as loop
+  You->>S: POST /api/chat {"message": "Hello"}
+  S->>S: wait for the lock
+  S->>L: run(model, history, "Hello")
+  L-->>S: "Good "
+  S-->>You: event: delta / data: {"text": "Good "}
+  L-->>S: "morning."
+  S-->>You: event: delta / data: {"text": "morning."}
+  S-->>You: event: done / data: {}
+  S->>S: release the lock
+```
+
+### One value, traced
+
+You run `curl -N -X POST http://127.0.0.1:8765/api/chat -d '{"message": "Hello"}'` (with the JSON content-type header from the README).
+
+**`create_app(model)`** ran once, when the program started. It made two values that live as long as the program:
+
+```python
+history = []            # list of message dicts, shared by every request
+turn = asyncio.Lock()   # free
+```
+
+Both are local variables of `create_app`. The `chat` function defined inside it can still reach them. This is called a closure, and it is why `history` survives between requests without being a global.
+
+**FastAPI reads the body** and calls `chat(request)` with:
+
+```python
+request = ChatRequest(message="Hello")    # request.message is the str "Hello"
+```
+
+**`chat` returns at once**, with `StreamingResponse(events(), media_type="text/event-stream")`. Nothing has run yet. Calling `events()` only creates the generator. FastAPI now pulls from it piece by piece.
+
+**Inside `events()`**, `async with turn:` takes the free lock. `loop.run(model, history, "Hello")` yields `"Good "` (chapter 1), so the server yields:
+
+```python
+sse("delta", {"text": "Good "}) -> 'event: delta\ndata: {"text": "Good "}\n\n'    # a str
+```
+
+`json.dumps({"text": "Good "})` produced the `data` part. The `\n\n` at the end is the blank line that closes the event. Your terminal prints:
+
+```
+event: delta
+data: {"text": "Good "}
+```
+
+The same happens for `"morning."`. Then the loop ends, the code after the `try` block runs, and the server yields `sse("done", {})`, which is `'event: done\ndata: {}\n\n'`. The `async with` block ends and the lock is free again.
+
+**If the model failed**, `loop.run` would raise `ModelError` partway through. `except ModelError as error:` catches it and yields `sse("error", {"message": str(error)})`, and `return` ends the generator, so `done` is never sent. The lock is released on the way out.
+
+**Two messages at the same moment.** Suppose "I like tea." and "What do I like?" arrive together. The first request takes the lock. The second reaches `async with turn:` and waits. Only when the first reply is complete, and the loop has added that exchange to `history`, does the second take the lock. Its call to `loop.run` then sees `history` with 2 entries, so the model is asked "What do I like?" with "I like tea." already in front of it. Without the lock, both would read `history` while it was still empty.
+
+### The test
+
+```python
+async def test_two_messages_at_once_are_answered_one_after_the_other() -> None:
+    model = SlowScriptedModel([["Noted."], ["Tea."]])
+    transport = httpx.ASGITransport(app=create_app(model))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await asyncio.gather(
+            client.post("/api/chat", json={"message": "I like tea."}),
+            client.post("/api/chat", json={"message": "What do I like?"}),
+        )
+
+    second_call = model.received[1]
+    assert [m["content"] for m in second_call[1:]] == ["I like tea.", "Noted.", "What do I like?"]
+```
+
+In plain English: "When two messages arrive at the same time, the second is sent to the model only after the first exchange is complete, so it carries that exchange."
+
+`SlowScriptedModel` pauses briefly between chunks, so the two requests really do overlap. `asyncio.gather` starts both at once. `httpx.ASGITransport` sends the requests straight into the FastAPI app in memory, with no network involved.
+
+The other server tests say: a reply is streamed as `delta` events followed by `done`; a rejected request and an error partway through each end with one `error` event and no `done`; and every request to the model carries the privacy routing (chapter 2).
+
+### Change it yourself
+
+1. In `server.py`, delete the line `async with turn:` and move the block under it one level to the left.
+2. Run `uv run pytest tests/test_server.py`.
+3. The two-messages test fails. Its message shows the second call reaching the model with only "What do I like?" and no earlier exchange. This is the race the lock prevents.
+4. Undo the change.
+
+Then try a second change that keeps the tests green. Add a fourth kind of event, `start`, sent once before the first `delta`. Write the test first: copy `test_chat_streams_the_reply_then_signals_done` and expect `("start", {})` at the front of the list. Watch it fail, make it pass, then run the whole suite. You have now changed the API's behaviour the way every change in this project is made.

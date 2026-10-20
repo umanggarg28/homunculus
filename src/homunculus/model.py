@@ -20,7 +20,7 @@ class Model(Protocol):
         ...
 
 
-URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL_ID = "z-ai/glm-5.3-flash"
 
 # Route only to providers that keep no copy of the request and do not train on it.
@@ -41,7 +41,9 @@ class OpenRouterModel:
             "provider": PRIVACY_ROUTING,
         }
         headers = {"Authorization": f"Bearer {self._api_key}"}
-        async with self._client.stream("POST", URL, json=body, headers=headers) as response:
+        async with self._client.stream(
+            "POST", OPENROUTER_CHAT_URL, json=body, headers=headers
+        ) as response:
             if response.status_code != 200:
                 await response.aread()
                 raise ModelError(

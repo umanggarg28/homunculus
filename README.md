@@ -27,7 +27,7 @@ The full design, including the modules still to come (gate, sandbox, skills, wik
 
 ## Privacy
 
-Every model request asks OpenRouter to route only to providers that keep no copy of the request and do not train on it (`provider: {"zdr": true, "data_collection": "deny"}`). This is fixed in code, not a setting, and a test fails if it is ever missing.
+Every model request asks OpenRouter to route only to providers that keep no copy of the request and do not train on it (`provider: {"zdr": true, "data_collection": "deny"}`). It is fixed in code with no setting to turn it off, and a test fails if it is ever missing.
 
 The server listens on `127.0.0.1` only, so nothing else on your network can reach it.
 
@@ -41,7 +41,7 @@ export OPENROUTER_API_KEY=sk-or-...
 uv run homunculus
 ```
 
-In a second terminal, send a message:
+**Manual check against the real model.** In a second terminal, send a message:
 
 ```bash
 curl -N -X POST http://127.0.0.1:8765/api/chat \
@@ -49,7 +49,7 @@ curl -N -X POST http://127.0.0.1:8765/api/chat \
   -d '{"message": "Hello"}'
 ```
 
-The reply arrives as a series of `delta` events, ending with `done`. For example:
+The check passes when the reply arrives as a series of `delta` events and ends with `done`. For example:
 
 ```
 event: delta

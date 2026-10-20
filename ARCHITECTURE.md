@@ -19,7 +19,7 @@ Each module has one job. A new module needs a stated reason.
 ## How a chat message flows
 
 1. `POST /api/chat` arrives at `server` with `{"message": "Hello"}`.
-2. `server` calls `loop.run` with the model, the conversation history and the text.
+2. `server` waits for any reply already in progress, then calls `loop.run` with the model, the conversation history and the text.
 3. `loop` builds the message list: the system prompt, the earlier turns, then the new user message.
 4. `model` sends that list to OpenRouter with `stream: true` and the fixed privacy routing, and yields the reply as text chunks.
 5. `loop` passes each chunk up as it arrives and keeps a copy.
@@ -45,7 +45,8 @@ def create_app(model: Model) -> FastAPI: ...
 
 ## Design rules
 
-- **Privacy routing is code, not configuration.** Every request carries `{"zdr": true, "data_collection": "deny"}`. There is no switch to turn it off.
+- **Privacy routing is fixed in code.** Every request carries `{"zdr": true, "data_collection": "deny"}`. There is no switch to turn it off.
+- **One piece of work at a time.** The server holds a lock for the whole of a reply. A second message waits, then goes to the model with the first exchange already in the history.
 - **Record only what happened.** The conversation history changes only after a reply completes. A failed call ends the stream with `error`, never `done`.
 - **Local only.** The server binds to `127.0.0.1`.
 
@@ -56,6 +57,6 @@ Tests sit at agreed seams and fake only the outside world.
 | Seam | What it covers | Fakes |
 |---|---|---|
 | Loop | Streaming, when the loop stops, history handling | The model (a scripted stand-in) |
-| Server HTTP API | Event format, errors, privacy routing on the wire | The model, or only the network beneath the real model |
+| Server HTTP API | Event format, errors, one reply at a time, privacy routing on every request | The model, or only the network beneath the real model |
 
 Tests run with network access blocked, so a test that reaches the internet fails.
