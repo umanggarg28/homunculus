@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import uvicorn
+from platformdirs import user_data_path
 
 from homunculus.activity import ActivityLog
 from homunculus.model import OpenRouterModel
@@ -20,8 +21,9 @@ def main() -> None:
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         sys.exit("Set OPENROUTER_API_KEY to an OpenRouter API key, then start again.")
-    # The data directory lives outside the code repository, so private data cannot be committed.
-    home = Path(os.environ.get("HOMUNCULUS_HOME", Path.home() / "homunculus-data"))
+    # The data directory lives outside the code repository, so private data cannot be
+    # committed. By default it is the operating system's place for application data.
+    home = Path(os.environ.get("HOMUNCULUS_HOME") or user_data_path("homunculus", appauthor=False))
     workspace = home / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     app = create_app(

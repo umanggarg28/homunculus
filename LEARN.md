@@ -552,7 +552,7 @@ Then it calls the model again with both added to the list. That is the loop's se
 
 ### One value, traced
 
-You send `"Note that I like green tea."`. `tools` holds the seven file tools for the workspace `~/homunculus-data/workspace`.
+You send `"Note that I like green tea."`. `tools` holds the seven file tools for the workspace, `~/Library/Application Support/homunculus/workspace` on a Mac.
 
 **Lines 42-43** prepare the tools two ways:
 
@@ -761,7 +761,7 @@ An agent that works while you are away has to leave a record you can trust. If t
 ### A picture
 
 ```
- ~/homunculus-data/
+ ~/Library/Application Support/homunculus/
  ├─ activity.jsonl      written only by loop.py, one line per event
  └─ workspace/          everything the file tools can touch
      └─ tea.md
@@ -814,7 +814,7 @@ In plain English: "If the model tries to overwrite the activity log through the 
 
 ### Change it yourself
 
-1. Send a message through the real program (README quick start), then open `~/homunculus-data/activity.jsonl` and read each line aloud the way the trace above does.
+1. Send a message through the real program (README quick start), then open `activity.jsonl` in the data directory (`~/Library/Application Support/homunculus` on a Mac) and read each line aloud the way the trace above does.
 2. In `loop.py`, find `activity.record("error", error=str(error))` inside the `except ModelError` block and delete that line, keeping the `raise`.
 3. Run `uv run pytest tests/test_loop.py`. The failed-reply test fails: the log now shows your message and then nothing, so a reader could not tell the job failed. That silence is exactly what this line exists to prevent.
 4. Undo the change.
