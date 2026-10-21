@@ -24,6 +24,7 @@ Diagrams are plain text, so they read the same in any editor.
 4. [Tools](#4-tools)
 5. [The gate](#5-the-gate)
 6. [The activity log](#6-the-activity-log)
+7. [The web console](#7-the-web-console)
 
 ---
 
@@ -118,7 +119,7 @@ history = []                  # a list of message dicts; empty, since this is th
 text = "I like tea."          # a str
 ```
 
-**Line 29: `turn = [{"role": "user", "content": text}]`**
+**Line 44: `turn = [{"role": "user", "content": text}]`**
 
 ```python
 turn = [{"role": "user", "content": "I like tea."}]    # a list of 1 message, a dict with two str keys
@@ -126,7 +127,7 @@ turn = [{"role": "user", "content": "I like tea."}]    # a list of 1 message, a 
 
 `turn` collects everything that happens in this one exchange. With tools, it grows to hold the tool calls and their results too.
 
-**Line 35: `messages = [{"role": "system", ...}, *history, *turn]`**
+**Line 50: `messages = [{"role": "system", ...}, *history, *turn]`**
 
 `*history` and `*turn` spread their contents into the new list. `history` is empty, so `messages` is a list of 2 dicts:
 
@@ -137,7 +138,7 @@ messages[1] = {"role": "user",   "content": "I like tea."}
 
 Read `messages[1]` aloud: "the user said: I like tea."
 
-**Line 36: `model.stream(messages, schemas)`** returns an async iterator. Each item is either a piece of text (`str`) or a finished tool request (`ToolCall`, chapter 4). Suppose the model's reply arrives as one piece of text:
+**Line 51: `model.stream(messages, schemas)`** returns an async iterator. Each item is either a piece of text (`str`) or a finished tool request (`ToolCall`, chapter 4). Suppose the model's reply arrives as one piece of text:
 
 ```python
 model.stream(messages, schemas) -> "Noted."      # yields 1 str, then ends
@@ -167,13 +168,13 @@ When a reply arrives in two pieces, `"Good "` and `"morning."`, each pull goes l
 
 `parts` is the loop's private notepad. It exists only so the full reply can be glued together at the end, and nothing outside `run` ever sees it.
 
-**Line 42: `reply = {"role": "assistant", "content": "".join(parts)}`**
+**Line 57: `reply = {"role": "assistant", "content": "".join(parts)}`**
 
-`"".join(["Noted."])` is `"Noted."`, so `reply` is `{"role": "assistant", "content": "Noted."}`. Line 45 appends it, and `turn` is now a list of 2.
+`"".join(["Noted."])` is `"Noted."`, so `reply` is `{"role": "assistant", "content": "Noted."}`. Line 60 appends it, and `turn` is now a list of 2.
 
-**Lines 46-47: `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
+**Lines 61-62: `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
 
-**Line 55: `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
+**Line 71: `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
 
 ```python
 history[0] = {"role": "user",      "content": "I like tea."}
@@ -195,7 +196,7 @@ The model sees the whole exchange and can answer "tea". That is the entire mecha
 
 **Where each piece is used.** `parts` and `calls` are rebuilt on every pass of the `while` loop. `turn` lives for one call to `run`. `history` outlives the call: the server owns it, and `run` only adds to it. `SYSTEM_PROMPT` is read by `run` and never stored anywhere.
 
-**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so line 55 never runs and `history` stays as it was. On the way out, lines 51-53 record the error in the activity log and pass it on. A failed turn leaves no half-finished reply in the conversation.
+**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so line 71 never runs and `history` stays as it was. On the way out, lines 67-69 record the error in the activity log and pass it on. A failed turn leaves no half-finished reply in the conversation.
 
 ### The test
 
@@ -400,11 +401,14 @@ It also has to keep one rule the whole agent depends on: one piece of work at a 
 
 | Event | Data | Meaning |
 |---|---|---|
+| `tool` | `{"name", "arguments", "answer", "result", "duration_ms"}` | One tool call the loop dealt with (chapter 4) |
 | `delta` | `{"text": "..."}` | The next piece of the reply |
 | `done` | `{}` | The reply is complete |
 | `error` | `{"message": "..."}` | The reply failed, and why |
 
-A stream ends with exactly one `done` or one `error`, never both.
+A stream ends with exactly one `done` or one `error`, never both. The web console reads these events to draw the reply, the tool blocks and the robot's state.
+
+The server has two more jobs. `GET /api/history` returns the conversation so far, so the console can show it after a page reload. And when the console has been built, the server hands out its files: any address that is not under `/api/` gets the console's `index.html`, and the console itself works out which screen to show.
 
 **A lock for one turn at a time.** `asyncio.Lock` is a token only one task can hold. `async with turn:` waits until the token is free, takes it, and gives it back when the block ends, even if an error happens inside. The server holds it for the whole reply.
 
@@ -445,7 +449,7 @@ request = ChatRequest(message="Hello")    # request.message is the str "Hello"
 
 **`chat` returns at once**, with `StreamingResponse(events(), media_type="text/event-stream")`. Nothing has run yet. Calling `events()` only creates the generator. FastAPI now pulls from it piece by piece.
 
-**Inside `events()`**, `async with turn:` takes the free lock. `loop.run(model, history, "Hello")` yields `"Good "` (chapter 1), so the server yields:
+**Inside `events()`**, `async with turn:` takes the free lock. `loop.run(...)` yields `"Good "` (chapter 1). It is a `str`, not a `ToolStep`, so the server yields:
 
 ```python
 sse("delta", {"text": "Good "}) -> 'event: delta\ndata: {"text": "Good "}\n\n'    # a str
@@ -550,7 +554,7 @@ Then it calls the model again with both added to the list. That is the loop's se
 
 You send `"Note that I like green tea."`. `tools` holds the seven file tools for the workspace `~/homunculus-data/workspace`.
 
-**Lines 27-28** prepare the tools two ways:
+**Lines 42-43** prepare the tools two ways:
 
 ```
 by_name = {"read": <Tool>, "write": <Tool>, ..., "rename": <Tool>}       a dict of 7, name to Tool
@@ -565,11 +569,11 @@ schemas = [{"type": "function", "function": {"name": "read", ...}}, ...]   a lis
 ToolCall(id="call_1", name="write", arguments='{"path": "tea.md", "content": "Green"}')
 ```
 
-`isinstance(item, ToolCall)` is true, so it goes into `calls` (line 38), not `parts`. Nothing is yielded to you. `parts` stays `[]`.
+`isinstance(item, ToolCall)` is true, so it goes into `calls` (line 53), not `parts`. Nothing is yielded to you. `parts` stays `[]`.
 
-**Lines 42-45** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
+**Lines 57-60** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
 
-**Line 46:** `calls` is not empty, so no `break`. **Line 49** hands the call to `_carry_out`:
+**Line 61:** `calls` is not empty, so no `break`. **Line 64** hands the call to `_carry_out`:
 
 ```
 gate.decide(call)                    -> Answer.ACT                      (chapter 5)
@@ -581,7 +585,7 @@ by_name["write"].call({...})         -> "Wrote tea.md."                 a str
 
 `activity.record("tool", name="write", arguments=..., answer="act", result="Wrote tea.md.")` appends one line to the activity log, and `_carry_out` returns the result.
 
-**Line 50** adds the tool message. `turn` is now a list of 3:
+**Line 65** adds the tool message, and line 66 yields the step as a `ToolStep`, which the server sends to you as a `tool` event (chapter 3). `turn` is now a list of 3:
 
 ```
 turn[0] = {"role": "user",      "content": "Note that I like green tea."}
@@ -591,7 +595,7 @@ turn[2] = {"role": "tool",      "tool_call_id": "call_1", "content": "Wrote tea.
 
 Read `turn[2]` aloud: "the result of request call_1 was: Wrote tea.md."
 
-**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so line 47 breaks out. `turn` ends as a list of 4, and line 55 adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
+**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so line 62 breaks out. `turn` ends as a list of 4, and line 71 adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
 
 **How the real model streams a tool call.** OpenRouter sends the request in pieces, each tagged with an `index` saying which call it belongs to:
 
@@ -661,7 +665,7 @@ An agent that works by itself will sometimes propose something it should not do:
 
 ### The idea
 
-**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs (line 60 of `loop.py`). It returns one of five answers:
+**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs (line 78 of `loop.py`). It returns one of five answers:
 
 | Answer | Meaning |
 |---|---|
@@ -768,10 +772,10 @@ An agent that works while you are away has to leave a record you can trust. If t
 You send `"Note that I like green tea."` (the trace from chapter 4). Three calls to `activity.record` happen, in this order:
 
 ```
-record("message", text="Note that I like green tea.")                        line 30 of loop.py
+record("message", text="Note that I like green tea.")                        line 45 of loop.py
 record("tool", name="write", arguments='{"path": "tea.md", "content": "Green"}',
        answer="act", result="Wrote tea.md.")                                 in _carry_out
-record("reply", text="Saved.")                                               line 54 of loop.py
+record("reply", text="Saved.")                                               line 70 of loop.py
 ```
 
 `record(kind, **details)` builds one dict: the current time in UTC, the kind, then every detail passed in. For the second call:
@@ -814,6 +818,113 @@ In plain English: "If the model tries to overwrite the activity log through the 
 2. In `loop.py`, find `activity.record("error", error=str(error))` inside the `except ModelError` block and delete that line, keeping the `raise`.
 3. Run `uv run pytest tests/test_loop.py`. The failed-reply test fails: the log now shows your message and then nothing, so a reader could not tell the job failed. That silence is exactly what this line exists to prevent.
 4. Undo the change.
+
+---
+
+## 7. The web console
+
+Code: `web/src/`, mainly `hooks/useChatStream.ts`, `lib/sse.ts` and `lib/turnEvents.ts`. Test: `tests/browser/test_console.py`.
+
+### The problem
+
+Chapters 1 to 6 end at the server, which sends a stream of text events. A person needs a screen: somewhere to type, the reply appearing as it is written, the tool steps shown as they happen, and a sense of what the agent is doing. The console is that screen. It is a single-page web app the server hands out, so the whole agent is one program you open in a browser.
+
+### The idea
+
+**React** draws the screen from data. Components are functions that take values and return what to show. When a value changes, React redraws only what depends on it. A **hook** is a function, by convention named `use...`, that holds a piece of changing data for a component.
+
+**Reading a stream with `fetch`.** The browser's `EventSource` reads server-sent events only for `GET` requests, and a chat message is a `POST`. So the console sends the request with `fetch` and reads the response body piece by piece through `response.body.getReader()`. Pieces arrive at whatever size the network delivers. One piece can hold half an event or three events, so the console keeps a buffer and only takes out complete events, those ended by a blank line.
+
+**One source of truth for what is happening.** Every event the console receives is also recorded in `lib/turnEvents.ts`, a tiny in-page store. The robot in the sidebar and the thinking indicator read that store. The rule is that they show only what an event says. The console never guesses the agent's state.
+
+### A picture
+
+```
+ you press Enter
+      │
+      ▼
+ useChatStream.send("Save my priorities")
+      │  adds your message and an empty reply to `messages`
+      │  records { event: "user_message" }            ──►  turnEvents  ──►  robot: THINKING
+      ▼
+ fetch POST /api/chat  ──►  server (chapter 3)
+      │
+      ▼  response body, read piece by piece
+ buffer += piece ──► parseSseChunks(buffer) ──► complete events + leftover
+      │
+      ├─ tool   → add a ToolStep to `toolCalls`, record it  ──►  robot: WORKING
+      ├─ delta  → append the text to the reply in `messages`
+      ├─ error  → mark the reply failed, record it           ──►  robot: FAULT
+      └─ done   → record { event: "assistant_reply" }        ──►  robot: RESPONDING, DONE, IDLE
+```
+
+### One value, traced
+
+You type `Save my priorities` and press Enter. `BrutalistChatInput` calls `send("Save my priorities")` in `useChatStream`.
+
+**Before the request.** `send` adds two entries to `messages`, a list of `ChatMessage` objects that the chat log draws:
+
+```
+messages[-2] = { id: "…", role: "user", content: "Save my priorities", ts: "2026-10-21T08:40:01Z" }
+messages[-1] = { id: "…", role: "assistant", content: "", inFlight: true, ts: "…" }
+```
+
+The empty reply is a placeholder that text will be added to. `recordTurnEvent({ event: "user_message" })` puts the first event in the store, and the robot switches to THINKING.
+
+**The first piece of the body arrives.** Suppose it is this text, with one complete event and half of the next:
+
+```
+event: tool\ndata: {"name": "write", "arguments": "{…}", "answer": "act", "result": "Wrote priorities.md.", "duration_ms": 0}\n\nevent: del
+```
+
+`parseSseChunks(buffer)` splits on blank lines. That gives a list of 2 parts. The last part, `event: del`, may be incomplete, so it is returned as `remainder` and kept in `buffer` for next time:
+
+```
+parseSseChunks(buffer) -> { events: [{ event: "tool", data: '{"name": "write", …}' }], remainder: "event: del" }
+```
+
+`events` is a list of 1. `JSON.parse(data)` gives an object with `name`, `arguments`, `answer`, `result` and `duration_ms`. Because the event is `tool`, `send` adds a `ToolStep` to `toolCalls` (a list of 1 now), which draws the WRITE block, and records the step in the store. The robot switches to WORKING. `isFailedStep("act", "Wrote priorities.md.")` is `false`, so the block reads `OK · 0MS`.
+
+**The next piece** completes `event: delta\ndata: {"text": "Saved "}`. Now `buffer` is `event: del` plus the new text, which makes a whole event. `update` replaces the placeholder with a copy whose `content` is `"" + "Saved "`, so React redraws that one message. Each further `delta` appends again, and you watch the words arrive.
+
+**`done` arrives.** `recordTurnEvent({ event: "assistant_reply" })` makes the robot show RESPONDING, then DONE 1.5 seconds later, then IDLE. `finished` becomes `true`, the reading loop stops, and in `finally` the reply's `inFlight` is set to `false` and `sending` to `false`, so the input is ready again.
+
+**After a reload**, the hook asks `GET /api/history` and gets a list of 2 entries, your message and the reply, without times. The log shows `--:--` instead of a time, because inventing one would claim the messages were written now.
+
+**Where each value lives.** `messages` and `toolCalls` belong to `useChatStream` and are drawn by the chat log. The store in `turnEvents` is read by the robot (`useRobotState`) and the thinking indicator, and never by the log. `buffer` exists only inside one call to `send`.
+
+### The test
+
+```python
+def test_sending_a_message_shows_the_tool_step_and_the_reply(
+    page: Page, console_url: str, workspace: Path
+) -> None:
+    page.goto(f"{console_url}/chat")
+
+    page.locator("textarea").fill("Save my priorities")
+    page.locator("textarea").press("Enter")
+
+    expect(page.get_by_text("Saved priorities.md.")).to_be_visible()
+    expect(page.get_by_text("write", exact=True)).to_be_visible()
+    expect(page.get_by_text("OK ·")).to_be_visible()
+    assert (workspace / "priorities.md").read_text() == "1. Rest"
+
+    page.reload()
+
+    expect(page.get_by_text("Save my priorities")).to_be_visible()
+    expect(page.get_by_text("Saved priorities.md.")).to_be_visible()
+```
+
+In plain English: "In a real browser, typing a message and pressing Enter shows the tool step and the reply, really writes the file, and after a reload the conversation is still there."
+
+It runs the real server and the built console, with only the model replaced by the scripted stand-in. Playwright drives a real Chromium browser. Because it needs the console built and a browser installed, it is marked `browser` and runs on its own: `uv run pytest -m browser`.
+
+### Change it yourself
+
+1. In `web/src/lib/toolSteps.ts`, change `isFailedStep` to return `false` always.
+2. Run `npm run build` in `web/`, then send a message the gate refuses through the README quick start, for example one asking the agent to write `../outside.md`.
+3. The tool block now says `REFUSE` in green, as though all were well, while the server said the step was not done. That is the kind of invented state this one shared rule prevents.
+4. Undo the change and build again.
 
 ---
 

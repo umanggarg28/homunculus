@@ -1,0 +1,578 @@
+@import "tailwindcss";
+
+/* ===========================================================
+ * HOMUNCULUS · DESIGN TOKENS: Brutalist Phosphor.
+ *
+ * Phosphor CRT terminal aesthetic. Green on near-black. All
+ * type is JetBrains Mono. Hard rectangles only: radius is 0
+ * everywhere. Accent is reserved for "the agent is talking",
+ * tool call labels, and live signals.
+ * =========================================================== */
+@theme {
+  /* Surfaces (darkest → lightest). The page field sits one step above
+     true black: high-chroma green on near-black halates (worst for
+     astigmatic eyes), and lifting the chassis lets the CRT "screens"
+     (--color-screen wells) read as physically deeper than the panel
+     around them. Whole ladder shifted together so every relationship
+     between surfaces is preserved. */
+  --color-screen:    #020403;   /* in-panel screen wells: the only true black */
+  --color-bg:        #060A08;   /* page background (the chassis) */
+  --color-surface-1: #0A0F0C;   /* sidebar / topbar */
+  --color-surface-2: #0E1513;   /* cards, primary content blocks */
+  --color-surface-3: #141D1B;   /* hover, raised */
+  --color-surface-4: #1A2724;   /* selected / active row */
+
+  /* Borders: phosphor-tinted hairlines */
+  --color-border:        #173227;
+  --color-border-strong: #285443;
+  --color-border-bright: #438569;
+
+  /* Text: phosphor cream-green */
+  --color-text:       #D7F5DF;
+  --color-text-dim:   #93C7A7;
+  --color-text-muted: #5F8771;
+  /* Dimmest legible tier: 3.79:1 on the lifted --color-bg (nudged one
+     step when the field rose so the floor held; muted sits at 4.9:1, so
+     the hierarchy is intact). */
+  --color-text-faint: #487760;
+
+  /* Phosphor accent: the agent's signal */
+  --color-accent:        #77FF3D;
+  /* Accent as RUNNING TEXT (prompt prefixes, reply markers): same hue,
+     chroma pulled toward the cream tier. Marks, borders, numerals and
+     glows keep the pure accent; prose-adjacent green loses the vibrating
+     edge. */
+  --color-accent-ink:    #8CFD61;
+  --color-accent-hover:  #A4FF74;
+  --color-accent-dim:    rgba(124, 254, 0, 0.12);
+  --color-accent-faint:  rgba(124, 254, 0, 0.05);
+  --color-accent-glow:   rgba(124, 254, 0, 0.55);
+
+  /* Secondary lights: borrowed from the other CRT palettes */
+  --color-amber:         #FFB84D;   /* scheduled / warnings */
+  --color-amber-dim:     rgba(255, 176, 0, 0.14);
+  --color-indigo:        #6CE7FF;   /* user-initiated / info */
+  --color-indigo-dim:    rgba(108, 231, 255, 0.14);
+  --color-rose:          #FF5EA8;   /* rare contrast / destructive preview */
+  --color-rose-dim:      rgba(255, 94, 168, 0.12);
+
+  /* Semantic */
+  --color-success:  #7CFE00;
+  --color-warning:  #FFB000;
+  --color-danger:   #FF5A3D;
+  --color-info:     #6CE7FF;
+
+  /* Fonts: mono everywhere. The whole UI is a terminal. */
+  --font-display: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --font-sans:    "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* Radius: hard rectangles. No rounding. */
+  --radius-sm: 2px;
+  --radius:    4px;
+  --radius-lg: 6px;
+}
+
+/* ===========================================================
+ * TYPE SCALE: heading and label classes. Prefer these to an
+ * inline font size.
+ * =========================================================== */
+.brut-h1 {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 20px;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.brut-label {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 10px;
+  line-height: 1.4;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+/* ---------- Base ---------- */
+html, body {
+  background:
+    linear-gradient(180deg, rgba(108, 231, 255, 0.035), transparent 260px),
+    var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 14px;
+  line-height: 1.5;
+  font-feature-settings: "cv11", "ss03", "ss04";
+}
+
+#root { min-height: 100vh; position: relative; }
+
+@media (max-width: 760px) {
+  html, body { font-size: 13px; }
+}
+
+/* ---------- CRT scanline overlay ----------
+ * Subtle horizontal scanline pattern layered over the entire UI.
+ * Drawn via a fixed pseudo-element so it doesn't intercept clicks
+ * (pointer-events: none) and stays above everything visually.
+ * Adds the phosphor-CRT signature without dimming content. */
+body::before {
+  /* Static scanlines: barely-there texture. */
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0) 0px,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(119, 255, 61, 0.012) 2px,
+    rgba(119, 255, 61, 0.012) 3px
+  );
+  mix-blend-mode: screen;
+}
+body::after {
+  /* The vertical-hold roll: soft band sweeping every ~18s.
+     Ambient, only catches the eye when you stop looking. */
+  content: "";
+  position: fixed;
+  left: 0; right: 0; top: 0;
+  height: 28px;
+  z-index: 100;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgba(124, 254, 0, 0)    0%,
+    rgba(124, 254, 0, 0.015) 35%,
+    rgba(124, 254, 0, 0.04) 50%,
+    rgba(124, 254, 0, 0.015) 65%,
+    rgba(124, 254, 0, 0)    100%
+  );
+  animation: crt-roll 18s linear infinite;
+  filter: blur(0.4px);
+  mix-blend-mode: screen;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+@keyframes crt-roll {
+  0%   { transform: translateY(-28px); }
+  100% { transform: translateY(calc(100vh + 14px)); }
+}
+::selection { background: var(--color-accent-dim); color: var(--color-text); }
+
+/* ---------- Scrollbar: Linear-ish ---------- */
+* { scrollbar-width: thin; scrollbar-color: var(--color-border-bright) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--color-border-bright);
+  border-radius: 4px;
+  border: 2px solid var(--color-bg);
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
+
+/* ---------- Focus / caret ---------- */
+*:focus { outline: none; }
+*:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+input, textarea { caret-color: var(--color-accent); }
+
+/* ===========================================================
+ * TYPOGRAPHY UTILITIES: sans-serif, restrained.
+ * =========================================================== */
+
+.display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.1;
+}
+
+/* Small caps now means "small uppercase tag": used for labels */
+.label {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+/* ===========================================================
+ * MARKDOWN: brut-md* classes used in agent replies.
+ *
+ * Prose at 14px for readability. Code blocks get the phosphor
+ * terminal treatment. Syntax highlighting via hljs (see below).
+ * =========================================================== */
+
+.brut-md {
+  font-family: var(--font-mono);
+  /* Reading register: long-form replies get book-ish size/leading.
+     Data surfaces elsewhere stay dense: this is prose. */
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--color-text);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+/* Prose measure caps at ~68ch: mono past 70 chars is hard to track
+   back to the next line's start. Code blocks and tables are exempt:
+   they are data, they keep the full column and scroll if wider. */
+.brut-md p,
+.brut-md ul,
+.brut-md ol,
+.brut-md blockquote,
+.brut-md h1,
+.brut-md h2,
+.brut-md h3,
+.brut-md h4 {
+  max-width: 68ch;
+}
+.brut-md > * + * { margin-top: 14px; }
+.brut-md p,
+.brut-md li,
+.brut-md strong,
+.brut-md em,
+.brut-md a {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Headings: sized so there's real hierarchy, not just 12px everything */
+.brut-md h1 {
+  font-size: 15px; font-weight: 700;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--color-text);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--color-border-strong);
+  margin-bottom: 10px;
+}
+.brut-md h2 {
+  font-size: 13px; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--color-text);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--color-border);
+}
+.brut-md h3 {
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--color-text-dim);
+}
+
+/* Paragraphs */
+.brut-md p { margin: 0; }
+
+/* Strong / em */
+.brut-md strong { color: var(--color-accent); font-weight: 600; }
+.brut-md em    { color: var(--color-text-dim); font-style: normal; text-decoration: underline; text-decoration-color: var(--color-border-strong); text-underline-offset: 3px; }
+
+/* Lists: custom ▸ bullets, decimal-leading-zero for ordered */
+.brut-md ul, .brut-md ol { list-style: none; padding-left: 0; margin: 4px 0; }
+/* Counter slot is left-aligned at x=0, no width clipping. Text starts
+   at li padding-left = 32px so the period always has at least ~6px of
+   air after it for double-digit counters like "99.". */
+.brut-md li             { padding-left: 32px; position: relative; margin: 3px 0; }
+.brut-md ul > li::before {
+  content: "▸";
+  position: absolute; left: 10px; top: 0;
+  color: var(--color-accent);
+  /* Inherit font-size from the list item so the marker shares a
+     baseline with the body text (was 11px vs 13px → misalignment). */
+  font-size: inherit;
+  line-height: inherit;
+}
+.brut-md ol             { counter-reset: brut-ol; }
+.brut-md ol > li        { counter-increment: brut-ol; }
+.brut-md ol > li::before {
+  content: counter(brut-ol, decimal-leading-zero) ".";
+  position: absolute; left: 4px; top: 0;
+  color: var(--color-accent);
+  font-variant-numeric: tabular-nums;
+  /* Match the body text size so the counter sits on the same baseline. */
+  font-size: inherit;
+  line-height: inherit;
+}
+.brut-md li li { padding-left: 16px; }
+.brut-md li li::before { content: "·" !important; color: var(--color-text-muted) !important; }
+/* Suppress the bullet for empty nested items: the agent occasionally
+   emits a trailing list with no content (e.g. "  -" on a hanging line)
+   and the bare "·" leaks into the rendered message. */
+.brut-md li li:empty,
+.brut-md li li:empty::before { display: none !important; }
+
+/* Inline code */
+.brut-md-inline-code {
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+  padding: 1px 6px;
+  border: 1px solid var(--color-border-bright);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Code block: dark well with left accent + optional language badge */
+.brut-md-pre-wrap {
+  position: relative;
+  margin: 12px 0;
+}
+.brut-md-lang-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  padding: 2px 8px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--color-text-muted);
+  background: var(--color-surface-4);
+  border-left: 1px solid var(--color-border-bright);
+  border-bottom: 1px solid var(--color-border-bright);
+  z-index: 1;
+}
+.brut-md-pre {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  border-left: 2px solid var(--color-accent);
+  overflow-x: auto;
+  margin: 0;
+  position: relative;
+}
+.brut-md-code-block {
+  display: block;
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre;
+  background: transparent;
+}
+
+/* Horizontal rule */
+.brut-md hr { border: 0; border-top: 1px solid var(--color-border); margin: 12px 0; }
+
+/* Blockquote */
+.brut-md blockquote {
+  border-left: 2px solid var(--color-accent);
+  padding-left: 12px;
+  color: var(--color-text-dim);
+  margin: 8px 0;
+}
+
+/* Links */
+.brut-md a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-bright);
+  text-underline-offset: 3px;
+}
+.brut-md a:hover { text-decoration-color: var(--color-accent); }
+
+/* Tables */
+.brut-md-table-wrap { overflow-x: auto; margin: 10px 0; max-width: 100%; }
+.brut-md-table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.brut-md-table th, .brut-md-table td {
+  border: 1px solid var(--color-border);
+  padding: 7px 12px;
+  text-align: left;
+  font-family: var(--font-mono);
+}
+.brut-md-table th {
+  background: var(--color-surface-2);
+  color: var(--color-accent);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+}
+.brut-md-table td { color: var(--color-text-dim); }
+.brut-md-table tr:hover td { background: var(--color-surface-3); }
+
+/* ===========================================================
+ * HLJS: Phosphor CRT syntax theme.
+ * Mapped to the design-token palette so it stays in sync.
+ * =========================================================== */
+.hljs                { background: transparent; color: var(--color-text); }
+.hljs-comment,
+.hljs-quote          { color: var(--color-text-muted); font-style: italic; }
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-addition       { color: #7CFE00; font-weight: 600; }      /* accent green */
+.hljs-number,
+.hljs-literal,
+.hljs-deletion       { color: #FF8C00; }                        /* amber-orange */
+.hljs-string,
+.hljs-doctag,
+.hljs-attr           { color: #FFD580; }                        /* warm amber */
+.hljs-title,
+.hljs-section,
+.hljs-built_in       { color: #00D4FF; }                        /* cyan */
+.hljs-name,
+.hljs-tag            { color: #7CFE00; }
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable { color: #C8E6C9; }
+.hljs-type,
+.hljs-class          { color: #B8FFB8; font-style: italic; }
+.hljs-symbol,
+.hljs-bullet         { color: #FFB000; }
+.hljs-subst,
+.hljs-meta           { color: var(--color-text-dim); }
+.hljs-emphasis       { font-style: italic; }
+.hljs-strong         { font-weight: bold; }
+.hljs-regexp,
+.hljs-link           { color: #00D4FF; }
+.hljs-selector-id,
+.hljs-selector-class { color: #7CFE00; }
+.hljs-operator       { color: #C8E6C9; }
+.hljs-params         { color: #D4E8FF; }
+
+/* ===========================================================
+ * Info-helpable cursor + hover affordance.
+ * Replaces the OS "?" help cursor with a phosphor crosshair-
+ * bracket on tooltipped elements so the hint feels native to
+ * the brutalist terminal aesthetic. The SVG is inlined as a
+ * data URL: no extra asset, no flash on first hover. On
+ * hover, the trigger picks up a faint accent underline so the
+ * affordance also reads on touch devices.
+ * =========================================================== */
+.hm-info {
+  cursor:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'><g fill='none' stroke='%2377FF3D' stroke-width='1.4'><path d='M2 2h4M2 2v4M18 2h-4M18 2v4M2 18h4M2 18v-4M18 18h-4M18 18v-4'/><circle cx='10' cy='10' r='1.2' fill='%2377FF3D' stroke='none'/></g></svg>") 10 10,
+    help;
+  position: relative;
+  transition: color 0.12s ease;
+}
+.hm-info:hover {
+  color: var(--color-accent);
+}
+.hm-info::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 1px;
+  background: var(--color-accent);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.18s ease;
+  pointer-events: none;
+  opacity: 0.55;
+}
+.hm-info:hover::after,
+.hm-info:focus-visible::after {
+  transform: scaleX(1);
+}
+/* Bare variant for triggers that are already underlined (wikilinks,
+   links, etc.): suppress the second underline. */
+.hm-info--bare::after { display: none; }
+
+/* ===========================================================
+ * Tooltip: brutalist phosphor hover bubble. Replaces native
+ * title="" so the hint matches the rest of the UI instead of
+ * the OS chrome.
+ * =========================================================== */
+.hm-tooltip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  color: var(--color-text);
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border-strong);
+  padding: 7px 10px;
+  text-align: left;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: anywhere;
+  box-shadow: 0 0 0 1px var(--color-bg), 0 8px 24px rgba(0, 0, 0, 0.45);
+  animation: hm-tooltip-in 0.12s ease-out;
+}
+.hm-tooltip strong, .hm-tooltip b {
+  color: var(--color-accent);
+  font-weight: 500;
+}
+.hm-tooltip kbd {
+  display: inline-block;
+  padding: 0 4px;
+  border: 1px solid var(--color-border-strong);
+  font-size: 10px;
+  color: var(--color-accent);
+  background: var(--color-surface-2);
+}
+@keyframes hm-tooltip-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ===========================================================
+ * Phosphor variants: the three real CRT chemistries. P1 green is
+ * the @theme default above; P3 amber and P4 white-blue override ONLY
+ * the phosphor-family tokens (surfaces, borders, text tiers, accent).
+ * Semantic colors (danger/warning/info) are deliberately untouched:
+ * meaning must not change with the glass. Contrast validated per
+ * theme against its own field (text ≥17:1, muted ≈5:1, faint ≥3.6:1).
+ * Selected via data-phosphor on <html>, persisted in localStorage,
+ * applied pre-paint by an inline script in index.html.
+ * =========================================================== */
+:root[data-phosphor="amber"] {
+  --color-screen:    #030202;
+  --color-bg:        #0A0806;
+  --color-surface-1: #0F0C08;
+  --color-surface-2: #15110B;
+  --color-surface-3: #1C1710;
+  --color-surface-4: #251E14;
+  --color-border:        #33291A;
+  --color-border-strong: #55452B;
+  --color-border-bright: #7E6A44;
+  --color-text:       #F7EDD7;
+  --color-text-dim:   #CDB593;
+  --color-text-muted: #8E7B58;
+  --color-text-faint: #7E6B4B;
+  --color-accent:        #FFB000;
+  --color-accent-ink:    #FFC65C;
+  --color-accent-hover:  #FFC64D;
+  --color-accent-dim:    rgba(255, 176, 0, 0.12);
+  --color-accent-faint:  rgba(255, 176, 0, 0.05);
+  --color-accent-glow:   rgba(255, 176, 0, 0.5);
+}
+
+:root[data-phosphor="white"] {
+  --color-screen:    #020304;
+  --color-bg:        #070A0C;
+  --color-surface-1: #0B1013;
+  --color-surface-2: #101619;
+  --color-surface-3: #151D21;
+  --color-surface-4: #1C262B;
+  --color-border:        #1F2E38;
+  --color-border-strong: #3A5260;
+  --color-border-bright: #5B7A8C;
+  --color-text:       #ECF2F7;
+  --color-text-dim:   #B4C5D2;
+  --color-text-muted: #7B8C99;
+  --color-text-faint: #64747F;
+  --color-accent:        #A8D8FF;
+  --color-accent-ink:    #C4E4FF;
+  --color-accent-hover:  #CFE8FF;
+  --color-accent-dim:    rgba(168, 216, 255, 0.12);
+  --color-accent-faint:  rgba(168, 216, 255, 0.05);
+  --color-accent-glow:   rgba(168, 216, 255, 0.45);
+}
