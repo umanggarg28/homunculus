@@ -69,6 +69,8 @@ def create_app(model: Model, tools: list[Tool], activity: ActivityLog,
 
 `create_app` takes the model, tools and activity log as arguments, so tests can pass a scripted stand-in and temporary folders, and the real program passes `OpenRouterModel` and the data directory.
 
+The data directory is the operating system's place for application data (`~/Library/Application Support/homunculus` on macOS, `~/.local/share/homunculus` on Linux), found with `platformdirs`, or `HOMUNCULUS_HOME` when set. It holds `workspace/` and `activity.jsonl`, and stays outside the repository.
+
 ## Design rules
 
 - **Privacy routing is fixed in code.** Every request carries `{"zdr": true, "data_collection": "deny"}`. There is no switch to turn it off.

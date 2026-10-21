@@ -38,7 +38,7 @@ Every model request asks OpenRouter to route only to providers that keep no copy
 
 The server listens on `127.0.0.1` only, so nothing else on your network can reach it.
 
-The agent's files live in a data directory outside this repository, `~/homunculus-data` by default (set `HOMUNCULUS_HOME` to change it). Its tools can only touch the `workspace` folder inside it: any path that leads outside, including through `..` or a symbolic link, is refused.
+The agent's files live in a data directory outside this repository, in the operating system's standard place for application data: `~/Library/Application Support/homunculus` on macOS and `~/.local/share/homunculus` on Linux. Set `HOMUNCULUS_HOME` to use another folder. Its tools can only touch the `workspace` folder inside it: any path that leads outside, including through `..` or a symbolic link, is refused.
 
 ## Quick start
 
@@ -73,7 +73,7 @@ data: {}
 
 If the request fails, the stream ends with an `error` event that says why, for example `Model request failed (401): ...` for a wrong key.
 
-To see a tool in use, send `"Save a note called tea.md that says I like green tea."`. The file appears in `~/homunculus-data/workspace/`, and the step is recorded in `~/homunculus-data/activity.jsonl`.
+To see a tool in use, send `"Save a note called tea.md that says I like green tea."`. The file appears in the data directory's `workspace/` folder, and the step is recorded in its `activity.jsonl`. On macOS, `open ~/Library/Application\ Support/homunculus` shows them in Finder.
 
 ## The web console
 
