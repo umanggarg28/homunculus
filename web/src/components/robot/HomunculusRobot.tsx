@@ -1,22 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 
-/** HOMUNCULUS: PIXEL ROBOT (LED-cell build).
+/** HOMUNCULUS: the pixel robot.
  *
- *  A drop-in replacement for the original smooth-canvas robot. The figure
- *  is drawn as a grid of phosphor LED cells: the SAME visual language as
- *  DotMatrixWordmark: so it reads as "the same display, awake" rather than
- *  a mascot pasted on top.
- *
- *  Public API is unchanged: same exports, same props. `useRobotState.ts`
- *  and every call site keep working with no edits. `noDust` / `filled`
- *  are accepted for compatibility but are no-ops in the pixel build.
- *
- *  States: boot | idle | listening | thinking | working | responding |
- *          success | error
+ *  The figure is drawn as a grid of phosphor LED cells, the same visual
+ *  language as DotMatrixWordmark, so it reads as part of the display rather
+ *  than a mascot placed on top. Its state comes from useRobotState.
  */
 export type RobotState =
-  | "boot" | "idle" | "listening" | "thinking" | "working"
+  | "boot" | "idle" | "thinking" | "working"
   | "responding" | "success" | "error";
+
+/** How each state is named wherever it is shown. */
+export const ROBOT_STATE_LABELS: Record<RobotState, string> = {
+  boot: "INIT",
+  idle: "IDLE",
+  thinking: "THINKING",
+  working: "WORKING",
+  responding: "RESPONDING",
+  success: "DONE",
+  error: "FAULT",
+};
 
 export type RobotDetail = "high" | "mid" | "low";
 export type RobotPalette = "phosphor" | "cream" | "amber" | "cyan" | "white";
@@ -25,10 +28,6 @@ interface Props {
   state: RobotState;
   detail?: RobotDetail;
   palette?: RobotPalette;
-  /** accepted for API compat: no-op in the pixel build */
-  noDust?: boolean;
-  /** accepted for API compat: no-op in the pixel build */
-  filled?: boolean;
   className?: string;
   style?: React.CSSProperties;
 }
@@ -164,7 +163,6 @@ export function HomunculusRobot({
       switch (cur) {
         case "boot": pose.eyeLook = [0, 0]; pose.antenna = 1; break;
         case "idle": pose.antenna = 0.35 + Math.sin(t * 1.5) * 0.1; break;
-        case "listening": pose.eyeLook = [lookCur[0] * 0.5, -0.5]; pose.antenna = 0.85; pose.showEars = true; break;
         case "thinking": pose.eyeLook = [0.8, -1]; pose.antenna = 0.9; pose.treadPhase = Math.sin(t * 0.6); pose.showThought = true; break;
         case "working": pose.eyeLook = [0, 1]; pose.arms = "work"; pose.antenna = 0.6; break;
         case "responding": pose.eyeLook = [0, 0]; pose.antenna = 0.85; pose.showSpeech = true; pose.speak = (Math.sin(t * 6) + 1) * 0.5; break;
@@ -185,7 +183,7 @@ export function HomunculusRobot({
     const updateLook = () => {
       const cur = stateRef.current;
       const c = cursorOffset(canvas);
-      const allow = cur === "idle" || cur === "listening" || cur === "responding" || cur === "boot";
+      const allow = cur === "idle" || cur === "responding" || cur === "boot";
       const active = c.recent && c.dist < 800 && allow;
       if (active) {
         const tx = c.nx * 1.0, ty = c.ny * 0.8;

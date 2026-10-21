@@ -45,7 +45,7 @@ If the model call fails at any point, `model` raises `ModelError`, `server` send
 
 ## The web console
 
-`web/` is a React and Vite app, kept from the earlier version for its look and components and reduced to what v2 has: the shell and the chat screen. `useChatStream` reads the chat stream and records each turn event (message sent, tool step, reply finished, error, stopped) in a small in-page store, `lib/turnEvents.ts`. The sidebar robot and the thinking indicator read that store, so what they show always matches an event the server sent. Screens are added as their backends are built.
+`web/` is a React and Vite app, kept from the earlier version for its look and components and reduced to what v2 has: the shell and the chat screen. `useChatStream` reads the chat stream and records each turn event (message sent, tool step, reply finished, error, stopped) in a small in-page store, `lib/turnEvents.ts`. The robot's state is computed once from that store and shared, so the header and the sidebar always agree. One rule in `lib/toolSteps.ts` decides whether a tool step failed, for every part of the console. Nothing the console shows is invented: each state matches an event the server sent, and the boot screen's status line is the result of a real request. Screens are added as their backends are built.
 
 ## Interfaces
 
@@ -89,5 +89,6 @@ Tests sit at agreed seams and fake only the outside world.
 | Loop | Streaming, when the loop stops, history handling, and every tool through a scripted tool call | The model (a scripted stand-in) |
 | Gate | Each row of the table, and refusal when a call cannot be read | Nothing |
 | Server HTTP API | Event format including tool steps, errors, one reply at a time, privacy routing on every request, tools offered and streamed tool calls run, history, serving the console | The model, or only the network beneath the real model |
+| Console in a browser | Sending a message shows the tool step and the reply, and the conversation survives a reload | The model only; real server, built console and Chromium |
 
-Tests run with network access blocked, so a test that reaches the internet fails.
+Tests run with network access blocked, so a test that reaches the internet fails. Browser tests are marked `browser` and run separately with `uv run pytest -m browser`, after `npm run build` in `web/` and `uv run playwright install chromium`.

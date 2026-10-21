@@ -4,8 +4,6 @@ interface Props {
   sending: boolean;
   onSend: (text: string) => void;
   onCancel?: () => void;
-  lastToolName?: string;
-  toolCount?: number;
 }
 
 /** Palette entries. Each one inserts a plain-language prompt for the agent;
@@ -31,9 +29,9 @@ export function BrutalistChatInput({ sending, onSend, onCancel }: Props) {
     if (!sending && ref.current) ref.current.focus();
   }, [sending]);
 
-  // Palette opens while the draft is still a bare command word: once a
-  // space lands (e.g. after the `/use ` insert) the user is writing
-  // arguments and the palette gets out of the way.
+  // The palette shows while the draft is still a bare command word. Once a
+  // space is typed the operator is writing the rest of the prompt, and the
+  // palette gets out of the way.
   const matches =
     value.startsWith("/") && !/[\s]/.test(value) && !paletteDismissed
       ? PALETTE.filter((p) => p.cmd.startsWith(value))
@@ -64,7 +62,7 @@ export function BrutalistChatInput({ sending, onSend, onCancel }: Props) {
       if (e.key === "Escape") { e.preventDefault(); setPaletteDismissed(true); return; }
     }
     if (e.key === "Escape" && value) {
-      // The footer has promised "esc clear" since day one: honor it.
+      // Escape clears the draft, as the footer hint says.
       e.preventDefault();
       setValue("");
       if (ref.current) ref.current.style.height = "auto";

@@ -4,13 +4,12 @@ import { MarkdownMessage } from "./MarkdownMessage";
 import { BrutalistToolBlock } from "./BrutalistToolBlock";
 import { ThinkingIndicator } from "./ThinkingIndicator";
 import type { ChatMessage } from "@/hooks/useChatStream";
-import type { ToolCallEntry } from "./ToolCallCard";
+import type { ToolStep } from "@/lib/toolSteps";
 
 interface Props {
   message: ChatMessage;
-  toolCalls: ToolCallEntry[];
+  toolCalls: ToolStep[];
   sending: boolean;
-  turnNumber: number;
 }
 
 /** One chat turn with a left data-rail.
@@ -121,7 +120,7 @@ function UserPrompt({ content }: { content: string }) {
 
 interface AgentReplyProps {
   message: ChatMessage;
-  toolCalls: ToolCallEntry[];
+  toolCalls: ToolStep[];
   inFlight: boolean;
   sending: boolean;
 }
@@ -197,9 +196,8 @@ function Cursor() {
 }
 
 function fmtTime(ts?: string) {
-  // No timestamp → render an em-dash. Fabricating from Date.now()
-  // makes restored history appear to have happened now, which is
-  // confusing when the persisted content references a different time.
+  // Messages loaded from history carry no time. Showing the current time
+  // instead would claim they were written now.
   if (!ts) return "--:--";
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return "--:--";

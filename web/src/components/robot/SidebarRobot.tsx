@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { HomunculusRobot } from "./HomunculusRobot";
+import { HomunculusRobot, ROBOT_STATE_LABELS } from "./HomunculusRobot";
 import { useRobotState } from "@/hooks/useRobotState";
-import { isFailedStep, useTurnEvents, type TurnEvent } from "@/lib/turnEvents";
+import { isFailedToolEvent, useTurnEvents, type TurnEvent } from "@/lib/turnEvents";
 
 /** The sidebar presence: pixel robot in a unit card, alive.
  *
  *  Behaviour, in the manner of a desktop pet:
  *  - body leans toward the cursor; close approach makes it perk up
- *  - ~3% of idle "blinks" corrupt into a 140ms red glitch + SIGNAL LOST
+ *  - ~3% of idle "blinks" corrupt into a 140ms visual glitch
  *  - poke it 4× in 8s and it shakes, glares and complains
  *  - a finished reply earns a small hop
  *  - idle mutterings occasionally come from an ominous pool
@@ -26,27 +26,15 @@ interface BubbleMsg {
 }
 
 const HI_PHRASES = ["hi.", "yeah?", "hm?", "yes?", "what's up?", "operator detected."];
-const IDLE_PHRASES = ["…zzz", "still here.", "anything?", "…thinking…"];
+const IDLE_PHRASES = ["…zzz", "still here.", "anything?"];
 /** Darker idle lines, drawn for about 15% of idle speech. */
 const OMINOUS_PHRASES = [
-  "containment holding.",
   "i don't sleep. i wait.",
   "i could do this without you.",
-  "all systems nominal. for now.",
   "i remember everything.",
 ];
 const ANNOYED_PHRASES = ["i'm working.", "stop that.", "(sigh)", "noted. again."];
 
-const STATE_LABELS: Record<string, string> = {
-  idle: "ALIVE",
-  boot: "INIT",
-  listening: "LISTENING",
-  thinking: "THINKING",
-  working: "WORKING",
-  responding: "RESPONDING",
-  success: "DONE",
-  error: "FAULT",
-};
 
 export function SidebarRobot() {
   const robotState = useRobotState();
@@ -163,10 +151,8 @@ export function SidebarRobot() {
     speak(phrase, { durationMs: 1800 });
   };
 
-  const stateLabel = glitching
-    ? "SIGNAL LOST"
-    : STATE_LABELS[robotState] ?? robotState.toUpperCase();
-  const pipColor = glitching || robotState === "error"
+  const stateLabel = ROBOT_STATE_LABELS[robotState];
+  const pipColor = robotState === "error"
     ? "var(--color-danger)"
     : "var(--color-accent)";
 
@@ -214,8 +200,6 @@ export function SidebarRobot() {
             state={robotState}
             detail="mid"
             palette="phosphor"
-            filled
-            noDust
             style={{ width: "100%", height: "100%", display: "block" }}
           />
         </div>
@@ -347,7 +331,7 @@ function bubbleForEvent(e: TurnEvent): { text: string; color?: string; durationM
     case "user_message":
       return { text: "hmm…", durationMs: 1400 };
     case "tool":
-      if (isFailedStep(e)) return { text: "ugh.", color: "var(--color-danger)", durationMs: 3000 };
+      if (isFailedToolEvent(e)) return { text: "ugh.", color: "var(--color-danger)", durationMs: 3000 };
       return { text: `${(e.name ?? "tool").toLowerCase()}: done.`, color: "var(--color-accent)", durationMs: 1800 };
     case "assistant_reply":
       return { text: "there.", color: "var(--color-accent)", durationMs: 1800 };

@@ -1,27 +1,21 @@
 import type { ReactNode } from "react";
 import { useRobotState } from "@/hooks/useRobotState";
+import { ROBOT_STATE_LABELS } from "@/components/robot/HomunculusRobot";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { PALETTE_OPEN_EVENT } from "@/components/layout/CommandPalette";
 
 interface PageHeaderProps {
-  /** @deprecated alias for title: kept for older pages. */
-  latin?: string;
-  title?: string;
+  title: string;
   subtitle?: string;
   actions?: ReactNode;
 }
 
-const STATE_LABELS: Record<string, string> = {
-  idle: "IDLE", boot: "INIT", listening: "LISTENING",
-  thinking: "THINKING", working: "WORKING", responding: "RESPONDING",
-  success: "DONE", error: "FAULT",
-};
 
 /** Brutalist page header: `$ TITLE` with subtitle, unit crumb, and optional actions. */
-export function PageHeader({ latin, title, subtitle, actions }: PageHeaderProps) {
-  const heading = title ?? latin;
+export function PageHeader({ title, subtitle, actions }: PageHeaderProps) {
+  const heading = title;
   const robotState = useRobotState();
-  const stateLabel = STATE_LABELS[robotState] ?? robotState.toUpperCase();
+  const stateLabel = ROBOT_STATE_LABELS[robotState];
   const isActive = !["idle", "boot"].includes(robotState);
 
   return (
@@ -36,9 +30,7 @@ export function PageHeader({ latin, title, subtitle, actions }: PageHeaderProps)
              and page actions are orientation, not content. Opaque bg so
              scrolled content passes beneath, under the hairline. */
           position: sticky;
-          /* Below the alert strip when one is showing (AlertBanner
-             publishes its measured height); flush to the top otherwise. */
-          top: var(--hm-alert-offset, 0px);
+          top: 0;
           z-index: 30;
           background: var(--color-bg);
           padding-top: 10px;
@@ -77,7 +69,7 @@ export function PageHeader({ latin, title, subtitle, actions }: PageHeaderProps)
 
       {/* Right: palette hint + unit crumb + actions */}
       <div className="shrink-0 flex items-center gap-4">
-        <Tooltip text="Command palette: jump to any page by typing. Also opens with ⌘K / Ctrl+K." placement="bottom">
+        <Tooltip text="Command palette: run a command by typing its name. Also opens with ⌘K / Ctrl+K." placement="bottom">
           <button
             onClick={() => window.dispatchEvent(new CustomEvent(PALETTE_OPEN_EVENT))}
             className="text-[9px] uppercase tracking-[0.18em]"

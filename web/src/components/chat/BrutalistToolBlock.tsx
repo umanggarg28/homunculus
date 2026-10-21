@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import type { ToolCallEntry } from "./ToolCallCard";
+import { isFailedStep, type ToolStep } from "@/lib/toolSteps";
 
 /** Tool-call rendered as a bordered receipt panel.
  *
@@ -9,33 +9,22 @@ import type { ToolCallEntry } from "./ToolCallCard";
  *  ┃  ↩     <result preview>
  *                              [EXPAND ▼]
  *
- *  Click to expand/collapse result.
+ *  Steps arrive complete, after the gate answered and the tool ran or did
+ *  not. Click to expand or collapse the result.
  */
-export function BrutalistToolBlock({ entry }: { entry: ToolCallEntry }) {
+export function BrutalistToolBlock({ entry }: { entry: ToolStep }) {
   const [expanded, setExpanded] = useState(false);
-  const inFlight = entry.result === undefined;
-  const duration = entry.durationMs ?? Math.max(0, Date.now() - entry.startedAt);
-  const isError = !inFlight && /^error/i.test(entry.result ?? "");
-
-  const accentColor = inFlight
-    ? "var(--color-amber)"
-    : isError
-      ? "var(--color-danger)"
-      : "var(--color-border-bright)";
-
-  const statusColor = inFlight
-    ? "var(--color-amber)"
-    : isError
-      ? "var(--color-danger)"
-      : "var(--color-accent)";
-
-  const statusLabel = inFlight ? "RUNNING" : isError ? "ERR" : "OK";
-  const args = parseArgs(entry.args);
+  const isError = isFailedStep(entry.answer, entry.result);
+  const accentColor = isError ? "var(--color-danger)" : "var(--color-border-bright)";
+  const statusColor = isError ? "var(--color-danger)" : "var(--color-accent)";
+  // The gate's answer when it did not let the tool run; otherwise the outcome.
+  const statusLabel = entry.answer !== "act" ? entry.answer.toUpperCase() : isError ? "ERR" : "OK";
+  const args = parseArgs(entry.arguments);
 
   return (
     <div
       className="mb-2 cursor-pointer"
-      onClick={() => !inFlight && setExpanded((v) => !v)}
+      onClick={() => setExpanded((v) => !v)}
       style={{ fontFamily: "var(--font-mono)" }}
     >
       {/* Header row */}
@@ -62,10 +51,10 @@ export function BrutalistToolBlock({ entry }: { entry: ToolCallEntry }) {
             color: statusColor,
             border: `1px solid ${statusColor}`,
             padding: "1px 7px",
-            background: inFlight ? "rgba(255,176,0,0.06)" : "transparent",
+            background: "transparent",
           }}
         >
-          {statusLabel} · {formatDuration(duration)}
+          {statusLabel} · {formatDuration(entry.durationMs)}
         </span>
       </div>
 
@@ -112,7 +101,7 @@ export function BrutalistToolBlock({ entry }: { entry: ToolCallEntry }) {
         )}
 
         {/* Result: animated expand */}
-        {entry.result !== undefined && entry.result && (
+        {entry.result && (
           <>
             <AnimatePresence>
               {expanded && (
@@ -174,7 +163,7 @@ export function BrutalistToolBlock({ entry }: { entry: ToolCallEntry }) {
       </div>
 
       {/* Expand/collapse hint: only when there's a result */}
-      {!inFlight && entry.result && (
+      {entry.result && (
         <div
           className="text-[9px] uppercase tracking-[0.22em] text-right pt-1"
           style={{ color: "var(--color-text-faint)" }}

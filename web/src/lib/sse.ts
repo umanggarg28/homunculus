@@ -3,20 +3,11 @@
 // SSE format: events separated by blank lines, each event is one or more
 // lines like `data: <payload>` or `event: <name>`. The browser's native
 // EventSource handles this for GET requests, but for our streaming POST
-// (/api/chat/send) we read the response body manually and parse it ourselves.
+// (/api/chat) we read the response body manually and parse it ourselves.
 
 export interface ParsedSseEvent {
   event?: string;
   data: string;
-}
-
-export function decodeJsonSseData(data: string): string {
-  try {
-    const decoded = JSON.parse(data);
-    return typeof decoded === "string" ? decoded : data;
-  } catch {
-    return data;
-  }
 }
 
 /** Walk a buffered chunk of SSE text and yield complete events.

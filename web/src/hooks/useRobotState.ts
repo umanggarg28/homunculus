@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from "react";
-import { isFailedStep, useTurnEvents } from "@/lib/turnEvents";
+import { createContext, createElement, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { isFailedToolEvent, useTurnEvents } from "@/lib/turnEvents";
 import type { RobotState } from "@/components/robot/HomunculusRobot";
 
 /** Map what is happening in the current chat turn to the robot's state.
+ *  It is computed once, in RobotStateProvider, and read with useRobotState,
+ *  so every place that shows the state shows the same one.
  *
  *  Each new event moves the robot once:
  *    - user_message      → thinking
@@ -12,7 +14,7 @@ import type { RobotState } from "@/components/robot/HomunculusRobot";
  *    - stopped           → idle
  *  While no turn is in progress, ten seconds of silence returns it to idle.
  */
-export function useRobotState(options?: { bootDurationMs?: number }): RobotState {
+function useComputedRobotState(options?: { bootDurationMs?: number }): RobotState {
   const { events } = useTurnEvents(80);
   const [state, setState] = useState<RobotState>("boot");
   const bootMs = options?.bootDurationMs ?? 2700;
@@ -42,7 +44,7 @@ export function useRobotState(options?: { bootDurationMs?: number }): RobotState
     handledRef.current = key;
     clearTimers();
 
-    if (last.event === "error" || isFailedStep(last)) {
+    if (last.event === "error" || isFailedToolEvent(last)) {
       setState("error");
       later(2400, "idle");
     } else if (last.event === "tool") {
@@ -63,4 +65,15 @@ export function useRobotState(options?: { bootDurationMs?: number }): RobotState
   }, [events]);
 
   return state;
+}
+
+const RobotStateContext = createContext<RobotState>("boot");
+
+export function RobotStateProvider({ children }: { children: ReactNode }) {
+  return createElement(RobotStateContext.Provider, { value: useComputedRobotState() }, children);
+}
+
+/** The robot's current state, shared by everything inside RobotStateProvider. */
+export function useRobotState(): RobotState {
+  return useContext(RobotStateContext);
 }

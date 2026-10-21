@@ -8,7 +8,6 @@ import { PhosphorToggle } from "./PhosphorToggle";
 
 interface NavItem { to: string; label: string; short: string; kbd?: string; }
 
-// Screens are added here as each one is built: activity, approvals, wiki, skills.
 const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
   {
     title: "WORK",
@@ -159,9 +158,8 @@ export function Sidebar() {
       <nav className="flex-1 px-3 pt-3 pb-2 flex flex-col gap-3 overflow-y-auto">
         {NAV_GROUPS.map((group) => (
           <div key={group.title}>
-            {/* Group header: the visual separation between sections
-                (gap-3 wrap above) already signals grouping; the leading
-                "── " was redundant operator-noise. */}
+            {/* Group header. The gap between groups already separates them,
+                so the header is plain text with no rule. */}
             <div
               className="text-[9px] uppercase tracking-[0.22em] mb-1 px-1"
               style={{ color: "var(--color-text-faint)" }}

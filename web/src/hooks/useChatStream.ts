@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { parseSseChunks } from "@/lib/sse";
 import { recordTurnEvent } from "@/lib/turnEvents";
-import type { ToolCallEntry } from "@/components/chat/ToolCallCard";
+import type { ToolStep } from "@/lib/toolSteps";
 
 export interface ChatMessage {
   id: string;
@@ -19,13 +19,14 @@ export interface ChatMessage {
 interface UseChatStream {
   messages: ChatMessage[];
   /** Tool steps of the reply currently being written, in order. */
-  toolCalls: ToolCallEntry[];
+  toolCalls: ToolStep[];
   sending: boolean;
   historyLoading: boolean;
   send: (text: string) => Promise<void>;
   cancel: () => void;
 }
 
+/** A `tool` event as the server sends it. */
 interface ToolEvent {
   name: string;
   arguments: string;
@@ -38,7 +39,7 @@ interface ToolEvent {
  *  the last assistant message in place, so re-renders stay cheap. */
 export function useChatStream(): UseChatStream {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [toolCalls, setToolCalls] = useState<ToolCallEntry[]>([]);
+  const [toolCalls, setToolCalls] = useState<ToolStep[]>([]);
   const [sending, setSending] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
@@ -106,10 +107,10 @@ export function useChatStream(): UseChatStream {
                 ...prev,
                 {
                   name: step.name,
-                  args: step.arguments,
+                  answer: step.answer,
+                  arguments: step.arguments,
                   result: step.result,
                   durationMs: step.duration_ms,
-                  startedAt: Date.now(),
                 },
               ]);
               recordTurnEvent({ event: "tool", name: step.name, answer: step.answer, result: step.result });
@@ -137,8 +138,9 @@ export function useChatStream(): UseChatStream {
     [sending],
   );
 
-  /** Stop reading the reply. The server sees the connection close and drops the
-   *  unfinished turn, so it is not added to the conversation. */
+  /** Stop reading the reply. The server sees the connection close and leaves the
+   *  unfinished turn out of the conversation. Tool calls that already ran are not
+   *  undone. */
   const cancel = useCallback(() => abortRef.current?.abort(), []);
 
   return { messages, toolCalls, sending, historyLoading, send, cancel };

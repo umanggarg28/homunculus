@@ -214,3 +214,15 @@ def test_the_built_console_is_served_with_its_routes(tmp_path: Path) -> None:
     assert client.get("/assets/app.js").text == "console.log(1)"
     assert client.get("/api/history").json() == []
     assert client.get("/api/unknown").status_code == 404
+    assert client.get("/api").status_code == 404
+
+
+def test_a_console_build_without_assets_still_starts(tmp_path: Path) -> None:
+    console = tmp_path / "console"
+    console.mkdir()
+    (console / "index.html").write_text("<html>console</html>")
+    activity = ActivityLog(tmp_path / "activity.jsonl")
+
+    client = TestClient(create_app(ScriptedModel([]), [], activity, console=console))
+
+    assert client.get("/chat").text == "<html>console</html>"

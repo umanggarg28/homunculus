@@ -93,6 +93,10 @@ uv run pytest        # tests (no network access allowed)
 uv run mypy          # type checks
 uv run ruff check    # lint
 uv run ruff format   # formatting
+
+# The console in a real browser (needs the console built and Chromium installed)
+uv run playwright install chromium
+uv run pytest -m browser
 ```
 
 The same checks run on every pull request, along with a production build of the console.

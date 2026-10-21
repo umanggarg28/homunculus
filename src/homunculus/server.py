@@ -65,13 +65,14 @@ def create_app(
         ]
 
     if console is not None:
-        app.mount("/assets", StaticFiles(directory=console / "assets"), name="assets")
+        if (console / "assets").is_dir():
+            app.mount("/assets", StaticFiles(directory=console / "assets"), name="assets")
 
         # Every other path is a screen of the single-page console, which picks the
         # screen from the address itself, so each one is answered with index.html.
         @app.get("/{path:path}", include_in_schema=False)
         async def screen(path: str) -> FileResponse:
-            if path.startswith("api/"):
+            if path == "api" or path.startswith("api/"):
                 raise HTTPException(status_code=404)
             file = (console / path).resolve()
             if path and file.is_file() and file.is_relative_to(console.resolve()):

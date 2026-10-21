@@ -1,25 +1,28 @@
 import { useEffect, useState } from "react";
 import { DotMatrixWordmark } from "./DotMatrixWordmark";
+import { api } from "@/lib/api";
 
-/** One-shot terminal boot sequence shown only on the FIRST page load
- *  per browser tab. Stores a sentinel in sessionStorage so subsequent
- *  navigations skip it. Total runtime ~1.6s, then a 250ms fade out.
+/** One-shot terminal boot sequence, shown on the first page load in a tab.
+ *  A sessionStorage sentinel skips it on later navigations.
  *
- *  Renders as a full-screen overlay above everything (z-9999),
- *  printing six terminal lines in sequence with phosphor type. */
+ *  Its status line is the result of a real request to the server, so the
+ *  overlay never reports a check it did not make. */
 
-const LINES: { text: string; delay: number }[] = [
-  { text: "$ homunculus --boot", delay: 0 },
-  { text: "[OK] console attached", delay: 220 },
-  { text: "[OK] model routing · private providers only", delay: 400 },
-  { text: "[OK] gate armed · fails closed", delay: 580 },
-  { text: "[OK] workspace fenced · tools stay inside", delay: 760 },
-  { text: "[OK] ready · awaiting directive", delay: 980 },
-];
-
-const FINAL_DELAY = 1500;
+const COMMAND = "$ homunculus --boot";
+const MIN_CHECK_MS = 300;
+const HOLD_MS = 700;
 const FADE_MS = 250;
 const STORAGE_KEY = "homunculus_booted_v1";
+
+async function checkServer(): Promise<string> {
+  try {
+    const history = await api.history();
+    const turns = history.filter((m) => m.role === "user").length;
+    return `[OK] server reachable · ${turns} turn${turns === 1 ? "" : "s"} in this conversation`;
+  } catch {
+    return "[!!] server unreachable · start it with uv run homunculus";
+  }
+}
 
 export function BootSequence() {
   const [show, setShow] = useState<boolean>(() => {
@@ -30,21 +33,28 @@ export function BootSequence() {
       return false;
     }
   });
-  const [printed, setPrinted] = useState(0);
+  const [lines, setLines] = useState<string[]>([COMMAND]);
   const [fading, setFading] = useState(false);
 
   useEffect(() => {
     if (!show) return;
+    let cancelled = false;
     const timers: ReturnType<typeof setTimeout>[] = [];
-    LINES.forEach((_, i) => {
-      timers.push(setTimeout(() => setPrinted((p) => Math.max(p, i + 1)), LINES[i].delay));
+    const started = Date.now();
+    checkServer().then((status) => {
+      if (cancelled) return;
+      const wait = Math.max(0, MIN_CHECK_MS - (Date.now() - started));
+      timers.push(setTimeout(() => setLines([COMMAND, status]), wait));
+      timers.push(setTimeout(() => setFading(true), wait + HOLD_MS));
+      timers.push(setTimeout(() => {
+        try { sessionStorage.setItem(STORAGE_KEY, "1"); } catch { /* storage unavailable */ }
+        setShow(false);
+      }, wait + HOLD_MS + FADE_MS));
     });
-    timers.push(setTimeout(() => setFading(true), FINAL_DELAY));
-    timers.push(setTimeout(() => {
-      try { sessionStorage.setItem(STORAGE_KEY, "1"); } catch { /* ignore */ }
-      setShow(false);
-    }, FINAL_DELAY + FADE_MS));
-    return () => timers.forEach(clearTimeout);
+    return () => {
+      cancelled = true;
+      timers.forEach(clearTimeout);
+    };
   }, [show]);
 
   if (!show) return null;
@@ -82,29 +92,32 @@ export function BootSequence() {
           background: "rgba(0,0,0,0.45)",
         }}
       >
-        {LINES.slice(0, printed).map((line, i) => {
-          const isOk = line.text.startsWith("[OK]");
-          const isCmd = line.text.startsWith("$");
+        {lines.map((text, i) => {
+          const isOk = text.startsWith("[OK]");
+          const isFail = text.startsWith("[!!]");
+          const isCmd = text.startsWith("$");
           return (
             <div
               key={i}
               style={{
-                color: isCmd ? "var(--color-accent)" : isOk ? "var(--color-text)" : "var(--color-text-muted)",
+                color: isCmd ? "var(--color-accent)" : isOk ? "var(--color-text)" : "var(--color-danger)",
                 whiteSpace: "pre-wrap",
               }}
             >
-              {isOk ? (
+              {isOk || isFail ? (
                 <>
-                  <span style={{ color: "var(--color-accent)" }}>[OK]</span>
-                  <span>{line.text.slice(4)}</span>
+                  <span style={{ color: isOk ? "var(--color-accent)" : "var(--color-danger)" }}>
+                    {text.slice(0, 4)}
+                  </span>
+                  <span>{text.slice(4)}</span>
                 </>
               ) : (
-                <span>{line.text}</span>
+                <span>{text}</span>
               )}
             </div>
           );
         })}
-        {/* Blinking cursor under last line */}
+        {/* Blinking cursor under the last line */}
         <div style={{ marginTop: 4 }}>
           <span style={{ color: "var(--color-text-muted)" }}>&gt; </span>
           <span

@@ -24,6 +24,7 @@ Diagrams are plain text, so they read the same in any editor.
 4. [Tools](#4-tools)
 5. [The gate](#5-the-gate)
 6. [The activity log](#6-the-activity-log)
+7. [The web console](#7-the-web-console)
 
 ---
 
@@ -817,6 +818,113 @@ In plain English: "If the model tries to overwrite the activity log through the 
 2. In `loop.py`, find `activity.record("error", error=str(error))` inside the `except ModelError` block and delete that line, keeping the `raise`.
 3. Run `uv run pytest tests/test_loop.py`. The failed-reply test fails: the log now shows your message and then nothing, so a reader could not tell the job failed. That silence is exactly what this line exists to prevent.
 4. Undo the change.
+
+---
+
+## 7. The web console
+
+Code: `web/src/`, mainly `hooks/useChatStream.ts`, `lib/sse.ts` and `lib/turnEvents.ts`. Test: `tests/browser/test_console.py`.
+
+### The problem
+
+Chapters 1 to 6 end at the server, which sends a stream of text events. A person needs a screen: somewhere to type, the reply appearing as it is written, the tool steps shown as they happen, and a sense of what the agent is doing. The console is that screen. It is a single-page web app the server hands out, so the whole agent is one program you open in a browser.
+
+### The idea
+
+**React** draws the screen from data. Components are functions that take values and return what to show. When a value changes, React redraws only what depends on it. A **hook** is a function, by convention named `use...`, that holds a piece of changing data for a component.
+
+**Reading a stream with `fetch`.** The browser's `EventSource` reads server-sent events only for `GET` requests, and a chat message is a `POST`. So the console sends the request with `fetch` and reads the response body piece by piece through `response.body.getReader()`. Pieces arrive at whatever size the network delivers. One piece can hold half an event or three events, so the console keeps a buffer and only takes out complete events, those ended by a blank line.
+
+**One source of truth for what is happening.** Every event the console receives is also recorded in `lib/turnEvents.ts`, a tiny in-page store. The robot in the sidebar and the thinking indicator read that store. The rule is that they show only what an event says. The console never guesses the agent's state.
+
+### A picture
+
+```
+ you press Enter
+      │
+      ▼
+ useChatStream.send("Save my priorities")
+      │  adds your message and an empty reply to `messages`
+      │  records { event: "user_message" }            ──►  turnEvents  ──►  robot: THINKING
+      ▼
+ fetch POST /api/chat  ──►  server (chapter 3)
+      │
+      ▼  response body, read piece by piece
+ buffer += piece ──► parseSseChunks(buffer) ──► complete events + leftover
+      │
+      ├─ tool   → add a ToolStep to `toolCalls`, record it  ──►  robot: WORKING
+      ├─ delta  → append the text to the reply in `messages`
+      ├─ error  → mark the reply failed, record it           ──►  robot: FAULT
+      └─ done   → record { event: "assistant_reply" }        ──►  robot: RESPONDING, DONE, IDLE
+```
+
+### One value, traced
+
+You type `Save my priorities` and press Enter. `BrutalistChatInput` calls `send("Save my priorities")` in `useChatStream`.
+
+**Before the request.** `send` adds two entries to `messages`, a list of `ChatMessage` objects that the chat log draws:
+
+```
+messages[-2] = { id: "…", role: "user", content: "Save my priorities", ts: "2026-10-21T08:40:01Z" }
+messages[-1] = { id: "…", role: "assistant", content: "", inFlight: true, ts: "…" }
+```
+
+The empty reply is a placeholder that text will be added to. `recordTurnEvent({ event: "user_message" })` puts the first event in the store, and the robot switches to THINKING.
+
+**The first piece of the body arrives.** Suppose it is this text, with one complete event and half of the next:
+
+```
+event: tool\ndata: {"name": "write", "arguments": "{…}", "answer": "act", "result": "Wrote priorities.md.", "duration_ms": 0}\n\nevent: del
+```
+
+`parseSseChunks(buffer)` splits on blank lines. That gives a list of 2 parts. The last part, `event: del`, may be incomplete, so it is returned as `remainder` and kept in `buffer` for next time:
+
+```
+parseSseChunks(buffer) -> { events: [{ event: "tool", data: '{"name": "write", …}' }], remainder: "event: del" }
+```
+
+`events` is a list of 1. `JSON.parse(data)` gives an object with `name`, `arguments`, `answer`, `result` and `duration_ms`. Because the event is `tool`, `send` adds a `ToolStep` to `toolCalls` (a list of 1 now), which draws the WRITE block, and records the step in the store. The robot switches to WORKING. `isFailedStep("act", "Wrote priorities.md.")` is `false`, so the block reads `OK · 0MS`.
+
+**The next piece** completes `event: delta\ndata: {"text": "Saved "}`. Now `buffer` is `event: del` plus the new text, which makes a whole event. `update` replaces the placeholder with a copy whose `content` is `"" + "Saved "`, so React redraws that one message. Each further `delta` appends again, and you watch the words arrive.
+
+**`done` arrives.** `recordTurnEvent({ event: "assistant_reply" })` makes the robot show RESPONDING, then DONE 1.5 seconds later, then IDLE. `finished` becomes `true`, the reading loop stops, and in `finally` the reply's `inFlight` is set to `false` and `sending` to `false`, so the input is ready again.
+
+**After a reload**, the hook asks `GET /api/history` and gets a list of 2 entries, your message and the reply, without times. The log shows `--:--` instead of a time, because inventing one would claim the messages were written now.
+
+**Where each value lives.** `messages` and `toolCalls` belong to `useChatStream` and are drawn by the chat log. The store in `turnEvents` is read by the robot (`useRobotState`) and the thinking indicator, and never by the log. `buffer` exists only inside one call to `send`.
+
+### The test
+
+```python
+def test_sending_a_message_shows_the_tool_step_and_the_reply(
+    page: Page, console_url: str, workspace: Path
+) -> None:
+    page.goto(f"{console_url}/chat")
+
+    page.locator("textarea").fill("Save my priorities")
+    page.locator("textarea").press("Enter")
+
+    expect(page.get_by_text("Saved priorities.md.")).to_be_visible()
+    expect(page.get_by_text("write", exact=True)).to_be_visible()
+    expect(page.get_by_text("OK ·")).to_be_visible()
+    assert (workspace / "priorities.md").read_text() == "1. Rest"
+
+    page.reload()
+
+    expect(page.get_by_text("Save my priorities")).to_be_visible()
+    expect(page.get_by_text("Saved priorities.md.")).to_be_visible()
+```
+
+In plain English: "In a real browser, typing a message and pressing Enter shows the tool step and the reply, really writes the file, and after a reload the conversation is still there."
+
+It runs the real server and the built console, with only the model replaced by the scripted stand-in. Playwright drives a real Chromium browser. Because it needs the console built and a browser installed, it is marked `browser` and runs on its own: `uv run pytest -m browser`.
+
+### Change it yourself
+
+1. In `web/src/lib/toolSteps.ts`, change `isFailedStep` to return `false` always.
+2. Run `npm run build` in `web/`, then send a message the gate refuses through the README quick start, for example one asking the agent to write `../outside.md`.
+3. The tool block now says `REFUSE` in green, as though all were well, while the server said the step was not done. That is the kind of invented state this one shared rule prevents.
+4. Undo the change and build again.
 
 ---
 

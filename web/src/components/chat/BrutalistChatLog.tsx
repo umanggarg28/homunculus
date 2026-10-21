@@ -1,29 +1,29 @@
 import { Fragment, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import type { ChatMessage } from "@/hooks/useChatStream";
-import type { ToolCallEntry } from "./ToolCallCard";
+import type { ToolStep } from "@/lib/toolSteps";
 import { BrutalistMessage } from "./BrutalistMessage";
 import { BrutalistLanding } from "./BrutalistLanding";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 
 interface Props {
   messages: ChatMessage[];
-  toolTimeline: ToolCallEntry[];
+  toolCalls: ToolStep[];
   sending: boolean;
   bootDone: boolean;
   historyLoading: boolean;
   onPickPrompt: (text: string) => void;
 }
 
-/** Months of history render slow and scroll worse: the log opens on
- *  the most recent tail and pages backward on demand. */
+/** A long conversation renders and scrolls slowly, so the log opens on the
+ *  most recent messages and pages backward on demand. */
 const WINDOW_INITIAL = 60;
 const WINDOW_STEP = 100;
 
 /** The brutalist chat surface: a single column of prompt rows
  *  and reasoning lines, with KEY|VAL|STATUS tool blocks between
  *  user turn and final agent reply. */
-export function BrutalistChatLog({ messages, toolTimeline, sending, bootDone, historyLoading, onPickPrompt }: Props) {
+export function BrutalistChatLog({ messages, toolCalls, sending, bootDone, historyLoading, onPickPrompt }: Props) {
   const [windowSize, setWindowSize] = useState(WINDOW_INITIAL);
   // Expanding the window adds content ABOVE the viewport; compensate
   // the scroll position so the reader stays on the message they were
@@ -42,11 +42,11 @@ export function BrutalistChatLog({ messages, toolTimeline, sending, bootDone, hi
   // Tool calls are known only for the reply being written now; earlier
   // turns are loaded from history as text.
   const assistantToolCalls = useMemo(() => {
-    const map = new Map<string, ToolCallEntry[]>();
+    const map = new Map<string, ToolStep[]>();
     const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
-    if (lastAssistant) map.set(lastAssistant.id, toolTimeline);
+    if (lastAssistant) map.set(lastAssistant.id, toolCalls);
     return map;
-  }, [messages, toolTimeline]);
+  }, [messages, toolCalls]);
 
   // Trigger auto-scroll on the streaming content's growing length. Using
   // the last message's character count means we scroll on every chunk
@@ -54,8 +54,8 @@ export function BrutalistChatLog({ messages, toolTimeline, sending, bootDone, hi
   const scrollTrigger = useMemo(() => {
     const last = messages[messages.length - 1];
     const lastLen = (last?.content ?? "").length;
-    return `${messages.length}:${lastLen}:${toolTimeline.length}:${sending ? 1 : 0}`;
-  }, [messages, toolTimeline, sending]);
+    return `${messages.length}:${lastLen}:${toolCalls.length}:${sending ? 1 : 0}`;
+  }, [messages, toolCalls, sending]);
   useAutoScroll(scrollTrigger);
 
   if (historyLoading) {
@@ -69,15 +69,8 @@ export function BrutalistChatLog({ messages, toolTimeline, sending, bootDone, hi
   const windowed = messages.slice(-windowSize);
   const hiddenCount = messages.length - windowed.length;
 
-  // Turn numbering = number of user messages so far + 1 for the
-  // current assistant reply that belongs to the same turn.
-  //
-  // Day dividers: timestamps render as bare HH:MM, so without a marker a
-  // session spanning midnight reads as one out-of-order thread (04:46
-  // above yesterday's 04:41). A divider is emitted whenever the calendar
-  // day changes: and above the first message when it isn't from today,
-  // so the oldest group is never the only unlabeled one.
-  let turn = 0;
+  // Times render as bare HH:MM, so a divider marks each change of calendar
+  // day, and the first message when it is not from today.
   let prevDay: string | null = null;
   return (
     <div className="flex flex-col gap-3">
@@ -97,7 +90,6 @@ export function BrutalistChatLog({ messages, toolTimeline, sending, bootDone, hi
         </button>
       )}
       {windowed.map((m) => {
-        if (m.role === "user") turn += 1;
         const tools = (m.role === "assistant" && assistantToolCalls.get(m.id)) || [];
         const day = m.ts ? dayKey(new Date(m.ts)) : prevDay;
         const needsDivider =
@@ -106,7 +98,7 @@ export function BrutalistChatLog({ messages, toolTimeline, sending, bootDone, hi
         return (
           <Fragment key={m.id}>
             {needsDivider && m.ts && <DayDivider ts={m.ts} />}
-            <BrutalistMessage message={m} toolCalls={tools} sending={sending} turnNumber={turn} />
+            <BrutalistMessage message={m} toolCalls={tools} sending={sending} />
           </Fragment>
         );
       })}
@@ -178,10 +170,7 @@ function SessionLoader() {
         }}
       >
         <div style={{ color: "var(--color-accent)" }}>$ homunculus --restore-session</div>
-        <div>
-          <span style={{ color: "var(--color-accent)" }}>[OK]</span>
-          <span> loading session history</span>
-        </div>
+        <div style={{ color: "var(--color-text-muted)" }}>loading the conversation…</div>
         <div style={{ marginTop: 4 }}>
           <span style={{ color: "var(--color-text-muted)" }}>&gt; </span>
           <motion.span

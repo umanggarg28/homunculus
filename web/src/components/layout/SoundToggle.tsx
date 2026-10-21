@@ -1,6 +1,6 @@
 import { useAudio } from "@/hooks/useAudio";
 
-/** Inline sidebar sound toggle: same visual language as ModeToggle. */
+/** Inline sidebar sound toggle, styled like the other sidebar controls. */
 export function SoundToggle() {
   const audio = useAudio();
 

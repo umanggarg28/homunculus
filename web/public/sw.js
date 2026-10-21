@@ -1,7 +1,6 @@
 // Homunculus PWA service worker.
-// Network-first for navigations (so deploys land immediately), cache-first
-// for hashed build assets. Intentionally minimal: no API caching, since
-// the dashboard data is always live.
+// Network-first for navigations, so a new build is picked up at once, and
+// cache-first for hashed build assets. API responses are never cached.
 
 const CACHE = "homunculus-shell-v1";
 const SHELL = ["/", "/manifest.json", "/icon.svg", "/icon-192.svg", "/icon-512.svg"];

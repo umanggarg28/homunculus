@@ -1,11 +1,10 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
-import { isFailedStep, useTurnEvents } from "@/lib/turnEvents";
+import { isFailedToolEvent, useTurnEvents } from "@/lib/turnEvents";
 
 interface TraceStep {
   id: string;
   ts: number;
-  kind: "llm" | "tool_call" | "tool_result" | "reply";
   label: string;
   isError?: boolean;
 }
@@ -53,9 +52,9 @@ export function ThinkingIndicator({ active }: { active: boolean }) {
       seenRef.current.add(id);
       if (e.event === "tool" && e.name) {
         toolCountRef.current += 1;
-        const isError = isFailedStep(e);
+        const isError = isFailedToolEvent(e);
         const label = isError ? `${e.name}: ${e.answer === "act" ? "error" : e.answer}` : e.name;
-        next.push({ id, ts, kind: "tool_result", label, isError });
+        next.push({ id, ts, label, isError });
       }
     }
     if (next.length) {
@@ -138,17 +137,10 @@ function ThinkDots() {
 }
 
 function glyph(s: TraceStep): string {
-  switch (s.kind) {
-    case "llm": return "λ";
-    case "tool_call": return "→";
-    case "tool_result": return s.isError ? "✗" : "←";
-    case "reply": return "›";
-  }
+  return s.isError ? "✗" : "←";
 }
 function glyphColor(s: TraceStep): string {
-  if (s.isError) return "var(--color-danger)";
-  if (s.kind === "llm") return "var(--color-indigo)";
-  return "var(--color-accent)";
+  return s.isError ? "var(--color-danger)" : "var(--color-accent)";
 }
 function fmtTime(ms: number): string {
   const d = new Date(ms);
