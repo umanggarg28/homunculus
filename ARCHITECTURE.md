@@ -10,7 +10,7 @@ Homunculus is one always-on process that holds a small model loop, a few general
 | `loop` | Ask the model, run the tool it asks for, repeat until done | Full loop |
 | `model` | One streaming call to the model provider | Streaming text and tool calls, privacy routing, error reporting |
 | `gate` | The answer for every proposed action | Workspace file tools act when the path stays in the workspace; anything else asks; unreadable calls are refused |
-| `tools` | Plain functions the model can ask to run | `read`, `write`, `edit`, `list`, `search` in the workspace |
+| `tools` | Plain functions the model can ask to run | `read`, `write`, `edit`, `list`, `search`, `delete`, `rename` in the workspace |
 | `activity` | Append-only record of every step | Written by the loop; kept outside the workspace |
 | `skills` | Skill folders in the Agent Skills format | Planned |
 | `memory` | The wiki, raw sources, profile and goals, as files | Planned |
@@ -56,7 +56,8 @@ def create_app(model: Model, tools: list[Tool], activity: ActivityLog) -> FastAP
 - **Privacy routing is fixed in code.** Every request carries `{"zdr": true, "data_collection": "deny"}`. There is no switch to turn it off.
 - **One piece of work at a time.** The server holds a lock for the whole of a reply. A second message waits, then goes to the model with the first exchange already in the history.
 - **One gate, failing closed.** Every tool call passes through `gate.decide`, and nothing else decides whether an action may run. If the gate cannot read a call, the answer is refuse. An action with no rule asks first.
-- **The workspace is a fence, with two layers.** The gate refuses absolute paths and paths with `..`. The file tools then resolve every path, following symbolic links, and refuse any that lands outside the workspace.
+- **The workspace is a fence, with two layers.** The gate refuses absolute paths and paths with `..`, for both ends of a rename. The file tools then resolve every path, following symbolic links, and refuse any that lands outside the workspace.
+- **Irreversible file actions are narrow.** `delete` removes one file, never a folder. `rename` never overwrites. Neither acts on a symbolic link, so neither can reach the file a link points to.
 - **Tool failures are told to the model.** A missing file, a missing argument or a bug inside a tool becomes an `Error: ...` result the model can read and act on. It never ends the reply.
 - **Record only what happened.** The conversation history changes only after a reply completes. A failed call ends the stream with `error`, never `done`. The activity log is written by code, never by the model.
 - **Local only.** The server binds to `127.0.0.1`.

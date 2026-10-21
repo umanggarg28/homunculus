@@ -158,7 +158,7 @@ def test_the_real_model_offers_tools_and_runs_the_one_it_asks_for(tmp_path: Path
     assert (workspace / "tea.md").read_text() == "Green"
     assert events[-2:] == [("delta", {"text": "Saved."}), ("done", {})]
     offered = {tool["function"]["name"] for tool in sent[0]["tools"]}
-    assert offered == {"read", "write", "edit", "list", "search"}
+    assert offered == {"read", "write", "edit", "list", "search", "delete", "rename"}
     assert sent[1]["messages"][-1] == {
         "role": "tool",
         "tool_call_id": "call_1",

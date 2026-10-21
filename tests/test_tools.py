@@ -224,3 +224,57 @@ async def test_a_tool_that_fails_unexpectedly_is_reported_to_the_model(workspace
 
     assert tool_result(model).startswith("Error: write failed unexpectedly")
     assert reply == "Retrying."
+
+
+async def test_deleting_removes_a_file(workspace: Path) -> None:
+    (workspace / "old.md").write_text("stale")
+    model = ScriptedModel([[tool_call("delete", path="old.md")], ["Gone."]])
+
+    await run_job(model, workspace, "Delete old.md")
+
+    assert not (workspace / "old.md").exists()
+    assert tool_result(model) == "Deleted old.md."
+
+
+async def test_deleting_a_folder_is_refused(workspace: Path) -> None:
+    (workspace / "notes").mkdir()
+    (workspace / "notes" / "tea.md").write_text("Green")
+    model = ScriptedModel([[tool_call("delete", path="notes")], ["Kept."]])
+
+    await run_job(model, workspace, "Delete notes")
+
+    assert (workspace / "notes" / "tea.md").exists()
+    assert tool_result(model) == "Error: notes is a folder; only single files can be deleted."
+
+
+async def test_renaming_moves_a_file(workspace: Path) -> None:
+    (workspace / "draft.md").write_text("Plan")
+    model = ScriptedModel([[tool_call("rename", path="draft.md", to="plans/final.md")], ["Moved."]])
+
+    await run_job(model, workspace, "Move the draft")
+
+    assert not (workspace / "draft.md").exists()
+    assert (workspace / "plans" / "final.md").read_text() == "Plan"
+
+
+async def test_renaming_never_overwrites_a_file(workspace: Path) -> None:
+    (workspace / "a.md").write_text("A")
+    (workspace / "b.md").write_text("B")
+    model = ScriptedModel([[tool_call("rename", path="a.md", to="b.md")], ["Hm."]])
+
+    await run_job(model, workspace, "Rename a to b")
+
+    assert (workspace / "a.md").read_text() == "A"
+    assert (workspace / "b.md").read_text() == "B"
+    assert tool_result(model) == "Error: b.md already exists; rename will not overwrite it."
+
+
+async def test_deleting_a_link_is_refused_and_the_real_file_is_kept(workspace: Path) -> None:
+    (workspace / "real.md").write_text("keep me")
+    (workspace / "link.md").symlink_to(workspace / "real.md")
+    model = ScriptedModel([[tool_call("delete", path="link.md")], ["Kept."]])
+
+    await run_job(model, workspace, "Delete link.md")
+
+    assert (workspace / "real.md").read_text() == "keep me"
+    assert tool_result(model) == "Error: link.md is a link; links cannot be deleted or renamed."

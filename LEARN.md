@@ -525,7 +525,7 @@ The model never runs anything itself. It writes a **request**, and the program d
 
 Then it calls the model again with both added to the list. That is the loop's second half.
 
-**Few, general tools.** Homunculus has five file tools: `read`, `write`, `edit`, `list` and `search`. Their behaviour follows Anthropic's published memory-tool interface (view a file with numbered lines, create, replace text that appears exactly once). `search` is plain text search, the approach Claude Code takes with its Grep tool, instead of a pre-built index. Anthropic's "Seeing like an agent" notes that every extra tool is one more option the model has to weigh, so the bar for adding one is high. This project caps itself at 20.
+**Few, general tools.** Homunculus has seven file tools: `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`. Their behaviour follows Anthropic's published memory-tool interface (view a file with numbered lines, create, replace text that appears exactly once, delete, rename). `search` is plain text search, the approach Claude Code takes with its Grep tool, instead of a pre-built index. Anthropic's "Seeing like an agent" notes that every extra tool is one more option the model has to weigh, so the bar for adding one is high. This project caps itself at 20.
 
 **The workspace is a fence, with two layers.** The gate (chapter 5) refuses any path that is absolute or contains `..` before a tool runs. Then the tool resolves the path to its real location, following symbolic links, which only the tool can see, and refuses it if it lands outside the workspace folder. One mistake in either layer is not enough to get out. The activity log lives outside the workspace, so no tool can reach it.
 
@@ -548,13 +548,13 @@ Then it calls the model again with both added to the list. That is the loop's se
 
 ### One value, traced
 
-You send `"Note that I like green tea."`. `tools` holds the five file tools for the workspace `~/homunculus-data/workspace`.
+You send `"Note that I like green tea."`. `tools` holds the seven file tools for the workspace `~/homunculus-data/workspace`.
 
 **Lines 27-28** prepare the tools two ways:
 
 ```
-by_name = {"read": <Tool>, "write": <Tool>, "edit": <Tool>, "list": <Tool>, "search": <Tool>}   a dict, name to Tool
-schemas = [{"type": "function", "function": {"name": "read", ...}}, ...]                          a list of 5 dicts
+by_name = {"read": <Tool>, "write": <Tool>, ..., "rename": <Tool>}       a dict of 7, name to Tool
+schemas = [{"type": "function", "function": {"name": "read", ...}}, ...]   a list of 7 dicts
 ```
 
 `schemas` is what the model sees. `by_name` is how the loop finds the real function later. The model never sees `by_name`.
@@ -615,6 +615,11 @@ The arguments only become valid JSON once every fragment has arrived. That is wh
 | Text to edit appears twice | `Error: the text appears 2 times in plan.md; it must appear once.` |
 | A required argument is missing | `Error: write needs the argument 'content'.` |
 | A bug inside the tool | `Error: write failed unexpectedly (TypeError: ...).` |
+| Deleting a folder | `Error: notes is a folder; only single files can be deleted.` |
+| Deleting or renaming a symbolic link | `Error: link.md is a link; links cannot be deleted or renamed.` |
+| Renaming onto an existing file | `Error: b.md already exists; rename will not overwrite it.` |
+
+`delete` and `rename` are the two tools whose effect cannot be undone, so they are kept narrow on purpose. `delete` removes a single file, never a folder. `rename` refuses to replace a file that is already there. Neither acts on a symbolic link, because resolving the link would make the operation land on the file it points to, which may not be the one the model meant.
 
 ### The test
 
@@ -672,7 +677,7 @@ The first four mirror the approval behaviours OpenAI documents for its always-on
 
 **Unknown means ask.** An action that is not in the table is answered `ASK`. New tools are safe by default until someone writes a rule for them.
 
-Today the table has one row with real content: the five workspace file tools are answered `ACT` when their path stays in the workspace, and `REFUSE` when it does not. A path stays in the workspace if it is relative and has no `..` part. The tools check again on their own, following symbolic links (chapter 4). Approvals for `ASK` arrive in a later ticket. Until then the loop tells the model the action was not done.
+Today the table has one row with real content: the seven workspace file tools are answered `ACT` when their paths stay in the workspace, and `REFUSE` when they do not. For `rename` both `path` and `to` are checked. A path stays in the workspace if it is relative and has no `..` part. The tools check again on their own, following symbolic links (chapter 4). Approvals for `ASK` arrive in a later ticket. Until then the loop tells the model the action was not done.
 
 ### A picture
 
@@ -703,7 +708,7 @@ decide(ToolCall("call_3", "write", '{not json'))                              ->
 decide(ToolCall("call_4", "write", '{"path": "../activity.jsonl", "content": "x"}')) -> Answer.REFUSE
 ```
 
-Following the first: `json.loads` gives `{"path": "tea.md", "content": "Green"}`, a dict. `"write"` is in `WORKSPACE_FILE_TOOLS`, a set of 5 names. `arguments.get("path")` is `"tea.md"`, a str. `_stays_in_workspace("tea.md")` builds `PurePosixPath("tea.md")`, whose `.parts` is `("tea.md",)`, a tuple of 1 with no `".."` and not absolute, so it returns `True`. The answer is `ACT`.
+Following the first: `json.loads` gives `{"path": "tea.md", "content": "Green"}`, a dict. `"write"` is in `WORKSPACE_FILE_TOOLS`, a set of 7 names. `arguments.get("path")` is `"tea.md"`, a str. `_stays_in_workspace("tea.md")` builds `PurePosixPath("tea.md")`, whose `.parts` is `("tea.md",)`, a tuple of 1 with no `".."` and not absolute, so it returns `True`. The answer is `ACT`.
 
 The second: valid JSON, but `"send_email"` is not in the set. The answer is `ASK`. Back in the loop, `_carry_out` skips running it, and the model is shown `Not done: the gate answered 'ask' for this action.`
 
@@ -722,7 +727,7 @@ def test_a_call_the_gate_cannot_read_is_refused() -> None:
 
 In plain English: "If the gate cannot read a request, the request is refused." It is one line, and it guards the most important property of the whole module.
 
-The other gate tests say: each of the five workspace file tools is allowed; an action not in the table asks first; a file action without a path is refused; a path that is absolute or contains `..` is refused; and arguments that are valid JSON but not an object, such as `[]`, are refused.
+The other gate tests say: each workspace file tool is allowed, including `delete` and `rename`; a rename whose destination leads outside the workspace is refused; an action not in the table asks first; a file action without a path is refused; a path that is absolute or contains `..` is refused; and arguments that are valid JSON but not an object, such as `[]`, are refused.
 
 ### Change it yourself
 
