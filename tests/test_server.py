@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from scripted_model import ScriptedModel, SlowScriptedModel
 
 from homunculus.activity import ActivityLog
-from homunculus.model import Model, OpenRouterModel
+from homunculus.model import Model, OpenRouterModel, ToolCall
 from homunculus.server import create_app
 from homunculus.tools import Tool
 from homunculus.tools.files import file_tools
@@ -164,3 +164,53 @@ def test_the_real_model_offers_tools_and_runs_the_one_it_asks_for(tmp_path: Path
         "tool_call_id": "call_1",
         "content": "Wrote tea.md.",
     }
+
+
+def test_tool_steps_are_streamed_with_the_reply(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    write = ToolCall(id="call_1", name="write", arguments='{"path": "a.md", "content": "x"}')
+    model = ScriptedModel([[write], ["Saved."]])
+
+    events = chat(server(model, tmp_path, file_tools(workspace)), "Save a.md")
+
+    name, step = events[0]
+    assert name == "tool"
+    assert step.pop("duration_ms") >= 0
+    assert step == {
+        "name": "write",
+        "arguments": '{"path": "a.md", "content": "x"}',
+        "answer": "act",
+        "result": "Wrote a.md.",
+    }
+    assert events[1:] == [("delta", {"text": "Saved."}), ("done", {})]
+
+
+def test_history_lists_the_conversation_in_words(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    write = ToolCall(id="call_1", name="write", arguments='{"path": "a.md", "content": "x"}')
+    client = server(ScriptedModel([[write], ["Saved."]]), tmp_path, file_tools(workspace))
+    chat(client, "Save a.md")
+
+    response = client.get("/api/history")
+
+    assert response.json() == [
+        {"role": "user", "content": "Save a.md"},
+        {"role": "assistant", "content": "Saved."},
+    ]
+
+
+def test_the_built_console_is_served_with_its_routes(tmp_path: Path) -> None:
+    console = tmp_path / "console"
+    (console / "assets").mkdir(parents=True)
+    (console / "index.html").write_text("<html>console</html>")
+    (console / "assets" / "app.js").write_text("console.log(1)")
+    activity = ActivityLog(tmp_path / "activity.jsonl")
+    client = TestClient(create_app(ScriptedModel([]), [], activity, console=console))
+
+    assert client.get("/").text == "<html>console</html>"
+    assert client.get("/chat").text == "<html>console</html>"
+    assert client.get("/assets/app.js").text == "console.log(1)"
+    assert client.get("/api/history").json() == []
+    assert client.get("/api/unknown").status_code == 404

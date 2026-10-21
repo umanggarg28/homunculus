@@ -18,7 +18,9 @@ def activity(tmp_path: Path) -> ActivityLog:
 async def collect(
     model: Model, history: list[Message], text: str, activity: ActivityLog
 ) -> list[str]:
-    return [chunk async for chunk in loop.run(model, [], activity, history, text)]
+    return [
+        item async for item in loop.run(model, [], activity, history, text) if isinstance(item, str)
+    ]
 
 
 async def test_streams_the_reply_and_stops_when_the_model_answers_in_words(

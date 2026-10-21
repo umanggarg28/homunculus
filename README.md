@@ -2,7 +2,7 @@
 
 An always-on personal agent that works toward your goals in its own sandbox and asks before anything leaves it.
 
-> **Status:** early build. In place: chat with the model over an HTTP API, streamed word by word, and file tools in the agent's own workspace, each call checked by the gate. The plan and its progress are tracked in the [spec](https://github.com/umanggarg28/homunculus/issues/2) and its tickets.
+> **Status:** early build. In place: the web console's chat screen, replies streamed word by word, and file tools in the agent's own workspace, each call checked by the gate. The plan and its progress are tracked in the [spec](https://github.com/umanggarg28/homunculus/issues/2) and its tickets.
 
 ## How it works
 
@@ -75,6 +75,17 @@ If the request fails, the stream ends with an `error` event that says why, for e
 
 To see a tool in use, send `"Save a note called tea.md that says I like green tea."`. The file appears in `~/homunculus-data/workspace/`, and the step is recorded in `~/homunculus-data/activity.jsonl`.
 
+## The web console
+
+The console is a React app in `web/`. Build it once, and the server serves it:
+
+```bash
+cd web && npm ci && npm run build && cd ..
+uv run homunculus
+```
+
+Then open http://127.0.0.1:8765. While working on the console itself, `npm run dev` in `web/` serves it at http://127.0.0.1:5173 with live reload, and forwards `/api` to the server.
+
 ## Development
 
 ```bash
@@ -84,7 +95,7 @@ uv run ruff check    # lint
 uv run ruff format   # formatting
 ```
 
-The same checks run on every pull request.
+The same checks run on every pull request, along with a production build of the console.
 
 ## Stack and standards
 

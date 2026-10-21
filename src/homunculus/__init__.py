@@ -12,6 +12,8 @@ from homunculus.server import create_app
 from homunculus.tools.files import file_tools
 
 PORT = 8765
+# The web console's production build, present after `npm run build` in web/.
+CONSOLE = Path(__file__).resolve().parents[2] / "web" / "dist"
 
 
 def main() -> None:
@@ -23,7 +25,10 @@ def main() -> None:
     workspace = home / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     app = create_app(
-        OpenRouterModel(api_key), file_tools(workspace), ActivityLog(home / "activity.jsonl")
+        OpenRouterModel(api_key),
+        file_tools(workspace),
+        ActivityLog(home / "activity.jsonl"),
+        console=CONSOLE if (CONSOLE / "index.html").is_file() else None,
     )
     # Bound to this machine only: nothing else on the network can reach the API.
     uvicorn.run(app, host="127.0.0.1", port=PORT)

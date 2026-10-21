@@ -118,7 +118,7 @@ history = []                  # a list of message dicts; empty, since this is th
 text = "I like tea."          # a str
 ```
 
-**Line 29: `turn = [{"role": "user", "content": text}]`**
+**Line 44: `turn = [{"role": "user", "content": text}]`**
 
 ```python
 turn = [{"role": "user", "content": "I like tea."}]    # a list of 1 message, a dict with two str keys
@@ -126,7 +126,7 @@ turn = [{"role": "user", "content": "I like tea."}]    # a list of 1 message, a 
 
 `turn` collects everything that happens in this one exchange. With tools, it grows to hold the tool calls and their results too.
 
-**Line 35: `messages = [{"role": "system", ...}, *history, *turn]`**
+**Line 50: `messages = [{"role": "system", ...}, *history, *turn]`**
 
 `*history` and `*turn` spread their contents into the new list. `history` is empty, so `messages` is a list of 2 dicts:
 
@@ -137,7 +137,7 @@ messages[1] = {"role": "user",   "content": "I like tea."}
 
 Read `messages[1]` aloud: "the user said: I like tea."
 
-**Line 36: `model.stream(messages, schemas)`** returns an async iterator. Each item is either a piece of text (`str`) or a finished tool request (`ToolCall`, chapter 4). Suppose the model's reply arrives as one piece of text:
+**Line 51: `model.stream(messages, schemas)`** returns an async iterator. Each item is either a piece of text (`str`) or a finished tool request (`ToolCall`, chapter 4). Suppose the model's reply arrives as one piece of text:
 
 ```python
 model.stream(messages, schemas) -> "Noted."      # yields 1 str, then ends
@@ -167,13 +167,13 @@ When a reply arrives in two pieces, `"Good "` and `"morning."`, each pull goes l
 
 `parts` is the loop's private notepad. It exists only so the full reply can be glued together at the end, and nothing outside `run` ever sees it.
 
-**Line 42: `reply = {"role": "assistant", "content": "".join(parts)}`**
+**Line 57: `reply = {"role": "assistant", "content": "".join(parts)}`**
 
-`"".join(["Noted."])` is `"Noted."`, so `reply` is `{"role": "assistant", "content": "Noted."}`. Line 45 appends it, and `turn` is now a list of 2.
+`"".join(["Noted."])` is `"Noted."`, so `reply` is `{"role": "assistant", "content": "Noted."}`. Line 60 appends it, and `turn` is now a list of 2.
 
-**Lines 46-47: `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
+**Lines 61-62: `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
 
-**Line 55: `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
+**Line 71: `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
 
 ```python
 history[0] = {"role": "user",      "content": "I like tea."}
@@ -195,7 +195,7 @@ The model sees the whole exchange and can answer "tea". That is the entire mecha
 
 **Where each piece is used.** `parts` and `calls` are rebuilt on every pass of the `while` loop. `turn` lives for one call to `run`. `history` outlives the call: the server owns it, and `run` only adds to it. `SYSTEM_PROMPT` is read by `run` and never stored anywhere.
 
-**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so line 55 never runs and `history` stays as it was. On the way out, lines 51-53 record the error in the activity log and pass it on. A failed turn leaves no half-finished reply in the conversation.
+**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so line 71 never runs and `history` stays as it was. On the way out, lines 67-69 record the error in the activity log and pass it on. A failed turn leaves no half-finished reply in the conversation.
 
 ### The test
 
@@ -400,11 +400,14 @@ It also has to keep one rule the whole agent depends on: one piece of work at a 
 
 | Event | Data | Meaning |
 |---|---|---|
+| `tool` | `{"name", "arguments", "answer", "result", "duration_ms"}` | One tool call the loop dealt with (chapter 4) |
 | `delta` | `{"text": "..."}` | The next piece of the reply |
 | `done` | `{}` | The reply is complete |
 | `error` | `{"message": "..."}` | The reply failed, and why |
 
-A stream ends with exactly one `done` or one `error`, never both.
+A stream ends with exactly one `done` or one `error`, never both. The web console reads these events to draw the reply, the tool blocks and the robot's state.
+
+The server has two more jobs. `GET /api/history` returns the conversation so far, so the console can show it after a page reload. And when the console has been built, the server hands out its files: any address that is not under `/api/` gets the console's `index.html`, and the console itself works out which screen to show.
 
 **A lock for one turn at a time.** `asyncio.Lock` is a token only one task can hold. `async with turn:` waits until the token is free, takes it, and gives it back when the block ends, even if an error happens inside. The server holds it for the whole reply.
 
@@ -445,7 +448,7 @@ request = ChatRequest(message="Hello")    # request.message is the str "Hello"
 
 **`chat` returns at once**, with `StreamingResponse(events(), media_type="text/event-stream")`. Nothing has run yet. Calling `events()` only creates the generator. FastAPI now pulls from it piece by piece.
 
-**Inside `events()`**, `async with turn:` takes the free lock. `loop.run(model, history, "Hello")` yields `"Good "` (chapter 1), so the server yields:
+**Inside `events()`**, `async with turn:` takes the free lock. `loop.run(...)` yields `"Good "` (chapter 1). It is a `str`, not a `ToolStep`, so the server yields:
 
 ```python
 sse("delta", {"text": "Good "}) -> 'event: delta\ndata: {"text": "Good "}\n\n'    # a str
@@ -550,7 +553,7 @@ Then it calls the model again with both added to the list. That is the loop's se
 
 You send `"Note that I like green tea."`. `tools` holds the seven file tools for the workspace `~/homunculus-data/workspace`.
 
-**Lines 27-28** prepare the tools two ways:
+**Lines 42-43** prepare the tools two ways:
 
 ```
 by_name = {"read": <Tool>, "write": <Tool>, ..., "rename": <Tool>}       a dict of 7, name to Tool
@@ -565,11 +568,11 @@ schemas = [{"type": "function", "function": {"name": "read", ...}}, ...]   a lis
 ToolCall(id="call_1", name="write", arguments='{"path": "tea.md", "content": "Green"}')
 ```
 
-`isinstance(item, ToolCall)` is true, so it goes into `calls` (line 38), not `parts`. Nothing is yielded to you. `parts` stays `[]`.
+`isinstance(item, ToolCall)` is true, so it goes into `calls` (line 53), not `parts`. Nothing is yielded to you. `parts` stays `[]`.
 
-**Lines 42-45** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
+**Lines 57-60** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
 
-**Line 46:** `calls` is not empty, so no `break`. **Line 49** hands the call to `_carry_out`:
+**Line 61:** `calls` is not empty, so no `break`. **Line 64** hands the call to `_carry_out`:
 
 ```
 gate.decide(call)                    -> Answer.ACT                      (chapter 5)
@@ -581,7 +584,7 @@ by_name["write"].call({...})         -> "Wrote tea.md."                 a str
 
 `activity.record("tool", name="write", arguments=..., answer="act", result="Wrote tea.md.")` appends one line to the activity log, and `_carry_out` returns the result.
 
-**Line 50** adds the tool message. `turn` is now a list of 3:
+**Line 65** adds the tool message, and line 66 yields the step as a `ToolStep`, which the server sends to you as a `tool` event (chapter 3). `turn` is now a list of 3:
 
 ```
 turn[0] = {"role": "user",      "content": "Note that I like green tea."}
@@ -591,7 +594,7 @@ turn[2] = {"role": "tool",      "tool_call_id": "call_1", "content": "Wrote tea.
 
 Read `turn[2]` aloud: "the result of request call_1 was: Wrote tea.md."
 
-**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so line 47 breaks out. `turn` ends as a list of 4, and line 55 adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
+**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so line 62 breaks out. `turn` ends as a list of 4, and line 71 adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
 
 **How the real model streams a tool call.** OpenRouter sends the request in pieces, each tagged with an `index` saying which call it belongs to:
 
@@ -661,7 +664,7 @@ An agent that works by itself will sometimes propose something it should not do:
 
 ### The idea
 
-**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs (line 60 of `loop.py`). It returns one of five answers:
+**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs (line 78 of `loop.py`). It returns one of five answers:
 
 | Answer | Meaning |
 |---|---|
@@ -768,10 +771,10 @@ An agent that works while you are away has to leave a record you can trust. If t
 You send `"Note that I like green tea."` (the trace from chapter 4). Three calls to `activity.record` happen, in this order:
 
 ```
-record("message", text="Note that I like green tea.")                        line 30 of loop.py
+record("message", text="Note that I like green tea.")                        line 45 of loop.py
 record("tool", name="write", arguments='{"path": "tea.md", "content": "Green"}',
        answer="act", result="Wrote tea.md.")                                 in _carry_out
-record("reply", text="Saved.")                                               line 54 of loop.py
+record("reply", text="Saved.")                                               line 70 of loop.py
 ```
 
 `record(kind, **details)` builds one dict: the current time in UTC, the kind, then every detail passed in. For the second call:

@@ -1,7 +1,9 @@
 """The agent loop: ask the model, run the tools it asks for, repeat until it answers in words."""
 
 import json
+import time
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 from homunculus import gate
 from homunculus.activity import ActivityLog
@@ -11,14 +13,27 @@ from homunculus.tools import Tool, ToolError
 SYSTEM_PROMPT = "You are Homunculus, a personal agent working on behalf of your operator."
 
 
+@dataclass(frozen=True)
+class ToolStep:
+    """One tool call the loop has dealt with: what was asked, the gate's answer, the result,
+    and how long it took."""
+
+    name: str
+    arguments: str
+    answer: str
+    result: str
+    duration_ms: int
+
+
 async def run(
     model: Model,
     tools: list[Tool],
     activity: ActivityLog,
     history: list[Message],
     text: str,
-) -> AsyncIterator[str]:
-    """Answer one operator message, yielding the reply text as it streams.
+) -> AsyncIterator[str | ToolStep]:
+    """Answer one operator message, yielding the reply text as it streams and a
+    ToolStep after each tool call, so a caller can show the work as it happens.
 
     `history` holds the earlier turns. The new turn, including any tool calls and
     their results, is added to it only once the final reply is complete, so a
@@ -46,8 +61,9 @@ async def run(
             if not calls:
                 break
             for call in calls:
-                result = _carry_out(call, by_name, activity)
-                turn.append({"role": "tool", "tool_call_id": call.id, "content": result})
+                step = _carry_out(call, by_name, activity)
+                turn.append({"role": "tool", "tool_call_id": call.id, "content": step.result})
+                yield step
     except ModelError as error:
         activity.record("error", error=str(error))
         raise
@@ -55,8 +71,10 @@ async def run(
     history += turn
 
 
-def _carry_out(call: ToolCall, by_name: dict[str, Tool], activity: ActivityLog) -> str:
-    """Put one tool call through the gate and, if allowed, run it. Returns what the model sees."""
+def _carry_out(call: ToolCall, by_name: dict[str, Tool], activity: ActivityLog) -> ToolStep:
+    """Put one tool call through the gate and, if allowed, run it. The step's result is
+    what the model sees."""
+    started = time.monotonic()
     answer = gate.decide(call)
     if answer is gate.Answer.ACT:
         try:
@@ -74,7 +92,13 @@ def _carry_out(call: ToolCall, by_name: dict[str, Tool], activity: ActivityLog) 
     activity.record(
         "tool", name=call.name, arguments=call.arguments, answer=answer.value, result=result
     )
-    return result
+    return ToolStep(
+        name=call.name,
+        arguments=call.arguments,
+        answer=answer.value,
+        result=result,
+        duration_ms=round((time.monotonic() - started) * 1000),
+    )
 
 
 def _as_message(call: ToolCall) -> dict[str, object]:

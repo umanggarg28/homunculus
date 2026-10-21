@@ -6,7 +6,7 @@ Homunculus is one always-on process that holds a small model loop, a few general
 
 | Module | Owns | Status |
 |---|---|---|
-| `server` | HTTP API for the web console and chat channels | Chat endpoint |
+| `server` | HTTP API for the web console and chat channels, and the built console itself | Chat stream, history, console files |
 | `loop` | Ask the model, run the tool it asks for, repeat until done | Full loop |
 | `model` | One streaming call to the model provider | Streaming text and tool calls, privacy routing, error reporting |
 | `gate` | The answer for every proposed action | Workspace file tools act when the path stays in the workspace; anything else asks; unreadable calls are refused |
@@ -25,10 +25,27 @@ Each module has one job. A new module needs a stated reason. `activity` is separ
 3. `loop` builds the message list: the system prompt, the earlier turns, then the messages of this turn so far.
 4. `model` sends that list and the tool schemas to OpenRouter with `stream: true` and the fixed privacy routing. It yields text chunks as they arrive, and each tool call once its fragments are complete.
 5. `loop` passes each text chunk up as it arrives. `server` wraps each one as a `delta` server-sent event.
-6. If the model asked for tools, `loop` puts each call through `gate.decide`. Allowed calls run; the rest are not run. Either way the result goes into the turn as a `tool` message, the step is recorded in the activity log, and the loop goes back to step 3.
+6. If the model asked for tools, `loop` puts each call through `gate.decide`. Allowed calls run; the rest are not run. Either way the result goes into the turn as a `tool` message, the step is recorded in the activity log, `loop` yields a `ToolStep` that `server` sends as a `tool` event, and the loop goes back to step 3.
 7. When the model answers without asking for a tool, `loop` adds the whole turn to the history, and `server` sends `done`.
 
 If the model call fails at any point, `model` raises `ModelError`, `server` sends an `error` event with a readable message, and the history is left unchanged.
+
+## The chat stream
+
+`POST /api/chat` with `{"message": "..."}` answers with server-sent events:
+
+| Event | Data | Meaning |
+|---|---|---|
+| `tool` | `{"name", "arguments", "answer", "result", "duration_ms"}` | One tool call, after the gate answered and the tool ran or did not |
+| `delta` | `{"text": "..."}` | The next piece of the reply |
+| `done` | `{}` | The reply is complete |
+| `error` | `{"message": "..."}` | The reply failed, and why |
+
+`GET /api/history` returns the conversation as the operator saw it: their messages and the replies, without tool messages. Any other path that is not under `/api/` is answered with the console's `index.html`, so the console can choose the screen from the address.
+
+## The web console
+
+`web/` is a React and Vite app, kept from the earlier version for its look and components and reduced to what v2 has: the shell and the chat screen. `useChatStream` reads the chat stream and records each turn event (message sent, tool step, reply finished, error, stopped) in a small in-page store, `lib/turnEvents.ts`. The sidebar robot and the thinking indicator read that store, so what they show always matches an event the server sent. Screens are added as their backends are built.
 
 ## Interfaces
 
@@ -44,9 +61,10 @@ class Model(Protocol):
 def decide(call: ToolCall) -> Answer: ...              # ACT, ACT_WHEN_ASKED, ASK, HAND_OFF, REFUSE
 
 async def run(model: Model, tools: list[Tool], activity: ActivityLog,
-              history: list[Message], text: str) -> AsyncIterator[str]: ...
+              history: list[Message], text: str) -> AsyncIterator[str | ToolStep]: ...
 
-def create_app(model: Model, tools: list[Tool], activity: ActivityLog) -> FastAPI: ...
+def create_app(model: Model, tools: list[Tool], activity: ActivityLog,
+               console: Path | None = None) -> FastAPI: ...
 ```
 
 `create_app` takes the model, tools and activity log as arguments, so tests can pass a scripted stand-in and temporary folders, and the real program passes `OpenRouterModel` and the data directory.
@@ -70,6 +88,6 @@ Tests sit at agreed seams and fake only the outside world.
 |---|---|---|
 | Loop | Streaming, when the loop stops, history handling, and every tool through a scripted tool call | The model (a scripted stand-in) |
 | Gate | Each row of the table, and refusal when a call cannot be read | Nothing |
-| Server HTTP API | Event format, errors, one reply at a time, privacy routing on every request, tools offered and streamed tool calls run | The model, or only the network beneath the real model |
+| Server HTTP API | Event format including tool steps, errors, one reply at a time, privacy routing on every request, tools offered and streamed tool calls run, history, serving the console | The model, or only the network beneath the real model |
 
 Tests run with network access blocked, so a test that reaches the internet fails.

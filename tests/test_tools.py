@@ -28,10 +28,8 @@ def tool_call(name: str, **arguments: object) -> ToolCall:
 async def run_job(model: ScriptedModel, workspace: Path, text: str) -> str:
     activity = ActivityLog(workspace.parent / "activity.jsonl")
     history: list[Message] = []
-    chunks = [
-        chunk async for chunk in loop.run(model, file_tools(workspace), activity, history, text)
-    ]
-    return "".join(chunks)
+    items = [item async for item in loop.run(model, file_tools(workspace), activity, history, text)]
+    return "".join(item for item in items if isinstance(item, str))
 
 
 def tool_result(model: ScriptedModel, call: int = 1) -> str:
