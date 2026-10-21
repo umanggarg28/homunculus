@@ -77,6 +77,29 @@ class Files:
                 self.search,
             ),
             Tool(
+                "delete",
+                "Delete one file in the workspace. Folders and links cannot be deleted.",
+                {
+                    "type": "object",
+                    "properties": {"path": _path_parameter("Path relative to the workspace.")},
+                    "required": ["path"],
+                },
+                self.delete,
+            ),
+            Tool(
+                "rename",
+                "Move or rename one file in the workspace. Never overwrites an existing file.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "path": _path_parameter("The file to move, relative to the workspace."),
+                        "to": _path_parameter("Its new path, relative to the workspace."),
+                    },
+                    "required": ["path", "to"],
+                },
+                self.rename,
+            ),
+            Tool(
                 "write",
                 "Create or overwrite a text file in the workspace.",
                 {
@@ -103,6 +126,16 @@ class Files:
         if not target.is_relative_to(self._root):
             raise ToolError(f"{path} is outside the workspace.")
         return target
+
+    def _plain_file(self, path: str) -> Path:
+        """An existing regular file. Links are refused, so an operation on a link can
+        never reach the file it points to."""
+        if (self._root / path).is_symlink():
+            raise ToolError(f"{path} is a link; links cannot be deleted or renamed.")
+        target = self._resolve(path)
+        if target.is_dir():
+            raise ToolError(f"{path} is a folder; only single files can be deleted.")
+        return self._existing_file(path)
 
     def _existing_file(self, path: str) -> Path:
         target = self._resolve(path)
@@ -152,3 +185,16 @@ class Files:
             shown = matches[:MAX_SEARCH_RESULTS]
             return "\n".join(shown) + f"\n({len(matches) - MAX_SEARCH_RESULTS} more not shown)"
         return "\n".join(matches) or "No matches."
+
+    def delete(self, arguments: dict[str, Any]) -> str:
+        self._plain_file(arguments["path"]).unlink()
+        return f"Deleted {arguments['path']}."
+
+    def rename(self, arguments: dict[str, Any]) -> str:
+        source = self._plain_file(arguments["path"])
+        target = self._resolve(arguments["to"])
+        if target.exists() or target.is_symlink():
+            raise ToolError(f"{arguments['to']} already exists; rename will not overwrite it.")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(target)
+        return f"Moved {arguments['path']} to {arguments['to']}."

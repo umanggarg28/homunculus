@@ -27,7 +27,7 @@ flowchart LR
 | `loop` | Asks the model, runs the tools it asks for, repeats until it answers in words. |
 | `model` | One streaming call to the model through OpenRouter. |
 | `gate` | Decides for every tool call whether it may run. Anything it cannot read is refused. |
-| `tools` | `read`, `write`, `edit`, `list` and `search`, inside the agent's workspace only. |
+| `tools` | `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`, inside the agent's workspace only. |
 | `activity` | An append-only record of every step, written by code, out of reach of every tool. |
 
 The full design, including the modules still to come (sandbox, skills, wiki, waker), is in [ARCHITECTURE.md](ARCHITECTURE.md). [LEARN.md](LEARN.md) teaches the code one module at a time.

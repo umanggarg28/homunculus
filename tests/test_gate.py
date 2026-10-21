@@ -34,3 +34,13 @@ def test_a_file_action_aimed_outside_the_workspace_is_refused(path: str) -> None
 
 def test_arguments_that_are_not_an_object_are_refused() -> None:
     assert decide(call("read", "[]")) is Answer.REFUSE
+
+
+@pytest.mark.parametrize("to", ["../moved.md", "/tmp/moved.md", "a/../../moved.md"])
+def test_a_rename_aimed_outside_the_workspace_is_refused(to: str) -> None:
+    assert decide(call("rename", json.dumps({"path": "a.md", "to": to}))) is Answer.REFUSE
+
+
+def test_renaming_and_deleting_inside_the_workspace_are_allowed() -> None:
+    assert decide(call("rename", '{"path": "a.md", "to": "b/a.md"}')) is Answer.ACT
+    assert decide(call("delete", '{"path": "a.md"}')) is Answer.ACT

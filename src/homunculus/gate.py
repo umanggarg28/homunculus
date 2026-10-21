@@ -15,8 +15,9 @@ class Answer(Enum):
     REFUSE = "refuse"  # never run it
 
 
-# Tools that only touch files inside the agent's workspace.
-WORKSPACE_FILE_TOOLS = {"read", "write", "edit", "list", "search"}
+# Tools that only touch files inside the agent's workspace, and the arguments that name a path.
+WORKSPACE_FILE_TOOLS = {"read", "write", "edit", "list", "search", "delete", "rename"}
+PATH_ARGUMENTS = ("path", "to")
 
 
 def decide(call: ToolCall) -> Answer:
@@ -32,9 +33,12 @@ def _decide(call: ToolCall) -> Answer:
     if not isinstance(arguments, dict):
         return Answer.REFUSE
     if call.name in WORKSPACE_FILE_TOOLS:
-        path = arguments.get("path")
-        if not isinstance(path, str) or not _stays_in_workspace(path):
+        if not isinstance(arguments.get("path"), str):
             return Answer.REFUSE
+        for name in PATH_ARGUMENTS:
+            path = arguments.get(name)
+            if path is not None and (not isinstance(path, str) or not _stays_in_workspace(path)):
+                return Answer.REFUSE
         return Answer.ACT
     return Answer.ASK
 
