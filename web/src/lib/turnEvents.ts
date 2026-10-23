@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { isFailedStep } from "@/lib/toolSteps";
+import type { StepOutcome } from "@/lib/toolSteps";
 
 /** What happened during a chat turn, as the console saw it. The chat stream
  *  records these as they arrive; the robot and the thinking indicator read them
@@ -11,6 +11,7 @@ export interface TurnEvent {
   name?: string;
   answer?: string;
   result?: string;
+  outcome?: StepOutcome;
   text?: string;
 }
 
@@ -26,9 +27,14 @@ export function recordTurnEvent(event: Omit<TurnEvent, "ts">): void {
   shared.subscribers.forEach((notify) => notify(stamped));
 }
 
-/** True for a tool step that failed, by the rule in toolSteps. */
+/** True for a tool step the server reported as failed. */
 export function isFailedToolEvent(event: TurnEvent): boolean {
-  return event.event === "tool" && isFailedStep(event.answer, event.result);
+  return event.event === "tool" && event.outcome === "failed";
+}
+
+/** True for a tool step the server reported as waiting for the operator. */
+export function isWaitingToolEvent(event: TurnEvent): boolean {
+  return event.event === "tool" && event.outcome === "waiting";
 }
 
 /** The most recent turn events, kept up to date as new ones arrive. */

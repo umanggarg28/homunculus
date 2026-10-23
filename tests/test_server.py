@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from scripted_model import ScriptedModel, SlowScriptedModel
 
 from homunculus.activity import ActivityLog
+from homunculus.approvals import Approvals
 from homunculus.model import Model, OpenRouterModel, ToolCall
 from homunculus.server import create_app
 from homunculus.tools import Tool
@@ -33,7 +34,9 @@ def chat(client: TestClient, text: str) -> list[tuple[str, dict[str, Any]]]:
 
 
 def server(model: Model, tmp_path: Path, tools: list[Tool] | None = None) -> TestClient:
-    return TestClient(create_app(model, tools or [], ActivityLog(tmp_path / "activity.jsonl")))
+    activity = ActivityLog(tmp_path / "activity.jsonl")
+    approvals = Approvals(tmp_path / "approvals.json")
+    return TestClient(create_app(model, tools or [], activity, approvals))
 
 
 def openrouter_model(network: Callable[[httpx.Request], httpx.Response]) -> OpenRouterModel:
@@ -77,6 +80,34 @@ def test_every_model_request_requires_private_providers(tmp_path: Path) -> None:
     for body in sent:
         assert body["provider"] == {"zdr": True, "data_collection": "deny"}
         assert body["stream"] is True
+
+
+def test_only_the_api_fields_of_a_message_are_sent_to_the_model(tmp_path: Path) -> None:
+    sent: list[dict[str, Any]] = []
+    email = {
+        "index": 0,
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "send_email", "arguments": '{"to": "sam@example.com"}'},
+    }
+
+    def network(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        if len(sent) == 1:
+            chunk = {"choices": [{"delta": {"tool_calls": [email]}}]}
+            return httpx.Response(200, text=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n")
+        return httpx.Response(200, text=openrouter_stream("Done."))
+
+    send = Tool("send_email", "Send an email.", {"type": "object"}, lambda arguments: "Sent.")
+    client = server(openrouter_model(network), tmp_path, [send])
+    chat(client, "Email Sam")
+    [request] = client.get("/api/approvals").json()
+
+    client.post(f"/api/approvals/{request['id']}/approve")
+
+    follow_up = sent[-1]["messages"]
+    assert follow_up[-1]["content"].startswith("Approved:")
+    assert all("notice" not in message for message in follow_up)
 
 
 def test_a_rejected_request_ends_the_stream_with_a_readable_error(tmp_path: Path) -> None:
@@ -182,6 +213,7 @@ def test_tool_steps_are_streamed_with_the_reply(tmp_path: Path) -> None:
         "arguments": '{"path": "a.md", "content": "x"}',
         "answer": "act",
         "result": "Wrote a.md.",
+        "outcome": "ok",
     }
     assert events[1:] == [("delta", {"text": "Saved."}), ("done", {})]
 
@@ -207,7 +239,9 @@ def test_the_built_console_is_served_with_its_routes(tmp_path: Path) -> None:
     (console / "index.html").write_text("<html>console</html>")
     (console / "assets" / "app.js").write_text("console.log(1)")
     activity = ActivityLog(tmp_path / "activity.jsonl")
-    client = TestClient(create_app(ScriptedModel([]), [], activity, console=console))
+    client = TestClient(
+        create_app(ScriptedModel([]), [], activity, Approvals(tmp_path / "a.json"), console=console)
+    )
 
     assert client.get("/").text == "<html>console</html>"
     assert client.get("/chat").text == "<html>console</html>"
@@ -223,6 +257,17 @@ def test_a_console_build_without_assets_still_starts(tmp_path: Path) -> None:
     (console / "index.html").write_text("<html>console</html>")
     activity = ActivityLog(tmp_path / "activity.jsonl")
 
-    client = TestClient(create_app(ScriptedModel([]), [], activity, console=console))
+    client = TestClient(
+        create_app(ScriptedModel([]), [], activity, Approvals(tmp_path / "a.json"), console=console)
+    )
 
     assert client.get("/chat").text == "<html>console</html>"
+
+
+def test_an_unreachable_model_ends_the_stream_with_a_readable_error(tmp_path: Path) -> None:
+    def network(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    events = chat(server(openrouter_model(network), tmp_path), "Hello")
+
+    assert events == [("error", {"message": "Could not reach the model: connection refused"})]

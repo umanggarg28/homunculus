@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from homunculus import gate
 from homunculus.activity import ActivityLog
+from homunculus.approvals import Approvals, Kind
 from homunculus.model import Message, Model, ModelError, ToolCall
 from homunculus.tools import Tool, ToolError
 
@@ -23,14 +24,19 @@ class ToolStep:
     answer: str
     result: str
     duration_ms: int
+    # How the step ended, so every reader classifies it the same way: "ok" (it ran),
+    # "waiting" (the operator decides) or "failed" (refused, or the tool reported an error).
+    outcome: str
 
 
 async def run(
     model: Model,
     tools: list[Tool],
     activity: ActivityLog,
+    approvals: Approvals,
     history: list[Message],
     text: str,
+    notice: bool = False,
 ) -> AsyncIterator[str | ToolStep]:
     """Answer one operator message, yielding the reply text as it streams and a
     ToolStep after each tool call, so a caller can show the work as it happens.
@@ -38,10 +44,16 @@ async def run(
     `history` holds the earlier turns. The new turn, including any tool calls and
     their results, is added to it only once the final reply is complete, so a
     failed call leaves the conversation unchanged.
+
+    A `notice` is a message the program writes on the operator's behalf, such as the
+    outcome of an approval. It is marked so the console can show it as one.
     """
     by_name = {tool.name: tool for tool in tools}
     schemas = [tool.schema() for tool in tools]
-    turn: list[Message] = [{"role": "user", "content": text}]
+    opening: Message = {"role": "user", "content": text}
+    if notice:
+        opening["notice"] = True
+    turn: list[Message] = [opening]
     activity.record("message", text=text)
     try:
         while True:
@@ -61,7 +73,7 @@ async def run(
             if not calls:
                 break
             for call in calls:
-                step = _carry_out(call, by_name, activity)
+                step = _carry_out(call, by_name, activity, approvals)
                 turn.append({"role": "tool", "tool_call_id": call.id, "content": step.result})
                 yield step
     except ModelError as error:
@@ -71,24 +83,26 @@ async def run(
     history += turn
 
 
-def _carry_out(call: ToolCall, by_name: dict[str, Tool], activity: ActivityLog) -> ToolStep:
+def _carry_out(
+    call: ToolCall, by_name: dict[str, Tool], activity: ActivityLog, approvals: Approvals
+) -> ToolStep:
     """Put one tool call through the gate and, if allowed, run it. The step's result is
     what the model sees."""
     started = time.monotonic()
     answer = gate.decide(call)
     if answer is gate.Answer.ACT:
-        try:
-            if call.name not in by_name:
-                raise ToolError(f"there is no tool named {call.name}.")
-            result = by_name[call.name].call(json.loads(call.arguments))
-        except ToolError as error:
-            result = f"Error: {error}"
-        except Exception as error:
-            # A bug or bad input inside a tool must not end the whole reply. The model is
-            # told, the step is recorded, and the loop carries on.
-            result = f"Error: {call.name} failed unexpectedly ({type(error).__name__}: {error})."
+        result = run_tool(call.name, call.arguments, by_name)
+        outcome = "failed" if result.startswith("Error:") else "ok"
+    elif answer in WAITS_FOR_OPERATOR:
+        outcome = "waiting"
+        request = approvals.request(call.name, call.arguments, WAITS_FOR_OPERATOR[answer])
+        result = (
+            f"Waiting for the operator's approval (request {request.id}). Carry on with other "
+            "work; you will be told the outcome."
+        )
     else:
         result = f"Not done: the gate answered '{answer.value}' for this action."
+        outcome = "failed"
     activity.record(
         "tool", name=call.name, arguments=call.arguments, answer=answer.value, result=result
     )
@@ -98,7 +112,32 @@ def _carry_out(call: ToolCall, by_name: dict[str, Tool], activity: ActivityLog) 
         answer=answer.value,
         result=result,
         duration_ms=round((time.monotonic() - started) * 1000),
+        outcome=outcome,
     )
+
+
+# Answers that wait for the operator, and the kind of request each one creates. An
+# action allowed only when the operator asked for it becomes a request as well,
+# because the loop does not track which actions the operator asked for.
+WAITS_FOR_OPERATOR: dict[gate.Answer, Kind] = {
+    gate.Answer.ASK: "ask",
+    gate.Answer.ACT_WHEN_ASKED: "ask",
+    gate.Answer.HAND_OFF: "hand off",
+}
+
+
+def run_tool(name: str, arguments: str, by_name: dict[str, Tool]) -> str:
+    """Run one tool and return what it reports. Failures are returned as text, never raised."""
+    try:
+        if name not in by_name:
+            raise ToolError(f"there is no tool named {name}.")
+        return by_name[name].call(json.loads(arguments))
+    except ToolError as error:
+        return f"Error: {error}"
+    except Exception as error:
+        # A bug or bad input inside a tool must not end the whole reply. The model is
+        # told, the step is recorded, and the loop carries on.
+        return f"Error: {name} failed unexpectedly ({type(error).__name__}: {error})."
 
 
 def _as_message(call: ToolCall) -> dict[str, object]:

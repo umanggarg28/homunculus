@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { HomunculusRobot, ROBOT_STATE_LABELS } from "./HomunculusRobot";
 import { useRobotState } from "@/hooks/useRobotState";
-import { isFailedToolEvent, useTurnEvents, type TurnEvent } from "@/lib/turnEvents";
+import { isFailedToolEvent, isWaitingToolEvent, useTurnEvents, type TurnEvent } from "@/lib/turnEvents";
 
 /** The sidebar presence: pixel robot in a unit card, alive.
  *
@@ -332,6 +332,7 @@ function bubbleForEvent(e: TurnEvent): { text: string; color?: string; durationM
       return { text: "hmm…", durationMs: 1400 };
     case "tool":
       if (isFailedToolEvent(e)) return { text: "ugh.", color: "var(--color-danger)", durationMs: 3000 };
+      if (isWaitingToolEvent(e)) return { text: "your call.", color: "var(--color-warning)", durationMs: 3000 };
       return { text: `${(e.name ?? "tool").toLowerCase()}: done.`, color: "var(--color-accent)", durationMs: 1800 };
     case "assistant_reply":
       return { text: "there.", color: "var(--color-accent)", durationMs: 1800 };

@@ -54,13 +54,22 @@ class OpenRouterModel:
     ) -> AsyncIterator[str | ToolCall]:
         body: dict[str, Any] = {
             "model": MODEL_ID,
-            "messages": messages,
+            "messages": [_api_fields(message) for message in messages],
             "stream": True,
             "provider": PRIVACY_ROUTING,
         }
         if tools:
             body["tools"] = tools
         headers = {"Authorization": f"Bearer {self._api_key}"}
+        try:
+            async for item in self._request(body, headers):
+                yield item
+        except httpx.HTTPError as error:
+            raise ModelError(f"Could not reach the model: {error}") from error
+
+    async def _request(
+        self, body: dict[str, Any], headers: dict[str, str]
+    ) -> AsyncIterator[str | ToolCall]:
         async with self._client.stream(
             "POST", OPENROUTER_CHAT_URL, json=body, headers=headers
         ) as response:
@@ -105,3 +114,12 @@ def _error_message(response: httpx.Response) -> str:
         return str(response.json()["error"]["message"])
     except (ValueError, KeyError, TypeError):
         return response.text[:200]
+
+
+# The fields the Chat Completions format defines for a message. Anything else a
+# message carries is for this program's own use and is not sent.
+API_FIELDS = ("role", "content", "tool_calls", "tool_call_id")
+
+
+def _api_fields(message: Message) -> Message:
+    return {key: value for key, value in message.items() if key in API_FIELDS}

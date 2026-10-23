@@ -44,3 +44,8 @@ def test_a_rename_aimed_outside_the_workspace_is_refused(to: str) -> None:
 def test_renaming_and_deleting_inside_the_workspace_are_allowed() -> None:
     assert decide(call("rename", '{"path": "a.md", "to": "b/a.md"}')) is Answer.ACT
     assert decide(call("delete", '{"path": "a.md"}')) is Answer.ACT
+
+
+@pytest.mark.parametrize("tool", ["pay", "enter_password", "enter_verification_code"])
+def test_payments_passwords_and_codes_are_handed_to_the_operator(tool: str) -> None:
+    assert decide(call(tool, "{}")) is Answer.HAND_OFF

@@ -26,6 +26,7 @@ export function CommandPalette() {
   const commands = useMemo<Command[]>(
     () => [
       { id: "chat", label: "open chat", hint: "/chat", run: () => navigate("/chat") },
+      { id: "approvals", label: "open approvals", hint: "/approvals", run: () => navigate("/approvals") },
     ],
     [navigate],
   );

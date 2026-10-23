@@ -25,6 +25,7 @@ Diagrams are plain text, so they read the same in any editor.
 5. [The gate](#5-the-gate)
 6. [The activity log](#6-the-activity-log)
 7. [The web console](#7-the-web-console)
+8. [Approvals](#8-approvals)
 
 ---
 
@@ -119,15 +120,18 @@ history = []                  # a list of message dicts; empty, since this is th
 text = "I like tea."          # a str
 ```
 
-**Line 44: `turn = [{"role": "user", "content": text}]`**
+**Lines 53-56: the opening message, then `turn`**
 
 ```python
-turn = [{"role": "user", "content": "I like tea."}]    # a list of 1 message, a dict with two str keys
+opening = {"role": "user", "content": "I like tea."}   # one message: a dict with two str keys
+turn = [opening]                                         # a list of 1 message
 ```
+
+`notice` is `False` for a message you typed, so the opening message has no `"notice"` key. Chapter 8 covers the messages that have one.
 
 `turn` collects everything that happens in this one exchange. With tools, it grows to hold the tool calls and their results too.
 
-**Line 50: `messages = [{"role": "system", ...}, *history, *turn]`**
+**Line 62: `messages = [{"role": "system", ...}, *history, *turn]`**
 
 `*history` and `*turn` spread their contents into the new list. `history` is empty, so `messages` is a list of 2 dicts:
 
@@ -138,7 +142,7 @@ messages[1] = {"role": "user",   "content": "I like tea."}
 
 Read `messages[1]` aloud: "the user said: I like tea."
 
-**Line 51: `model.stream(messages, schemas)`** returns an async iterator. Each item is either a piece of text (`str`) or a finished tool request (`ToolCall`, chapter 4). Suppose the model's reply arrives as one piece of text:
+**Line 63: `model.stream(messages, schemas)`** returns an async iterator. Each item is either a piece of text (`str`) or a finished tool request (`ToolCall`, chapter 4). Suppose the model's reply arrives as one piece of text:
 
 ```python
 model.stream(messages, schemas) -> "Noted."      # yields 1 str, then ends
@@ -168,13 +172,13 @@ When a reply arrives in two pieces, `"Good "` and `"morning."`, each pull goes l
 
 `parts` is the loop's private notepad. It exists only so the full reply can be glued together at the end, and nothing outside `run` ever sees it.
 
-**Line 57: `reply = {"role": "assistant", "content": "".join(parts)}`**
+**Line 69: `reply = {"role": "assistant", "content": "".join(parts)}`**
 
-`"".join(["Noted."])` is `"Noted."`, so `reply` is `{"role": "assistant", "content": "Noted."}`. Line 60 appends it, and `turn` is now a list of 2.
+`"".join(["Noted."])` is `"Noted."`, so `reply` is `{"role": "assistant", "content": "Noted."}`. Line 72 appends it, and `turn` is now a list of 2.
 
-**Lines 61-62: `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
+**Lines 73-74: `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
 
-**Line 71: `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
+**Line 83: `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
 
 ```python
 history[0] = {"role": "user",      "content": "I like tea."}
@@ -196,7 +200,7 @@ The model sees the whole exchange and can answer "tea". That is the entire mecha
 
 **Where each piece is used.** `parts` and `calls` are rebuilt on every pass of the `while` loop. `turn` lives for one call to `run`. `history` outlives the call: the server owns it, and `run` only adds to it. `SYSTEM_PROMPT` is read by `run` and never stored anywhere.
 
-**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so line 71 never runs and `history` stays as it was. On the way out, lines 67-69 record the error in the activity log and pass it on. A failed turn leaves no half-finished reply in the conversation.
+**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so line 83 never runs and `history` stays as it was. On the way out, lines 79-81 record the error in the activity log and pass it on. A failed turn leaves no half-finished reply in the conversation.
 
 ### The test
 
@@ -224,7 +228,7 @@ The other loop tests say: the loop streams the reply and calls the model exactly
 
 ### Change it yourself
 
-1. In `loop.py`, make the history update happen **before** the model is called. Add `history += turn` on a new line just above `try:`.
+1. In `loop.py`, make the history update happen **before** the model is called. Add `history += turn` on a new line just above `try:` (line 58).
 2. Run `uv run pytest tests/test_loop.py`.
 3. Two tests fail. Read their failure messages. One shows your message appearing twice in the list sent to the model. The other shows a failed turn leaving your message behind in `history`.
 4. Undo the change and run the tests again to see them pass.
@@ -401,7 +405,7 @@ It also has to keep one rule the whole agent depends on: one piece of work at a 
 
 | Event | Data | Meaning |
 |---|---|---|
-| `tool` | `{"name", "arguments", "answer", "result", "duration_ms"}` | One tool call the loop dealt with (chapter 4) |
+| `tool` | `{"name", "arguments", "answer", "result", "duration_ms", "outcome"}` | One tool call the loop dealt with (chapter 4). `outcome` is `ok`, `waiting` or `failed` |
 | `delta` | `{"text": "..."}` | The next piece of the reply |
 | `done` | `{}` | The reply is complete |
 | `error` | `{"message": "..."}` | The reply failed, and why |
@@ -554,7 +558,7 @@ Then it calls the model again with both added to the list. That is the loop's se
 
 You send `"Note that I like green tea."`. `tools` holds the seven file tools for the workspace, `~/Library/Application Support/homunculus/workspace` on a Mac.
 
-**Lines 42-43** prepare the tools two ways:
+**Lines 51-52** prepare the tools two ways:
 
 ```
 by_name = {"read": <Tool>, "write": <Tool>, ..., "rename": <Tool>}       a dict of 7, name to Tool
@@ -569,11 +573,11 @@ schemas = [{"type": "function", "function": {"name": "read", ...}}, ...]   a lis
 ToolCall(id="call_1", name="write", arguments='{"path": "tea.md", "content": "Green"}')
 ```
 
-`isinstance(item, ToolCall)` is true, so it goes into `calls` (line 53), not `parts`. Nothing is yielded to you. `parts` stays `[]`.
+`isinstance(item, ToolCall)` is true, so it goes into `calls` (line 65), not `parts`. Nothing is yielded to you. `parts` stays `[]`.
 
-**Lines 57-60** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
+**Lines 69-72** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
 
-**Line 61:** `calls` is not empty, so no `break`. **Line 64** hands the call to `_carry_out`:
+**Line 73:** `calls` is not empty, so no `break`. **Line 76** hands the call to `_carry_out`:
 
 ```
 gate.decide(call)                    -> Answer.ACT                      (chapter 5)
@@ -585,7 +589,7 @@ by_name["write"].call({...})         -> "Wrote tea.md."                 a str
 
 `activity.record("tool", name="write", arguments=..., answer="act", result="Wrote tea.md.")` appends one line to the activity log, and `_carry_out` returns the result.
 
-**Line 65** adds the tool message, and line 66 yields the step as a `ToolStep`, which the server sends to you as a `tool` event (chapter 3). `turn` is now a list of 3:
+**Line 77** adds the tool message, and line 78 yields the step as a `ToolStep`, which the server sends to you as a `tool` event (chapter 3). `turn` is now a list of 3:
 
 ```
 turn[0] = {"role": "user",      "content": "Note that I like green tea."}
@@ -595,7 +599,7 @@ turn[2] = {"role": "tool",      "tool_call_id": "call_1", "content": "Wrote tea.
 
 Read `turn[2]` aloud: "the result of request call_1 was: Wrote tea.md."
 
-**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so line 62 breaks out. `turn` ends as a list of 4, and line 71 adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
+**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so line 74 breaks out. `turn` ends as a list of 4, and line 83 adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
 
 **How the real model streams a tool call.** OpenRouter sends the request in pieces, each tagged with an `index` saying which call it belongs to:
 
@@ -665,7 +669,7 @@ An agent that works by itself will sometimes propose something it should not do:
 
 ### The idea
 
-**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs (line 78 of `loop.py`). It returns one of five answers:
+**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs (line 92 of `loop.py`). It returns one of five answers:
 
 | Answer | Meaning |
 |---|---|
@@ -681,7 +685,7 @@ The first four mirror the approval behaviours OpenAI documents for its always-on
 
 **Unknown means ask.** An action that is not in the table is answered `ASK`. New tools are safe by default until someone writes a rule for them.
 
-Today the table has one row with real content: the seven workspace file tools are answered `ACT` when their paths stay in the workspace, and `REFUSE` when they do not. For `rename` both `path` and `to` are checked. A path stays in the workspace if it is relative and has no `..` part. The tools check again on their own, following symbolic links (chapter 4). Approvals for `ASK` arrive in a later ticket. Until then the loop tells the model the action was not done.
+Today the table has one row with real content: the seven workspace file tools are answered `ACT` when their paths stay in the workspace, and `REFUSE` when they do not. For `rename` both `path` and `to` are checked. A path stays in the workspace if it is relative and has no `..` part. The tools check again on their own, following symbolic links (chapter 4). Payments, passwords and verification codes (`pay`, `enter_password`, `enter_verification_code`) are answered `HAND_OFF`: only you should do them. No such tool exists yet, so this row is policy written down before it is needed. What happens to `ASK` and `HAND_OFF` answers is chapter 8.
 
 ### A picture
 
@@ -691,6 +695,9 @@ Today the table has one row with real content: the seven workspace file tools ar
            ▼
    arguments are a valid JSON object? ── no ──► REFUSE
            │ yes
+           ▼
+   a payment, password or code? ── yes ──► HAND_OFF
+           │ no
            ▼
    a workspace file tool? ── yes ──► "path" is a string? ── no ──► REFUSE
            │ no                               │ yes
@@ -714,7 +721,7 @@ decide(ToolCall("call_4", "write", '{"path": "../activity.jsonl", "content": "x"
 
 Following the first: `json.loads` gives `{"path": "tea.md", "content": "Green"}`, a dict. `"write"` is in `WORKSPACE_FILE_TOOLS`, a set of 7 names. `arguments.get("path")` is `"tea.md"`, a str. `_stays_in_workspace("tea.md")` builds `PurePosixPath("tea.md")`, whose `.parts` is `("tea.md",)`, a tuple of 1 with no `".."` and not absolute, so it returns `True`. The answer is `ACT`.
 
-The second: valid JSON, but `"send_email"` is not in the set. The answer is `ASK`. Back in the loop, `_carry_out` skips running it, and the model is shown `Not done: the gate answered 'ask' for this action.`
+The second: valid JSON, but `"send_email"` is not in the set. The answer is `ASK`. Back in the loop, `_carry_out` does not run it. It saves a request for you instead, and the model is shown `Waiting for the operator's approval (request 04fdba). Carry on with other work; you will be told the outcome.` (chapter 8).
 
 The third: `json.loads('{not json')` raises `json.JSONDecodeError` inside `_decide`. The `except` in `decide` catches it, and the answer is `REFUSE`.
 
@@ -738,7 +745,7 @@ The other gate tests say: each workspace file tool is allowed, including `delete
 1. In `gate.py`, change `return Answer.REFUSE` inside `decide`'s `except` to `return Answer.ASK`.
 2. Run `uv run pytest tests/test_gate.py`.
 3. The cannot-read test fails. Think about what you just did: a request the gate cannot understand would now wait for approval instead of being refused outright, and once approvals exist it could be approved by accident.
-4. Undo the change. Then add a real row: make the gate answer `HAND_OFF` for any tool named `pay`. Write the test first in `tests/test_gate.py`, watch it fail, then add the rule above `return Answer.ASK`.
+4. Undo the change. Then add a real row: deleting is the one file action that cannot be undone, so make the gate answer `ASK` for `delete`. Write the test first in `tests/test_gate.py`, watch it fail, then add the rule. Run the whole suite afterwards. Four tests fail: the gate test that says deleting is allowed, and the three tool tests that delete through the loop, because nothing is deleted until you approve. That is what a policy change looks like: the tests that described the old policy fail, and you decide whether to update them or undo the change.
 
 ---
 
@@ -772,10 +779,10 @@ An agent that works while you are away has to leave a record you can trust. If t
 You send `"Note that I like green tea."` (the trace from chapter 4). Three calls to `activity.record` happen, in this order:
 
 ```
-record("message", text="Note that I like green tea.")                        line 45 of loop.py
+record("message", text="Note that I like green tea.")                        line 57 of loop.py
 record("tool", name="write", arguments='{"path": "tea.md", "content": "Green"}',
        answer="act", result="Wrote tea.md.")                                 in _carry_out
-record("reply", text="Saved.")                                               line 70 of loop.py
+record("reply", text="Saved.")                                               line 82 of loop.py
 ```
 
 `record(kind, **details)` builds one dict: the current time in UTC, the kind, then every detail passed in. For the second call:
@@ -874,7 +881,7 @@ The empty reply is a placeholder that text will be added to. `recordTurnEvent({ 
 **The first piece of the body arrives.** Suppose it is this text, with one complete event and half of the next:
 
 ```
-event: tool\ndata: {"name": "write", "arguments": "{…}", "answer": "act", "result": "Wrote priorities.md.", "duration_ms": 0}\n\nevent: del
+event: tool\ndata: {"name": "write", "arguments": "{…}", "answer": "act", "result": "Wrote priorities.md.", "duration_ms": 0, "outcome": "ok"}\n\nevent: del
 ```
 
 `parseSseChunks(buffer)` splits on blank lines. That gives a list of 2 parts. The last part, `event: del`, may be incomplete, so it is returned as `remainder` and kept in `buffer` for next time:
@@ -883,7 +890,7 @@ event: tool\ndata: {"name": "write", "arguments": "{…}", "answer": "act", "res
 parseSseChunks(buffer) -> { events: [{ event: "tool", data: '{"name": "write", …}' }], remainder: "event: del" }
 ```
 
-`events` is a list of 1. `JSON.parse(data)` gives an object with `name`, `arguments`, `answer`, `result` and `duration_ms`. Because the event is `tool`, `send` adds a `ToolStep` to `toolCalls` (a list of 1 now), which draws the WRITE block, and records the step in the store. The robot switches to WORKING. `isFailedStep("act", "Wrote priorities.md.")` is `false`, so the block reads `OK · 0MS`.
+`events` is a list of 1. `JSON.parse(data)` gives an object with `name`, `arguments`, `answer`, `result`, `duration_ms` and `outcome`. Because the event is `tool`, `send` adds a `ToolStep` to `toolCalls` (a list of 1 now), which draws the WRITE block, and records the step in the store. The robot switches to WORKING. The server sent `"outcome": "ok"`, so the block reads `OK · 0MS` in green. The console never works out the outcome for itself; it shows what the server decided, so the block, the robot and the thinking indicator always agree.
 
 **The next piece** completes `event: delta\ndata: {"text": "Saved "}`. Now `buffer` is `event: del` plus the new text, which makes a whole event. `update` replaces the placeholder with a copy whose `content` is `"" + "Saved "`, so React redraws that one message. Each further `delta` appends again, and you watch the words arrive.
 
@@ -921,10 +928,140 @@ It runs the real server and the built console, with only the model replaced by t
 
 ### Change it yourself
 
-1. In `web/src/lib/toolSteps.ts`, change `isFailedStep` to return `false` always.
+1. In `web/src/components/chat/BrutalistToolBlock.tsx`, change `const outcome = entry.outcome;` to `const outcome = "ok";`.
 2. Run `npm run build` in `web/`, then send a message the gate refuses through the README quick start, for example one asking the agent to write `../outside.md`.
-3. The tool block now says `REFUSE` in green, as though all were well, while the server said the step was not done. That is the kind of invented state this one shared rule prevents.
+3. The tool block now says `REFUSE` in green, as though all were well, while the robot shows FAULT for the same step. One part of the screen has stopped reading what the server sent, and the screen now contradicts itself.
 4. Undo the change and build again.
+
+---
+
+## 8. Approvals
+
+Code: `src/homunculus/approvals.py`, the approval endpoints in `src/homunculus/server.py`, and `web/src/pages/ApprovalsPage.tsx`. Tests: `tests/test_approvals.py`, and the second test in `tests/browser/test_console.py`.
+
+### The problem
+
+The gate (chapter 5) can answer "ask" or "hand off". Those answers need somewhere to go. An agent that works while you are away cannot stop and wait at your desk, and it must not take silence as a yes. So a request has to be written down, survive a restart, wait for you for as long as it takes, and run exactly as proposed once you say yes.
+
+### The idea
+
+**A request is a saved record, not a paused program.** When the gate asks, the loop does not freeze. It saves the exact tool name and arguments, tells the model "waiting for the operator, carry on", and the turn ends normally. Nothing about the request lives in memory, so a restart loses nothing.
+
+**What you approve is what runs.** The request stores the arguments as the model wrote them, and deciding never changes them. If the agent wants something different, that is a new request. Dots and Grok Bot describe the same rule: an approval covers the exact action shown.
+
+**The outcome becomes a message to the agent.** After you decide, the server starts a short turn that tells the agent what happened, for example `Approved: request 04fdba, send_email {...}. Result: Sent.` The agent replies as usual, so the work carries on. That message is marked as a **notice**: the console shows it as a decision rather than as something you typed, and the model module strips the mark before anything is sent to OpenRouter.
+
+**Three kinds of decision**, matching the gate's answers:
+
+| Request kind | Your choices | What runs |
+|---|---|---|
+| `ask` | approve, or decline with an optional reason | on approve, exactly the requested action |
+| `hand off` | mark done with an optional note, or decline | nothing: you do it yourself |
+
+### A picture
+
+```
+ model: send_email {"to": "sam@example.com", ...}
+   │
+   ▼
+ gate.decide → ASK
+   │
+   ▼
+ loop: approvals.request(...)  ──►  approvals.json   { id: "04fdba", status: "pending", ... }
+   │  model is told: "Waiting for the operator's approval (request 04fdba)..."
+   ▼
+ console: APPROVALS [1]  ──►  you press [approve]
+   │
+   ▼
+ server: decide → "approved"  ──►  run_tool(send_email, the saved arguments) → "Sent."
+   │
+   ▼
+ server: a new turn, notice=True:  "Approved: request 04fdba, send_email {...}. Result: Sent."
+   │
+   ▼
+ model: "Done: the email to Sam is sent."   ──►  shown in Chat
+```
+
+### One value, traced
+
+You type "Email Sam to move Friday's call to 4pm". The model proposes:
+
+```
+ToolCall(name="send_email", arguments='{"to": "sam@example.com", "subject": "Friday", "body": "Can we move our call to 4pm?"}')
+```
+
+**In the loop, `_carry_out`.** `gate.decide` returns `Answer.ASK`. `WAITS_FOR_OPERATOR[Answer.ASK]` is `"ask"`, so the loop calls:
+
+```
+approvals.request("send_email", '{"to": ...}', "ask")
+  → Approval(id="04fdba", tool="send_email", arguments='{"to": ...}', kind="ask",
+             status="pending", created="2026-10-24T04:41:15Z", decided=None, note=None, result=None)
+```
+
+`Approvals.request` reads the saved list (`approvals.json`), adds this one, and writes the whole list back. It writes to a temporary file and moves it into place, so a crash mid-write can never leave half a list. The tool step's result is the waiting sentence, so the model replies "I've drafted the email. It's waiting for your approval." and the turn ends.
+
+**In the console.** `ApprovalsProvider` asks `GET /api/approvals` every ten seconds, and after every turn event. The list is one item, so the sidebar shows a badge of 1 and the screen shows the request with its arguments laid out as `to`, `subject` and `body`.
+
+**You press approve.** The console calls `POST /api/approvals/04fdba/approve`. In the server:
+
+```
+decide("04fdba", "approved", "ask", None)    checks the request exists, is still pending, and is an "ask"
+  → Approval(..., status="approved", decided="2026-10-24T04:43:02Z")
+run_tool("send_email", '{"to": ...}', by_name)   the same function the loop uses for an allowed action
+  → "Sent."
+approvals.record_result("04fdba", "Sent.")
+```
+
+The tool runs inside the same lock as a chat message (chapter 3), so it never runs alongside another turn's tools, and in a worker thread (`asyncio.to_thread`), so a slow tool does not hold up the rest of the server.
+
+Then `background.add_task(tell_the_agent, ...)` schedules the follow-up turn to run after the response is sent, so your button does not wait for the model. `tell_the_agent` takes the lock again and calls:
+
+```
+loop.run(..., text='Approved: request 04fdba, send_email {"to": ...}. Result: Sent.', notice=True)
+```
+
+**If that turn fails**, for example because no provider answers, the decision must not vanish. `tell_the_agent` adds the notice to `history` on its own, so the agent reads it in its next turn, and records `follow_up = "failed: ..."` on the request. The approvals screen then says the agent could not reply, instead of pointing you to a reply that does not exist. When the turn succeeds, `follow_up` is `"replied"`, and an open chat screen loads the conversation again to show it.
+
+**If the server stops mid-action**, a request can be left approved with no result. On the next start, `Approvals.mark_interrupted` gives each such request the result `Unknown: the server stopped while this action was running, so it may or may not have run.` Nothing can tell which happened, so the record says exactly that.
+
+**The notice.** Lines 53-55 of `loop.py` build the opening message with `"notice": True`. It is stored in `history` with that mark. Before sending, `model.py` keeps only `role`, `content`, `tool_calls` and `tool_call_id`, so OpenRouter receives a plain user message. `GET /api/history` passes the mark on, and the chat shows the line under DECIDED instead of YOU.
+
+**Where each value lives.** The request lives in `approvals.json` in the data directory and is kept there as a record after it is decided. The notice lives in `history`. The tool's result is in three places: on the request, in the activity log, and in the notice the agent read.
+
+### The test
+
+```python
+def test_approving_runs_exactly_that_action_and_the_agent_carries_on(
+    tmp_path: Path, send_email: StandIn
+) -> None:
+    model = ScriptedModel(
+        [[asks_to("send_email", to="sam@example.com")], ["I have asked."], ["Sam is emailed."]]
+    )
+    client = server(model, tmp_path, send_email)
+    client.post("/api/chat", json={"message": "Email Sam"})
+    request = pending_id(client)
+
+    decided = client.post(f"/api/approvals/{request}/approve").json()
+
+    assert send_email.calls == [{"to": "sam@example.com"}]
+    assert decided["status"] == "approved"
+    assert decided["result"] == "Sent."
+    told = model.received[2][-1]
+    assert told["content"] == (
+        f'Approved: request {request}, send_email {{"to": "sam@example.com"}}. Result: Sent.'
+    )
+```
+
+In plain English: "When the agent asks to send an email and I approve it, the email tool runs once, with exactly the arguments the agent proposed, and the agent is then told the result in its next turn."
+
+`StandIn` is a tool that only records the calls it receives. No real email tool exists yet, so the whole approval flow is built and proven now, ready for when web tools (#9) and outside services arrive. Other approval tests cover declining with a reason, a hand-off marked done, deciding a request twice (refused), approving a hand-off (refused), an unknown request (404), and a pending request surviving a restart.
+
+### Change it yourself
+
+1. In `server.py`, find `approve` and change `loop.run_tool(decided.tool, decided.arguments, by_name)` so it runs with arguments of your own, for example `'{"to": "someone-else@example.com"}'`.
+2. Run `uv run pytest tests/test_approvals.py`.
+3. Two tests fail, the approve test among them: the tool ran with arguments you did not approve. The request stores the arguments it was given so that this cannot happen.
+4. Undo the change.
 
 ---
 

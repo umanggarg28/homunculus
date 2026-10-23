@@ -7,19 +7,27 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from homunculus import loop
 from homunculus.activity import ActivityLog
+from homunculus.approvals import Approval, ApprovalError, Approvals, Kind, Status
 from homunculus.model import Message, Model, ModelError
 from homunculus.tools import Tool
+
+# How many decided requests the approvals list shows below the pending ones.
+RECENT_DECISIONS = 10
 
 
 class ChatRequest(BaseModel):
     message: str
+
+
+class Decision(BaseModel):
+    note: str | None = None
 
 
 def sse(event: str, data: dict[str, Any]) -> str:
@@ -28,10 +36,15 @@ def sse(event: str, data: dict[str, Any]) -> str:
 
 
 def create_app(
-    model: Model, tools: list[Tool], activity: ActivityLog, console: Path | None = None
+    model: Model,
+    tools: list[Tool],
+    activity: ActivityLog,
+    approvals: Approvals,
+    console: Path | None = None,
 ) -> FastAPI:
     """The HTTP API, and the built web console from `console` when one is given."""
     app = FastAPI(title="Homunculus")
+    approvals.mark_interrupted()
     # One operator, one conversation, kept in memory for the life of the process.
     history: list[Message] = []
     # One piece of work at a time: a second message waits until the first reply is complete,
@@ -43,7 +56,9 @@ def create_app(
         async def events() -> AsyncIterator[str]:
             async with turn:
                 try:
-                    async for item in loop.run(model, tools, activity, history, request.message):
+                    async for item in loop.run(
+                        model, tools, activity, approvals, history, request.message
+                    ):
                         if isinstance(item, loop.ToolStep):
                             yield sse("tool", dataclasses.asdict(item))
                         else:
@@ -55,14 +70,112 @@ def create_app(
 
         return StreamingResponse(events(), media_type="text/event-stream")
 
+    @app.get("/api/approvals")
+    async def list_approvals() -> list[dict[str, Any]]:
+        """Pending requests first, then the most recently decided ones, newest first."""
+        requests = approvals.all()
+        pending = [a for a in requests if a.status == "pending"]
+        decided = [a for a in reversed(requests) if a.status != "pending"][:RECENT_DECISIONS]
+        return [dataclasses.asdict(a) for a in [*pending, *decided]]
+
+    async def tell_the_agent(approval_id: str, text: str) -> None:
+        """Run a turn that tells the agent the outcome of a request, so it can carry on.
+
+        The decision is part of the conversation whatever happens: if the turn fails,
+        the notice is added on its own, so the agent reads it in its next turn."""
+        async with turn:
+            try:
+                async for _ in loop.run(
+                    model, tools, activity, approvals, history, text, notice=True
+                ):
+                    pass
+            except Exception as error:
+                # The loop has already recorded a model failure in the activity log.
+                history.append({"role": "user", "content": text, "notice": True})
+                approvals.record_follow_up(approval_id, f"failed: {error}")
+                return
+        approvals.record_follow_up(approval_id, "replied")
+
+    def record_decision(
+        approval_id: str, status: Status, required_kind: Kind | None, note: str | None
+    ) -> Approval:
+        """Record the operator's decision, refusing an unknown request (404), one that is
+        already decided, or a decision that does not suit its kind (409)."""
+        try:
+            current = approvals.get(approval_id)
+        except ApprovalError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        if required_kind is not None and current.kind != required_kind:
+            raise HTTPException(
+                status_code=409,
+                detail=f"request {approval_id} is '{current.kind}', not '{required_kind}'",
+            )
+        try:
+            decided = approvals.decide(approval_id, status, note)
+        except ApprovalError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        activity.record("approval", id=approval_id, tool=decided.tool, status=status, note=note)
+        return decided
+
+    @app.post("/api/approvals/{approval_id}/approve")
+    async def approve(approval_id: str, background: BackgroundTasks) -> dict[str, Any]:
+        """Run exactly the action that was requested, then tell the agent the result."""
+        decided = record_decision(approval_id, "approved", "ask", None)
+        by_name = {tool.name: tool for tool in tools}
+        # Inside the turn lock, so the action never runs alongside a chat turn's own tools,
+        # and in a worker thread, so a slow tool does not stall other requests.
+        async with turn:
+            result = await asyncio.to_thread(
+                loop.run_tool, decided.tool, decided.arguments, by_name
+            )
+        decided = approvals.record_result(approval_id, result)
+        activity.record(
+            "tool",
+            name=decided.tool,
+            arguments=decided.arguments,
+            answer="act",
+            result=result,
+            request=approval_id,
+        )
+        background.add_task(
+            tell_the_agent, approval_id, f"Approved: {_request_summary(decided)}. Result: {result}"
+        )
+        return dataclasses.asdict(decided)
+
+    @app.post("/api/approvals/{approval_id}/deny")
+    async def deny(
+        approval_id: str, background: BackgroundTasks, decision: Decision | None = None
+    ) -> dict[str, Any]:
+        """Decline a request. Nothing runs; the agent is told, with the reason if given."""
+        note = decision.note if decision else None
+        decided = record_decision(approval_id, "denied", None, note)
+        text = f"Declined: {_request_summary(decided)}{_appended('Reason', note)}"
+        background.add_task(tell_the_agent, approval_id, text)
+        return dataclasses.asdict(decided)
+
+    @app.post("/api/approvals/{approval_id}/done")
+    async def done(
+        approval_id: str, background: BackgroundTasks, decision: Decision | None = None
+    ) -> dict[str, Any]:
+        """Mark a hand-off as done by the operator, and tell the agent."""
+        note = decision.note if decision else None
+        decided = record_decision(approval_id, "done", "hand off", note)
+        text = f"Done by the operator: {_request_summary(decided)}{_appended('Note', note)}"
+        background.add_task(tell_the_agent, approval_id, text)
+        return dataclasses.asdict(decided)
+
     @app.get("/api/history")
-    async def conversation() -> list[dict[str, str]]:
-        """The conversation so far, as the operator saw it: their messages and the replies."""
-        return [
-            {"role": message["role"], "content": message["content"]}
-            for message in history
-            if message["role"] in ("user", "assistant") and message["content"]
-        ]
+    async def conversation() -> list[dict[str, Any]]:
+        """The conversation so far, as the operator saw it: their messages, notices of
+        their decisions, and the replies."""
+        shown = []
+        for message in history:
+            if message["role"] in ("user", "assistant") and message["content"]:
+                entry: dict[str, Any] = {"role": message["role"], "content": message["content"]}
+                if message.get("notice"):
+                    entry["notice"] = True
+                shown.append(entry)
+        return shown
 
     if console is not None:
         if (console / "assets").is_dir():
@@ -80,3 +193,12 @@ def create_app(
             return FileResponse(console / "index.html")
 
     return app
+
+
+def _request_summary(approval: Approval) -> str:
+    """The request as the agent is told it: its id, the tool and the exact arguments."""
+    return f"request {approval.id}, {approval.tool} {approval.arguments}"
+
+
+def _appended(label: str, text: str | None) -> str:
+    return f". {label}: {text}" if text else "."

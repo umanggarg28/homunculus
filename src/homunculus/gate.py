@@ -19,6 +19,9 @@ class Answer(Enum):
 WORKSPACE_FILE_TOOLS = {"read", "write", "edit", "list", "search", "delete", "rename"}
 PATH_ARGUMENTS = ("path", "to")
 
+# Actions only the operator should take. The agent may prepare them; the operator does them.
+HAND_OFF_ACTIONS = {"pay", "enter_password", "enter_verification_code"}
+
 
 def decide(call: ToolCall) -> Answer:
     """Answer a proposed tool call. Any failure to decide is a refusal."""
@@ -32,6 +35,8 @@ def _decide(call: ToolCall) -> Answer:
     arguments = json.loads(call.arguments)
     if not isinstance(arguments, dict):
         return Answer.REFUSE
+    if call.name in HAND_OFF_ACTIONS:
+        return Answer.HAND_OFF
     if call.name in WORKSPACE_FILE_TOOLS:
         if not isinstance(arguments.get("path"), str):
             return Answer.REFUSE

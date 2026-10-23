@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { DashboardShell } from "@/components/layout/DashboardShell";
+import { ApprovalsPage } from "@/pages/ApprovalsPage";
 import { ChatPage } from "@/pages/ChatPage";
 
 /** Each route is its own surface, so a new route starts at the top. */
@@ -20,6 +21,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/chat" replace />} />
           <Route path="/chat" element={<ChatPage />} />
+          <Route path="/approvals" element={<ApprovalsPage />} />
           <Route path="*" element={<Navigate to="/chat" replace />} />
         </Routes>
       </DashboardShell>
