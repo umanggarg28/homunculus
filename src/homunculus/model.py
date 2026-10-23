@@ -61,6 +61,15 @@ class OpenRouterModel:
         if tools:
             body["tools"] = tools
         headers = {"Authorization": f"Bearer {self._api_key}"}
+        try:
+            async for item in self._request(body, headers):
+                yield item
+        except httpx.HTTPError as error:
+            raise ModelError(f"Could not reach the model: {error}") from error
+
+    async def _request(
+        self, body: dict[str, Any], headers: dict[str, str]
+    ) -> AsyncIterator[str | ToolCall]:
         async with self._client.stream(
             "POST", OPENROUTER_CHAT_URL, json=body, headers=headers
         ) as response:

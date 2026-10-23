@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { argumentPairs, stepOutcome, type ToolStep } from "@/lib/toolSteps";
+import { argumentPairs, type ToolStep } from "@/lib/toolSteps";
 
 /** Tool-call rendered as a bordered receipt panel.
  *
@@ -14,7 +14,7 @@ import { argumentPairs, stepOutcome, type ToolStep } from "@/lib/toolSteps";
  */
 export function BrutalistToolBlock({ entry }: { entry: ToolStep }) {
   const [expanded, setExpanded] = useState(false);
-  const outcome = stepOutcome(entry.answer, entry.result);
+  const outcome = entry.outcome;
   const isError = outcome === "failed";
   const outcomeColor = {
     ok: "var(--color-accent)",

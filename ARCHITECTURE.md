@@ -37,12 +37,12 @@ If the model call fails at any point, `model` raises `ModelError`, `server` send
 
 | Event | Data | Meaning |
 |---|---|---|
-| `tool` | `{"name", "arguments", "answer", "result", "duration_ms"}` | One tool call, after the gate answered and the tool ran or did not |
+| `tool` | `{"name", "arguments", "answer", "result", "duration_ms", "outcome"}` | One tool call, after the gate answered and the tool ran or did not. `outcome` is `ok`, `waiting` or `failed`, so every reader classifies it the same way |
 | `delta` | `{"text": "..."}` | The next piece of the reply |
 | `done` | `{}` | The reply is complete |
 | `error` | `{"message": "..."}` | The reply failed, and why |
 
-`GET /api/history` returns the conversation as the operator saw it: their messages, notices of their decisions (marked `"notice": true`), and the replies, without tool messages.
+`GET /api/history` returns the conversation as the operator saw it: their messages, notices of their decisions (marked `"notice": true`), and the replies, without tool messages. Any other path that is not under `/api/` is answered with the console's `index.html`, so the console can choose the screen from the address.
 
 ## Approvals
 
@@ -55,11 +55,13 @@ When the gate answers ask or hand off, the loop saves a request with the exact t
 | `POST /api/approvals/{id}/deny` | Declines; nothing runs. Optional `{"note": "..."}` as the reason |
 | `POST /api/approvals/{id}/done` | For a `hand off` request: the operator did it. Optional note |
 
-A request is decided once. After any decision the server runs a short turn telling the agent the outcome, as a message marked as a notice. The model module sends only the fields the Chat Completions format defines, so the mark never reaches the provider. Any other path that is not under `/api/` is answered with the console's `index.html`, so the console can choose the screen from the address.
+A request is decided once. After any decision the server runs a short turn telling the agent the outcome, as a message marked as a notice. The model module sends only the fields the Chat Completions format defines, so the mark never reaches the provider. If that turn fails, the notice is still added to the conversation, and the request records `follow_up` as `replied` or `failed: <why>`, which the console shows.
+
+An approved action runs inside the same lock as a chat turn and in a worker thread. A request approved but left without a result because the server stopped is marked, on the next start, as unknown: it may or may not have run.
 
 ## The web console
 
-`web/` is a React and Vite app, kept from the earlier version for its look and components and reduced to what v2 has: the shell and the chat screen. `useChatStream` reads the chat stream and records each turn event (message sent, tool step, reply finished, error, stopped) in a small in-page store, `lib/turnEvents.ts`. The robot's state is computed once from that store and shared, so the header and the sidebar always agree. One rule in `lib/toolSteps.ts` decides whether a tool step failed, for every part of the console. Nothing the console shows is invented: each state matches an event the server sent, and the boot screen's status line is the result of a real request. Screens are added as their backends are built.
+`web/` is a React and Vite app, kept from the earlier version for its look and components and reduced to what v2 has: the shell and the chat screen. `useChatStream` reads the chat stream and records each turn event (message sent, tool step, reply finished, error, stopped) in a small in-page store, `lib/turnEvents.ts`. The robot's state is computed once from that store and shared, so the header and the sidebar always agree. Whether a tool step ran, is waiting or failed comes from the server's `outcome` field, so every part of the console agrees. Nothing the console shows is invented: each state matches an event the server sent, and the boot screen's status line is the result of a real request. Screens are added as their backends are built.
 
 ## Interfaces
 

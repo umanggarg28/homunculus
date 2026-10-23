@@ -16,31 +16,37 @@ def activity(tmp_path: Path) -> ActivityLog:
     return ActivityLog(tmp_path / "activity.jsonl")
 
 
+@pytest.fixture
+def approvals(tmp_path: Path) -> Approvals:
+    return Approvals(tmp_path / "approvals.json")
+
+
 async def collect(
-    model: Model, history: list[Message], text: str, activity: ActivityLog
+    model: Model, history: list[Message], text: str, activity: ActivityLog, approvals: Approvals
 ) -> list[str]:
-    approvals = Approvals(activity.path.parent / "approvals.json")
     items = [item async for item in loop.run(model, [], activity, approvals, history, text)]
     return [item for item in items if isinstance(item, str)]
 
 
 async def test_streams_the_reply_and_stops_when_the_model_answers_in_words(
-    activity: ActivityLog,
+    activity: ActivityLog, approvals: Approvals
 ) -> None:
     model = ScriptedModel([["Good ", "morning."]])
 
-    chunks = await collect(model, [], "Hello", activity)
+    chunks = await collect(model, [], "Hello", activity, approvals)
 
     assert chunks == ["Good ", "morning."]
     assert len(model.received) == 1
 
 
-async def test_the_next_message_carries_the_earlier_exchange(activity: ActivityLog) -> None:
+async def test_the_next_message_carries_the_earlier_exchange(
+    activity: ActivityLog, approvals: Approvals
+) -> None:
     model = ScriptedModel([["Noted."], ["You said you like tea."]])
     history: list[Message] = []
 
-    await collect(model, history, "I like tea.", activity)
-    await collect(model, history, "What do I like?", activity)
+    await collect(model, history, "I like tea.", activity, approvals)
+    await collect(model, history, "What do I like?", activity, approvals)
 
     second_call = model.received[1]
     assert [(m["role"], m["content"]) for m in second_call[1:]] == [
@@ -58,18 +64,22 @@ class FailingModel:
         raise ModelError("Model stopped mid-reply: connection lost")
 
 
-async def test_a_failed_reply_leaves_the_conversation_unchanged(activity: ActivityLog) -> None:
+async def test_a_failed_reply_leaves_the_conversation_unchanged(
+    activity: ActivityLog, approvals: Approvals
+) -> None:
     history: list[Message] = []
 
     with pytest.raises(ModelError):
-        await collect(FailingModel(), history, "Hello", activity)
+        await collect(FailingModel(), history, "Hello", activity, approvals)
 
     assert history == []
 
 
-async def test_a_failed_reply_is_recorded_in_the_activity_log(activity: ActivityLog) -> None:
+async def test_a_failed_reply_is_recorded_in_the_activity_log(
+    activity: ActivityLog, approvals: Approvals
+) -> None:
     with pytest.raises(ModelError):
-        await collect(FailingModel(), [], "Hello", activity)
+        await collect(FailingModel(), [], "Hello", activity, approvals)
 
     assert [(e["kind"], e.get("error")) for e in activity.entries()] == [
         ("message", None),

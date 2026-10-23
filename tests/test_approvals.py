@@ -1,6 +1,7 @@
 """Approvals, through the server's HTTP API with a scripted model and stand-in tools."""
 
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,7 @@ from scripted_model import ScriptedModel
 
 from homunculus.activity import ActivityLog
 from homunculus.approvals import Approvals
-from homunculus.model import ToolCall
+from homunculus.model import Message, ModelError, ToolCall
 from homunculus.server import create_app
 from homunculus.tools import Tool
 
@@ -63,6 +64,16 @@ def test_an_action_that_needs_approval_waits_instead_of_running(
     assert pending["status"] == "pending"
     told = model.received[1][-1]["content"]
     assert told.startswith(f"Waiting for the operator's approval (request {pending['id']}).")
+
+
+def test_a_waiting_step_is_reported_as_waiting(tmp_path: Path, send_email: StandIn) -> None:
+    model = ScriptedModel([[asks_to("send_email", to="sam@example.com")], ["I have asked."]])
+    client = server(model, tmp_path, send_email)
+
+    body = client.post("/api/chat", json={"message": "Email Sam"}).text
+
+    assert '"answer": "ask"' in body
+    assert '"outcome": "waiting"' in body
 
 
 def pending_id(client: TestClient) -> str:
@@ -174,3 +185,60 @@ def test_the_decision_shows_in_history_as_a_notice(tmp_path: Path, send_email: S
     assert notice["notice"] is True
     assert notice["content"].startswith(f"Approved: request {request}")
     assert reply == {"role": "assistant", "content": "Sam is emailed."}
+
+
+class FailingFollowUp(ScriptedModel):
+    """Answers the chat turn from its script, then fails on the follow-up turn."""
+
+    async def stream(
+        self, messages: list[Message], tools: list[dict[str, Any]]
+    ) -> AsyncIterator[str | ToolCall]:
+        if len(self.received) >= 2:
+            self.received.append(list(messages))
+            raise ModelError("Model request failed (503): no providers available")
+            yield ""  # makes this an async generator
+        async for item in super().stream(messages, tools):
+            yield item
+
+
+def test_a_failed_follow_up_still_records_the_decision_and_says_so(
+    tmp_path: Path, send_email: StandIn
+) -> None:
+    model = FailingFollowUp([[asks_to("send_email", to="sam@example.com")], ["I have asked."]])
+    client = server(model, tmp_path, send_email)
+    client.post("/api/chat", json={"message": "Email Sam"})
+    request = pending_id(client)
+
+    client.post(f"/api/approvals/{request}/approve")
+
+    [decided] = client.get("/api/approvals").json()
+    assert decided["follow_up"] == "failed: Model request failed (503): no providers available"
+    assert (
+        client.get("/api/history").json()[-1]["content"].startswith(f"Approved: request {request}")
+    )
+
+
+def test_a_successful_follow_up_is_recorded_as_replied(tmp_path: Path, send_email: StandIn) -> None:
+    model = ScriptedModel(
+        [[asks_to("send_email", to="sam@example.com")], ["I have asked."], ["Sam is emailed."]]
+    )
+    client = server(model, tmp_path, send_email)
+    client.post("/api/chat", json={"message": "Email Sam"})
+    request = pending_id(client)
+
+    client.post(f"/api/approvals/{request}/approve")
+
+    assert client.get("/api/approvals").json()[0]["follow_up"] == "replied"
+
+
+def test_an_action_interrupted_by_a_restart_is_marked_unknown(tmp_path: Path) -> None:
+    approvals = Approvals(tmp_path / "approvals.json")
+    request = approvals.request("send_email", '{"to": "sam@example.com"}', "ask")
+    approvals.decide(request.id, "approved")
+
+    restarted = server(ScriptedModel([]), tmp_path)
+
+    [decided] = restarted.get("/api/approvals").json()
+    assert decided["result"] == (
+        "Unknown: the server stopped while this action was running, so it may or may not have run."
+    )

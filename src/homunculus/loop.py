@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from homunculus import gate
 from homunculus.activity import ActivityLog
-from homunculus.approvals import Approvals
+from homunculus.approvals import Approvals, Kind
 from homunculus.model import Message, Model, ModelError, ToolCall
 from homunculus.tools import Tool, ToolError
 
@@ -24,6 +24,9 @@ class ToolStep:
     answer: str
     result: str
     duration_ms: int
+    # How the step ended, so every reader classifies it the same way: "ok" (it ran),
+    # "waiting" (the operator decides) or "failed" (refused, or the tool reported an error).
+    outcome: str
 
 
 async def run(
@@ -89,7 +92,9 @@ def _carry_out(
     answer = gate.decide(call)
     if answer is gate.Answer.ACT:
         result = run_tool(call.name, call.arguments, by_name)
+        outcome = "failed" if result.startswith("Error:") else "ok"
     elif answer in WAITS_FOR_OPERATOR:
+        outcome = "waiting"
         request = approvals.request(call.name, call.arguments, WAITS_FOR_OPERATOR[answer])
         result = (
             f"Waiting for the operator's approval (request {request.id}). Carry on with other "
@@ -97,6 +102,7 @@ def _carry_out(
         )
     else:
         result = f"Not done: the gate answered '{answer.value}' for this action."
+        outcome = "failed"
     activity.record(
         "tool", name=call.name, arguments=call.arguments, answer=answer.value, result=result
     )
@@ -106,13 +112,14 @@ def _carry_out(
         answer=answer.value,
         result=result,
         duration_ms=round((time.monotonic() - started) * 1000),
+        outcome=outcome,
     )
 
 
 # Answers that wait for the operator, and the kind of request each one creates. An
-# action allowed only when the operator asked for it is treated as a request too,
-# until the loop can tell which actions the operator asked for.
-WAITS_FOR_OPERATOR = {
+# action allowed only when the operator asked for it becomes a request as well,
+# because the loop does not track which actions the operator asked for.
+WAITS_FOR_OPERATOR: dict[gate.Answer, Kind] = {
     gate.Answer.ASK: "ask",
     gate.Answer.ACT_WHEN_ASKED: "ask",
     gate.Answer.HAND_OFF: "hand off",

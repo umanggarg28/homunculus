@@ -4,7 +4,6 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
 import { useApprovals } from "@/hooks/useApprovals";
 import { api, type Approval } from "@/lib/api";
-import { argumentPairs } from "@/lib/toolSteps";
 
 /** Actions the agent proposed that wait for the operator.
  *
@@ -83,7 +82,7 @@ function PendingRequest({ approval, onDecided }: { approval: Approval; onDecided
       <div className="text-[11px] mt-3" style={{ color: "var(--color-text-muted)" }}>
         {isHandOff
           ? "Only you should do this. Do it yourself, then mark it done."
-          : "Approve to run exactly this action. The agent is told either way."}
+          : "Approve to run exactly this action. Either way, the agent is told the outcome."}
       </div>
       <input
         value={note}
@@ -129,9 +128,7 @@ function DecidedRequest({ approval }: { approval: Approval }) {
           result: {approval.result}
         </div>
       )}
-      <Link to="/chat" className="text-[10px] uppercase tracking-[0.16em] mt-2 inline-block" style={{ color: "var(--color-text-faint)" }}>
-        the agent's follow-up is in chat ›
-      </Link>
+      <FollowUp approval={approval} />
     </div>
   );
 }
@@ -160,19 +157,51 @@ function RequestHeading({
   );
 }
 
+/** The arguments exactly as the agent proposed them, so types and spacing are visible. */
 function Arguments({ raw }: { raw: string }) {
-  const pairs = argumentPairs(raw);
-  if (pairs.length === 0) return null;
+  let shown = raw;
+  try {
+    shown = JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    // not JSON: shown as written
+  }
   return (
-    <div className="mt-3 grid gap-x-4 gap-y-1" style={{ gridTemplateColumns: "max-content 1fr" }}>
-      {pairs.map(([key, value]) => (
-        <div key={key} className="contents text-[12px]">
-          <span className="uppercase tracking-[0.12em] text-[10px]" style={{ color: "var(--color-accent)", paddingTop: 2 }}>
-            {key}
-          </span>
-          <span style={{ color: "var(--color-text)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{value}</span>
-        </div>
-      ))}
+    <pre
+      className="mt-3 text-[12px] p-2"
+      style={{
+        color: "var(--color-text)",
+        background: "var(--color-bg)",
+        border: "1px solid var(--color-border)",
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-word",
+        fontFamily: "var(--font-mono)",
+      }}
+    >
+      {shown}
+    </pre>
+  );
+}
+
+/** Whether the agent has been told the outcome yet, as the server recorded it. */
+function FollowUp({ approval }: { approval: Approval }) {
+  if (approval.follow_up === null) {
+    return (
+      <div className="text-[10px] uppercase tracking-[0.16em] mt-2" style={{ color: "var(--color-text-faint)" }}>
+        telling the agent…
+      </div>
+    );
+  }
+  if (approval.follow_up === "replied") {
+    return (
+      <Link to="/chat" className="text-[10px] uppercase tracking-[0.16em] mt-2 inline-block" style={{ color: "var(--color-text-faint)" }}>
+        the agent replied in chat ›
+      </Link>
+    );
+  }
+  return (
+    <div className="text-[11px] mt-2" style={{ color: "var(--color-warning)" }}>
+      The agent could not reply ({approval.follow_up.replace(/^failed: /, "")}). It will read this
+      decision in its next turn.
     </div>
   );
 }

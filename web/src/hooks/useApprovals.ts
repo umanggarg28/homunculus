@@ -2,8 +2,8 @@ import { createContext, createElement, useCallback, useContext, useEffect, useSt
 import { api, type Approval } from "@/lib/api";
 import { useTurnEvents } from "@/lib/turnEvents";
 
-// Requests can appear while the operator is on another screen, so the list is
-// refreshed on a timer as well as after every tool step and decision.
+// Requests appear, and follow-up replies land, while the operator may be on another
+// screen, so the list is refreshed on a timer as well as after every turn event.
 const REFRESH_MS = 10_000;
 
 interface ApprovalsState {

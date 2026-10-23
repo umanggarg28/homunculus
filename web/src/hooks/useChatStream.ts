@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { parseSseChunks } from "@/lib/sse";
 import { recordTurnEvent } from "@/lib/turnEvents";
-import type { ToolStep } from "@/lib/toolSteps";
+import type { StepOutcome, ToolStep } from "@/lib/toolSteps";
 
 export interface ChatMessage {
   id: string;
@@ -26,6 +26,8 @@ interface UseChatStream {
   historyLoading: boolean;
   send: (text: string) => Promise<void>;
   cancel: () => void;
+  /** Load the conversation again, for turns that happened outside this screen. */
+  reload: () => Promise<void>;
 }
 
 /** A `tool` event as the server sends it. */
@@ -35,6 +37,7 @@ interface ToolEvent {
   answer: string;
   result: string;
   duration_ms: number;
+  outcome: StepOutcome;
 }
 
 /** Owns the chat log and the streaming POST to /api/chat. Text accumulates onto
@@ -46,22 +49,21 @@ export function useChatStream(): UseChatStream {
   const [historyLoading, setHistoryLoading] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .history()
-      .then((history) => {
-        if (cancelled) return;
-        setMessages(history.map((m) => ({ id: crypto.randomUUID(), ...m })));
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        if (!cancelled) setHistoryLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+  /** Load the conversation from the server, replacing what is shown. */
+  const reload = useCallback(async () => {
+    try {
+      const history = await api.history();
+      setMessages(history.map((m) => ({ id: crypto.randomUUID(), ...m })));
+    } catch {
+      // Unreachable server: keep what is shown.
+    } finally {
+      setHistoryLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
 
   const send = useCallback(
     async (text: string) => {
@@ -113,9 +115,16 @@ export function useChatStream(): UseChatStream {
                   arguments: step.arguments,
                   result: step.result,
                   durationMs: step.duration_ms,
+                  outcome: step.outcome,
                 },
               ]);
-              recordTurnEvent({ event: "tool", name: step.name, answer: step.answer, result: step.result });
+              recordTurnEvent({
+                event: "tool",
+                name: step.name,
+                answer: step.answer,
+                result: step.result,
+                outcome: step.outcome,
+              });
             } else if (event.event === "error") {
               fail(data.message);
               finished = true;
@@ -145,5 +154,5 @@ export function useChatStream(): UseChatStream {
    *  undone. */
   const cancel = useCallback(() => abortRef.current?.abort(), []);
 
-  return { messages, toolCalls, sending, historyLoading, send, cancel };
+  return { messages, toolCalls, sending, historyLoading, send, cancel, reload };
 }

@@ -1,12 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
 import { useChatStream } from "@/hooks/useChatStream";
+import { useApprovals } from "@/hooks/useApprovals";
 import { BrutalistChatLog } from "@/components/chat/BrutalistChatLog";
 import { BrutalistChatInput } from "@/components/chat/BrutalistChatInput";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
 
 export function ChatPage() {
-  const { messages, toolCalls, sending, historyLoading, send, cancel } = useChatStream();
+  const { messages, toolCalls, sending, historyLoading, send, cancel, reload } = useChatStream();
+  // A decision on the approvals screen starts a turn outside this screen. When the
+  // agent's reply to it lands, load the conversation again so it shows here.
+  const { approvals } = useApprovals();
+  const replies = approvals.filter((a) => a.follow_up !== null).length;
+  // Runs only when the number of follow-ups changes: reloading after an ordinary
+  // reply would replace the live turn's tool steps with the plainer history.
+  useEffect(() => {
+    if (replies > 0 && !sending) reload();
+  }, [replies]);
   const [bootDone, setBootDone] = useState(false);
   // Ticks every 5s so "last reply 14m ago" stays current without
   // re-rendering the whole log every second.

@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from homunculus import loop
 from homunculus.activity import ActivityLog
-from homunculus.approvals import Approval, ApprovalError, Approvals
+from homunculus.approvals import Approval, ApprovalError, Approvals, Kind, Status
 from homunculus.model import Message, Model, ModelError
 from homunculus.tools import Tool
 
@@ -44,6 +44,7 @@ def create_app(
 ) -> FastAPI:
     """The HTTP API, and the built web console from `console` when one is given."""
     app = FastAPI(title="Homunculus")
+    approvals.mark_interrupted()
     # One operator, one conversation, kept in memory for the life of the process.
     history: list[Message] = []
     # One piece of work at a time: a second message waits until the first reply is complete,
@@ -77,25 +78,37 @@ def create_app(
         decided = [a for a in reversed(requests) if a.status != "pending"][:RECENT_DECISIONS]
         return [dataclasses.asdict(a) for a in [*pending, *decided]]
 
-    async def tell_the_agent(text: str) -> None:
-        """Run a turn that tells the agent the outcome of a request, so it can carry on."""
+    async def tell_the_agent(approval_id: str, text: str) -> None:
+        """Run a turn that tells the agent the outcome of a request, so it can carry on.
+
+        The decision is part of the conversation whatever happens: if the turn fails,
+        the notice is added on its own, so the agent reads it in its next turn."""
         async with turn:
             try:
                 async for _ in loop.run(
                     model, tools, activity, approvals, history, text, notice=True
                 ):
                     pass
-            except ModelError:
-                pass  # recorded in the activity log by the loop; the decision itself stands
+            except Exception as error:
+                # The loop has already recorded a model failure in the activity log.
+                history.append({"role": "user", "content": text, "notice": True})
+                approvals.record_follow_up(approval_id, f"failed: {error}")
+                return
+        approvals.record_follow_up(approval_id, "replied")
 
-    def decide(approval_id: str, status: str, kind: str | None, note: str | None) -> Approval:
+    def record_decision(
+        approval_id: str, status: Status, required_kind: Kind | None, note: str | None
+    ) -> Approval:
+        """Record the operator's decision, refusing an unknown request (404), one that is
+        already decided, or a decision that does not suit its kind (409)."""
         try:
             current = approvals.get(approval_id)
         except ApprovalError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
-        if kind is not None and current.kind != kind:
+        if required_kind is not None and current.kind != required_kind:
             raise HTTPException(
-                status_code=409, detail=f"request {approval_id} is '{current.kind}', not '{kind}'"
+                status_code=409,
+                detail=f"request {approval_id} is '{current.kind}', not '{required_kind}'",
             )
         try:
             decided = approvals.decide(approval_id, status, note)
@@ -107,14 +120,26 @@ def create_app(
     @app.post("/api/approvals/{approval_id}/approve")
     async def approve(approval_id: str, background: BackgroundTasks) -> dict[str, Any]:
         """Run exactly the action that was requested, then tell the agent the result."""
-        decided = decide(approval_id, "approved", "ask", None)
+        decided = record_decision(approval_id, "approved", "ask", None)
         by_name = {tool.name: tool for tool in tools}
-        result = loop.run_tool(decided.tool, decided.arguments, by_name)
+        # Inside the turn lock, so the action never runs alongside a chat turn's own tools,
+        # and in a worker thread, so a slow tool does not stall other requests.
+        async with turn:
+            result = await asyncio.to_thread(
+                loop.run_tool, decided.tool, decided.arguments, by_name
+            )
         decided = approvals.record_result(approval_id, result)
         activity.record(
-            "tool", name=decided.tool, arguments=decided.arguments, answer="approved", result=result
+            "tool",
+            name=decided.tool,
+            arguments=decided.arguments,
+            answer="act",
+            result=result,
+            request=approval_id,
         )
-        background.add_task(tell_the_agent, f"Approved: {_describe(decided)}. Result: {result}")
+        background.add_task(
+            tell_the_agent, approval_id, f"Approved: {_request_summary(decided)}. Result: {result}"
+        )
         return dataclasses.asdict(decided)
 
     @app.post("/api/approvals/{approval_id}/deny")
@@ -123,9 +148,9 @@ def create_app(
     ) -> dict[str, Any]:
         """Decline a request. Nothing runs; the agent is told, with the reason if given."""
         note = decision.note if decision else None
-        decided = decide(approval_id, "denied", None, note)
-        reason = f". Reason: {note}" if note else "."
-        background.add_task(tell_the_agent, f"Declined: {_describe(decided)}{reason}")
+        decided = record_decision(approval_id, "denied", None, note)
+        text = f"Declined: {_request_summary(decided)}{_appended('Reason', note)}"
+        background.add_task(tell_the_agent, approval_id, text)
         return dataclasses.asdict(decided)
 
     @app.post("/api/approvals/{approval_id}/done")
@@ -134,9 +159,9 @@ def create_app(
     ) -> dict[str, Any]:
         """Mark a hand-off as done by the operator, and tell the agent."""
         note = decision.note if decision else None
-        decided = decide(approval_id, "done", "hand off", note)
-        detail = f". Note: {note}" if note else "."
-        background.add_task(tell_the_agent, f"Done by the operator: {_describe(decided)}{detail}")
+        decided = record_decision(approval_id, "done", "hand off", note)
+        text = f"Done by the operator: {_request_summary(decided)}{_appended('Note', note)}"
+        background.add_task(tell_the_agent, approval_id, text)
         return dataclasses.asdict(decided)
 
     @app.get("/api/history")
@@ -170,5 +195,10 @@ def create_app(
     return app
 
 
-def _describe(approval: Approval) -> str:
+def _request_summary(approval: Approval) -> str:
+    """The request as the agent is told it: its id, the tool and the exact arguments."""
     return f"request {approval.id}, {approval.tool} {approval.arguments}"
+
+
+def _appended(label: str, text: str | None) -> str:
+    return f". {label}: {text}" if text else "."

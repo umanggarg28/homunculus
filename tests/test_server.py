@@ -213,6 +213,7 @@ def test_tool_steps_are_streamed_with_the_reply(tmp_path: Path) -> None:
         "arguments": '{"path": "a.md", "content": "x"}',
         "answer": "act",
         "result": "Wrote a.md.",
+        "outcome": "ok",
     }
     assert events[1:] == [("delta", {"text": "Saved."}), ("done", {})]
 
@@ -261,3 +262,12 @@ def test_a_console_build_without_assets_still_starts(tmp_path: Path) -> None:
     )
 
     assert client.get("/chat").text == "<html>console</html>"
+
+
+def test_an_unreachable_model_ends_the_stream_with_a_readable_error(tmp_path: Path) -> None:
+    def network(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    events = chat(server(openrouter_model(network), tmp_path), "Hello")
+
+    assert events == [("error", {"message": "Could not reach the model: connection refused"})]

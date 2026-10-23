@@ -19,9 +19,11 @@ export interface Approval {
   decided: string | null;
   note: string | null;
   result: string | null;
+  /** Whether the agent has been told the outcome: "replied", or "failed: <why>". */
+  follow_up: string | null;
 }
 
-async function decide(id: string, action: "approve" | "deny" | "done", note?: string): Promise<Approval> {
+async function sendDecision(id: string, action: "approve" | "deny" | "done", note?: string): Promise<Approval> {
   const response = await fetch(`/api/approvals/${id}/${action}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -54,11 +56,11 @@ export const api = {
   },
 
   /** Run exactly the requested action; the agent is told the result. */
-  approve: (id: string) => decide(id, "approve"),
+  approve: (id: string) => sendDecision(id, "approve"),
   /** Decline; nothing runs and the agent is told, with the reason if given. */
-  deny: (id: string, reason?: string) => decide(id, "deny", reason),
+  deny: (id: string, reason?: string) => sendDecision(id, "deny", reason),
   /** Mark a hand-off as done by the operator; the agent is told. */
-  done: (id: string, note?: string) => decide(id, "done", note),
+  done: (id: string, note?: string) => sendDecision(id, "done", note),
 
   /** The conversation so far: the operator's messages and the replies. */
   async history(): Promise<HistoryMessage[]> {
