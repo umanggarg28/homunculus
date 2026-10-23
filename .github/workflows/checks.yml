@@ -17,6 +17,7 @@ jobs:
       - run: uv run ruff format --check
       - run: uv run mypy
       - run: uv run pytest -q
+      - run: uv run python scripts/check_learn_links.py
 
   console:
     runs-on: ubuntu-latest

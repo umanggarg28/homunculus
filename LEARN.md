@@ -13,6 +13,8 @@ There is one chapter per module, in the order the modules were built. Every chap
 
 Read a chapter with the code open beside it. Each one takes about fifteen minutes.
 
+References to code are links to the exact line, followed by the code they point at, for example [loop.py:62](src/homunculus/loop.py#L62) `messages = [{"role": "system", ...}, *history, *turn]`. Click one to jump there. A check runs on every pull request and fails if any reference no longer matches its line, so they stay correct as the code changes.
+
 Diagrams are plain text, so they read the same in any editor.
 
 ## Contents
@@ -120,7 +122,7 @@ history = []                  # a list of message dicts; empty, since this is th
 text = "I like tea."          # a str
 ```
 
-**Lines 53-56: the opening message, then `turn`**
+**The opening message, then `turn`**: [loop.py:53-56](src/homunculus/loop.py#L53-L56) `opening: Message = ... turn: list[Message] = [opening]`
 
 ```python
 opening = {"role": "user", "content": "I like tea."}   # one message: a dict with two str keys
@@ -131,7 +133,7 @@ turn = [opening]                                         # a list of 1 message
 
 `turn` collects everything that happens in this one exchange. With tools, it grows to hold the tool calls and their results too.
 
-**Line 62: `messages = [{"role": "system", ...}, *history, *turn]`**
+**[loop.py:62](src/homunculus/loop.py#L62) `messages = [{"role": "system", ...}, *history, *turn]`**
 
 `*history` and `*turn` spread their contents into the new list. `history` is empty, so `messages` is a list of 2 dicts:
 
@@ -142,7 +144,7 @@ messages[1] = {"role": "user",   "content": "I like tea."}
 
 Read `messages[1]` aloud: "the user said: I like tea."
 
-**Line 63: `model.stream(messages, schemas)`** returns an async iterator. Each item is either a piece of text (`str`) or a finished tool request (`ToolCall`, chapter 4). Suppose the model's reply arrives as one piece of text:
+**[loop.py:63](src/homunculus/loop.py#L63) `model.stream(messages, schemas)`** returns an async iterator. Each item is either a piece of text (`str`) or a finished tool request (`ToolCall`, chapter 4). Suppose the model's reply arrives as one piece of text:
 
 ```python
 model.stream(messages, schemas) -> "Noted."      # yields 1 str, then ends
@@ -172,13 +174,13 @@ When a reply arrives in two pieces, `"Good "` and `"morning."`, each pull goes l
 
 `parts` is the loop's private notepad. It exists only so the full reply can be glued together at the end, and nothing outside `run` ever sees it.
 
-**Line 69: `reply = {"role": "assistant", "content": "".join(parts)}`**
+**[loop.py:69](src/homunculus/loop.py#L69) `reply: Message = {"role": "assistant", "content": "".join(parts)}`**
 
-`"".join(["Noted."])` is `"Noted."`, so `reply` is `{"role": "assistant", "content": "Noted."}`. Line 72 appends it, and `turn` is now a list of 2.
+`"".join(["Noted."])` is `"Noted."`, so `reply` is `{"role": "assistant", "content": "Noted."}`. [loop.py:72](src/homunculus/loop.py#L72) `turn.append(reply)` appends it, and `turn` is now a list of 2.
 
-**Lines 73-74: `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
+**[loop.py:73-74](src/homunculus/loop.py#L73-L74) `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
 
-**Line 83: `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
+**[loop.py:83](src/homunculus/loop.py#L83) `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
 
 ```python
 history[0] = {"role": "user",      "content": "I like tea."}
@@ -200,7 +202,7 @@ The model sees the whole exchange and can answer "tea". That is the entire mecha
 
 **Where each piece is used.** `parts` and `calls` are rebuilt on every pass of the `while` loop. `turn` lives for one call to `run`. `history` outlives the call: the server owns it, and `run` only adds to it. `SYSTEM_PROMPT` is read by `run` and never stored anywhere.
 
-**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so line 83 never runs and `history` stays as it was. On the way out, lines 79-81 record the error in the activity log and pass it on. A failed turn leaves no half-finished reply in the conversation.
+**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so [loop.py:83](src/homunculus/loop.py#L83) `history += turn` never runs and `history` stays as it was. On the way out, [loop.py:79-81](src/homunculus/loop.py#L79-L81) `except ModelError as error: ... raise` record the error in the activity log and pass it on. A failed turn leaves no half-finished reply in the conversation.
 
 ### The test
 
@@ -228,7 +230,7 @@ The other loop tests say: the loop streams the reply and calls the model exactly
 
 ### Change it yourself
 
-1. In `loop.py`, make the history update happen **before** the model is called. Add `history += turn` on a new line just above `try:` (line 58).
+1. In `loop.py`, make the history update happen **before** the model is called. Add `history += turn` on a new line just above [loop.py:58](src/homunculus/loop.py#L58) `try:`.
 2. Run `uv run pytest tests/test_loop.py`.
 3. Two tests fail. Read their failure messages. One shows your message appearing twice in the list sent to the model. The other shows a failed turn leaving your message behind in `history`.
 4. Undo the change and run the tests again to see them pass.
@@ -558,7 +560,7 @@ Then it calls the model again with both added to the list. That is the loop's se
 
 You send `"Note that I like green tea."`. `tools` holds the seven file tools for the workspace, `~/Library/Application Support/homunculus/workspace` on a Mac.
 
-**Lines 51-52** prepare the tools two ways:
+**[loop.py:51-52](src/homunculus/loop.py#L51-L52) `by_name = ... schemas = ...`** prepare the tools two ways:
 
 ```
 by_name = {"read": <Tool>, "write": <Tool>, ..., "rename": <Tool>}       a dict of 7, name to Tool
@@ -573,11 +575,11 @@ schemas = [{"type": "function", "function": {"name": "read", ...}}, ...]   a lis
 ToolCall(id="call_1", name="write", arguments='{"path": "tea.md", "content": "Green"}')
 ```
 
-`isinstance(item, ToolCall)` is true, so it goes into `calls` (line 65), not `parts`. Nothing is yielded to you. `parts` stays `[]`.
+`isinstance(item, ToolCall)` is true, so it goes into `calls` ([loop.py:65](src/homunculus/loop.py#L65) `calls.append(item)`), not `parts`. Nothing is yielded to you. `parts` stays `[]`.
 
-**Lines 69-72** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
+**[loop.py:69-72](src/homunculus/loop.py#L69-L72) `reply: Message = ... turn.append(reply)`** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
 
-**Line 73:** `calls` is not empty, so no `break`. **Line 76** hands the call to `_carry_out`:
+**[loop.py:73](src/homunculus/loop.py#L73) `if not calls:`** is false, because `calls` is not empty, so there is no `break`. **[loop.py:76](src/homunculus/loop.py#L76) `step = _carry_out(...)`** hands the call to `_carry_out`:
 
 ```
 gate.decide(call)                    -> Answer.ACT                      (chapter 5)
@@ -589,7 +591,7 @@ by_name["write"].call({...})         -> "Wrote tea.md."                 a str
 
 `activity.record("tool", name="write", arguments=..., answer="act", result="Wrote tea.md.")` appends one line to the activity log, and `_carry_out` returns the result.
 
-**Line 77** adds the tool message, and line 78 yields the step as a `ToolStep`, which the server sends to you as a `tool` event (chapter 3). `turn` is now a list of 3:
+**[loop.py:77](src/homunculus/loop.py#L77) `turn.append({"role": "tool", ...})`** adds the tool message, and [loop.py:78](src/homunculus/loop.py#L78) `yield step` yields the step as a `ToolStep`, which the server sends to you as a `tool` event (chapter 3). `turn` is now a list of 3:
 
 ```
 turn[0] = {"role": "user",      "content": "Note that I like green tea."}
@@ -599,7 +601,7 @@ turn[2] = {"role": "tool",      "tool_call_id": "call_1", "content": "Wrote tea.
 
 Read `turn[2]` aloud: "the result of request call_1 was: Wrote tea.md."
 
-**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so line 74 breaks out. `turn` ends as a list of 4, and line 83 adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
+**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so [loop.py:74](src/homunculus/loop.py#L74) `break` ends the loop. `turn` ends as a list of 4, and [loop.py:83](src/homunculus/loop.py#L83) `history += turn` adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
 
 **How the real model streams a tool call.** OpenRouter sends the request in pieces, each tagged with an `index` saying which call it belongs to:
 
@@ -669,7 +671,7 @@ An agent that works by itself will sometimes propose something it should not do:
 
 ### The idea
 
-**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs (line 92 of `loop.py`). It returns one of five answers:
+**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs ([loop.py:92](src/homunculus/loop.py#L92) `answer = gate.decide(call)`). It returns one of five answers:
 
 | Answer | Meaning |
 |---|---|
@@ -779,11 +781,13 @@ An agent that works while you are away has to leave a record you can trust. If t
 You send `"Note that I like green tea."` (the trace from chapter 4). Three calls to `activity.record` happen, in this order:
 
 ```
-record("message", text="Note that I like green tea.")                        line 57 of loop.py
+record("message", text="Note that I like green tea.")
 record("tool", name="write", arguments='{"path": "tea.md", "content": "Green"}',
-       answer="act", result="Wrote tea.md.")                                 in _carry_out
-record("reply", text="Saved.")                                               line 82 of loop.py
+       answer="act", result="Wrote tea.md.")
+record("reply", text="Saved.")
 ```
+
+The first comes from [loop.py:57](src/homunculus/loop.py#L57) `activity.record("message", text=text)`, the second from `_carry_out`, and the third from [loop.py:82](src/homunculus/loop.py#L82) `activity.record("reply", text=reply["content"])`.
 
 `record(kind, **details)` builds one dict: the current time in UTC, the kind, then every detail passed in. For the second call:
 
@@ -1024,7 +1028,7 @@ loop.run(..., text='Approved: request 04fdba, send_email {"to": ...}. Result: Se
 
 **If the server stops mid-action**, a request can be left approved with no result. On the next start, `Approvals.mark_interrupted` gives each such request the result `Unknown: the server stopped while this action was running, so it may or may not have run.` Nothing can tell which happened, so the record says exactly that.
 
-**The notice.** Lines 53-55 of `loop.py` build the opening message with `"notice": True`. It is stored in `history` with that mark. Before sending, `model.py` keeps only `role`, `content`, `tool_calls` and `tool_call_id`, so OpenRouter receives a plain user message. `GET /api/history` passes the mark on, and the chat shows the line under DECIDED instead of YOU.
+**The notice.** [loop.py:53-55](src/homunculus/loop.py#L53-L55) `opening: Message = ... opening["notice"] = True` build the opening message with `"notice": True`. It is stored in `history` with that mark. Before sending, `model.py` keeps only `role`, `content`, `tool_calls` and `tool_call_id`, so OpenRouter receives a plain user message. `GET /api/history` passes the mark on, and the chat shows the line under DECIDED instead of YOU.
 
 **Where each value lives.** The request lives in `approvals.json` in the data directory and is kept there as a record after it is decided. The notice lives in `history`. The tool's result is in three places: on the request, in the activity log, and in the notice the agent read.
 

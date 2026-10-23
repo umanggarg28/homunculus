@@ -9,6 +9,10 @@ These are checked in every code review.
 - No names, casual tone or internal back-and-forth.
 - No AI co-author lines on commits or PRs: no `Co-Authored-By` trailer and no "Generated with" footer.
 
+## Learning document
+
+LEARN.md teaches the code and is updated in the same pull request as every change it describes, in every part: traces, tables, tests quoted and exercises. A reference to a line of code is a link to that line followed by the code in backticks, for example ``[loop.py:62](src/homunculus/loop.py#L62) `messages = [...]` ``. `uv run python scripts/check_learn_links.py` checks every such reference and runs on every pull request; a line number without a link is an error.
+
 ## Agent skills
 
 ### Issue tracker
