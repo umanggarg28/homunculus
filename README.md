@@ -94,6 +94,7 @@ uv run pytest        # tests (no network access allowed)
 uv run mypy          # type checks
 uv run ruff check    # lint
 uv run ruff format   # formatting
+uv run python scripts/check_learn_links.py   # every line reference in LEARN.md still matches the code
 
 # The console in a real browser (needs the console built and Chromium installed)
 uv run playwright install chromium
