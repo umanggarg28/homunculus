@@ -20,7 +20,7 @@ export function ChatPage() {
     return () => clearTimeout(t);
   }, []);
 
-  const userTurnCount = messages.filter((m) => m.role === "user").length;
+  const userTurnCount = messages.filter((m) => m.role === "user" && !m.notice).length;
   const subtitle = `turn ${userTurnCount}` + (sending ? " · ● working" : "");
 
   // Shown while idle: how long ago the last completed reply arrived. Only replies

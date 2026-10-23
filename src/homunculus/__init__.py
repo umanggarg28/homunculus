@@ -8,6 +8,7 @@ import uvicorn
 from platformdirs import user_data_path
 
 from homunculus.activity import ActivityLog
+from homunculus.approvals import Approvals
 from homunculus.model import OpenRouterModel
 from homunculus.server import create_app
 from homunculus.tools.files import file_tools
@@ -30,6 +31,7 @@ def main() -> None:
         OpenRouterModel(api_key),
         file_tools(workspace),
         ActivityLog(home / "activity.jsonl"),
+        Approvals(home / "approvals.json"),
         console=CONSOLE if (CONSOLE / "index.html").is_file() else None,
     )
     # Bound to this machine only: nothing else on the network can reach the API.

@@ -4,13 +4,15 @@ import { CommandPalette } from "./CommandPalette";
 import { BootSequence } from "./BootSequence";
 import { Atmosphere } from "./Atmosphere";
 import { RobotStateProvider } from "@/hooks/useRobotState";
+import { ApprovalsProvider } from "@/hooks/useApprovals";
 
 /** App shell: fixed sidebar on the left, scrolling content on the right. */
 export function DashboardShell({ children }: { children: ReactNode }) {
   return (
     <RobotStateProvider>
-      <div className="min-h-screen" style={{ background: "var(--color-bg)" }}>
-        <style>{`
+      <ApprovalsProvider>
+        <div className="min-h-screen" style={{ background: "var(--color-bg)" }}>
+          <style>{`
           .dashboard-main {
             margin-left: 220px;
             min-height: 100vh;
@@ -22,12 +24,13 @@ export function DashboardShell({ children }: { children: ReactNode }) {
             }
           }
         `}</style>
-        <Atmosphere />
-        <BootSequence />
-        <Sidebar />
-        <main className="dashboard-main">{children}</main>
-        <CommandPalette />
-      </div>
+          <Atmosphere />
+          <BootSequence />
+          <Sidebar />
+          <main className="dashboard-main">{children}</main>
+          <CommandPalette />
+        </div>
+      </ApprovalsProvider>
     </RobotStateProvider>
   );
 }

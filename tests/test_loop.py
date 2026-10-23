@@ -7,6 +7,7 @@ from scripted_model import ScriptedModel
 
 from homunculus import loop
 from homunculus.activity import ActivityLog
+from homunculus.approvals import Approvals
 from homunculus.model import Message, Model, ModelError, ToolCall
 
 
@@ -18,9 +19,9 @@ def activity(tmp_path: Path) -> ActivityLog:
 async def collect(
     model: Model, history: list[Message], text: str, activity: ActivityLog
 ) -> list[str]:
-    return [
-        item async for item in loop.run(model, [], activity, history, text) if isinstance(item, str)
-    ]
+    approvals = Approvals(activity.path.parent / "approvals.json")
+    items = [item async for item in loop.run(model, [], activity, approvals, history, text)]
+    return [item for item in items if isinstance(item, str)]
 
 
 async def test_streams_the_reply_and_stops_when_the_model_answers_in_words(

@@ -13,6 +13,10 @@ class ActivityLog:
     def __init__(self, path: Path) -> None:
         self._path = path
 
+    @property
+    def path(self) -> Path:
+        return self._path
+
     def record(self, kind: str, **details: Any) -> None:
         entry = {"time": datetime.now(UTC).isoformat(), "kind": kind, **details}
         self._path.parent.mkdir(parents=True, exist_ok=True)

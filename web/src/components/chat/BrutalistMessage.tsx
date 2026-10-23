@@ -61,7 +61,7 @@ export function BrutalistMessage({ message, toolCalls, sending }: Props) {
             letterSpacing: "0.18em",
           }}
         >
-          {isUser ? "you" : "ai"}
+          {message.notice ? "decided" : isUser ? "you" : "ai"}
         </div>
         <div className="uppercase tracking-[0.08em]">
           {inFlight && !isUser
@@ -77,7 +77,9 @@ export function BrutalistMessage({ message, toolCalls, sending }: Props) {
 
       {/* CONTENT */}
       <div style={{ minWidth: 0 }}>
-        {isUser ? (
+        {message.notice ? (
+          <DecisionNotice content={message.content} />
+        ) : isUser ? (
           <UserPrompt content={message.content} />
         ) : (
           <AgentReply
@@ -89,6 +91,25 @@ export function BrutalistMessage({ message, toolCalls, sending }: Props) {
         )}
       </div>
     </motion.div>
+  );
+}
+
+/** The outcome of an approval, as the agent was told it. Shown word for word, in a
+ *  quieter style, because the operator decided it on the approvals screen. */
+function DecisionNotice({ content }: { content: string }) {
+  return (
+    <div
+      className="text-[11.5px] leading-[1.6] pl-3"
+      style={{
+        fontFamily: "var(--font-mono)",
+        color: "var(--color-text-muted)",
+        borderLeft: "2px solid var(--color-warning)",
+        whiteSpace: "pre-wrap",
+        overflowWrap: "anywhere",
+      }}
+    >
+      {content}
+    </div>
   );
 }
 

@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
-import { isFailedToolEvent, useTurnEvents } from "@/lib/turnEvents";
+import { isFailedToolEvent, isWaitingToolEvent, useTurnEvents } from "@/lib/turnEvents";
 
 interface TraceStep {
   id: string;
@@ -53,7 +53,11 @@ export function ThinkingIndicator({ active }: { active: boolean }) {
       if (e.event === "tool" && e.name) {
         toolCountRef.current += 1;
         const isError = isFailedToolEvent(e);
-        const label = isError ? `${e.name}: ${e.answer === "act" ? "error" : e.answer}` : e.name;
+        const label = isWaitingToolEvent(e)
+          ? `${e.name}: waiting for you`
+          : isError
+            ? `${e.name}: ${e.answer === "act" ? "error" : e.answer}`
+            : e.name;
         next.push({ id, ts, label, isError });
       }
     }

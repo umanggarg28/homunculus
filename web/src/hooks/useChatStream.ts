@@ -14,6 +14,8 @@ export interface ChatMessage {
   ts?: string;
   /** Set when the reply ended with an error instead of finishing. */
   error?: string;
+  /** Written by the program on the operator's behalf, such as an approval outcome. */
+  notice?: boolean;
 }
 
 interface UseChatStream {

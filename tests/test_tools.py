@@ -8,6 +8,7 @@ from scripted_model import ScriptedModel
 
 from homunculus import loop
 from homunculus.activity import ActivityLog
+from homunculus.approvals import Approvals
 from homunculus.model import Message, ToolCall
 from homunculus.tools import Tool, ToolError
 from homunculus.tools.files import file_tools
@@ -28,7 +29,9 @@ def tool_call(name: str, **arguments: object) -> ToolCall:
 async def run_job(model: ScriptedModel, workspace: Path, text: str) -> str:
     activity = ActivityLog(workspace.parent / "activity.jsonl")
     history: list[Message] = []
-    items = [item async for item in loop.run(model, file_tools(workspace), activity, history, text)]
+    approvals = Approvals(workspace.parent / "approvals.json")
+    tools = file_tools(workspace)
+    items = [item async for item in loop.run(model, tools, activity, approvals, history, text)]
     return "".join(item for item in items if isinstance(item, str))
 
 
@@ -114,9 +117,10 @@ async def test_an_allowed_tool_that_does_not_exist_tells_the_model(
         [[ToolCall(id="call_1", name="search", arguments='{"path": "."}')], ["Sorry."]]
     )
     activity = ActivityLog(tmp_path / "activity.jsonl")
+    approvals = Approvals(tmp_path / "approvals.json")
     no_tools: list[Tool] = []
 
-    _ = [chunk async for chunk in loop.run(model, no_tools, activity, [], "Search")]
+    _ = [chunk async for chunk in loop.run(model, no_tools, activity, approvals, [], "Search")]
 
     assert tool_result(model) == "Error: there is no tool named search."
 
@@ -186,11 +190,12 @@ async def test_an_action_that_needs_approval_is_not_run(tmp_path: Path, workspac
     send = Tool("send_email", "Send an email.", {"type": "object"}, send_email)
     model = ScriptedModel([[tool_call("send_email", to="someone@example.com")], ["I will ask."]])
     activity = ActivityLog(tmp_path / "activity.jsonl")
+    approvals = Approvals(tmp_path / "approvals.json")
 
-    _ = [chunk async for chunk in loop.run(model, [send], activity, [], "Email them")]
+    _ = [chunk async for chunk in loop.run(model, [send], activity, approvals, [], "Email them")]
 
     assert ran == []
-    assert tool_result(model) == "Not done: the gate answered 'ask' for this action."
+    assert tool_result(model).startswith("Waiting for the operator's approval")
 
 
 async def test_every_step_is_recorded_in_the_activity_log(tmp_path: Path, workspace: Path) -> None:

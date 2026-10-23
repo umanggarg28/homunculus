@@ -4,6 +4,7 @@ import { InstallBadge } from "./InstallBadge";
 import { SidebarBrand } from "./SidebarBrand";
 import { SidebarRobot } from "@/components/robot/SidebarRobot";
 import { SoundToggle } from "./SoundToggle";
+import { useApprovals } from "@/hooks/useApprovals";
 import { PhosphorToggle } from "./PhosphorToggle";
 
 interface NavItem { to: string; label: string; short: string; kbd?: string; }
@@ -11,7 +12,10 @@ interface NavItem { to: string; label: string; short: string; kbd?: string; }
 const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
   {
     title: "WORK",
-    items: [{ to: "/chat", label: "CHAT", short: "CHAT", kbd: "C" }],
+    items: [
+      { to: "/chat", label: "CHAT", short: "CHAT", kbd: "C" },
+      { to: "/approvals", label: "APPROVALS", short: "APPR", kbd: "A" },
+    ],
   },
 ];
 
@@ -20,6 +24,7 @@ NAV_GROUPS.forEach(g => g.items.forEach(i => { if (i.kbd) KBD_MAP[i.kbd.toLowerC
 
 export function Sidebar() {
   const navigate = useNavigate();
+  const { pendingCount } = useApprovals();
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -183,6 +188,21 @@ export function Sidebar() {
                       </span>
                       <span className="nav-label-full" style={{ flex: 1 }}>{item.label}</span>
                       <span className="nav-label-short" style={{ flex: 1 }}>{item.short}</span>
+                      {item.to === "/approvals" && pendingCount > 0 && (
+                        <span
+                          aria-label={`${pendingCount} waiting for approval`}
+                          style={{
+                            fontSize: 9,
+                            lineHeight: 1,
+                            padding: "2px 5px",
+                            color: "var(--color-bg)",
+                            background: "var(--color-warning)",
+                            fontVariantNumeric: "tabular-nums",
+                          }}
+                        >
+                          {pendingCount}
+                        </span>
+                      )}
                       {item.kbd && (
                         <span
                           className="kbd"

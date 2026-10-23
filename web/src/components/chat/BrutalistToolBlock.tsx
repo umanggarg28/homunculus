@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { isFailedStep, type ToolStep } from "@/lib/toolSteps";
+import { argumentPairs, stepOutcome, type ToolStep } from "@/lib/toolSteps";
 
 /** Tool-call rendered as a bordered receipt panel.
  *
@@ -14,12 +14,18 @@ import { isFailedStep, type ToolStep } from "@/lib/toolSteps";
  */
 export function BrutalistToolBlock({ entry }: { entry: ToolStep }) {
   const [expanded, setExpanded] = useState(false);
-  const isError = isFailedStep(entry.answer, entry.result);
-  const accentColor = isError ? "var(--color-danger)" : "var(--color-border-bright)";
-  const statusColor = isError ? "var(--color-danger)" : "var(--color-accent)";
+  const outcome = stepOutcome(entry.answer, entry.result);
+  const isError = outcome === "failed";
+  const outcomeColor = {
+    ok: "var(--color-accent)",
+    waiting: "var(--color-warning)",
+    failed: "var(--color-danger)",
+  }[outcome];
+  const accentColor = outcome === "ok" ? "var(--color-border-bright)" : outcomeColor;
+  const statusColor = outcomeColor;
   // The gate's answer when it did not let the tool run; otherwise the outcome.
   const statusLabel = entry.answer !== "act" ? entry.answer.toUpperCase() : isError ? "ERR" : "OK";
-  const args = parseArgs(entry.arguments);
+  const args = argumentPairs(entry.arguments);
 
   return (
     <div
@@ -118,7 +124,7 @@ export function BrutalistToolBlock({ entry }: { entry: ToolStep }) {
                   >
                     <span
                       className="text-[10px] uppercase tracking-[0.14em] font-semibold block mb-1"
-                      style={{ color: isError ? "var(--color-danger)" : "var(--color-accent)" }}
+                      style={{ color: outcomeColor }}
                     >
                       result
                     </span>
@@ -146,7 +152,7 @@ export function BrutalistToolBlock({ entry }: { entry: ToolStep }) {
               <div className="mt-1 flex gap-3 text-[11.5px] leading-[1.55]">
                 <span
                   className="shrink-0 uppercase tracking-[0.14em] text-[10px] font-semibold"
-                  style={{ color: isError ? "var(--color-danger)" : "var(--color-accent)", width: 72, paddingTop: 1 }}
+                  style={{ color: outcomeColor, width: 72, paddingTop: 1 }}
                 >
                   result
                 </span>
@@ -173,21 +179,6 @@ export function BrutalistToolBlock({ entry }: { entry: ToolStep }) {
       )}
     </div>
   );
-}
-
-function parseArgs(raw: string | undefined): Array<[string, string]> {
-  if (!raw) return [];
-  try {
-    const obj = JSON.parse(raw);
-    if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-      return Object.entries(obj).map(([k, v]) => [
-        k,
-        typeof v === "string" ? v : JSON.stringify(v),
-      ]);
-    }
-  } catch { /* fall through */ }
-  const collapsed = raw.replace(/\s+/g, " ").trim();
-  return collapsed ? [["raw", collapsed]] : [];
 }
 
 function compactPreview(s: string, n: number): string {

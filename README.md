@@ -2,7 +2,7 @@
 
 An always-on personal agent that works toward your goals in its own sandbox and asks before anything leaves it.
 
-> **Status:** early build. In place: the web console's chat screen, replies streamed word by word, and file tools in the agent's own workspace, each call checked by the gate. The plan and its progress are tracked in the [spec](https://github.com/umanggarg28/homunculus/issues/2) and its tickets.
+> **Status:** early build. In place: the web console's chat and approvals screens, replies streamed word by word, file tools in the agent's own workspace with each call checked by the gate, and approvals for actions that need your consent. The plan and its progress are tracked in the [spec](https://github.com/umanggarg28/homunculus/issues/2) and its tickets.
 
 ## How it works
 
@@ -27,6 +27,7 @@ flowchart LR
 | `loop` | Asks the model, runs the tools it asks for, repeats until it answers in words. |
 | `model` | One streaming call to the model through OpenRouter. |
 | `gate` | Decides for every tool call whether it may run. Anything it cannot read is refused. |
+| `approvals` | Actions waiting for you. You approve, decline, or mark a hand-off done, and the agent is told. |
 | `tools` | `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`, inside the agent's workspace only. |
 | `activity` | An append-only record of every step, written by code, out of reach of every tool. |
 
