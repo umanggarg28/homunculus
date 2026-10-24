@@ -7,7 +7,7 @@ from pathlib import Path
 import uvicorn
 from platformdirs import user_data_path
 
-from homunculus.activity import ActivityLog
+from homunculus.activity import Activity
 from homunculus.approvals import Approvals
 from homunculus.model import OpenRouterModel
 from homunculus.server import create_app
@@ -30,7 +30,7 @@ def main() -> None:
     app = create_app(
         OpenRouterModel(api_key),
         file_tools(workspace),
-        ActivityLog(home / "activity.jsonl"),
+        Activity(home),
         Approvals(home / "approvals.json"),
         console=CONSOLE if (CONSOLE / "index.html").is_file() else None,
     )

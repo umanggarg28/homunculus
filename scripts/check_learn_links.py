@@ -7,7 +7,8 @@ code it refers to in backticks:
 
 The quoted code must appear in the linked lines, ignoring spacing. `...` stands for
 any text in between. A line number written without a link is an error, because
-nothing could check it.
+nothing could check it. A test quoted in a python code block must match the test in
+tests/ word for word, so a quoted test can never drift from the real one.
 
 Run: uv run python scripts/check_learn_links.py
      uv run python scripts/check_learn_links.py --fix
@@ -124,8 +125,38 @@ def fix() -> int:
     return updated
 
 
+TEST_START = re.compile(r"^(async )?def (test_\w+)\(")
+
+
+def quoted_tests(lines: list[str]) -> list[tuple[int, str, str]]:
+    """Each test quoted in a python code block, as (line number, test name, its code)."""
+    found: list[tuple[int, str, str]] = []
+    block: list[str] | None = None
+    start = 0
+    for number, line in enumerate(lines, start=1):
+        if line.strip() == "```python":
+            block, start = [], number + 1
+        elif line.strip() == "```" and block is not None:
+            if block and (match := TEST_START.match(block[0])):
+                found.append((start, match.group(2), "\n".join(block).rstrip()))
+            block = None
+        elif block is not None:
+            block.append(line)
+    return found
+
+
+def test_problems(lines: list[str]) -> list[str]:
+    """A quoted test that is not, word for word, a test in tests/."""
+    sources = "\n".join(path.read_text() for path in sorted((ROOT / "tests").rglob("*.py")))
+    return [
+        f"LEARN.md:{number}: the quoted {name} does not match the test in tests/"
+        for number, name, code in quoted_tests(lines)
+        if code not in sources
+    ]
+
+
 def problems() -> list[str]:
-    found: list[str] = []
+    found: list[str] = test_problems(DOCUMENT.read_text().splitlines())
     for index, line, in_code_block in outside_code_blocks(DOCUMENT.read_text().splitlines()):
         where = f"LEARN.md:{index + 1}"
         if in_code_block:

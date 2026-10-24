@@ -2,17 +2,21 @@
 
 import asyncio
 import json
-import secrets
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import mcp_types as mcp
+from opentelemetry import trace
+from opentelemetry.context import Context
+from opentelemetry.trace import Span, SpanKind, Status, StatusCode
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from homunculus import gate, prompt
-from homunculus.activity import ActivityLog
+from homunculus.activity import AGENT, ROOT_SPAN, Activity, as_messages
 from homunculus.approvals import Approvals, Kind
-from homunculus.model import Message, Model, ModelError, ToolCall
+from homunculus.model import Message, Model, ModelError, ToolCall, Usage
 from homunculus.tools import Tool, make_result, result_text
 
 
@@ -34,7 +38,7 @@ class ToolStep:
 async def run(
     model: Model,
     tools: list[Tool],
-    activity: ActivityLog,
+    activity: Activity,
     approvals: Approvals,
     history: list[Message],
     text: str,
@@ -53,25 +57,39 @@ async def run(
     by_name = {tool.name: tool for tool in tools}
     schemas = [tool.schema() for tool in tools]
     system: Message = {"role": "system", "content": prompt.system_prompt()}
-    # Every line this turn writes to the activity log carries the same job id, so the
-    # activity screen can show the turn as one piece of work.
-    job = secrets.token_hex(8)
     opening: Message = {"role": "user", "content": text}
     if notice:
         opening["notice"] = True
     turn: list[Message] = [opening]
-    activity.record("message", job=job, text=text, notice=notice)
+    # The whole turn is one trace. Each span below names its parent explicitly, because
+    # the "current span" of a context does not survive the yields of a generator.
+    root = activity.tracer.start_span(
+        ROOT_SPAN,
+        attributes={
+            "gen_ai.operation.name": "invoke_agent",
+            "gen_ai.agent.name": AGENT,
+            "gen_ai.provider.name": model.provider,
+            "gen_ai.request.model": model.name,
+            "gen_ai.conversation.id": activity.conversation_id,
+            "gen_ai.input.messages": as_messages("user", text),
+            "homunculus.notice": notice,
+        },
+    )
+    parent = trace.set_span_in_context(root)
     try:
         while True:
             parts: list[str] = []
             calls: list[ToolCall] = []
             messages = [system, *history, *turn]
-            async for item in model.stream(messages, schemas):
-                if isinstance(item, ToolCall):
-                    calls.append(item)
-                else:
-                    parts.append(item)
-                    yield item
+            with _model_call(activity, model, parent) as chat:
+                async for item in model.stream(messages, schemas):
+                    if isinstance(item, ToolCall):
+                        calls.append(item)
+                    elif isinstance(item, Usage):
+                        _record_usage(chat, item)
+                    else:
+                        parts.append(item)
+                        yield item
             reply: Message = {"role": "assistant", "content": "".join(parts)}
             if calls:
                 reply["tool_calls"] = [_as_message(call) for call in calls]
@@ -79,31 +97,33 @@ async def run(
             if not calls:
                 break
             for call in calls:
-                step = _carry_out(call, by_name, activity, approvals, job)
+                step = _carry_out(call, by_name, activity, approvals, parent)
                 turn.append({"role": "tool", "tool_call_id": call.id, "content": step.result})
                 yield step
     except ModelError as error:
-        activity.record("error", job=job, error=str(error))
+        _fail(root, error, str(error))
         raise
     except BaseException as error:
         # Anything else that ends the turn early, such as a bug or the operator closing
         # the page, still ends the job, so the activity screen never shows it as running.
-        activity.record("error", job=job, error=_stopped(error))
+        _fail(root, error, _stopped(error))
         raise
-    activity.record("reply", job=job, text=reply["content"])
+    root.set_attribute("gen_ai.output.messages", as_messages("assistant", reply["content"]))
+    root.end()
     history += turn
 
 
 def _carry_out(
     call: ToolCall,
     by_name: dict[str, Tool],
-    activity: ActivityLog,
+    activity: Activity,
     approvals: Approvals,
-    job: str,
+    parent: Context,
 ) -> ToolStep:
     """Put one tool call through the gate and, if allowed, run it. The step's result is
     what the model sees."""
     started = time.monotonic()
+    span = activity.start_tool(call.name, call.arguments, parent, call_id=call.id)
     answer = gate.decide(call, by_name.get(call.name))
     request_id = None
     if answer is gate.Answer.ACT:
@@ -111,7 +131,9 @@ def _carry_out(
         result, outcome = as_text(done), outcome_of(done)
     elif answer in WAITS_FOR_OPERATOR:
         outcome = "waiting"
-        request = approvals.request(call.name, call.arguments, WAITS_FOR_OPERATOR[answer], job)
+        request = approvals.request(
+            call.name, call.arguments, WAITS_FOR_OPERATOR[answer], traceparent(parent)
+        )
         request_id = request.id
         result = (
             f"Waiting for the operator's approval (request {request.id}). Carry on with other "
@@ -124,16 +146,7 @@ def _carry_out(
     else:
         result = f"Not done: the gate answered '{answer.value}' for this action."
         outcome = "failed"
-    activity.record(
-        "tool",
-        job=job,
-        name=call.name,
-        arguments=call.arguments,
-        answer=answer.value,
-        result=result,
-        outcome=outcome,
-        request=request_id,
-    )
+    activity.end_tool(span, answer.value, result, outcome, request_id)
     return ToolStep(
         name=call.name,
         arguments=call.arguments,
@@ -178,6 +191,48 @@ def as_text(result: mcp.CallToolResult) -> str:
 def outcome_of(result: mcp.CallToolResult) -> str:
     """Whether a tool that ran succeeded: "ok", or "failed" when it reported an error."""
     return "failed" if result.is_error else "ok"
+
+
+@contextmanager
+def _model_call(activity: Activity, model: Model, parent: Context) -> Iterator[Span]:
+    """The span of one model call, ended when the call is, with an error status if it
+    failed."""
+    span = activity.tracer.start_span(
+        f"chat {model.name}",
+        context=parent,
+        kind=SpanKind.CLIENT,
+        attributes={
+            "gen_ai.operation.name": "chat",
+            "gen_ai.provider.name": model.provider,
+            "gen_ai.request.model": model.name,
+        },
+    )
+    try:
+        yield span
+    except BaseException as error:
+        _fail(span, error, str(error) or type(error).__name__)
+        raise
+    span.end()
+
+
+def _record_usage(span: Span, usage: Usage) -> None:
+    span.set_attribute("gen_ai.usage.input_tokens", usage.input_tokens)
+    span.set_attribute("gen_ai.usage.output_tokens", usage.output_tokens)
+    if usage.cached_input_tokens:
+        span.set_attribute("gen_ai.usage.cache_read.input_tokens", usage.cached_input_tokens)
+
+
+def _fail(span: Span, error: BaseException, message: str) -> None:
+    span.set_status(Status(StatusCode.ERROR, message))
+    span.set_attribute("error.type", type(error).__name__)
+    span.end()
+
+
+def traceparent(context: Context) -> str:
+    """The W3C trace context header for `context`, so later work can join its trace."""
+    carrier: dict[str, str] = {}
+    TraceContextTextMapPropagator().inject(carrier, context=context)
+    return carrier["traceparent"]
 
 
 def _stopped(error: BaseException) -> str:

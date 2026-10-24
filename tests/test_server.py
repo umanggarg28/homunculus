@@ -9,7 +9,7 @@ import mcp_types as mcp
 from fastapi.testclient import TestClient
 from scripted_model import ScriptedModel, SlowScriptedModel
 
-from homunculus.activity import ActivityLog
+from homunculus.activity import Activity
 from homunculus.approvals import Approvals
 from homunculus.model import Model, OpenRouterModel, ToolCall
 from homunculus.server import create_app
@@ -35,7 +35,7 @@ def chat(client: TestClient, text: str) -> list[tuple[str, dict[str, Any]]]:
 
 
 def server(model: Model, tmp_path: Path, tools: list[Tool] | None = None) -> TestClient:
-    activity = ActivityLog(tmp_path / "activity.jsonl")
+    activity = Activity(tmp_path)
     approvals = Approvals(tmp_path / "approvals.json")
     return TestClient(create_app(model, tools or [], activity, approvals))
 
@@ -242,7 +242,7 @@ def test_the_built_console_is_served_with_its_routes(tmp_path: Path) -> None:
     (console / "assets").mkdir(parents=True)
     (console / "index.html").write_text("<html>console</html>")
     (console / "assets" / "app.js").write_text("console.log(1)")
-    activity = ActivityLog(tmp_path / "activity.jsonl")
+    activity = Activity(tmp_path)
     client = TestClient(
         create_app(ScriptedModel([]), [], activity, Approvals(tmp_path / "a.json"), console=console)
     )
@@ -259,7 +259,7 @@ def test_a_console_build_without_assets_still_starts(tmp_path: Path) -> None:
     console = tmp_path / "console"
     console.mkdir()
     (console / "index.html").write_text("<html>console</html>")
-    activity = ActivityLog(tmp_path / "activity.jsonl")
+    activity = Activity(tmp_path)
 
     client = TestClient(
         create_app(ScriptedModel([]), [], activity, Approvals(tmp_path / "a.json"), console=console)

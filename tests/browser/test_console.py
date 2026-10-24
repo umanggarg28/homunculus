@@ -19,7 +19,7 @@ from fastapi import FastAPI
 from playwright.sync_api import Page, expect, sync_playwright
 from scripted_model import ScriptedModel
 
-from homunculus.activity import ActivityLog
+from homunculus.activity import Activity
 from homunculus.approvals import Approvals
 from homunculus.model import ToolCall
 from homunculus.server import create_app
@@ -64,7 +64,7 @@ def console_app(model: ScriptedModel, tools: list[Tool], tmp_path: Path) -> Fast
     return create_app(
         model,
         tools,
-        ActivityLog(tmp_path / "activity.jsonl"),
+        Activity(tmp_path),
         Approvals(tmp_path / "approvals.json"),
         console=CONSOLE,
     )

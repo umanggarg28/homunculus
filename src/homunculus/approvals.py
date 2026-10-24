@@ -42,15 +42,18 @@ class Approval:
     result: str | None = None  # what the tool returned, when an approved action ran
     # Whether the agent has been told the outcome: "replied", or "failed: <why>".
     follow_up: str | None = None
-    # The job that asked, so an approved run is shown with the rest of that work.
-    job: str | None = None
+    # The W3C trace context of the job that asked, so an approved run joins its trace and
+    # is shown with the rest of that work.
+    traceparent: str | None = None
 
 
 class Approvals:
     def __init__(self, path: Path) -> None:
         self._path = path
 
-    def request(self, tool: str, arguments: str, kind: Kind, job: str | None = None) -> Approval:
+    def request(
+        self, tool: str, arguments: str, kind: Kind, traceparent: str | None = None
+    ) -> Approval:
         requests = self.all()
         taken = {a.id for a in requests}
         new_id = secrets.token_hex(3)
@@ -63,7 +66,7 @@ class Approvals:
             kind=kind,
             status="pending",
             created=_now(),
-            job=job,
+            traceparent=traceparent,
         )
         self._save([*requests, approval])
         return approval

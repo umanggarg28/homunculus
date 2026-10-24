@@ -9,12 +9,15 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
-from homunculus.model import Message, ToolCall
+from homunculus.model import Message, ToolCall, Usage
 
-Reply = list[str | ToolCall]
+Reply = list[str | ToolCall | Usage]
 
 
 class ScriptedModel:
+    name = "scripted"
+    provider = "scripted"
+
     def __init__(self, replies: list[Reply]) -> None:
         self._replies = list(replies)
         self.received: list[list[Message]] = []
@@ -22,7 +25,7 @@ class ScriptedModel:
 
     async def stream(
         self, messages: list[Message], tools: list[dict[str, Any]]
-    ) -> AsyncIterator[str | ToolCall]:
+    ) -> AsyncIterator[str | ToolCall | Usage]:
         self.received.append(list(messages))
         self.offered_tools.append(tools)
         for item in self._replies.pop(0):
@@ -34,7 +37,7 @@ class SlowScriptedModel(ScriptedModel):
 
     async def stream(
         self, messages: list[Message], tools: list[dict[str, Any]]
-    ) -> AsyncIterator[str | ToolCall]:
+    ) -> AsyncIterator[str | ToolCall | Usage]:
         async for item in super().stream(messages, tools):
             await asyncio.sleep(0.01)
             yield item

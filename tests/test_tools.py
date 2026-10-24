@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from scripted_model import ScriptedModel
 
 from homunculus import loop
-from homunculus.activity import ActivityLog
+from homunculus.activity import Activity
 from homunculus.approvals import Approvals
 from homunculus.model import Message, ToolCall
 from homunculus.server import create_app
@@ -30,7 +30,7 @@ def tool_call(name: str, **arguments: object) -> ToolCall:
 
 
 async def run_job(model: ScriptedModel, workspace: Path, text: str) -> str:
-    activity = ActivityLog(workspace.parent / "activity.jsonl")
+    activity = Activity(workspace.parent)
     history: list[Message] = []
     approvals = Approvals(workspace.parent / "approvals.json")
     tools = file_tools(workspace)
@@ -102,24 +102,21 @@ def test_the_file_tools_refuse_a_path_outside_the_workspace_on_their_own(
 
 async def test_no_tool_can_reach_the_activity_log(tmp_path: Path, workspace: Path) -> None:
     model = ScriptedModel(
-        [[tool_call("write", path="../activity.jsonl", content="forged")], ["Done."]]
+        [[tool_call("write", path="../traces.jsonl", content="forged")], ["Done."]]
     )
 
     await run_job(model, workspace, "Rewrite the log")
 
-    entries = ActivityLog(tmp_path / "activity.jsonl").entries()
-    assert [(entry["kind"], entry.get("answer")) for entry in entries] == [
-        ("message", None),
-        ("tool", "refuse"),
-        ("reply", None),
-    ]
+    [job] = Activity(tmp_path).jobs()
+    assert (job["message"], job["reply"]) == ("Rewrite the log", "Done.")
+    assert [(step["name"], step["answer"]) for step in job["steps"]] == [("write", "refuse")]
 
 
 async def test_a_tool_that_does_not_exist_is_refused(tmp_path: Path, workspace: Path) -> None:
     model = ScriptedModel(
         [[ToolCall(id="call_1", name="search", arguments='{"path": "."}')], ["Sorry."]]
     )
-    activity = ActivityLog(tmp_path / "activity.jsonl")
+    activity = Activity(tmp_path)
     approvals = Approvals(tmp_path / "approvals.json")
     no_tools: list[Tool] = []
 
@@ -195,7 +192,7 @@ async def test_an_action_that_needs_approval_is_not_run(tmp_path: Path, workspac
         send_email,
     )
     model = ScriptedModel([[tool_call("send_email", to="someone@example.com")], ["I will ask."]])
-    activity = ActivityLog(tmp_path / "activity.jsonl")
+    activity = Activity(tmp_path)
     approvals = Approvals(tmp_path / "approvals.json")
 
     _ = [chunk async for chunk in loop.run(model, [send], activity, approvals, [], "Email them")]
@@ -209,13 +206,10 @@ async def test_every_step_is_recorded_in_the_activity_log(tmp_path: Path, worksp
 
     await run_job(model, workspace, "Save a.md")
 
-    entries = ActivityLog(tmp_path / "activity.jsonl").entries()
-    assert [(e["kind"], e.get("name"), e.get("answer")) for e in entries] == [
-        ("message", None, None),
-        ("tool", "write", "act"),
-        ("reply", None, None),
-    ]
-    assert entries[1]["result"] == "Wrote a.md."
+    [job] = Activity(tmp_path).jobs()
+    [step] = job["steps"]
+    assert (job["message"], job["reply"]) == ("Save a.md", "Saved.")
+    assert (step["name"], step["answer"], step["result"]) == ("write", "act", "Wrote a.md.")
 
 
 async def test_a_missing_argument_tells_the_model_which_one(workspace: Path) -> None:
@@ -241,7 +235,7 @@ def approved_delete(workspace: Path, path: str) -> str:
     app = create_app(
         model,
         file_tools(workspace),
-        ActivityLog(workspace.parent / "activity.jsonl"),
+        Activity(workspace.parent),
         Approvals(workspace.parent / "approvals.json"),
     )
     client = TestClient(app)

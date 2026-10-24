@@ -21,17 +21,32 @@ class ToolCall:
     arguments: str
 
 
+@dataclass(frozen=True)
+class Usage:
+    """How many tokens one model call used, sent once at the end of its stream."""
+
+    input_tokens: int
+    output_tokens: int
+    # Input tokens the provider read from its cache, which cost less.
+    cached_input_tokens: int = 0
+
+
 class ModelError(Exception):
     """The model call failed. The message is safe to show to the operator."""
 
 
 class Model(Protocol):
+    # Recorded on each model call's span: the model asked for, and who serves it.
+    name: str
+    provider: str
+
     def stream(
         self, messages: list[Message], tools: list[dict[str, Any]]
-    ) -> AsyncIterator[str | ToolCall]:
+    ) -> AsyncIterator[str | ToolCall | Usage]:
         """Send the conversation and the tools on offer.
 
-        Yields the reply text as it arrives, chunk by chunk, and each complete tool call.
+        Yields the reply text as it arrives, chunk by chunk, each complete tool call, and
+        the token counts once the call is done, when the provider reports them.
         """
         ...
 
@@ -45,13 +60,16 @@ PRIVACY_ROUTING = {"zdr": True, "data_collection": "deny"}
 
 
 class OpenRouterModel:
+    name = MODEL_ID
+    provider = "openrouter"
+
     def __init__(self, api_key: str, client: httpx.AsyncClient | None = None) -> None:
         self._api_key = api_key
         self._client = client or httpx.AsyncClient(timeout=120)
 
     async def stream(
         self, messages: list[Message], tools: list[dict[str, Any]]
-    ) -> AsyncIterator[str | ToolCall]:
+    ) -> AsyncIterator[str | ToolCall | Usage]:
         body: dict[str, Any] = {
             "model": MODEL_ID,
             "messages": [_api_fields(message) for message in messages],
@@ -69,7 +87,7 @@ class OpenRouterModel:
 
     async def _request(
         self, body: dict[str, Any], headers: dict[str, str]
-    ) -> AsyncIterator[str | ToolCall]:
+    ) -> AsyncIterator[str | ToolCall | Usage]:
         async with self._client.stream(
             "POST", OPENROUTER_CHAT_URL, json=body, headers=headers
         ) as response:
@@ -82,6 +100,8 @@ class OpenRouterModel:
             # index: the id and name first, then the arguments a few characters at a time.
             # They are joined here and handed over whole once the stream ends.
             calls: dict[int, dict[str, str]] = {}
+            # OpenRouter reports the token counts in the last chunk of every stream.
+            usage: dict[str, Any] | None = None
             # The reply arrives as server-sent events: "data: {json}" lines, ending
             # with "data: [DONE]". Lines starting with ":" are keep-alive comments.
             async for line in response.aiter_lines():
@@ -93,7 +113,8 @@ class OpenRouterModel:
                 chunk = json.loads(data)
                 if "error" in chunk:
                     raise ModelError(f"Model stopped mid-reply: {chunk['error']['message']}")
-                for choice in chunk["choices"]:
+                usage = chunk.get("usage") or usage
+                for choice in chunk.get("choices") or []:
                     delta = choice["delta"]
                     if text := delta.get("content"):
                         yield text
@@ -107,6 +128,14 @@ class OpenRouterModel:
                         call["arguments"] += function.get("arguments") or ""
             for _, call in sorted(calls.items()):
                 yield ToolCall(id=call["id"], name=call["name"], arguments=call["arguments"])
+            if usage:
+                yield Usage(
+                    input_tokens=usage.get("prompt_tokens", 0),
+                    output_tokens=usage.get("completion_tokens", 0),
+                    cached_input_tokens=(usage.get("prompt_tokens_details") or {}).get(
+                        "cached_tokens", 0
+                    ),
+                )
 
 
 def _error_message(response: httpx.Response) -> str:

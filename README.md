@@ -29,7 +29,7 @@ flowchart LR
 | `gate` | Decides for every tool call whether it may run, from what the tool says it does. Reading acts, deleting and anything outward waits for your approval, and anything it cannot read is refused. |
 | `approvals` | Actions waiting for you. You approve, decline, or mark a hand-off done, and the agent is told. |
 | `tools` | `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`, inside the agent's workspace only. Each is described as an MCP tool. |
-| `activity` | An append-only record of every step, written by code, out of reach of every tool. The activity screen shows it as one job per message, and you can rate each one. |
+| `activity` | An append-only record of every step as OpenTelemetry traces, written by code, out of reach of every tool. Any OpenTelemetry tool can read the file. The activity screen shows one job per message, and you can rate each one. |
 
 The full design, including the modules still to come (sandbox, skills, wiki, waker), is in [ARCHITECTURE.md](ARCHITECTURE.md). [LEARN.md](LEARN.md) teaches the code one module at a time.
 
@@ -74,7 +74,7 @@ data: {}
 
 If the request fails, the stream ends with an `error` event that says why, for example `Model request failed (401): ...` for a wrong key.
 
-To see a tool in use, send `"Save a note called tea.md that says I like green tea."`. The file appears in the data directory's `workspace/` folder, and the step is recorded in its `activity.jsonl`. On macOS, `open ~/Library/Application\ Support/homunculus` shows them in Finder.
+To see a tool in use, send `"Save a note called tea.md that says I like green tea."`. The file appears in the data directory's `workspace/` folder, and the step is recorded in its `traces.jsonl`. On macOS, `open ~/Library/Application\ Support/homunculus` shows them in Finder.
 
 ## The web console
 

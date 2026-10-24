@@ -80,7 +80,7 @@ function JobCard({ job, onRated }: { job: Job; onRated: (job: Job) => void }) {
           overflowWrap: "anywhere",
         }}
       >
-        {job.message}
+        {job.message ?? "(the message is recorded when the job ends)"}
       </div>
 
       {job.steps.length > 0 && (
