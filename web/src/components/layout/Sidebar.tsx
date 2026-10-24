@@ -15,6 +15,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     items: [
       { to: "/chat", label: "CHAT", short: "CHAT", kbd: "C" },
       { to: "/approvals", label: "APPROVALS", short: "APPR", kbd: "A" },
+      { to: "/activity", label: "ACTIVITY", short: "ACT", kbd: "T" },
     ],
   },
 ];

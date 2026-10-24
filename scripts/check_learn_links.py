@@ -10,6 +10,10 @@ any text in between. A line number written without a link is an error, because
 nothing could check it.
 
 Run: uv run python scripts/check_learn_links.py
+     uv run python scripts/check_learn_links.py --fix
+
+With --fix, a link whose quoted code has moved is pointed at its new lines, but only
+when the code now appears in exactly one place. Anything else is left for a person.
 """
 
 import re
@@ -39,6 +43,49 @@ def quoted_code_is_there(quote: str, cited: str) -> bool:
             return False
         position = found + len(piece)
     return True
+
+
+def new_location(quote: str, lines: list[str], span: int) -> tuple[int, int] | None:
+    """The only run of `span` lines containing the quote, as (first, last), or None."""
+    matches = [
+        (start + 1, start + span)
+        for start in range(len(lines) - span + 1)
+        if quoted_code_is_there(quote, squeeze("".join(lines[start : start + span])))
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def fix() -> int:
+    """Point moved links at their code's new lines. Returns how many were updated."""
+    text = DOCUMENT.read_text().splitlines(keepends=True)
+    updated = 0
+    for index, line in enumerate(text):
+
+        def relink(link: re.Match[str], line: str = line) -> str:
+            nonlocal updated
+            path, first = ROOT / link.group(2), int(link.group(3))
+            last = int(link.group(4) or first)
+            quote = CODE.search(line, link.end())
+            if quote is None or not path.is_file():
+                return link.group(0)
+            lines = path.read_text().splitlines()
+            if 1 <= first <= last <= len(lines) and quoted_code_is_there(
+                quote.group(1), squeeze("".join(lines[first - 1 : last]))
+            ):
+                return link.group(0)
+            found = new_location(quote.group(1), lines, last - first + 1)
+            if found is None:
+                return link.group(0)
+            updated += 1
+            new_first, new_last = found
+            name = Path(link.group(2)).name
+            if new_first == new_last:
+                return f"[{name}:{new_first}]({link.group(2)}#L{new_first})"
+            return f"[{name}:{new_first}-{new_last}]({link.group(2)}#L{new_first}-L{new_last})"
+
+        text[index] = LINK.sub(relink, line)
+    DOCUMENT.write_text("".join(text))
+    return updated
 
 
 def problems() -> list[str]:
@@ -81,6 +128,8 @@ def problems() -> list[str]:
 
 
 if __name__ == "__main__":
+    if "--fix" in sys.argv:
+        print(f"Updated {fix()} link(s).")
     issues = problems()
     for issue in issues:
         print(issue)

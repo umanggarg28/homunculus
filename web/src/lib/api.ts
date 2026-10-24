@@ -1,3 +1,5 @@
+import type { StepOutcome } from "@/lib/toolSteps";
+
 /** The server's HTTP API, as the console uses it. */
 
 export interface HistoryMessage {
@@ -21,6 +23,29 @@ export interface Approval {
   result: string | null;
   /** Whether the agent has been told the outcome: "replied", or "failed: <why>". */
   follow_up: string | null;
+}
+
+export interface ActivityStep {
+  time: string;
+  name: string;
+  arguments: string;
+  answer: string;
+  result: string;
+  outcome: StepOutcome;
+}
+
+/** One piece of work: a message and everything the agent did for it. */
+export interface Job {
+  job: string;
+  started: string;
+  ended: string | null;
+  message: string;
+  /** The turn that told the agent the outcome of a decision, not a typed message. */
+  notice: boolean;
+  steps: ActivityStep[];
+  reply: string | null;
+  error: string | null;
+  feedback: { rating: "up" | "down"; reason: string | null; time: string } | null;
 }
 
 async function sendDecision(id: string, action: "approve" | "deny" | "done", note?: string): Promise<Approval> {
@@ -61,6 +86,24 @@ export const api = {
   deny: (id: string, reason?: string) => sendDecision(id, "deny", reason),
   /** Mark a hand-off as done by the operator; the agent is told. */
   done: (id: string, note?: string) => sendDecision(id, "done", note),
+
+  /** What the agent did, one job per turn, newest first. */
+  async activity(): Promise<Job[]> {
+    const response = await fetch("/api/activity");
+    if (!response.ok) throw new Error(`activity failed: ${response.status}`);
+    return response.json();
+  },
+
+  /** Rate one piece of work. A later rating replaces an earlier one. */
+  async feedback(job: string, rating: "up" | "down", reason?: string): Promise<Job> {
+    const response = await fetch(`/api/activity/${job}/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rating, reason: reason || null }),
+    });
+    if (!response.ok) throw new Error(`feedback failed: ${response.status}`);
+    return response.json();
+  },
 
   /** The conversation so far: the operator's messages and the replies. */
   async history(): Promise<HistoryMessage[]> {

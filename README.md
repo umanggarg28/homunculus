@@ -2,7 +2,7 @@
 
 An always-on personal agent that works toward your goals in its own sandbox and asks before anything leaves it.
 
-> **Status:** early build. In place: the web console's chat and approvals screens, replies streamed word by word, file tools in the agent's own workspace with each call checked by the gate, and approvals for actions that need your consent. The plan and its progress are tracked in the [spec](https://github.com/umanggarg28/homunculus/issues/2) and its tickets.
+> **Status:** early build. In place: the web console's chat, approvals and activity screens, replies streamed word by word, file tools in the agent's own workspace with each call checked by the gate, and approvals for actions that need your consent. The plan and its progress are tracked in the [spec](https://github.com/umanggarg28/homunculus/issues/2) and its tickets.
 
 ## How it works
 
@@ -29,7 +29,7 @@ flowchart LR
 | `gate` | Decides for every tool call whether it may run. Anything it cannot read is refused. |
 | `approvals` | Actions waiting for you. You approve, decline, or mark a hand-off done, and the agent is told. |
 | `tools` | `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`, inside the agent's workspace only. |
-| `activity` | An append-only record of every step, written by code, out of reach of every tool. |
+| `activity` | An append-only record of every step, written by code, out of reach of every tool. The activity screen shows it as one job per message, and you can rate each one. |
 
 The full design, including the modules still to come (sandbox, skills, wiki, waker), is in [ARCHITECTURE.md](ARCHITECTURE.md). [LEARN.md](LEARN.md) teaches the code one module at a time.
 

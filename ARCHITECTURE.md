@@ -11,7 +11,7 @@ Homunculus is one always-on process that holds a small model loop, a few general
 | `model` | One streaming call to the model provider | Streaming text and tool calls, privacy routing, error reporting |
 | `gate` | The answer for every proposed action | Workspace file tools act when the path stays in the workspace; anything else asks; unreadable calls are refused |
 | `tools` | Plain functions the model can ask to run | `read`, `write`, `edit`, `list`, `search`, `delete`, `rename` in the workspace |
-| `activity` | Append-only record of every step | Written by the loop; kept outside the workspace |
+| `activity` | Append-only record of every step | Written by the loop; kept outside the workspace; grouped into jobs with feedback |
 | `approvals` | Requests waiting for the operator | Saved to the data directory; approve, decline, or done for hand-offs |
 | `skills` | Skill folders in the Agent Skills format | Planned |
 | `memory` | The wiki, raw sources, profile and goals, as files | Planned |
@@ -43,6 +43,17 @@ If the model call fails at any point, `model` raises `ModelError`, `server` send
 | `error` | `{"message": "..."}` | The reply failed, and why |
 
 `GET /api/history` returns the conversation as the operator saw it: their messages, notices of their decisions (marked `"notice": true`), and the replies, without tool messages. Any other path that is not under `/api/` is answered with the console's `index.html`, so the console can choose the screen from the address.
+
+## Activity
+
+Every line the loop writes to the activity log carries the turn's job id. `jobs()` groups the lines into one job per turn: the message, each tool step with its outcome, and the reply or error that ended it.
+
+| Endpoint | Effect |
+|---|---|
+| `GET /api/activity` | The 100 most recent jobs, newest first |
+| `POST /api/activity/{job}/feedback` | `{"rating": "up" \| "down", "reason": "..."}`. Appends a feedback line; the latest rating for a job counts |
+
+Feedback is a new line in the log, never an edit, so the log stays append-only.
 
 ## Approvals
 
@@ -107,8 +118,9 @@ Tests sit at agreed seams and fake only the outside world.
 |---|---|---|
 | Loop | Streaming, when the loop stops, history handling, and every tool through a scripted tool call | The model (a scripted stand-in) |
 | Gate | Each row of the table, and refusal when a call cannot be read | Nothing |
+| Server HTTP API: activity | Jobs grouped from the log, feedback kept and replaced by a later rating, failed jobs, decision follow-ups marked as notices | The model |
 | Server HTTP API: approvals | Waiting instead of running, approve, decline, hand-off done, decided once, survives a restart, notices | The model; stand-in tools that record their calls |
 | Server HTTP API | Event format including tool steps, errors, one reply at a time, privacy routing on every request, tools offered and streamed tool calls run, history, serving the console | The model, or only the network beneath the real model |
-| Console in a browser | Sending a message shows the tool step and the reply, the conversation survives a reload, and approving a request runs it and the agent carries on | The model only; real server, built console and Chromium |
+| Console in a browser | Sending a message shows the tool step and the reply, the conversation survives a reload, approving a request runs it and the agent carries on, and a rating on the activity screen is kept | The model only; real server, built console and Chromium |
 
 Tests run with network access blocked, so a test that reaches the internet fails. Browser tests are marked `browser` and run separately with `uv run pytest -m browser`, after `npm run build` in `web/` and `uv run playwright install chromium`.
