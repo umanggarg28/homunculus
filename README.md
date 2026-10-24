@@ -29,7 +29,7 @@ flowchart LR
 | `gate` | Decides for every tool call whether it may run, from what the tool says it does. Reading acts, deleting and anything outward waits for your approval, and anything it cannot read is refused. |
 | `approvals` | Actions waiting for you. You approve, decline, or mark a hand-off done, and the agent is told. |
 | `tools` | `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`, inside the agent's workspace only. Each is described as an MCP tool. |
-| `activity` | An append-only record of every step as OpenTelemetry traces, written by code, out of reach of every tool. Any OpenTelemetry tool can read the file. The activity screen shows one job per message, and you can rate each one. |
+| `activity` | An append-only record of every step as OpenTelemetry traces, plus log events for each turn's start, your decisions and your ratings, written by code, out of reach of every tool. Any OpenTelemetry tool can read both files. The activity screen shows one job per message, and you can rate each one. |
 
 The full design, including the modules still to come (sandbox, skills, wiki, waker), is in [ARCHITECTURE.md](ARCHITECTURE.md). [LEARN.md](LEARN.md) teaches the code one module at a time.
 

@@ -44,7 +44,9 @@ export interface Job {
   job: string;
   started: string;
   ended: string | null;
-  /** Null until the job's root span is written, when the job ends. */
+  /** The id of the job's root span, which a rating is attached to. */
+  span: string | null;
+  /** Null only if the turn's start was never recorded. */
   message: string | null;
   /** The turn that told the agent the outcome of a decision, not a typed message. */
   notice: boolean;

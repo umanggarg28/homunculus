@@ -16,6 +16,7 @@ from homunculus import gate, prompt
 from homunculus.activity import (
     AGENT,
     ROOT_SPAN,
+    TURN_START,
     Activity,
     fail,
     input_messages,
@@ -83,6 +84,13 @@ async def run(
         },
     )
     parent = trace.set_span_in_context(root)
+    # Written as the turn begins, so the activity screen can show what was asked while the
+    # work is still going on, or after it was cut off.
+    activity.event(
+        TURN_START,
+        parent,
+        {"gen_ai.input.messages": input_messages(text), "homunculus.notice": notice},
+    )
     try:
         while True:
             parts: list[str] = []

@@ -13,7 +13,7 @@ There is one chapter per module, in the order the modules were built. Every chap
 
 Read a chapter with the code open beside it. Each one takes about fifteen minutes.
 
-References to code are links to the exact line, followed by the code they point at, for example [loop.py:90](src/homunculus/loop.py#L90) `messages = [system, *history, *turn]`. Click one to jump there. A check runs on every pull request and fails if any reference no longer matches its line, so they stay correct as the code changes.
+References to code are links to the exact line, followed by the code they point at, for example [loop.py:98](src/homunculus/loop.py#L98) `messages = [system, *history, *turn]`. Click one to jump there. A check runs on every pull request and fails if any reference no longer matches its line, so they stay correct as the code changes.
 
 Diagrams are plain text, so they read the same in any editor.
 
@@ -123,7 +123,7 @@ history = []                  # a list of message dicts; empty, since this is th
 text = "I like tea."          # a str
 ```
 
-**The opening message, then `turn`**: [loop.py:67-70](src/homunculus/loop.py#L67-L70) `opening: Message = ... turn: list[Message] = [opening]`
+**The opening message, then `turn`**: [loop.py:68-71](src/homunculus/loop.py#L68-L71) `opening: Message = ... turn: list[Message] = [opening]`
 
 ```python
 opening = {"role": "user", "content": "I like tea."}   # one message: a dict with two str keys
@@ -134,7 +134,7 @@ turn = [opening]                                         # a list of 1 message
 
 `turn` collects everything that happens in this one exchange. With tools, it grows to hold the tool calls and their results too.
 
-**[loop.py:90](src/homunculus/loop.py#L90) `messages = [system, *history, *turn]`**
+**[loop.py:98](src/homunculus/loop.py#L98) `messages = [system, *history, *turn]`**
 
 `system` is the system message, built once at the start of `run` from the fixed instructions (chapter 9). `*history` and `*turn` spread their contents into the new list. `history` is empty, so `messages` is a list of 2 dicts:
 
@@ -145,7 +145,7 @@ messages[1] = {"role": "user",   "content": "I like tea."}
 
 Read `messages[1]` aloud: "the user said: I like tea."
 
-**[loop.py:92](src/homunculus/loop.py#L92) `model.stream(messages, schemas)`** returns an async iterator. Each item is either a piece of text (`str`) or a finished tool request (`ToolCall`, chapter 4). Suppose the model's reply arrives as one piece of text:
+**[loop.py:100](src/homunculus/loop.py#L100) `model.stream(messages, schemas)`** returns an async iterator. Each item is either a piece of text (`str`) or a finished tool request (`ToolCall`, chapter 4). Suppose the model's reply arrives as one piece of text:
 
 ```python
 model.stream(messages, schemas) -> "Noted."      # yields 1 str, then ends
@@ -175,13 +175,13 @@ When a reply arrives in two pieces, `"Good "` and `"morning."`, each pull goes l
 
 `parts` is the loop's private notepad. It exists only so the full reply can be glued together at the end, and nothing outside `run` ever sees it.
 
-**[loop.py:101](src/homunculus/loop.py#L101) `reply: Message = {"role": "assistant", "content": "".join(parts)}`**
+**[loop.py:109](src/homunculus/loop.py#L109) `reply: Message = {"role": "assistant", "content": "".join(parts)}`**
 
-`"".join(["Noted."])` is `"Noted."`, so `reply` is `{"role": "assistant", "content": "Noted."}`. [loop.py:104](src/homunculus/loop.py#L104) `turn.append(reply)` appends it, and `turn` is now a list of 2.
+`"".join(["Noted."])` is `"Noted."`, so `reply` is `{"role": "assistant", "content": "Noted."}`. [loop.py:112](src/homunculus/loop.py#L112) `turn.append(reply)` appends it, and `turn` is now a list of 2.
 
-**[loop.py:105-106](src/homunculus/loop.py#L105-L106) `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
+**[loop.py:113-114](src/homunculus/loop.py#L113-L114) `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
 
-**[loop.py:121](src/homunculus/loop.py#L121) `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
+**[loop.py:129](src/homunculus/loop.py#L129) `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
 
 ```python
 history[0] = {"role": "user",      "content": "I like tea."}
@@ -203,7 +203,7 @@ The model sees the whole exchange and can answer "tea". That is the entire mecha
 
 **Where each piece is used.** `parts` and `calls` are rebuilt on every pass of the `while` loop. `turn` lives for one call to `run`. `history` outlives the call: the server owns it, and `run` only adds to it. `system`, the system message, is built once per call to `run` and never stored anywhere.
 
-**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so [loop.py:121](src/homunculus/loop.py#L121) `history += turn` never runs and `history` stays as it was. On the way out, [loop.py:111-113](src/homunculus/loop.py#L111-L113) `except ModelError as error: ... raise` mark the turn's trace as failed (chapter 6) and pass the error on. A failed turn leaves no half-finished reply in the conversation.
+**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so [loop.py:129](src/homunculus/loop.py#L129) `history += turn` never runs and `history` stays as it was. On the way out, [loop.py:119-121](src/homunculus/loop.py#L119-L121) `except ModelError as error: ... raise` mark the turn's trace as failed (chapter 6) and pass the error on. A failed turn leaves no half-finished reply in the conversation.
 
 ### The test
 
@@ -233,7 +233,7 @@ The other loop tests say: the loop streams the reply and calls the model exactly
 
 ### Change it yourself
 
-1. In `loop.py`, make the history update happen **before** the model is called. Add `history += turn` on a new line just above the `try:` that follows [loop.py:85](src/homunculus/loop.py#L85) `parent = trace.set_span_in_context(root)`.
+1. In `loop.py`, make the history update happen **before** the model is called. Add `history += turn` on a new line just above the `try:` that follows [loop.py:86](src/homunculus/loop.py#L86) `parent = trace.set_span_in_context(root)`.
 2. Run `uv run pytest tests/test_loop.py`.
 3. Two tests fail. Read their failure messages. One shows your message appearing twice in the list sent to the model. The other shows a failed turn leaving your message behind in `history`.
 4. Undo the change and run the tests again to see them pass.
@@ -575,7 +575,7 @@ The defaults assume the worst, so a tool that says nothing about itself is treat
 
 You send `"Note that I like green tea."`. `tools` holds the seven file tools for the workspace, `~/Library/Application Support/homunculus/workspace` on a Mac.
 
-**[loop.py:64-65](src/homunculus/loop.py#L64-L65) `by_name = ... schemas = ...`** prepare the tools two ways:
+**[loop.py:65-66](src/homunculus/loop.py#L65-L66) `by_name = ... schemas = ...`** prepare the tools two ways:
 
 ```
 by_name = {"read": <Tool>, "write": <Tool>, ..., "rename": <Tool>}       a dict of 7, name to Tool
@@ -599,11 +599,11 @@ by_name["write"].workspace_paths  -> ("path",)   the arguments the gate keeps in
 ToolCall(id="call_1", name="write", arguments='{"path": "tea.md", "content": "Green"}')
 ```
 
-`isinstance(item, ToolCall)` is true, so it goes into `calls` ([loop.py:94](src/homunculus/loop.py#L94) `calls.append(item)`), not `parts`. Nothing is yielded to you. `parts` stays `[]`.
+`isinstance(item, ToolCall)` is true, so it goes into `calls` ([loop.py:102](src/homunculus/loop.py#L102) `calls.append(item)`), not `parts`. Nothing is yielded to you. `parts` stays `[]`.
 
-**[loop.py:101-104](src/homunculus/loop.py#L101-L104) `reply: Message = ... turn.append(reply)`** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
+**[loop.py:109-112](src/homunculus/loop.py#L109-L112) `reply: Message = ... turn.append(reply)`** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
 
-**[loop.py:105](src/homunculus/loop.py#L105) `if not calls:`** is false, because `calls` is not empty, so there is no `break`. **[loop.py:108](src/homunculus/loop.py#L108) `step = _carry_out(...)`** hands the call to `_carry_out`:
+**[loop.py:113](src/homunculus/loop.py#L113) `if not calls:`** is false, because `calls` is not empty, so there is no `break`. **[loop.py:116](src/homunculus/loop.py#L116) `step = _carry_out(...)`** hands the call to `_carry_out`:
 
 ```
 gate.decide(call, by_name["write"])  -> Answer.ACT                      (chapter 5)
@@ -617,7 +617,7 @@ outcome_of(result)                   -> "ok"                            because 
 
 `activity.end_tool(span, "act", "Wrote tea.md.", "ok", None)` ends the step's `execute_tool` span, which writes it to the activity log (chapter 6), and `_carry_out` returns the result.
 
-**[loop.py:109](src/homunculus/loop.py#L109) `turn.append({"role": "tool", ...})`** adds the tool message, and [loop.py:110](src/homunculus/loop.py#L110) `yield step` yields the step as a `ToolStep`, which the server sends to you as a `tool` event (chapter 3). `turn` is now a list of 3:
+**[loop.py:117](src/homunculus/loop.py#L117) `turn.append({"role": "tool", ...})`** adds the tool message, and [loop.py:118](src/homunculus/loop.py#L118) `yield step` yields the step as a `ToolStep`, which the server sends to you as a `tool` event (chapter 3). `turn` is now a list of 3:
 
 ```
 turn[0] = {"role": "user",      "content": "Note that I like green tea."}
@@ -627,7 +627,7 @@ turn[2] = {"role": "tool",      "tool_call_id": "call_1", "content": "Wrote tea.
 
 Read `turn[2]` aloud: "the result of request call_1 was: Wrote tea.md."
 
-**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so [loop.py:106](src/homunculus/loop.py#L106) `break` ends the loop. `turn` ends as a list of 4, and [loop.py:121](src/homunculus/loop.py#L121) `history += turn` adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
+**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so [loop.py:114](src/homunculus/loop.py#L114) `break` ends the loop. `turn` ends as a list of 4, and [loop.py:129](src/homunculus/loop.py#L129) `history += turn` adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
 
 **How the real model streams a tool call.** OpenRouter sends the request in pieces, each tagged with an `index` saying which call it belongs to:
 
@@ -698,7 +698,7 @@ An agent that works by itself will sometimes propose something it should not do:
 
 ### The idea
 
-**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs ([loop.py:156](src/homunculus/loop.py#L156) `answer = gate.decide(call, by_name.get(call.name))`). It returns one of five answers:
+**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs ([loop.py:164](src/homunculus/loop.py#L164) `answer = gate.decide(call, by_name.get(call.name))`). It returns one of five answers:
 
 | Answer | Meaning |
 |---|---|
@@ -812,7 +812,7 @@ The other gate tests say: read-only tools are allowed; `write` and `edit` are al
 
 ## 6. The activity log
 
-Code: `src/homunculus/activity.py`, the spans in `src/homunculus/loop.py`, and the approval and feedback endpoints in `src/homunculus/server.py`. Tests: `tests/test_traces.py` and `tests/test_activity.py`.
+Code: `src/homunculus/activity.py`, the spans in `src/homunculus/loop.py`, and the approval and feedback endpoints in `src/homunculus/server.py`. Tests: `tests/test_traces.py`, `tests/test_events.py` and `tests/test_activity.py`.
 
 ### The problem
 
@@ -832,11 +832,19 @@ An agent that works while you are away has to leave a record you can trust. If t
 
 Attributes use the conventions' names, such as `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.usage.input_tokens` and `gen_ai.conversation.id`. What the gate decided has no standard name, so it is `homunculus.gate.answer`, in this project's own namespace. Your message, the reply, and tool arguments and results are recorded too. The conventions mark those Opt-In, because they may be private, and here they never leave your machine.
 
-**A file any OpenTelemetry tool can read.** OpenTelemetry's [file exporter format](https://opentelemetry.io/docs/specs/otel/protocol/file-exporter/) is JSON lines: each line is one `TracesData` object in OTLP's JSON encoding, which writes ids as hex and 64-bit numbers as strings. The SDK has no file exporter of its own, so `JsonLinesExporter` writes it, using the official OTLP encoder. The file is `traces.jsonl` in the data directory, beside the workspace and outside it, so the file tools' fence (chapters 4 and 5) keeps every tool away from it. Nothing is sent over the network.
+**A file any OpenTelemetry tool can read.** OpenTelemetry's [file exporter format](https://opentelemetry.io/docs/specs/otel/protocol/file-exporter/) is JSON lines: each line is one `TracesData` object in OTLP's JSON encoding, which writes ids as hex and 64-bit numbers as strings. The SDK has no file exporter of its own, so `SpanFileExporter` writes it, using the official OTLP encoder. The file is `traces.jsonl` in the data directory, beside the workspace and outside it, so the file tools' fence (chapters 4 and 5) keeps every tool away from it. Nothing is sent over the network.
 
-**Record what happened, when it happened.** A span is written the moment it ends ([activity.py:70](src/homunculus/activity.py#L70) `provider.add_span_processor(SimpleSpanProcessor(JsonLinesExporter(self._traces)))`). So the root span, which ends last, is written last. A job that is still running, or was cut off because the program stopped, shows its finished steps but no message yet.
+**Record what happened, when it happened.** A span is written the moment it ends ([activity.py:124](src/homunculus/activity.py#L124) `tracing.add_span_processor(SimpleSpanProcessor(SpanFileExporter(self._traces)))`). So the root span, which ends last, is written last.
 
-**Your view lives in its own file.** Ratings and approval decisions are not the agent's work, so they are not spans. They go to `operator.jsonl`, one line each, keyed by the trace id, the way trace tools attach scores to a trace. Nothing in either file is ever rewritten.
+**Moments are events.** Some things have no length: a turn starting, you deciding on a request, you rating a job. OpenTelemetry records those as **log events**, each with a name, a time and attributes, attached to a span by its ids. They are written the moment they happen, to `logs.jsonl`, in the same file format with one `LogsData` object per line ([activity.py:128](src/homunculus/activity.py#L128) `logging.add_log_record_processor(SimpleLogRecordProcessor(LogFileExporter(self._logs)))`). The SDK still marks its logs API experimental, which is why it lives under `opentelemetry._logs`.
+
+| Event | Name from | Attributes |
+|---|---|---|
+| `homunculus.turn.start` | this program | your message (`gen_ai.input.messages`), and whether it is a notice |
+| `homunculus.approval.decision` | this program | the request id, its status and note, and the tool |
+| `gen_ai.evaluation.result` | the GenAI conventions | the evaluation's name, score and label, and your reason |
+
+The first two have no standard name, so they start with `homunculus.`, as OpenTelemetry's naming guidance asks for names that belong to one application. Because the turn's start is written at once, the activity screen shows what you asked while the job is still running, and still shows it if the program stopped before the job ended.
 
 ### A picture
 
@@ -847,12 +855,14 @@ Attributes use the conventions' names, such as `gen_ai.tool.name`, `gen_ai.tool.
   ├─ execute_tool write         act · ok · "Wrote tea.md."
   └─ chat z-ai/glm-5.3-flash    input 1260 tokens, output 14
 
- operator.jsonl:  {"kind": "rating", "job": "9f3c41d2...", "rating": "up", ...}
+ logs.jsonl, one line per event, each attached to the root span:
+  homunculus.turn.start       "Note that I like green tea."
+  gen_ai.evaluation.result    task_completion · 1.0 · pass
 ```
 
 ### One value, traced
 
-You send `"Note that I like green tea."`. In `run`, [loop.py:73](src/homunculus/loop.py#L73) `root = activity.tracer.start_span(` starts the root span with these attributes, a dict of 7:
+You send `"Note that I like green tea."`. In `run`, [loop.py:74](src/homunculus/loop.py#L74) `root = activity.tracer.start_span(` starts the root span with these attributes, a dict of 7:
 
 ```
 {"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "Homunculus",
@@ -863,11 +873,11 @@ You send `"Note that I like green tea."`. In `run`, [loop.py:73](src/homunculus/
 
 The span's trace id, `9f3c41d2...` (32 hex characters), is the job's id from now on. `parent` is a context holding the root, and every later span is started with it, so each one names the root as its parent.
 
-**The first model call.** [loop.py:91](src/homunculus/loop.py#L91) `with _model_call(activity, model, parent) as chat:` starts a `chat` span. The model streams a `ToolCall`, then, as its last item, `Usage(input_tokens=1195, output_tokens=85, cached_input_tokens=1044)`. [loop.py:96](src/homunculus/loop.py#L96) `_record_usage(chat, item)` copies those onto the span. Just before the `with` block ends, the span also records what the model said, in `gen_ai.output.messages`: here no text, one `tool_call` part with the tool's name, id and arguments, and `"finish_reason": "tool_call"`. If the model had written "Let me save that" before asking, that text would be recorded too. When the `with` block ends, the span ends and is written: the first line of the file.
+**The first model call.** [loop.py:99](src/homunculus/loop.py#L99) `with _model_call(activity, model, parent) as chat:` starts a `chat` span. The model streams a `ToolCall`, then, as its last item, `Usage(input_tokens=1195, output_tokens=85, cached_input_tokens=1044)`. [loop.py:104](src/homunculus/loop.py#L104) `_record_usage(chat, item)` copies those onto the span. Just before the `with` block ends, the span also records what the model said, in `gen_ai.output.messages`: here no text, one `tool_call` part with the tool's name, id and arguments, and `"finish_reason": "tool_call"`. If the model had written "Let me save that" before asking, that text would be recorded too. When the `with` block ends, the span ends and is written: the first line of the file.
 
-**The tool call.** In `_carry_out`, [loop.py:134](src/homunculus/loop.py#L134) `span = activity.start_tool(call.name, call.arguments, parent, call_id=call.id)` starts the `execute_tool write` span before the gate decides. After the write, [loop.py:140](src/homunculus/loop.py#L140) `activity.end_tool(span, answer.value, result, outcome, request_id)` sets `homunculus.gate.answer="act"`, `gen_ai.tool.call.result="Wrote tea.md."` and `homunculus.outcome="ok"`, and ends it. That is line two. A failed step gets an error status and `error.type`: `"tool_error"` when the tool ran and reported a failure, or the gate's answer, such as `"refuse"`, when it never ran. If anything goes wrong between starting the span and ending it, the `except` around it still ends the span, so no span is ever left open.
+**The tool call.** In `_carry_out`, [loop.py:142](src/homunculus/loop.py#L142) `span = activity.start_tool(call.name, call.arguments, parent, call_id=call.id)` starts the `execute_tool write` span before the gate decides. After the write, [loop.py:148](src/homunculus/loop.py#L148) `activity.end_tool(span, answer.value, result, outcome, request_id)` sets `homunculus.gate.answer="act"`, `gen_ai.tool.call.result="Wrote tea.md."` and `homunculus.outcome="ok"`, and ends it. That is line two. A failed step gets an error status and `error.type`: `"tool_error"` when the tool ran and reported a failure, or the gate's answer, such as `"refuse"`, when it never ran. If anything goes wrong between starting the span and ending it, the `except` around it still ends the span, so no span is ever left open.
 
-**The second model call** answers "Saved." and becomes line three. Then [loop.py:120](src/homunculus/loop.py#L120) `root.end()` ends the root, with the reply in `gen_ai.output.messages`: line four. If the model had failed, `fail` would have set the root's status to error with the message, and `error.type` to `"ModelError"`. Anything else that cuts a turn short, such as you closing the page, does the same, in the `except` block whose comment starts [loop.py:115](src/homunculus/loop.py#L115) `# Anything else that ends the turn early, such as a bug or the operator closing`.
+**The second model call** answers "Saved." and becomes line three. Then [loop.py:128](src/homunculus/loop.py#L128) `root.end()` ends the root, with the reply in `gen_ai.output.messages`: line four. If the model had failed, `fail` would have set the root's status to error with the message, and `error.type` to `"ModelError"`. Anything else that cuts a turn short, such as you closing the page, does the same, in the `except` block whose comment starts [loop.py:123](src/homunculus/loop.py#L123) `# Anything else that ends the turn early, such as a bug or the operator closing`.
 
 One line of the file, cut down:
 
@@ -879,15 +889,25 @@ One line of the file, cut down:
     "attributes": [{"key": "gen_ai.tool.name", "value": {"stringValue": "write"}}, ...]}]}]}]}
 ```
 
-**From spans to jobs.** [activity.py:135](src/homunculus/activity.py#L135) `def jobs(spans: list[dict[str, Any]], operator: list[dict[str, Any]]) -> list[dict[str, Any]]:` groups the spans by `traceId`. For each trace it finds the root ([activity.py:146](src/homunculus/activity.py#L146) `root = next((s for s in members if s["name"] == ROOT_SPAN), None)`), reads your message and the reply from its attributes, and turns each `execute_tool` span into a step, in the order they started. Read the job aloud: "you asked me to note that you like green tea; I wrote tea.md, which worked; I replied Saved."
+**From spans to jobs.** [activity.py:200](src/homunculus/activity.py#L200) `def jobs(spans: list[dict[str, Any]], events: list[dict[str, Any]]) -> list[dict[str, Any]]:` groups the spans and events by `traceId`. For each trace it finds the root ([activity.py:214](src/homunculus/activity.py#L214) `root = next((s for s in members if s["name"] == ROOT_SPAN), None)`), reads your message from the root, or from the turn's start event while the root is not written yet, and the reply from the root's attributes, and turns each `execute_tool` span into a step, in the order they started. Read the job aloud: "you asked me to note that you like green tea; I wrote tea.md, which worked; I replied Saved."
 
-**An approved action joins its trace later.** When the gate asks, the approval request stores the turn's W3C `traceparent`, the standard text form of a trace context: `"00-9f3c41d2...-df12ff...-01"`, meaning version, trace id, parent span id and flags. When you approve, the server passes it to `context_of`, which turns the text back into a context with OpenTelemetry's own W3C propagator, and [server.py:143](src/homunculus/server.py#L143) `span = activity.start_tool(` starts the approved run's `execute_tool` span under the original root, with the original tool call id. Its `homunculus.gate.answer` is `"ask"`, because that is what the gate answered, and its outcome is what the run did. So the job reads: asked (◷), then approved and done (✓).
+**An approved action joins its trace later.** When the gate asks, the approval request stores the turn's W3C `traceparent`, the standard text form of a trace context: `"00-9f3c41d2...-df12ff...-01"`, meaning version, trace id, parent span id and flags. When you approve, the server passes it to `context_of`, which turns the text back into a context with OpenTelemetry's own W3C propagator, and [server.py:145](src/homunculus/server.py#L145) `span = activity.start_tool(` starts the approved run's `execute_tool` span under the original root, with the original tool call id. Its `homunculus.gate.answer` is `"ask"`, because that is what the gate answered, and its outcome is what the run did. So the job reads: asked (◷), then approved and done (✓).
 
 ### Feedback
 
 On the activity screen each job has a 👍 and a 👎, and either can carry a reason. Pressing 👎 and typing "Ask before saving" sends `POST /api/activity/9f3c41d2.../feedback` with `{"rating": "down", "reason": "Ask before saving"}`.
 
-[server.py:193](src/homunculus/server.py#L193) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` checks there is such a job, then `activity.record_operator("rating", job, rating=feedback.rating, reason=feedback.reason)` appends one line to `operator.jsonl` and returns it. If you change your mind and press 👍, a second line is added, and `jobs` keeps the latest one ([activity.py:143](src/homunculus/activity.py#L143) `ratings = {entry["job"]: entry for entry in operator if entry["kind"] == "rating"}`: a later line for the same job replaces the earlier one in the dict). Both lines stay in the file. A new rating starts with an empty reason box, so the old reason is never sent with it. Nothing reads the ratings yet. Ticket #17, the daily learning pass, is where they will be used.
+The GenAI conventions define one event for judging an agent's output: `gen_ai.evaluation.result`. Microsoft Foundry documents how to record an end user's thumbs up or down with it: a score of 1.0 labelled `pass`, or 0.0 labelled `fail`. The name, `task_completion`, is the one its own thumbs-up sample uses. This project follows both:
+
+```
+👍  ->  gen_ai.evaluation.name = "task_completion", score.value = 1.0, score.label = "pass"
+👎  ->  gen_ai.evaluation.name = "task_completion", score.value = 0.0, score.label = "fail",
+        gen_ai.evaluation.explanation = "Ask before saving"
+```
+
+[server.py:195](src/homunculus/server.py#L195) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` finds the job, then [server.py:204](src/homunculus/server.py#L204) `found["feedback"] = activity.rate(` writes the event. `rate` attaches it to the job's root span by writing the job's trace id and root span id as a W3C traceparent and turning that into a context, the same way an approved action finds its trace, so a trace viewer shows the rating on the work it judges.
+
+If you change your mind and press 👍, a second event is written. `jobs` keeps the latest one ([activity.py:210](src/homunculus/activity.py#L210) `ratings = {e["traceId"]: e for e in events if _is_rating(e)}`: a later event for the same trace replaces the earlier one in the dict, and only this program's `task_completion` evaluations labelled `pass` or `fail` count). Both stay in the file. A new rating starts with an empty reason box, so the old reason is never sent with it. Nothing reads the ratings yet. Ticket #17, the daily learning pass, is where they will be used.
 
 ### The tests
 
@@ -1122,7 +1142,7 @@ loop.run(..., text='Approved: request 04fdba, send_email {"to": ...}. Result: Se
 
 **If the server stops mid-action**, a request can be left approved with no result. On the next start, `Approvals.mark_interrupted` gives each such request the result `Unknown: the server stopped while this action was running, so it may or may not have run.` Nothing can tell which happened, so the record says exactly that.
 
-**The notice.** [loop.py:67-69](src/homunculus/loop.py#L67-L69) `opening: Message = ... opening["notice"] = True` build the opening message with `"notice": True`. It is stored in `history` with that mark. Before sending, `model.py` keeps only `role`, `content`, `tool_calls` and `tool_call_id`, so OpenRouter receives a plain user message. `GET /api/history` passes the mark on, and the chat shows the line under DECIDED instead of YOU.
+**The notice.** [loop.py:68-70](src/homunculus/loop.py#L68-L70) `opening: Message = ... opening["notice"] = True` build the opening message with `"notice": True`. It is stored in `history` with that mark. Before sending, `model.py` keeps only `role`, `content`, `tool_calls` and `tool_call_id`, so OpenRouter receives a plain user message. `GET /api/history` passes the mark on, and the chat shows the line under DECIDED instead of YOU.
 
 **Where each value lives.** The request lives in `approvals.json` in the data directory and is kept there as a record after it is decided. The notice lives in `history`. The tool's result is in three places: on the request, in the activity log, and in the notice the agent read.
 
@@ -1219,7 +1239,7 @@ _INSTRUCTIONS   -> "## Who you are\n\nYou are Homunculus, ...\n\n## When to ask\
 system_prompt() -> the same str, on every call
 ```
 
-You send "Email Sam". In `run`, [loop.py:66](src/homunculus/loop.py#L66) `system: Message = {"role": "system", "content": prompt.system_prompt()}` wraps that string as the first message. Every pass of the loop sends `[system, *history, *turn]`, with the same `system` object.
+You send "Email Sam". In `run`, [loop.py:67](src/homunculus/loop.py#L67) `system: Message = {"role": "system", "content": prompt.system_prompt()}` wraps that string as the first message. Every pass of the loop sends `[system, *history, *turn]`, with the same `system` object.
 
 The real model reads "If a request is missing something only the operator can tell you, ... ask", and "If you can find the answer yourself, ... do that instead of asking". In a run against GLM it first called `search` with `{"path": ".", "text": "sam"}`. It found nothing, and replied asking for Sam's address and what the email should say. No email tool was called. That run used a stand-in `send_email` tool, since the real outward tools arrive in #9. Its description said to use it only once the operator has given the recipient and what to say. Given the address, subject and words, GLM called it straight away, and the gate turned that into an approval request (chapter 8). Its reply said the email "is prepared and waiting for your approval", not that it was sent, which follows the last section's rule.
 

@@ -4,8 +4,12 @@ One piece of work is one trace. Its root span is `invoke_agent Homunculus`, each
 call is a `chat` span and each tool call an `execute_tool` span, named and described as
 OpenTelemetry's GenAI conventions say. Spans are written to `traces.jsonl` in
 OpenTelemetry's file exporter format, so any OTLP tool can read them, and nothing is
-sent over the network. What the operator does about the work, ratings and decisions,
-goes to `operator.jsonl`, keyed by trace id.
+sent over the network.
+
+Things that happen at a moment rather than over a stretch of time are OpenTelemetry
+log events in `logs.jsonl`, in the same format, each attached to its job's root span:
+the start of a turn, the operator's decision on a request, and the operator's rating,
+which is the GenAI conventions' `gen_ai.evaluation.result` event.
 
 Both files live outside the workspace, so no tool can read or change them.
 """
@@ -14,16 +18,27 @@ import base64
 import json
 import secrets
 import threading
+import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from google.protobuf.json_format import MessageToDict
-from opentelemetry import trace
 from opentelemetry.context import Context
+
+# The logs encoder sits in a private module of the official exporter package, which
+# exports no public one yet.
+from opentelemetry.exporter.otlp.proto.common._log_encoder import encode_logs
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+from opentelemetry.proto.logs.v1.logs_pb2 import LogsData
 from opentelemetry.proto.trace.v1.trace_pb2 import TracesData
+from opentelemetry.sdk._logs import LoggerProvider, ReadableLogRecord
+from opentelemetry.sdk._logs.export import (
+    LogRecordExporter,
+    LogRecordExportResult,
+    SimpleLogRecordProcessor,
+)
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
@@ -37,24 +52,61 @@ ROOT_SPAN = f"invoke_agent {AGENT}"
 # OTLP JSON writes these ids as hex, where protobuf's own JSON would write base64.
 ID_FIELDS = {"traceId", "spanId", "parentSpanId"}
 
+# Event names. The first is the GenAI conventions' own. The others have no standard
+# name, so they carry this program's name as a prefix, as OpenTelemetry's naming
+# guidance asks for application-specific names.
+EVALUATION = "gen_ai.evaluation.result"
+TURN_START = "homunculus.turn.start"
+DECISION = "homunculus.approval.decision"
 
-class JsonLinesExporter(SpanExporter):
-    """Writes finished spans as OpenTelemetry's file exporter does: one `TracesData`
-    object per line, in OTLP's JSON encoding."""
+# A thumbs up or down as a pass or fail evaluation, as Microsoft Foundry maps end-user
+# feedback onto `gen_ai.evaluation.result`: up is a score of 1.0 labelled "pass", down is
+# 0.0 labelled "fail". The name is the one its thumbs-up sample uses.
+EVALUATION_NAME = "task_completion"
+SCORES = {"up": (1.0, "pass"), "down": (0.0, "fail")}
+LABELS = {label: rating for rating, (_, label) in SCORES.items()}
+
+
+class _JsonLines:
+    """Appends OTLP data to a file in OpenTelemetry's file exporter format: one object
+    per line, in OTLP's JSON encoding."""
 
     def __init__(self, path: Path) -> None:
         self._path = path
         self._lock = threading.Lock()
 
-    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        request = encode_spans(spans)
-        data = MessageToDict(
-            TracesData(resource_spans=request.resource_spans), use_integers_for_enums=True
-        )
-        line = json.dumps(_hex_ids(data)) + "\n"
+    def append(self, data: Any) -> None:
+        line = json.dumps(_hex_ids(MessageToDict(data, use_integers_for_enums=True))) + "\n"
         with self._lock, self._path.open("a", encoding="utf-8") as file:
             file.write(line)
+
+
+class SpanFileExporter(SpanExporter):
+    """Writes finished spans, one `TracesData` object per line."""
+
+    def __init__(self, path: Path) -> None:
+        self._file = _JsonLines(path)
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        self._file.append(TracesData(resource_spans=encode_spans(spans).resource_spans))
         return SpanExportResult.SUCCESS
+
+    def shutdown(self) -> None:
+        pass
+
+
+class LogFileExporter(LogRecordExporter):
+    """Writes log events, one `LogsData` object per line."""
+
+    def __init__(self, path: Path) -> None:
+        self._file = _JsonLines(path)
+
+    def export(self, batch: Sequence[ReadableLogRecord]) -> LogRecordExportResult:
+        self._file.append(LogsData(resource_logs=encode_logs(batch).resource_logs))
+        return LogRecordExportResult.SUCCESS
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        return True  # every event is written as soon as it is exported
 
     def shutdown(self) -> None:
         pass
@@ -64,11 +116,17 @@ class Activity:
     def __init__(self, directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         self._traces = directory / "traces.jsonl"
-        self._operator = directory / "operator.jsonl"
-        provider = TracerProvider(resource=Resource.create({"service.name": "homunculus"}))
-        # Each span is written as soon as it ends, so a crash loses nothing already done.
-        provider.add_span_processor(SimpleSpanProcessor(JsonLinesExporter(self._traces)))
-        self.tracer = provider.get_tracer("homunculus")
+        self._logs = directory / "logs.jsonl"
+        resource = Resource.create({"service.name": "homunculus"})
+        tracing = TracerProvider(resource=resource)
+        # Each span is written as soon as it ends, and each event as soon as it happens,
+        # so a crash loses nothing already done.
+        tracing.add_span_processor(SimpleSpanProcessor(SpanFileExporter(self._traces)))
+        self.tracer = tracing.get_tracer("homunculus")
+        # The SDK's logs API is still marked experimental, hence its underscore.
+        logging = LoggerProvider(resource=resource)
+        logging.add_log_record_processor(SimpleLogRecordProcessor(LogFileExporter(self._logs)))
+        self._logger = logging.get_logger("homunculus")
         # One conversation per run of the program, until the conversation is saved (#30).
         self.conversation_id = secrets.token_hex(8)
 
@@ -102,56 +160,74 @@ class Activity:
             span.set_status(Status(StatusCode.ERROR, result))
         span.end()
 
-    def record_operator(self, kind: str, job: str | None, **details: Any) -> dict[str, Any]:
-        """Add one line about the operator's view of a job, and return it."""
-        entry = {"time": datetime.now(UTC).isoformat(), "kind": kind, "job": job, **details}
-        with self._operator.open("a", encoding="utf-8") as file:
-            file.write(json.dumps(entry) + "\n")
-        return entry
+    def event(self, name: str, parent: Context, attributes: dict[str, Any]) -> int:
+        """Write one log event, attached to the span in `parent`, and return its time in
+        nanoseconds. Attributes with no value are left out."""
+        now = time.time_ns()
+        present = {key: item for key, item in attributes.items() if item is not None}
+        self._logger.emit(timestamp=now, context=parent, event_name=name, attributes=present)
+        return now
+
+    def rate(self, trace_id: str, span_id: str, rating: str, reason: str | None) -> dict[str, Any]:
+        """Record the operator's rating of a job as a `gen_ai.evaluation.result` event on
+        its root span, and return the rating as the activity screen shows it."""
+        score, label = SCORES[rating]
+        at = self.event(
+            EVALUATION,
+            context_of(f"00-{trace_id}-{span_id}-01"),
+            {
+                "gen_ai.evaluation.name": EVALUATION_NAME,
+                "gen_ai.evaluation.score.value": score,
+                "gen_ai.evaluation.score.label": label,
+                "gen_ai.evaluation.explanation": reason,
+            },
+        )
+        return {"rating": rating, "reason": reason, "time": _iso(at)}
 
     def spans(self) -> list[dict[str, Any]]:
         """Every span written so far, in the order they ended, with attributes as a dict."""
-        if not self._traces.exists():
-            return []
-        found = []
-        for line in self._traces.read_text(encoding="utf-8").splitlines():
-            for resource in json.loads(line)["resourceSpans"]:
-                for scope in resource["scopeSpans"]:
-                    for span in scope["spans"]:
-                        attributes = {
-                            a["key"]: _value(a["value"]) for a in span.get("attributes", [])
-                        }
-                        found.append({**span, "attributes": attributes})
-        return found
+        return _read(self._traces, "resourceSpans", "scopeSpans", "spans")
+
+    def events(self) -> list[dict[str, Any]]:
+        """Every log event written so far, in order, with attributes as a dict."""
+        return _read(self._logs, "resourceLogs", "scopeLogs", "logRecords")
 
     def jobs(self) -> list[dict[str, Any]]:
         """Each trace as one job, newest first, with the operator's latest rating."""
-        operator = []
-        if self._operator.exists():
-            operator = [json.loads(line) for line in self._operator.read_text().splitlines()]
-        return jobs(self.spans(), operator)
+        return jobs(self.spans(), self.events())
 
 
-def jobs(spans: list[dict[str, Any]], operator: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Group spans by trace into jobs: the message that started each, its tool steps in
-    the order they began, and the reply or error that ended it. A trace whose root span
-    was never written, because the job is still running or the program stopped, has no
-    message, reply or end."""
+def jobs(spans: list[dict[str, Any]], events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group spans and events by trace into jobs: the message that started each, its tool
+    steps in the order they began, the reply or error that ended it, and the operator's
+    latest rating. The message comes from the turn's start event, so a job that is still
+    running, or was cut off before its root span ended, still shows what was asked."""
     by_trace: dict[str, list[dict[str, Any]]] = {}
     for span in spans:
         by_trace.setdefault(span["traceId"], []).append(span)
-    ratings = {entry["job"]: entry for entry in operator if entry["kind"] == "rating"}
+    starts = {e["traceId"]: e for e in events if e.get("eventName") == TURN_START}
+    # A later rating of the same job replaces an earlier one here; both stay in the file.
+    ratings = {e["traceId"]: e for e in events if _is_rating(e)}
     found = []
-    for trace_id, members in by_trace.items():
+    for trace_id in {*by_trace, *starts}:
+        members = by_trace.get(trace_id, [])
         root = next((s for s in members if s["name"] == ROOT_SPAN), None)
+        start = starts.get(trace_id)
         tools = sorted(
             (s for s in members if s["attributes"].get("gen_ai.operation.name") == "execute_tool"),
             key=lambda s: int(s["startTimeUnixNano"]),
         )
-        started = min(int(s["startTimeUnixNano"]) for s in members)
+        opened = root or start
+        if root is not None:
+            began = int(root["startTimeUnixNano"])
+        elif start is not None:
+            began = int(start["timeUnixNano"])
+        else:
+            began = min(int(s["startTimeUnixNano"]) for s in members)
         job: dict[str, Any] = {
             "job": trace_id,
-            "started": _iso(started),
+            "span": opened["spanId"] if opened else None,
+            "started": _iso(began),
             "ended": None,
             "message": None,
             "notice": False,
@@ -160,23 +236,39 @@ def jobs(spans: list[dict[str, Any]], operator: list[dict[str, Any]]) -> list[di
             "error": None,
             "feedback": None,
         }
+        if opened is not None:
+            job["message"] = _text(opened["attributes"].get("gen_ai.input.messages"))
+            job["notice"] = bool(opened["attributes"].get("homunculus.notice"))
         if root is not None:
-            attributes = root["attributes"]
             job["ended"] = _iso(int(root["endTimeUnixNano"]))
-            job["message"] = _text(attributes.get("gen_ai.input.messages"))
-            job["notice"] = bool(attributes.get("homunculus.notice"))
-            job["reply"] = _text(attributes.get("gen_ai.output.messages"))
+            job["reply"] = _text(root["attributes"].get("gen_ai.output.messages"))
             if root.get("status", {}).get("code") == StatusCode.ERROR.value:
                 job["error"] = root["status"].get("message")
         if trace_id in ratings:
-            job["feedback"] = feedback_of(ratings[trace_id])
+            job["feedback"] = _rating(ratings[trace_id])
         found.append(job)
     return sorted(found, key=lambda job: job["started"], reverse=True)
 
 
-def feedback_of(rating: dict[str, Any]) -> dict[str, Any]:
-    """A rating line as the activity screen shows it."""
-    return {"rating": rating["rating"], "reason": rating.get("reason"), "time": rating["time"]}
+def _is_rating(event: dict[str, Any]) -> bool:
+    """An operator's rating: this program's evaluation, with one of the two labels it uses.
+    Any other evaluation in the file is left out of the activity screen."""
+    attributes = event["attributes"]
+    return (
+        event.get("eventName") == EVALUATION
+        and attributes.get("gen_ai.evaluation.name") == EVALUATION_NAME
+        and attributes.get("gen_ai.evaluation.score.label") in LABELS
+    )
+
+
+def _rating(event: dict[str, Any]) -> dict[str, Any]:
+    """A `gen_ai.evaluation.result` event as the activity screen shows it."""
+    attributes = event["attributes"]
+    return {
+        "rating": LABELS[attributes["gen_ai.evaluation.score.label"]],
+        "reason": attributes.get("gen_ai.evaluation.explanation"),
+        "time": _iso(int(event["timeUnixNano"])),
+    }
 
 
 def input_messages(text: str) -> str:
@@ -207,8 +299,8 @@ def fail(span: Span, error: BaseException, message: str) -> None:
     span.end()
 
 
-# W3C trace context: how a later piece of work, such as an approved action, finds the
-# trace it belongs to. A traceparent reads "00-<trace id>-<parent span id>-<flags>".
+# W3C trace context: how a later piece of work, such as an approved action or a rating,
+# finds the span it belongs to. A traceparent reads "00-<trace id>-<parent span id>-<flags>".
 _PROPAGATOR = TraceContextTextMapPropagator()
 
 
@@ -221,12 +313,6 @@ def traceparent_of(context: Context) -> str:
 def context_of(traceparent: str | None) -> Context:
     """The context a traceparent names, or an empty one, which starts a new trace."""
     return _PROPAGATOR.extract({"traceparent": traceparent} if traceparent else {})
-
-
-def trace_id_of(traceparent: str | None) -> str | None:
-    """The trace id a traceparent names, which is the job's id."""
-    span_context = trace.get_current_span(context_of(traceparent)).get_span_context()
-    return trace.format_trace_id(span_context.trace_id) if span_context.is_valid else None
 
 
 def _text(recorded: Any) -> str | None:
@@ -248,6 +334,21 @@ def _step(span: dict[str, Any]) -> dict[str, Any]:
         "outcome": attributes.get("homunculus.outcome"),
         "request": attributes.get("homunculus.approval.id"),
     }
+
+
+def _read(path: Path, resources: str, scopes: str, items: str) -> list[dict[str, Any]]:
+    """Every item in an OTLP JSON lines file, such as each span under `resourceSpans`,
+    then `scopeSpans`, then `spans`, with its attributes as a dict."""
+    if not path.exists():
+        return []
+    found = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        for resource in json.loads(line)[resources]:
+            for scope in resource[scopes]:
+                for item in scope[items]:
+                    attributes = {a["key"]: _value(a["value"]) for a in item.get("attributes", [])}
+                    found.append({**item, "attributes": attributes})
+    return found
 
 
 def _iso(unix_nano: int) -> str:
