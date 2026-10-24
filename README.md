@@ -26,9 +26,9 @@ flowchart LR
 | `server` | HTTP API. Turns the reply into a stream of server-sent events. |
 | `loop` | Asks the model, runs the tools it asks for, repeats until it answers in words. |
 | `model` | One streaming call to the model through OpenRouter. |
-| `gate` | Decides for every tool call whether it may run. Anything it cannot read is refused. |
+| `gate` | Decides for every tool call whether it may run, from what the tool says it does. Reading acts, deleting and anything outward waits for your approval, and anything it cannot read is refused. |
 | `approvals` | Actions waiting for you. You approve, decline, or mark a hand-off done, and the agent is told. |
-| `tools` | `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`, inside the agent's workspace only. |
+| `tools` | `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`, inside the agent's workspace only. Each is described as an MCP tool. |
 | `activity` | An append-only record of every step, written by code, out of reach of every tool. The activity screen shows it as one job per message, and you can rate each one. |
 
 The full design, including the modules still to come (sandbox, skills, wiki, waker), is in [ARCHITECTURE.md](ARCHITECTURE.md). [LEARN.md](LEARN.md) teaches the code one module at a time.
@@ -107,7 +107,8 @@ The same checks run on every pull request, along with a production build of the 
 
 - Python 3.12, FastAPI, httpx, managed with uv.
 - The model is `z-ai/glm-5.3-flash` through OpenRouter's OpenAI-compatible chat completions API.
-- Planned: [Agent Skills](https://agentskills.io) for skills, [MCP](https://modelcontextprotocol.io) for outside services, and an [LLM wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) for memory.
+- Tools are described with the [Model Context Protocol](https://modelcontextprotocol.io)'s official types (`mcp-types`), including the annotations the gate decides from.
+- Planned: [Agent Skills](https://agentskills.io) for skills, MCP servers for outside services, and an [LLM wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) for memory.
 
 ## License
 

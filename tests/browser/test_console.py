@@ -12,6 +12,7 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 
+import mcp_types as mcp
 import pytest
 import uvicorn
 from fastapi import FastAPI
@@ -118,7 +119,10 @@ def test_approving_a_request_runs_it_and_the_agent_carries_on(page: Page, tmp_pa
         sent.append(arguments)
         return "Sent."
 
-    tool = Tool("send_email", "Send an email.", {"type": "object"}, send_email)
+    tool = Tool(
+        mcp.Tool(name="send_email", description="Send an email.", input_schema={"type": "object"}),
+        send_email,
+    )
     email = ToolCall(id="call_1", name="send_email", arguments='{"to": "sam@example.com"}')
     model = ScriptedModel([[email], ["I have asked you first."], ["Sam is emailed."]])
     for url in start_server(console_app(model, [tool], tmp_path)):

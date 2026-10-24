@@ -4,7 +4,10 @@ import json
 from enum import Enum
 from pathlib import PurePosixPath
 
+import mcp_types as mcp
+
 from homunculus.model import ToolCall
+from homunculus.tools import Tool
 
 
 class Answer(Enum):
@@ -15,37 +18,50 @@ class Answer(Enum):
     REFUSE = "refuse"  # never run it
 
 
-# Tools that only touch files inside the agent's workspace, and the arguments that name a path.
-WORKSPACE_FILE_TOOLS = {"read", "write", "edit", "list", "search", "delete", "rename"}
-PATH_ARGUMENTS = ("path", "to")
-
 # Actions only the operator should take. The agent may prepare them; the operator does them.
 HAND_OFF_ACTIONS = {"pay", "enter_password", "enter_verification_code"}
 
+# Destructive tools the operator allows without asking, because they only change the
+# agent's own workspace and saving notes there is everyday work (decided 24 Oct 2026).
+# rename never loses content, so it stays allowed as before. Every other destructive
+# action, such as delete, asks.
+ALLOWED_DESTRUCTIVE = {"write", "edit", "rename"}
 
-def decide(call: ToolCall) -> Answer:
-    """Answer a proposed tool call. Any failure to decide is a refusal."""
+
+def decide(call: ToolCall, tool: Tool | None) -> Answer:
+    """Answer a proposed tool call, given the definition of the tool it names, or None
+    when no such tool exists. Any failure to decide is a refusal."""
     try:
-        return _decide(call)
+        return _decide(call, tool)
     except Exception:
         return Answer.REFUSE
 
 
-def _decide(call: ToolCall) -> Answer:
+def _decide(call: ToolCall, tool: Tool | None) -> Answer:
     arguments = json.loads(call.arguments)
     if not isinstance(arguments, dict):
         return Answer.REFUSE
     if call.name in HAND_OFF_ACTIONS:
         return Answer.HAND_OFF
-    if call.name in WORKSPACE_FILE_TOOLS:
-        if not isinstance(arguments.get("path"), str):
+    if tool is None:
+        return Answer.REFUSE
+    for name in tool.workspace_paths:
+        path = arguments.get(name)
+        if path is None and name not in tool.required:
+            continue
+        if not isinstance(path, str) or not _stays_in_workspace(path):
             return Answer.REFUSE
-        for name in PATH_ARGUMENTS:
-            path = arguments.get(name)
-            if path is not None and (not isinstance(path, str) or not _stays_in_workspace(path)):
-                return Answer.REFUSE
+    # The annotations are trusted because every tool so far is the program's own. A tool
+    # from an outside MCP server must not be judged by its own annotations (#9).
+    hints = tool.definition.annotations or mcp.ToolAnnotations()
+    if hints.read_only_hint is True:
         return Answer.ACT
-    return Answer.ASK
+    # A missing hint takes the protocol's default: outward, and destructive.
+    if hints.open_world_hint is not False:
+        return Answer.ASK
+    if hints.destructive_hint is not False and call.name not in ALLOWED_DESTRUCTIVE:
+        return Answer.ASK
+    return Answer.ACT
 
 
 def _stays_in_workspace(path: str) -> bool:

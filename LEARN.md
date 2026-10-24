@@ -13,7 +13,7 @@ There is one chapter per module, in the order the modules were built. Every chap
 
 Read a chapter with the code open beside it. Each one takes about fifteen minutes.
 
-References to code are links to the exact line, followed by the code they point at, for example [loop.py:66](src/homunculus/loop.py#L66) `messages = [system, *history, *turn]`. Click one to jump there. A check runs on every pull request and fails if any reference no longer matches its line, so they stay correct as the code changes.
+References to code are links to the exact line, followed by the code they point at, for example [loop.py:68](src/homunculus/loop.py#L68) `messages = [system, *history, *turn]`. Click one to jump there. A check runs on every pull request and fails if any reference no longer matches its line, so they stay correct as the code changes.
 
 Diagrams are plain text, so they read the same in any editor.
 
@@ -123,7 +123,7 @@ history = []                  # a list of message dicts; empty, since this is th
 text = "I like tea."          # a str
 ```
 
-**The opening message, then `turn`**: [loop.py:57-60](src/homunculus/loop.py#L57-L60) `opening: Message = ... turn: list[Message] = [opening]`
+**The opening message, then `turn`**: [loop.py:59-62](src/homunculus/loop.py#L59-L62) `opening: Message = ... turn: list[Message] = [opening]`
 
 ```python
 opening = {"role": "user", "content": "I like tea."}   # one message: a dict with two str keys
@@ -134,7 +134,7 @@ turn = [opening]                                         # a list of 1 message
 
 `turn` collects everything that happens in this one exchange. With tools, it grows to hold the tool calls and their results too.
 
-**[loop.py:66](src/homunculus/loop.py#L66) `messages = [system, *history, *turn]`**
+**[loop.py:68](src/homunculus/loop.py#L68) `messages = [system, *history, *turn]`**
 
 `system` is the system message, built once at the start of `run` from the fixed instructions (chapter 9). `*history` and `*turn` spread their contents into the new list. `history` is empty, so `messages` is a list of 2 dicts:
 
@@ -145,7 +145,7 @@ messages[1] = {"role": "user",   "content": "I like tea."}
 
 Read `messages[1]` aloud: "the user said: I like tea."
 
-**[loop.py:67](src/homunculus/loop.py#L67) `model.stream(messages, schemas)`** returns an async iterator. Each item is either a piece of text (`str`) or a finished tool request (`ToolCall`, chapter 4). Suppose the model's reply arrives as one piece of text:
+**[loop.py:69](src/homunculus/loop.py#L69) `model.stream(messages, schemas)`** returns an async iterator. Each item is either a piece of text (`str`) or a finished tool request (`ToolCall`, chapter 4). Suppose the model's reply arrives as one piece of text:
 
 ```python
 model.stream(messages, schemas) -> "Noted."      # yields 1 str, then ends
@@ -175,13 +175,13 @@ When a reply arrives in two pieces, `"Good "` and `"morning."`, each pull goes l
 
 `parts` is the loop's private notepad. It exists only so the full reply can be glued together at the end, and nothing outside `run` ever sees it.
 
-**[loop.py:73](src/homunculus/loop.py#L73) `reply: Message = {"role": "assistant", "content": "".join(parts)}`**
+**[loop.py:75](src/homunculus/loop.py#L75) `reply: Message = {"role": "assistant", "content": "".join(parts)}`**
 
-`"".join(["Noted."])` is `"Noted."`, so `reply` is `{"role": "assistant", "content": "Noted."}`. [loop.py:76](src/homunculus/loop.py#L76) `turn.append(reply)` appends it, and `turn` is now a list of 2.
+`"".join(["Noted."])` is `"Noted."`, so `reply` is `{"role": "assistant", "content": "Noted."}`. [loop.py:78](src/homunculus/loop.py#L78) `turn.append(reply)` appends it, and `turn` is now a list of 2.
 
-**[loop.py:77-78](src/homunculus/loop.py#L77-L78) `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
+**[loop.py:79-80](src/homunculus/loop.py#L79-L80) `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
 
-**[loop.py:92](src/homunculus/loop.py#L92) `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
+**[loop.py:94](src/homunculus/loop.py#L94) `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
 
 ```python
 history[0] = {"role": "user",      "content": "I like tea."}
@@ -203,7 +203,7 @@ The model sees the whole exchange and can answer "tea". That is the entire mecha
 
 **Where each piece is used.** `parts` and `calls` are rebuilt on every pass of the `while` loop. `turn` lives for one call to `run`. `history` outlives the call: the server owns it, and `run` only adds to it. `system`, the system message, is built once per call to `run` and never stored anywhere.
 
-**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so [loop.py:92](src/homunculus/loop.py#L92) `history += turn` never runs and `history` stays as it was. On the way out, [loop.py:83-85](src/homunculus/loop.py#L83-L85) `except ModelError as error: ... raise` record the error in the activity log and pass it on. A failed turn leaves no half-finished reply in the conversation.
+**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so [loop.py:94](src/homunculus/loop.py#L94) `history += turn` never runs and `history` stays as it was. On the way out, [loop.py:85-87](src/homunculus/loop.py#L85-L87) `except ModelError as error: ... raise` record the error in the activity log and pass it on. A failed turn leaves no half-finished reply in the conversation.
 
 ### The test
 
@@ -231,7 +231,7 @@ The other loop tests say: the loop streams the reply and calls the model exactly
 
 ### Change it yourself
 
-1. In `loop.py`, make the history update happen **before** the model is called. Add `history += turn` on a new line just above the `try:` in [loop.py:61-62](src/homunculus/loop.py#L61-L62) `activity.record("message", ...) ... try:`.
+1. In `loop.py`, make the history update happen **before** the model is called. Add `history += turn` on a new line just above the `try:` in [loop.py:63-64](src/homunculus/loop.py#L63-L64) `activity.record("message", ...) ... try:`.
 2. Run `uv run pytest tests/test_loop.py`.
 3. Two tests fail. Read their failure messages. One shows your message appearing twice in the list sent to the model. The other shows a failed turn leaving your message behind in `history`.
 4. Undo the change and run the tests again to see them pass.
@@ -536,6 +536,17 @@ The model never runs anything itself. It writes a **request**, and the program d
 
 Then it calls the model again with both added to the list. That is the loop's second half.
 
+**Each tool is described the way MCP describes one.** The [Model Context Protocol](https://modelcontextprotocol.io/specification/2026-07-28/server/tools) is the open standard for tools that agents use. Homunculus describes every tool with its official types, from the `mcp-types` package. A tool is an `mcp.Tool` with a `name`, a `title`, a `description`, an `input_schema` (the JSON Schema for its arguments) and `annotations`, which say what it does to its surroundings:
+
+| Annotation | Meaning, from the specification | Default when missing |
+|---|---|---|
+| `read_only_hint` | The tool does not change its environment | false |
+| `destructive_hint` | It may destroy or replace things; false means it only adds | true |
+| `idempotent_hint` | Calling it twice with the same arguments has no further effect | false |
+| `open_world_hint` | It reaches an open world of outside things, such as the web | true |
+
+The defaults assume the worst, so a tool that says nothing about itself is treated as risky. The gate decides from these annotations (chapter 5). A call returns an `mcp.CallToolResult`: some text `content`, and `is_error` set when the tool could not do what was asked. Built-in tools run inside the program. The same shape is what a real MCP server sends, so outside tools (#9) will fit without a second format. Only at the edge, in `Tool.schema()`, is a tool turned into the provider's `{"type": "function", ...}` format.
+
 **Few, general tools.** Homunculus has seven file tools: `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`. Their behaviour follows Anthropic's published memory-tool interface (view a file with numbered lines, create, replace text that appears exactly once, delete, rename). `search` is plain text search, the approach Claude Code takes with its Grep tool, instead of a pre-built index. Anthropic's "Seeing like an agent" notes that every extra tool is one more option the model has to weigh, so the bar for adding one is high. This project caps itself at 20.
 
 **The workspace is a fence, with two layers.** The gate (chapter 5) refuses any path that is absolute or contains `..` before a tool runs. Then the tool resolves the path to its real location, following symbolic links, which only the tool can see, and refuses it if it lands outside the workspace folder. One mistake in either layer is not enough to get out. The activity log lives outside the workspace, so no tool can reach it.
@@ -561,14 +572,23 @@ Then it calls the model again with both added to the list. That is the loop's se
 
 You send `"Note that I like green tea."`. `tools` holds the seven file tools for the workspace, `~/Library/Application Support/homunculus/workspace` on a Mac.
 
-**[loop.py:51-52](src/homunculus/loop.py#L51-L52) `by_name = ... schemas = ...`** prepare the tools two ways:
+**[loop.py:53-54](src/homunculus/loop.py#L53-L54) `by_name = ... schemas = ...`** prepare the tools two ways:
 
 ```
 by_name = {"read": <Tool>, "write": <Tool>, ..., "rename": <Tool>}       a dict of 7, name to Tool
 schemas = [{"type": "function", "function": {"name": "read", ...}}, ...]   a list of 7 dicts
 ```
 
-`schemas` is what the model sees. `by_name` is how the loop finds the real function later. The model never sees `by_name`.
+Each `Tool` holds three things. For `write`:
+
+```
+by_name["write"].definition       -> mcp.Tool(name="write", title="Write file", description="Create or overwrite ...",
+                                              input_schema={...}, annotations=ToolAnnotations(destructive_hint=True, ...))
+by_name["write"].run              -> Files.write, the function that does the work
+by_name["write"].workspace_paths  -> ("path",)   the arguments the gate keeps inside the workspace
+```
+
+`schemas` is what the model sees: each definition turned into the provider's format by `Tool.schema()`. `by_name` is how the loop finds the real function later. The model never sees `by_name`, or the annotations.
 
 **First pass of the `while` loop.** `model.stream(messages, schemas)` does not send text this time. The real model streams the request in fragments, and `model.py` glues them together (see the table below). The loop receives one item:
 
@@ -576,23 +596,25 @@ schemas = [{"type": "function", "function": {"name": "read", ...}}, ...]   a lis
 ToolCall(id="call_1", name="write", arguments='{"path": "tea.md", "content": "Green"}')
 ```
 
-`isinstance(item, ToolCall)` is true, so it goes into `calls` ([loop.py:69](src/homunculus/loop.py#L69) `calls.append(item)`), not `parts`. Nothing is yielded to you. `parts` stays `[]`.
+`isinstance(item, ToolCall)` is true, so it goes into `calls` ([loop.py:71](src/homunculus/loop.py#L71) `calls.append(item)`), not `parts`. Nothing is yielded to you. `parts` stays `[]`.
 
-**[loop.py:73-76](src/homunculus/loop.py#L73-L76) `reply: Message = ... turn.append(reply)`** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
+**[loop.py:75-78](src/homunculus/loop.py#L75-L78) `reply: Message = ... turn.append(reply)`** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
 
-**[loop.py:77](src/homunculus/loop.py#L77) `if not calls:`** is false, because `calls` is not empty, so there is no `break`. **[loop.py:80](src/homunculus/loop.py#L80) `step = _carry_out(...)`** hands the call to `_carry_out`:
+**[loop.py:79](src/homunculus/loop.py#L79) `if not calls:`** is false, because `calls` is not empty, so there is no `break`. **[loop.py:82](src/homunculus/loop.py#L82) `step = _carry_out(...)`** hands the call to `_carry_out`:
 
 ```
-gate.decide(call)                    -> Answer.ACT                      (chapter 5)
+gate.decide(call, by_name["write"])  -> Answer.ACT                      (chapter 5)
 json.loads(call.arguments)           -> {"path": "tea.md", "content": "Green"}    a dict
-by_name["write"].call({...})         -> "Wrote tea.md."                 a str
+by_name["write"].call({...})         -> CallToolResult(content=[TextContent(text="Wrote tea.md.")], is_error=False)
+as_text(result)                      -> "Wrote tea.md."                 what the model is shown, a str
+outcome_of(result)                   -> "ok"                            because is_error is False
 ```
 
-`Tool.call` first checks every required argument is present. A missing `content` would come back as `"Error: write needs the argument 'content'."`. Then `Files.write` resolves `tea.md` to `<workspace>/tea.md`, confirms it is inside the workspace, and writes `Green`.
+`Tool.call` first checks every required argument is present. A missing `content` comes back as a result with `is_error=True` and the text `write needs the argument 'content'.`. The Chat Completions format has no error flag, so `as_text` marks a failure in the text the model reads: `"Error: write needs the argument 'content'."`. The outcome comes from `is_error`, never from reading the text. Then `Files.write` resolves `tea.md` to `<workspace>/tea.md`, confirms it is inside the workspace, and writes `Green`.
 
 `activity.record("tool", job=job, name="write", arguments=..., answer="act", result="Wrote tea.md.", outcome="ok")` appends one line to the activity log, and `_carry_out` returns the result.
 
-**[loop.py:81](src/homunculus/loop.py#L81) `turn.append({"role": "tool", ...})`** adds the tool message, and [loop.py:82](src/homunculus/loop.py#L82) `yield step` yields the step as a `ToolStep`, which the server sends to you as a `tool` event (chapter 3). `turn` is now a list of 3:
+**[loop.py:83](src/homunculus/loop.py#L83) `turn.append({"role": "tool", ...})`** adds the tool message, and [loop.py:84](src/homunculus/loop.py#L84) `yield step` yields the step as a `ToolStep`, which the server sends to you as a `tool` event (chapter 3). `turn` is now a list of 3:
 
 ```
 turn[0] = {"role": "user",      "content": "Note that I like green tea."}
@@ -602,7 +624,7 @@ turn[2] = {"role": "tool",      "tool_call_id": "call_1", "content": "Wrote tea.
 
 Read `turn[2]` aloud: "the result of request call_1 was: Wrote tea.md."
 
-**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so [loop.py:78](src/homunculus/loop.py#L78) `break` ends the loop. `turn` ends as a list of 4, and [loop.py:92](src/homunculus/loop.py#L92) `history += turn` adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
+**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so [loop.py:80](src/homunculus/loop.py#L80) `break` ends the loop. `turn` ends as a list of 4, and [loop.py:94](src/homunculus/loop.py#L94) `history += turn` adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
 
 **How the real model streams a tool call.** OpenRouter sends the request in pieces, each tagged with an `index` saying which call it belongs to:
 
@@ -625,12 +647,13 @@ The arguments only become valid JSON once every fragment has arrived. That is wh
 | Symbolic link leads outside the workspace | `Error: shortcut.md is outside the workspace.` |
 | Text to edit appears twice | `Error: the text appears 2 times in plan.md; it must appear once.` |
 | A required argument is missing | `Error: write needs the argument 'content'.` |
+| No tool has that name | `Error: there is no tool named search.` |
 | A bug inside the tool | `Error: write failed unexpectedly (TypeError: ...).` |
 | Deleting a folder | `Error: notes is a folder; only single files can be deleted.` |
 | Deleting or renaming a symbolic link | `Error: link.md is a link; links cannot be deleted or renamed.` |
 | Renaming onto an existing file | `Error: b.md already exists; rename will not overwrite it.` |
 
-`delete` and `rename` are the two tools whose effect cannot be undone, so they are kept narrow on purpose. `delete` removes a single file, never a folder. `rename` refuses to replace a file that is already there. Neither acts on a symbolic link, because resolving the link would make the operation land on the file it points to, which may not be the one the model meant.
+`delete` and `rename` are kept narrow on purpose, because they act on whole files. `delete` removes a single file, never a folder. `rename` refuses to replace a file that is already there. Neither acts on a symbolic link, because resolving the link would make the operation land on the file it points to, which may not be the one the model meant. `delete` also waits for your approval every time (chapter 5), so the folder and link refusals above are tested by approving a delete and checking what comes back.
 
 ### The test
 
@@ -651,7 +674,7 @@ In plain English: "If the workspace holds a shortcut that points to a file outsi
 
 `workspace` is a pytest fixture: an empty folder made fresh for each test, with the activity log beside it. `tool_result(model)` reads the last message the model was shown on its second call, which is the `tool` message. So the test checks what the model actually saw, through the loop, the same way it happens for real.
 
-Other tool tests cover each tool, each error in the table above, the gate refusing `../` and absolute paths, the tools refusing them again on their own when called directly, and an attempt to overwrite the activity log through `../activity.jsonl`.
+Other tool tests cover each tool, each error in the table above, a tool that does not exist (refused by the gate), the gate refusing `../` and absolute paths, the tools refusing them again on their own when called directly, and an attempt to overwrite the activity log through `../activity.jsonl`.
 
 ### Change it yourself
 
@@ -672,7 +695,7 @@ An agent that works by itself will sometimes propose something it should not do:
 
 ### The idea
 
-**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs ([loop.py:105](src/homunculus/loop.py#L105) `answer = gate.decide(call)`). It returns one of five answers:
+**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs ([loop.py:107](src/homunculus/loop.py#L107) `answer = gate.decide(call, by_name.get(call.name))`). It returns one of five answers:
 
 | Answer | Meaning |
 |---|---|
@@ -686,69 +709,101 @@ The first four mirror the approval behaviours OpenAI documents for its always-on
 
 **Fail closed.** If anything goes wrong while deciding, such as arguments that are not valid JSON or a missing path, the answer is `REFUSE`. A broken safety check must never let an action through. `decide` wraps the real rules in `try`/`except Exception` for exactly this reason.
 
-**Unknown means ask.** An action that is not in the table is answered `ASK`. New tools are safe by default until someone writes a rule for them.
+**Decide from what the tool says it does.** Each tool carries MCP annotations (chapter 4), and the gate reads them, instead of listing which tool names may run. It keeps only two short lists: the hand-offs below, and the destructive tools you allowed.
 
-Today the table has one row with real content: the seven workspace file tools are answered `ACT` when their paths stay in the workspace, and `REFUSE` when they do not. For `rename` both `path` and `to` are checked. A path stays in the workspace if it is relative and has no `..` part. The tools check again on their own, following symbolic links (chapter 4). Payments, passwords and verification codes (`pay`, `enter_password`, `enter_verification_code`) are answered `HAND_OFF`: only you should do them. No such tool exists yet, so this row is policy written down before it is needed. What happens to `ASK` and `HAND_OFF` answers is chapter 8.
+| The tool's annotations | Answer |
+|---|---|
+| read-only | `ACT` |
+| reaches the outside world, or does not say | `ASK` |
+| destructive, inside the program | `ASK`, except `write`, `edit` and `rename` |
+| only adds, inside the program | `ACT` |
+
+A missing hint takes the protocol's own default, which assumes the worst: not read-only, destructive, and outward. So a new tool that says nothing about itself asks first. `write` and `edit` are honestly destructive, since they can replace text. `rename` is too, since the old name stops existing. You decided `write` and `edit` may act without asking, because they only change the agent's own workspace and saving notes there is everyday work. `rename` never loses any content, so it keeps acting as it did before. Those three are listed in the gate as `ALLOWED_DESTRUCTIVE`. The annotations still describe each tool truthfully, and the exception is written where you can read it. `delete` has no exception, so every delete waits for you.
+
+**Annotations are trusted only from our own tools.** The MCP specification says clients "MUST consider tool annotations to be untrusted unless they come from trusted servers". Every tool today is the program's own. When outside MCP servers arrive (#9), their annotations must not decide anything.
+
+**Before the annotations: readable arguments, hand-offs, the tool itself, and paths.** Arguments that are not a JSON object are refused first, whatever the tool. Payments, passwords and verification codes (`pay`, `enter_password`, `enter_verification_code`) are answered `HAND_OFF`: only you should do them. No such tool exists yet, so this row is policy written down before it is needed. A name with no tool behind it is `REFUSE`, because nothing could run. Then each argument listed in the tool's `workspace_paths` must be a relative path with no `..` part, or the answer is `REFUSE`. For `rename` both `path` and `to` are checked. The tools check again on their own, following symbolic links (chapter 4). What happens to `ASK` and `HAND_OFF` answers is chapter 8.
 
 ### A picture
 
 ```
-  ToolCall(name, arguments)
+  ToolCall(name, arguments), and the tool with that name (or None)
            │
            ▼
-   arguments are a valid JSON object? ── no ──► REFUSE
+   arguments a JSON object? ── no ──► REFUSE
            │ yes
            ▼
    a payment, password or code? ── yes ──► HAND_OFF
            │ no
            ▼
-   a workspace file tool? ── yes ──► "path" is a string? ── no ──► REFUSE
-           │ no                               │ yes
-           ▼                                  ▼
-          ASK                     relative, with no ".." part? ── no ──► REFUSE
-                                              │ yes
-                                              ▼
-                                             ACT
+   is there such a tool? ── no ──► REFUSE
+           │ yes
+           ▼
+   every workspace path inside? ── no ──► REFUSE
+           │ yes
+           ▼
+   read-only? ── yes ──► ACT
+           │ no
+           ▼
+   reaches outside, or does not say? ── yes ──► ASK
+           │ no
+           ▼
+   destructive, and not write, edit or rename? ── yes ──► ASK
+           │ no
+           ▼
+          ACT
 ```
 
 ### One value, traced
 
-Three calls, three answers:
+Four calls, four answers. `tools` is a dict from name to `Tool`, built from `file_tools(workspace)`:
 
 ```
-decide(ToolCall("call_1", "write", '{"path": "tea.md", "content": "Green"}'))  -> Answer.ACT
-decide(ToolCall("call_2", "send_email", '{"to": "someone@example.com"}'))     -> Answer.ASK
-decide(ToolCall("call_3", "write", '{not json'))                              -> Answer.REFUSE
-decide(ToolCall("call_4", "write", '{"path": "../activity.jsonl", "content": "x"}')) -> Answer.REFUSE
+decide(ToolCall("call_1", "write", '{"path": "tea.md", "content": "Green"}'), tools["write"])   -> Answer.ACT
+decide(ToolCall("call_2", "delete", '{"path": "old.md"}'), tools["delete"])                    -> Answer.ASK
+decide(ToolCall("call_3", "write", '{"path": "../activity.jsonl", "content": "x"}'), tools["write"]) -> Answer.REFUSE
+decide(ToolCall("call_4", "write", '{not json'), tools["write"])                               -> Answer.REFUSE
 ```
 
-Following the first: `json.loads` gives `{"path": "tea.md", "content": "Green"}`, a dict. `"write"` is in `WORKSPACE_FILE_TOOLS`, a set of 7 names. `arguments.get("path")` is `"tea.md"`, a str. `_stays_in_workspace("tea.md")` builds `PurePosixPath("tea.md")`, whose `.parts` is `("tea.md",)`, a tuple of 1 with no `".."` and not absolute, so it returns `True`. The answer is `ACT`.
+Following the first: `json.loads` gives `{"path": "tea.md", "content": "Green"}`, a dict. `"write"` is not a hand-off, and the tool exists. `tools["write"].workspace_paths` is `("path",)`, a tuple of 1. `arguments.get("path")` is `"tea.md"`, and `_stays_in_workspace("tea.md")` builds `PurePosixPath("tea.md")`, whose `.parts` is `("tea.md",)`, with no `".."` and not absolute, so it returns `True`. Then the annotations:
 
-The second: valid JSON, but `"send_email"` is not in the set. The answer is `ASK`. Back in the loop, `_carry_out` does not run it. It saves a request for you instead, and the model is shown `Waiting for the operator's approval (request 04fdba). Carry on with other work; you will be told the outcome.` (chapter 8).
+```
+hints = tools["write"].definition.annotations
+hints.read_only_hint   -> False   not read-only, so carry on
+hints.open_world_hint  -> False   stays inside, so carry on
+hints.destructive_hint -> True    destructive, but "write" is in ALLOWED_DESTRUCTIVE
+                       -> Answer.ACT
+```
 
-The third: `json.loads('{not json')` raises `json.JSONDecodeError` inside `_decide`. The `except` in `decide` catches it, and the answer is `REFUSE`.
+Read it aloud: "write changes things and can replace text, but it stays inside the workspace and you allowed it, so it may run."
 
-The fourth: valid JSON and a file tool, but `PurePosixPath("../activity.jsonl").parts` is `("..", "activity.jsonl")`, which contains `".."`. The answer is `REFUSE`, and the activity log is never touched.
+The second is the same until the last check: `delete` is destructive and not in `ALLOWED_DESTRUCTIVE`, so the answer is `ASK`. Back in the loop, `_carry_out` does not run it. It saves a request for you instead, and the model is shown `Waiting for the operator's approval (request 04fdba). Carry on with other work; you will be told the outcome.` (chapter 8).
 
-**Where answers are used.** The loop reads the answer, and the activity log stores it as text (`answer.value`, such as `"act"`). The model only ever sees the effect: a result, or a "Not done" message.
+The third: `PurePosixPath("../activity.jsonl").parts` is `("..", "activity.jsonl")`, which contains `".."`. The answer is `REFUSE`, and the activity log is never touched. The annotations are never read.
+
+The fourth: `json.loads('{not json')` raises `json.JSONDecodeError` inside `_decide`. The `except` in `decide` catches it, and the answer is `REFUSE`.
+
+**Where answers are used.** The loop reads the answer, and the activity log stores it as text (`answer.value`, such as `"act"`). The model only ever sees the effect of the answer, never the answer's name. The annotations are read only here, by the gate. The model is never sent them.
 
 ### The test
 
 ```python
-def test_a_call_the_gate_cannot_read_is_refused() -> None:
-    assert decide(call("write", "{not json")) is Answer.REFUSE
+def test_a_tool_that_says_nothing_about_itself_asks_first() -> None:
+    # MCP's defaults for a missing hint: not read-only, destructive, and outward.
+    assert decide(call("send_email", "{}"), stand_in("send_email")) is Answer.ASK
 ```
 
-In plain English: "If the gate cannot read a request, the request is refused." It is one line, and it guards the most important property of the whole module.
+In plain English: "A tool that does not say what it does waits for your approval." `stand_in("send_email")` is a tool with no annotations at all. This one line is what makes a new, careless tool safe by default.
 
-The other gate tests say: each workspace file tool is allowed, including `delete` and `rename`; a rename whose destination leads outside the workspace is refused; an action not in the table asks first; a file action without a path is refused; a path that is absolute or contains `..` is refused; and arguments that are valid JSON but not an object, such as `[]`, are refused.
+The other gate tests say: read-only tools are allowed; `write` and `edit` are allowed; `delete` asks; `rename` is allowed; a hand-off the gate cannot read is refused; a tool that reaches outside asks; an additive tool inside the program is allowed, and a destructive one asks; a tool that does not exist is refused; a call the gate cannot read is refused; a file action without a path, or with a path leading outside, is refused; and payments, passwords and codes are handed to you.
 
 ### Change it yourself
 
 1. In `gate.py`, change `return Answer.REFUSE` inside `decide`'s `except` to `return Answer.ASK`.
-2. Run `uv run pytest tests/test_gate.py`.
-3. The cannot-read test fails. Think about what you just did: a request the gate cannot understand would now wait for approval instead of being refused outright, and once approvals exist it could be approved by accident.
-4. Undo the change. Then add a real row: deleting is the one file action that cannot be undone, so make the gate answer `ASK` for `delete`. Write the test first in `tests/test_gate.py`, watch it fail, then add the rule. Run the whole suite afterwards. Four tests fail: the gate test that says deleting is allowed, and the three tool tests that delete through the loop, because nothing is deleted until you approve. That is what a policy change looks like: the tests that described the old policy fail, and you decide whether to update them or undo the change.
+2. Run `uv run pytest tests/test_gate.py`. The cannot-read test fails. A request the gate cannot understand would now wait for approval instead of being refused outright, and it could be approved by accident. Undo the change.
+3. Now take `"edit"` out of `ALLOWED_DESTRUCTIVE`, so it reads `{"write", "rename"}`.
+4. Run `uv run pytest`. The gate test for `edit` fails, and so do the tool tests that edit a file through the loop, because each edit now waits for your approval. That is what a policy change looks like: the tests that described the old policy fail, and you decide whether to update them or undo the change.
+5. Undo the change.
 
 ---
 
@@ -788,7 +843,7 @@ record("tool", job="9f3c41d2a07be815", name="write", arguments='{"path": "tea.md
 record("reply", job="9f3c41d2a07be815", text="Saved.")
 ```
 
-The first comes from [loop.py:61](src/homunculus/loop.py#L61) `activity.record("message", job=job, text=text, notice=notice)`, the second from `_carry_out`, and the third from [loop.py:91](src/homunculus/loop.py#L91) `activity.record("reply", job=job, text=reply["content"])`. Each carries the same `job` id, a random 16-character name made at the start of the turn, so the activity screen can group the three lines as one piece of work.
+The first comes from [loop.py:63](src/homunculus/loop.py#L63) `activity.record("message", job=job, text=text, notice=notice)`, the second from `_carry_out`, and the third from [loop.py:93](src/homunculus/loop.py#L93) `activity.record("reply", job=job, text=reply["content"])`. Each carries the same `job` id, a random 16-character name made at the start of the turn, so the activity screen can group the three lines as one piece of work.
 
 `record(kind, **details)` builds one dict: the current time in UTC, the kind, then every detail passed in. For the second call:
 
@@ -802,7 +857,7 @@ entry = {"time": "2026-10-21T09:15:02.481Z", "kind": "tool", "job": "9f3c41d2a07
 
 `entries()` reads them back: it splits the file into lines and parses each with `json.loads`, giving a list of 3 dicts. Read `entries()[1]` aloud: "at this time, the tool write was proposed with these arguments; the gate said act; the result was Wrote tea.md."
 
-If the model call had failed instead, the third line would be `{"kind": "error", "job": "9f3c41d2a07be815", "error": "Model stopped mid-reply: ..."}`, and there would be no reply line. Anything else that ends a turn early, such as a bug or you closing the page mid-reply, is caught by [loop.py:86](src/homunculus/loop.py#L86) `except BaseException as error:` and also writes an error line, for example `"The turn stopped before it finished (RuntimeError: a bug)."`, then lets the failure carry on. Closing the page cancels the turn, and that line reads `"The turn stopped before it finished: the connection closed."`, because the cancellation's own text only names internal tasks. So every job ends with a reply or an error, unless the whole process is killed.
+If the model call had failed instead, the third line would be `{"kind": "error", "job": "9f3c41d2a07be815", "error": "Model stopped mid-reply: ..."}`, and there would be no reply line. Anything else that ends a turn early, such as a bug or you closing the page mid-reply, is caught by [loop.py:88](src/homunculus/loop.py#L88) `except BaseException as error:` and also writes an error line, for example `"The turn stopped before it finished (RuntimeError: a bug)."`, then lets the failure carry on. Closing the page cancels the turn, and that line reads `"The turn stopped before it finished: the connection closed."`, because the cancellation's own text only names internal tasks. So every job ends with a reply or an error, unless the whole process is killed.
 
 ### From lines to jobs
 
@@ -824,7 +879,7 @@ A step can arrive after its job has ended. When the agent asks to send an email,
 
 Each job on the activity screen has a 👍 and a 👎, and either can carry a reason. Pressing 👎 and typing "Ask before saving" sends `POST /api/activity/9f3c41d2a07be815/feedback` with `{"rating": "down", "reason": "Ask before saving"}`.
 
-[server.py:182](src/homunculus/server.py#L182) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` reads the log once and checks that a message line has this job id ([server.py:186](src/homunculus/server.py#L186) `if not any(e["kind"] == "message" and e.get("job") == job for e in entries):`). Then [server.py:188](src/homunculus/server.py#L188) `line = activity.record("feedback", job=job, rating=feedback.rating, reason=feedback.reason)` appends one more line:
+[server.py:181](src/homunculus/server.py#L181) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` reads the log once and checks that a message line has this job id ([server.py:185](src/homunculus/server.py#L185) `if not any(e["kind"] == "message" and e.get("job") == job for e in entries):`). Then [server.py:187](src/homunculus/server.py#L187) `line = activity.record("feedback", job=job, rating=feedback.rating, reason=feedback.reason)` appends one more line:
 
 ```
 {"time": "...", "kind": "feedback", "job": "9f3c41d2a07be815", "rating": "down", "reason": "Ask before saving"}
@@ -838,10 +893,9 @@ Nothing earlier is rewritten. If you change your mind and press 👍, a second f
 
 ```python
 def test_an_approved_action_shows_in_the_job_that_asked_for_it(tmp_path: Path) -> None:
-    send_email = Tool("send_email", "Stand-in send_email.", {"type": "object"}, lambda _: "Sent.")
     send = ToolCall(id="call_1", name="send_email", arguments='{"to": "sam@example.com"}')
     model = ScriptedModel([[send], ["I have asked."], ["Sent, thanks."]])
-    client = server(model, tmp_path, send_email)
+    client = server(model, tmp_path, SEND_EMAIL)
     client.post("/api/chat", json={"message": "Email Sam"})
     [request] = client.get("/api/approvals").json()
 
@@ -853,7 +907,7 @@ def test_an_approved_action_shows_in_the_job_that_asked_for_it(tmp_path: Path) -
     assert (ran["outcome"], ran["result"], ran["request"]) == ("ok", "Sent.", request["id"])
 ```
 
-In plain English: "When the agent asks to send an email and you approve it, the job that asked shows both steps: the wait, then the email that was sent." `_` is the newer job, the follow-up turn that told the agent the result, which this test does not look at.
+In plain English: "When the agent asks to send an email and you approve it, the job that asked shows both steps: the wait, then the email that was sent." `SEND_EMAIL` is a stand-in tool with no annotations, so the gate asks before it runs. `_` is the newer job, the follow-up turn that told the agent the result, which this test does not look at.
 
 ```python
 async def test_no_tool_can_reach_the_activity_log(tmp_path: Path, workspace: Path) -> None:
@@ -1064,7 +1118,8 @@ The last argument is this turn's job id (chapter 6), so the request remembers wh
 decide("04fdba", "approved", "ask", None)    checks the request exists, is still pending, and is an "ask"
   → Approval(..., status="approved", decided="2026-10-24T04:43:02Z")
 run_tool("send_email", '{"to": ...}', by_name)   the same function the loop uses for an allowed action
-  → "Sent."
+  → CallToolResult(content=[TextContent(text="Sent.")], is_error=False)
+as_text(...) → "Sent."
 approvals.record_result("04fdba", "Sent.")
 activity.record("tool", job="9f3c41d2a07be815", name="send_email", ..., outcome="ok", request="04fdba")
 ```
@@ -1083,7 +1138,7 @@ loop.run(..., text='Approved: request 04fdba, send_email {"to": ...}. Result: Se
 
 **If the server stops mid-action**, a request can be left approved with no result. On the next start, `Approvals.mark_interrupted` gives each such request the result `Unknown: the server stopped while this action was running, so it may or may not have run.` Nothing can tell which happened, so the record says exactly that.
 
-**The notice.** [loop.py:57-59](src/homunculus/loop.py#L57-L59) `opening: Message = ... opening["notice"] = True` build the opening message with `"notice": True`. It is stored in `history` with that mark. Before sending, `model.py` keeps only `role`, `content`, `tool_calls` and `tool_call_id`, so OpenRouter receives a plain user message. `GET /api/history` passes the mark on, and the chat shows the line under DECIDED instead of YOU.
+**The notice.** [loop.py:59-61](src/homunculus/loop.py#L59-L61) `opening: Message = ... opening["notice"] = True` build the opening message with `"notice": True`. It is stored in `history` with that mark. Before sending, `model.py` keeps only `role`, `content`, `tool_calls` and `tool_call_id`, so OpenRouter receives a plain user message. `GET /api/history` passes the mark on, and the chat shows the line under DECIDED instead of YOU.
 
 **Where each value lives.** The request lives in `approvals.json` in the data directory and is kept there as a record after it is decided. The notice lives in `history`. The tool's result is in three places: on the request, in the activity log, and in the notice the agent read.
 
@@ -1175,7 +1230,7 @@ _INSTRUCTIONS   -> "## Who you are\n\nYou are Homunculus, ...\n\n## When to ask\
 system_prompt() -> the same str, on every call
 ```
 
-You send "Email Sam". In `run`, [loop.py:53](src/homunculus/loop.py#L53) `system: Message = {"role": "system", "content": prompt.system_prompt()}` wraps that string as the first message. Every pass of the loop sends `[system, *history, *turn]`, with the same `system` object.
+You send "Email Sam". In `run`, [loop.py:55](src/homunculus/loop.py#L55) `system: Message = {"role": "system", "content": prompt.system_prompt()}` wraps that string as the first message. Every pass of the loop sends `[system, *history, *turn]`, with the same `system` object.
 
 The real model reads "If a request is missing something only the operator can tell you, ... ask", and "If you can find the answer yourself, ... do that instead of asking". In a run against GLM it first called `search` with `{"path": ".", "text": "sam"}`. It found nothing, and replied asking for Sam's address and what the email should say. No email tool was called. That run used a stand-in `send_email` tool, since the real outward tools arrive in #9. Its description said to use it only once the operator has given the recipient and what to say. Given the address, subject and words, GLM called it straight away, and the gate turned that into an approval request (chapter 8). Its reply said the email "is prepared and waiting for your approval", not that it was sent, which follows the last section's rule.
 

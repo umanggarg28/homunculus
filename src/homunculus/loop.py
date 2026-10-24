@@ -7,11 +7,13 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
+import mcp_types as mcp
+
 from homunculus import gate, prompt
 from homunculus.activity import ActivityLog
 from homunculus.approvals import Approvals, Kind
 from homunculus.model import Message, Model, ModelError, ToolCall
-from homunculus.tools import Tool, ToolError
+from homunculus.tools import Tool, make_result, result_text
 
 
 @dataclass(frozen=True)
@@ -102,11 +104,11 @@ def _carry_out(
     """Put one tool call through the gate and, if allowed, run it. The step's result is
     what the model sees."""
     started = time.monotonic()
-    answer = gate.decide(call)
+    answer = gate.decide(call, by_name.get(call.name))
     request_id = None
     if answer is gate.Answer.ACT:
-        result = run_tool(call.name, call.arguments, by_name)
-        outcome = outcome_of(result)
+        done = run_tool(call.name, call.arguments, by_name)
+        result, outcome = as_text(done), outcome_of(done)
     elif answer in WAITS_FOR_OPERATOR:
         outcome = "waiting"
         request = approvals.request(call.name, call.arguments, WAITS_FOR_OPERATOR[answer], job)
@@ -115,6 +117,10 @@ def _carry_out(
             f"Waiting for the operator's approval (request {request.id}). Carry on with other "
             "work; you will be told the outcome."
         )
+    elif call.name not in by_name:
+        # Said plainly, so the model can correct the name instead of retrying.
+        result = f"Error: there is no tool named {call.name}."
+        outcome = "failed"
     else:
         result = f"Not done: the gate answered '{answer.value}' for this action."
         outcome = "failed"
@@ -148,23 +154,30 @@ WAITS_FOR_OPERATOR: dict[gate.Answer, Kind] = {
 }
 
 
-def run_tool(name: str, arguments: str, by_name: dict[str, Tool]) -> str:
-    """Run one tool and return what it reports. Failures are returned as text, never raised."""
+def run_tool(name: str, arguments: str, by_name: dict[str, Tool]) -> mcp.CallToolResult:
+    """Run one tool and return its result. Failures are results with `is_error` set,
+    never raised."""
     try:
         if name not in by_name:
-            raise ToolError(f"there is no tool named {name}.")
+            return make_result(f"there is no tool named {name}.", is_error=True)
         return by_name[name].call(json.loads(arguments))
-    except ToolError as error:
-        return f"Error: {error}"
     except Exception as error:
         # A bug or bad input inside a tool must not end the whole reply. The model is
         # told, the step is recorded, and the loop carries on.
-        return f"Error: {name} failed unexpectedly ({type(error).__name__}: {error})."
+        detail = f"{name} failed unexpectedly ({type(error).__name__}: {error})."
+        return make_result(detail, is_error=True)
 
 
-def outcome_of(result: str) -> str:
+def as_text(result: mcp.CallToolResult) -> str:
+    """What the model is told. Chat Completions has no error flag, so a failure is
+    marked in the text itself."""
+    text = result_text(result)
+    return f"Error: {text}" if result.is_error else text
+
+
+def outcome_of(result: mcp.CallToolResult) -> str:
     """Whether a tool that ran succeeded: "ok", or "failed" when it reported an error."""
-    return "failed" if result.startswith("Error:") else "ok"
+    return "failed" if result.is_error else "ok"
 
 
 def _stopped(error: BaseException) -> str:

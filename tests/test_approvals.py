@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+import mcp_types as mcp
 import pytest
 from fastapi.testclient import TestClient
 from scripted_model import ScriptedModel
@@ -14,6 +15,7 @@ from homunculus.approvals import Approvals
 from homunculus.model import Message, ModelError, ToolCall
 from homunculus.server import create_app
 from homunculus.tools import Tool
+from homunculus.tools.files import file_tools
 
 
 class StandIn:
@@ -21,7 +23,10 @@ class StandIn:
 
     def __init__(self, name: str, result: str) -> None:
         self.calls: list[dict[str, Any]] = []
-        self.tool = Tool(name, f"Stand-in {name}.", {"type": "object"}, self._run)
+        definition = mcp.Tool(
+            name=name, description=f"Stand-in {name}.", input_schema={"type": "object"}
+        )
+        self.tool = Tool(definition, self._run)
         self._result = result
 
     def _run(self, arguments: dict[str, Any]) -> str:
@@ -242,3 +247,24 @@ def test_an_action_interrupted_by_a_restart_is_marked_unknown(tmp_path: Path) ->
     assert decided["result"] == (
         "Unknown: the server stopped while this action was running, so it may or may not have run."
     )
+
+
+def test_a_delete_waits_for_approval_and_then_removes_the_file(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "old.md").write_text("Old notes")
+    model = ScriptedModel([[asks_to("delete", path="old.md")], ["I have asked."], ["Deleted."]])
+    app = create_app(
+        model,
+        file_tools(workspace),
+        ActivityLog(tmp_path / "activity.jsonl"),
+        Approvals(tmp_path / "approvals.json"),
+    )
+    client = TestClient(app)
+    client.post("/api/chat", json={"message": "Delete old.md"})
+
+    assert (workspace / "old.md").exists()
+    decided = client.post(f"/api/approvals/{pending_id(client)}/approve").json()
+
+    assert decided["result"] == "Deleted old.md."
+    assert not (workspace / "old.md").exists()
