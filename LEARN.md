@@ -1137,11 +1137,11 @@ The rules that must hold on every task have to be written down by the program an
 
 ### The idea
 
-**Fixed instructions, owned by the program.** Current personal agents build their prompt in layers. [OpenClaw](https://docs.openclaw.ai/concepts/system-prompt) starts with sections it writes itself, such as how eager to be and when to take care, then adds the user's own files, then a list of skills. Homunculus does the same. This chapter builds the first layer. Later tickets add your profile and the wiki index (#11) and the skill list (#15) after it.
+**Fixed instructions, owned by the program.** Current personal agents build their prompt in layers. [OpenClaw](https://docs.openclaw.ai/concepts/system-prompt) starts with sections it writes itself, such as "Execution Bias" and "Care", then adds the user's own files, then a list of skills. Homunculus does the same. This chapter builds the first layer. Later tickets add your profile and the wiki index (#11) and the skill list (#15) after it.
 
-**Rules go here, not in a skill.** A skill is read only when the model decides it fits the task. "Ask before guessing" fits every task, so it cannot depend on that choice. Skills are for how to do one kind of work, such as the tone you like in emails.
+**Rules for every task belong in these instructions.** A skill is read only when the model decides it fits the task. "Ask before guessing" fits every task, so it cannot depend on that choice. Skills are for how to do one kind of work, such as the tone you like in emails.
 
-**Each tool says when to use it.** [OpenAI's GPT-5 prompting guide](https://developers.openai.com/cookbook/examples/gpt-5/gpt-5_prompting_guide) suggests a threshold for asking per tool: a payment tool should ask at the slightest doubt, a search tool almost never. Tool descriptions are sent on every call too, so each one carries its own rule. `read` says "Use it freely". `delete` says it cannot be undone and should only be used when you asked.
+**Each tool says when to use it.** [OpenAI's GPT-5 prompting guide](https://developers.openai.com/cookbook/examples/gpt-5/gpt-5_prompting_guide) suggests a threshold for asking per tool: a payment tool should ask at the slightest doubt, a search tool almost never. Tool descriptions are sent on every call too, so each one carries its own rule. `read` says "Use it freely". `delete` says it cannot be undone, and should only be used when you asked for the file to be deleted, or for a file the agent made that is no longer needed.
 
 **The same text every turn.** Providers can reuse their work on the start of a prompt if it has not changed since the last call, which is faster and cheaper. So the fixed part holds nothing that changes, not even the time.
 
@@ -1150,7 +1150,7 @@ The rules that must hold on every task have to be written down by the program an
 ```
  system message, built by prompt.system_prompt()
  ┌──────────────────────────────────────────┐
- │ ## Who you are                           │  fixed, from prompt.FIXED
+ │ ## Who you are                           │  fixed, from prompt.FIXED_SECTIONS
  │ ## When to ask                           │  the same text every turn
  │ ## What you can and cannot do            │
  ├──────────────────────────────────────────┤
@@ -1163,7 +1163,7 @@ The rules that must hold on every task have to be written down by the program an
 
 ### One value, traced
 
-`FIXED` is a tuple of 3 `Section` objects. Each is a frozen dataclass with two strings: `FIXED[1].name` is `"When to ask"`, and `FIXED[1].text` starts `"- If a request is missing something only the operator can tell you..."`.
+`FIXED_SECTIONS` is a tuple of 3 `Section` objects. Each is a frozen dataclass with two strings: `FIXED_SECTIONS[1].name` is `"When to ask"`, and `FIXED_SECTIONS[1].text` starts `"- If a request is missing something only the operator can tell you..."`.
 
 [prompt.py:46](src/homunculus/prompt.py#L46) `def system_prompt() -> str:` joins them:
 
@@ -1175,7 +1175,7 @@ system_prompt() -> "## Who you are\nYou are Homunculus, ...\n\n## When to ask\n-
 
 You send "Email Sam". In `run`, [loop.py:53](src/homunculus/loop.py#L53) `system: Message = {"role": "system", "content": prompt.system_prompt()}` wraps that string as the first message. Every pass of the loop sends `[system, *history, *turn]`, with the same `system` object.
 
-The real model reads "If a request is missing something only the operator can tell you, ... ask", and "If you can find the answer yourself, ... do that instead of asking". In a run against GLM it first called `search` with `{"path": ".", "text": "sam"}`. It found nothing, and replied asking for Sam's address and what the email should say. No email tool was called. Given the address, subject and words instead, it called `send_email` straight away, and the gate turned that into an approval request (chapter 8). Its reply said the email "is prepared and waiting for your approval", not that it was sent, which follows the last section's rule.
+The real model reads "If a request is missing something only the operator can tell you, ... ask", and "If you can find the answer yourself, ... do that instead of asking". In a run against GLM it first called `search` with `{"path": ".", "text": "sam"}`. It found nothing, and replied asking for Sam's address and what the email should say. No email tool was called. That run used a stand-in `send_email` tool, since the real outward tools arrive in #9. Its description said to use it only once the operator has given the recipient and what to say. Given the address, subject and words, GLM called it straight away, and the gate turned that into an approval request (chapter 8). Its reply said the email "is prepared and waiting for your approval", not that it was sent, which follows the last section's rule.
 
 ### The tests
 
@@ -1191,16 +1191,16 @@ def test_the_fixed_instructions_are_the_same_on_every_turn(tmp_path: Path) -> No
     assert model.received[0][0] == model.received[1][0]
 ```
 
-In plain English: "Two turns apart, the model is sent exactly the same first message." `model.received` is a list with one entry per model call, and each entry is the list of messages sent, so `model.received[1][0]` is the first message of the second call. Two more tests check that the sections arrive in the order `FIXED` lists them, and that every tool offered says when to use it.
+In plain English: "Two turns apart, the model is sent exactly the same first message." `model.received` is a list with one entry per model call, and each entry is the list of messages sent, so `model.received[1][0]` is the first message of the second call. Two more tests check that the sections arrive by name in a set order, and that every tool offered says when to use it.
 
 A scripted model cannot show whether the real model follows the rules. That is checked by hand against GLM before each change to the instructions, and later by the evals in #20.
 
 ### Change it yourself
 
-1. In `prompt.py`, add a fourth `Section` to `FIXED`, for example `Section("Style", "Reply in one sentence.")`.
-2. Run `uv run pytest tests/test_prompt.py`. All three tests pass: the order test reads its headings from `FIXED`, so it follows your change.
-3. Start the program (README quick start) and ask it something. The replies are now one sentence long, because the model reads your section on every turn.
-4. Now change `system_prompt` to add the current time at the start, `f"Now: {datetime.now()}\n\n" + ...`. Run the tests again. The same-on-every-turn test fails: a prompt that starts with something that changes can never reuse the provider's cached work.
+1. In `prompt.py`, add a fourth `Section` to `FIXED_SECTIONS`, for example `Section("Style", "Reply in one sentence.")`.
+2. Run `uv run pytest tests/test_prompt.py`. The order test fails: it lists the sections by name, so a section can only be added, moved or renamed on purpose, with the test changed to match.
+3. Add `"Style"` to the end of the list in that test and run it again. It passes. Start the program (README quick start) and ask it something. The replies should now be one sentence long, because the model reads your section on every turn. A model can still ignore an instruction, which is why the real model is checked by hand.
+4. Now change `system_prompt` to put the current time at the very start, `f"Now: {datetime.now()}\n\n" + ...`. Run the tests again. The same-on-every-turn test fails: the first characters now change every turn, so the provider could never reuse its cached work. The spec does want the time in the prompt, so it will go after the fixed part, where a change costs nothing.
 5. Undo both changes.
 
 ---

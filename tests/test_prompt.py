@@ -5,7 +5,6 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from scripted_model import ScriptedModel
 
-from homunculus import prompt
 from homunculus.activity import ActivityLog
 from homunculus.approvals import Approvals
 from homunculus.server import create_app
@@ -35,7 +34,11 @@ def test_every_turn_starts_with_the_fixed_instructions_in_order(tmp_path: Path) 
     first = model.received[0][0]
 
     assert first["role"] == "system"
-    assert headings(first["content"]) == [section.name for section in prompt.FIXED]
+    assert headings(first["content"]) == [
+        "Who you are",
+        "When to ask",
+        "What you can and cannot do",
+    ]
 
 
 def test_the_fixed_instructions_are_the_same_on_every_turn(tmp_path: Path) -> None:

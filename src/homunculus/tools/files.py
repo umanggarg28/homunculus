@@ -38,8 +38,8 @@ class Files:
             ),
             Tool(
                 "edit",
-                "Replace a piece of text in a workspace file. "
-                "The old text must appear exactly once. Use it to change part of a file.",
+                "Replace a piece of text in a workspace file. The old text must appear "
+                "exactly once. Use it when only part of a file needs to change.",
                 {
                     "type": "object",
                     "properties": {
@@ -94,7 +94,7 @@ class Files:
             Tool(
                 "rename",
                 "Move or rename one file in the workspace. Never overwrites an existing file. "
-                "Use it to organise the workspace.",
+                "Use it when a file needs a new name or place.",
                 {
                     "type": "object",
                     "properties": {

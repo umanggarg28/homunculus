@@ -14,7 +14,7 @@ class Section:
     text: str
 
 
-FIXED = (
+FIXED_SECTIONS = (
     Section(
         "Who you are",
         "You are Homunculus, a personal agent. You work for one person, your operator, "
@@ -46,4 +46,4 @@ FIXED = (
 def system_prompt() -> str:
     """The instructions the model reads before the conversation, each section headed by
     its name. The text is the same on every turn, so a provider can cache it."""
-    return "\n\n".join(f"## {section.name}\n{section.text}" for section in FIXED)
+    return "\n\n".join(f"## {section.name}\n{section.text}" for section in FIXED_SECTIONS)
