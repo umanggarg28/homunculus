@@ -188,7 +188,7 @@ history[0] = {"role": "user",      "content": "I like tea."}
 history[1] = {"role": "assistant", "content": "Noted."}
 ```
 
-The system message is **not** stored in `history`. It is built at the start of every turn by `prompt.system_prompt()` (chapter 9), so changing the instructions affects every later turn.
+The system message is **not** stored in `history`. It comes from `prompt.system_prompt()` (chapter 9) at the start of every turn, so changing the instructions affects every later turn.
 
 **Now your second message, `"What do I like?"`.** `history` holds the 2 dicts above, so `messages` is a list of 4:
 
@@ -1127,7 +1127,7 @@ In plain English: "When the agent asks to send an email and I approve it, the em
 
 ## 9. The prompt
 
-Code: `src/homunculus/prompt.py`, and the tool descriptions in `src/homunculus/tools/files.py`. Tests: `tests/test_prompt.py`.
+Code: `src/homunculus/prompt.md` (the instructions), `src/homunculus/prompt.py` (which loads them), and the tool descriptions in `src/homunculus/tools/files.py`. Tests: `tests/test_prompt.py`.
 
 ### The problem
 
@@ -1139,6 +1139,8 @@ The rules that must hold on every task have to be written down by the program an
 
 **Fixed instructions, owned by the program.** Current personal agents build their prompt in layers. [OpenClaw](https://docs.openclaw.ai/concepts/system-prompt) starts with sections it writes itself, such as "Execution Bias" and "Care", then adds the user's own files, then a list of skills. Homunculus does the same. This chapter builds the first layer. Later tickets add your profile and the wiki index (#11) and the skill list (#15) after it.
 
+**Written as markdown, shipped with the code.** The instructions are prose, so they live in a markdown file, `prompt.md`, sent to the model exactly as written. OpenAI's [Codex CLI](https://github.com/openai/codex/tree/main/codex-rs/core) does the same with its base instructions, keeping one markdown file per model next to its code. The file sits inside the Python package, and Python's standard `importlib.resources` reads it, so it is there wherever the program is installed. It is outside the workspace, so none of the agent's tools can rewrite its own rules, and it changes only through a reviewed pull request. Instructions you write yourself are a separate file in the data directory, added in #11.
+
 **Rules for every task belong in these instructions.** A skill is read only when the model decides it fits the task. "Ask before guessing" fits every task, so it cannot depend on that choice. Skills are for how to do one kind of work, such as the tone you like in emails.
 
 **Each tool says when to use it.** [OpenAI's GPT-5 prompting guide](https://developers.openai.com/cookbook/examples/gpt-5/gpt-5_prompting_guide) suggests a threshold for asking per tool: a payment tool should ask at the slightest doubt, a search tool almost never. Tool descriptions are sent on every call too, so each one carries its own rule. `read` says "Use it freely". `delete` says it cannot be undone, and should only be used when you asked for the file to be deleted, or for a file the agent made that is no longer needed.
@@ -1148,9 +1150,9 @@ The rules that must hold on every task have to be written down by the program an
 ### A picture
 
 ```
- system message, built by prompt.system_prompt()
+ system message, read from prompt.md by prompt.system_prompt()
  ┌──────────────────────────────────────────┐
- │ ## Who you are                           │  fixed, from prompt.FIXED_SECTIONS
+ │ ## Who you are                           │  fixed, from prompt.md
  │ ## When to ask                           │  the same text every turn
  │ ## What you can and cannot do            │
  ├──────────────────────────────────────────┤
@@ -1163,14 +1165,14 @@ The rules that must hold on every task have to be written down by the program an
 
 ### One value, traced
 
-`FIXED_SECTIONS` is a tuple of 3 `Section` objects. Each is a frozen dataclass with two strings: `FIXED_SECTIONS[1].name` is `"When to ask"`, and `FIXED_SECTIONS[1].text` starts `"- If a request is missing something only the operator can tell you..."`.
+`prompt.md` is a markdown file with 3 sections, each a `## ` heading followed by its text: "Who you are", "When to ask", and "What you can and cannot do".
 
-[prompt.py:46](src/homunculus/prompt.py#L46) `def system_prompt() -> str:` joins them:
+When the program starts and first imports `prompt.py`, [prompt.py:14](src/homunculus/prompt.py#L14) `_INSTRUCTIONS = files("homunculus").joinpath("prompt.md").read_text(encoding="utf-8").strip()` reads the whole file into one string. `files("homunculus")` is the folder the package is installed in, wherever that is. If the file is missing, that line raises an error and the program never starts. If it is empty, the check just below raises one. The agent never runs without its rules.
 
 ```
-system_prompt() -> "## Who you are\nYou are Homunculus, ...\n\n## When to ask\n- If a request ...\n\n## What you can and cannot do\n- If no tool ..."
-                   one str: each section is "## " + its name, a new line, then its text,
-                   and the sections are separated by a blank line
+_INSTRUCTIONS   -> "## Who you are\n\nYou are Homunculus, ...\n\n## When to ask\n\n- If a request ..."
+                   one str, the file exactly as written, without the trailing new line
+system_prompt() -> the same str, on every call
 ```
 
 You send "Email Sam". In `run`, [loop.py:53](src/homunculus/loop.py#L53) `system: Message = {"role": "system", "content": prompt.system_prompt()}` wraps that string as the first message. Every pass of the loop sends `[system, *history, *turn]`, with the same `system` object.
@@ -1197,10 +1199,10 @@ A scripted model cannot show whether the real model follows the rules. That is c
 
 ### Change it yourself
 
-1. In `prompt.py`, add a fourth `Section` to `FIXED_SECTIONS`, for example `Section("Style", "Reply in one sentence.")`.
+1. At the end of `prompt.md`, add a fourth section: a line `## Style`, a blank line, then `Reply in one sentence.`
 2. Run `uv run pytest tests/test_prompt.py`. The order test fails: it lists the sections by name, so a section can only be added, moved or renamed on purpose, with the test changed to match.
-3. Add `"Style"` to the end of the list in that test and run it again. It passes. Start the program (README quick start) and ask it something. The replies should now be one sentence long, because the model reads your section on every turn. A model can still ignore an instruction, which is why the real model is checked by hand.
-4. Now change `system_prompt` to put the current time at the very start, `f"Now: {datetime.now()}\n\n" + ...`. Run the tests again. The same-on-every-turn test fails: the first characters now change every turn, so the provider could never reuse its cached work. The spec does want the time in the prompt, so it will go after the fixed part, where a change costs nothing.
+3. Add `"Style"` to the end of the list in that test and run it again. It passes. Start the program (README quick start), since the file is read at start-up, and ask it something. The replies should now be one sentence long, because the model reads your section on every turn. A model can still ignore an instruction, which is why the real model is checked by hand.
+4. Now change `system_prompt` in `prompt.py` to put the current time at the very start, `return f"Now: {datetime.now()}\n\n" + _INSTRUCTIONS`. Run the tests again. The same-on-every-turn test fails: the first characters now change every turn, so the provider could never reuse its cached work. The spec does want the time in the prompt, so it will go after the fixed part, where a change costs nothing.
 5. Undo both changes.
 
 ---
