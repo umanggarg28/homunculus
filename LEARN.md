@@ -425,7 +425,7 @@ A stream ends with exactly one of `done`, `error` or `stopped`.
 
 | Endpoint | Effect |
 |---|---|
-| `GET /api/turns/current` | Which turn is in progress, if any |
+| `GET /api/turns/current` | Which turn is in progress, or 204 No Content when none is |
 | `GET /api/turns/{id}/events` | That turn's events from the start, or after `Last-Event-ID`, then live |
 | `POST /api/turns/{id}/stop` | Stop it. Its stream ends with `stopped` |
 
@@ -918,7 +918,7 @@ One line of the file, cut down:
 
 **From spans to jobs.** [activity.py:200](src/homunculus/activity.py#L200) `def jobs(spans: list[dict[str, Any]], events: list[dict[str, Any]]) -> list[dict[str, Any]]:` groups the spans and events by `traceId`. For each trace it finds the root ([activity.py:214](src/homunculus/activity.py#L214) `root = next((s for s in members if s["name"] == ROOT_SPAN), None)`), reads your message from the root, or from the turn's start event while the root is not written yet, and the reply from the root's attributes, and turns each `execute_tool` span into a step, in the order they started. Read the job aloud: "you asked me to note that you like green tea; I wrote tea.md, which worked; I replied Saved."
 
-**An approved action joins its trace later.** When the gate asks, the approval request stores the turn's W3C `traceparent`, the standard text form of a trace context: `"00-9f3c41d2...-df12ff...-01"`, meaning version, trace id, parent span id and flags. When you approve, the server passes it to `context_of`, which turns the text back into a context with OpenTelemetry's own W3C propagator, and [server.py:195](src/homunculus/server.py#L195) `span = activity.start_tool(` starts the approved run's `execute_tool` span under the original root, with the original tool call id. Its `homunculus.gate.answer` is `"ask"`, because that is what the gate answered, and its outcome is what the run did. So the job reads: asked (◷), then approved and done (✓).
+**An approved action joins its trace later.** When the gate asks, the approval request stores the turn's W3C `traceparent`, the standard text form of a trace context: `"00-9f3c41d2...-df12ff...-01"`, meaning version, trace id, parent span id and flags. When you approve, the server passes it to `context_of`, which turns the text back into a context with OpenTelemetry's own W3C propagator, and [server.py:196](src/homunculus/server.py#L196) `span = activity.start_tool(` starts the approved run's `execute_tool` span under the original root, with the original tool call id. Its `homunculus.gate.answer` is `"ask"`, because that is what the gate answered, and its outcome is what the run did. So the job reads: asked (◷), then approved and done (✓).
 
 ### Feedback
 
@@ -932,7 +932,7 @@ The GenAI conventions define one event for judging an agent's output: `gen_ai.ev
         gen_ai.evaluation.explanation = "Ask before saving"
 ```
 
-[server.py:245](src/homunculus/server.py#L245) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` finds the job, then [server.py:254](src/homunculus/server.py#L254) `found["feedback"] = activity.rate(` writes the event. `rate` attaches it to the job's root span by writing the job's trace id and root span id as a W3C traceparent and turning that into a context, the same way an approved action finds its trace, so a trace viewer shows the rating on the work it judges.
+[server.py:246](src/homunculus/server.py#L246) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` finds the job, then [server.py:255](src/homunculus/server.py#L255) `found["feedback"] = activity.rate(` writes the event. `rate` attaches it to the job's root span by writing the job's trace id and root span id as a W3C traceparent and turning that into a context, the same way an approved action finds its trace, so a trace viewer shows the rating on the work it judges.
 
 If you change your mind and press 👍, a second event is written. `jobs` keeps the latest one ([activity.py:210](src/homunculus/activity.py#L210) `ratings = {e["traceId"]: e for e in events if _is_rating(e)}`: a later event for the same trace replaces the earlier one in the dict, and only this program's `task_completion` evaluations labelled `pass` or `fail` count). Both stay in the file. A new rating starts with an empty reason box, so the old reason is never sent with it. Nothing reads the ratings yet. Ticket #17, the daily learning pass, is where they will be used.
 
@@ -1041,7 +1041,7 @@ parseSseChunks(buffer) -> { events: [{ id: "2", event: "tool", data: '{"name": "
 
 **`done` arrives.** `recordTurnEvent({ event: "assistant_reply" })` makes the robot show RESPONDING, then DONE 1.5 seconds later, then IDLE. `finished` becomes `true`, the reading loop stops, and in `finally` the reply's `inFlight` is set to `false` and `sending` to `false`, so the input is ready again.
 
-**After a reload**, the hook asks `GET /api/history` and gets a list of 2 entries, your message and the reply, without times. Then it asks `GET /api/turns/current`, which answers 404 because nothing is running. Had you reloaded mid-reply, it would have named the turn, and the hook would have rejoined it from event 1. The log shows `--:--` instead of a time, because inventing one would claim the messages were written now.
+**After a reload**, the hook asks `GET /api/history` and gets a list of 2 entries, your message and the reply, without times. Then it asks `GET /api/turns/current`, which answers 204 No Content because nothing is running. Had you reloaded mid-reply, it would have named the turn, and the hook would have rejoined it from event 1. The log shows `--:--` instead of a time, because inventing one would claim the messages were written now.
 
 **Where each value lives.** `messages` and `toolCalls` belong to `useChatStream` and are drawn by the chat log. The store in `turnEvents` is read by the robot (`useRobotState`) and the thinking indicator, and never by the log. `buffer` and `lastId` exist only inside one call to `follow`.
 
