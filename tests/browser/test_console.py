@@ -137,3 +137,27 @@ def test_approving_a_request_runs_it_and_the_agent_carries_on(page: Page, tmp_pa
         assert sent == [{"to": "sam@example.com"}]
         page.get_by_role("link", name="CHAT").first.click()
         expect(page.get_by_text("Sam is emailed.")).to_be_visible()
+
+
+def test_a_piece_of_work_can_be_rated_and_the_rating_is_kept(page: Page, console_url: str) -> None:
+    page.goto(f"{console_url}/chat")
+    page.locator("textarea").fill("Save my priorities")
+    page.locator("textarea").press("Enter")
+    expect(page.get_by_text("Saved priorities.md.")).to_be_visible()
+
+    page.get_by_role("link", name="ACTIVITY").first.click()
+    expect(page.get_by_text("Wrote priorities.md.")).to_be_visible()
+    page.get_by_role("button", name="not good work").click()
+    page.get_by_placeholder("what could be better? (optional)").fill("Ask before saving")
+    page.get_by_role("button", name="[save]").click()
+    expect(page.get_by_text("“Ask before saving”")).to_be_visible()
+
+    page.reload()
+
+    expect(page.get_by_text("“Ask before saving”")).to_be_visible()
+    # A new rating starts with no reason, so the old one is not carried over.
+    page.get_by_role("button", name="good work", exact=True).click()
+    page.get_by_placeholder("what was good? (optional)").fill("Clear plan")
+    page.get_by_role("button", name="[save]").click()
+    expect(page.get_by_text("“Clear plan”")).to_be_visible()
+    expect(page.get_by_text("“Ask before saving”")).to_have_count(0)

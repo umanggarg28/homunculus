@@ -42,20 +42,28 @@ class Approval:
     result: str | None = None  # what the tool returned, when an approved action ran
     # Whether the agent has been told the outcome: "replied", or "failed: <why>".
     follow_up: str | None = None
+    # The job that asked, so an approved run is shown with the rest of that work.
+    job: str | None = None
 
 
 class Approvals:
     def __init__(self, path: Path) -> None:
         self._path = path
 
-    def request(self, tool: str, arguments: str, kind: Kind) -> Approval:
+    def request(self, tool: str, arguments: str, kind: Kind, job: str | None = None) -> Approval:
         requests = self.all()
         taken = {a.id for a in requests}
         new_id = secrets.token_hex(3)
         while new_id in taken:
             new_id = secrets.token_hex(3)
         approval = Approval(
-            id=new_id, tool=tool, arguments=arguments, kind=kind, status="pending", created=_now()
+            id=new_id,
+            tool=tool,
+            arguments=arguments,
+            kind=kind,
+            status="pending",
+            created=_now(),
+            job=job,
         )
         self._save([*requests, approval])
         return approval

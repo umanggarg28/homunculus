@@ -5,7 +5,7 @@ import dataclasses
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -13,13 +13,15 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from homunculus import loop
-from homunculus.activity import ActivityLog
+from homunculus.activity import ActivityLog, jobs
 from homunculus.approvals import Approval, ApprovalError, Approvals, Kind, Status
 from homunculus.model import Message, Model, ModelError
 from homunculus.tools import Tool
 
 # How many decided requests the approvals list shows below the pending ones.
 RECENT_DECISIONS = 10
+# How many jobs the activity screen shows, newest first.
+RECENT_JOBS = 100
 
 
 class ChatRequest(BaseModel):
@@ -28,6 +30,11 @@ class ChatRequest(BaseModel):
 
 class Decision(BaseModel):
     note: str | None = None
+
+
+class Feedback(BaseModel):
+    rating: Literal["up", "down"]
+    reason: str | None = None
 
 
 def sse(event: str, data: dict[str, Any]) -> str:
@@ -131,10 +138,12 @@ def create_app(
         decided = approvals.record_result(approval_id, result)
         activity.record(
             "tool",
+            job=decided.job,
             name=decided.tool,
             arguments=decided.arguments,
             answer="act",
             result=result,
+            outcome=loop.outcome_of(result),
             request=approval_id,
         )
         background.add_task(
@@ -163,6 +172,21 @@ def create_app(
         text = f"Done by the operator: {_request_summary(decided)}{_appended('Note', note)}"
         background.add_task(tell_the_agent, approval_id, text)
         return dataclasses.asdict(decided)
+
+    @app.get("/api/activity")
+    async def list_activity() -> list[dict[str, Any]]:
+        """What the agent did, one job per turn, newest first."""
+        return jobs(activity.entries())[:RECENT_JOBS]
+
+    @app.post("/api/activity/{job}/feedback")
+    async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:
+        """Record the operator's view of one piece of work. A later rating replaces an
+        earlier one; the log keeps both, since it is only ever added to."""
+        entries = activity.entries()
+        if not any(e["kind"] == "message" and e.get("job") == job for e in entries):
+            raise HTTPException(status_code=404, detail=f"there is no job {job}")
+        line = activity.record("feedback", job=job, rating=feedback.rating, reason=feedback.reason)
+        return next(j for j in jobs([*entries, line]) if j["job"] == job)
 
     @app.get("/api/history")
     async def conversation() -> list[dict[str, Any]]:

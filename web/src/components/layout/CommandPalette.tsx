@@ -27,6 +27,7 @@ export function CommandPalette() {
     () => [
       { id: "chat", label: "open chat", hint: "/chat", run: () => navigate("/chat") },
       { id: "approvals", label: "open approvals", hint: "/approvals", run: () => navigate("/approvals") },
+      { id: "activity", label: "open activity", hint: "/activity", run: () => navigate("/activity") },
     ],
     [navigate],
   );
