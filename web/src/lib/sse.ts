@@ -1,11 +1,13 @@
 // Pure SSE parsing helpers: no React, no DOM dependency beyond fetch.
 //
 // SSE format: events separated by blank lines, each event is one or more
-// lines like `data: <payload>` or `event: <name>`. The browser's native
+// lines like `id: <number>`, `event: <name>` or `data: <payload>`. The id is
+// what a reconnecting reader sends back as `Last-Event-ID`. The browser's native
 // EventSource handles this for GET requests, but for our streaming POST
 // (/api/chat) we read the response body manually and parse it ourselves.
 
 export interface ParsedSseEvent {
+  id?: string;
   event?: string;
   data: string;
 }
@@ -31,11 +33,13 @@ export function parseSseChunks(buffer: string): {
 function parseSingleEvent(block: string): ParsedSseEvent | null {
   const lines = block.split("\n");
   let event: string | undefined;
+  let id: string | undefined;
   const dataLines: string[] = [];
   for (const line of lines) {
     if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
     else if (line.startsWith("event:")) event = line.slice(6).trim();
+    else if (line.startsWith("id:")) id = line.slice(3).trim();
   }
   if (!dataLines.length && !event) return null;
-  return { event, data: dataLines.join("\n") };
+  return { id, event, data: dataLines.join("\n") };
 }

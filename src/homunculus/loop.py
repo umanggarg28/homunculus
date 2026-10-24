@@ -26,6 +26,7 @@ from homunculus.activity import (
 from homunculus.approvals import Approvals, Kind
 from homunculus.model import Message, Model, ModelError, ToolCall, Usage
 from homunculus.tools import Tool, make_result, result_text
+from homunculus.turns import STOPPED_BY_OPERATOR
 
 
 @dataclass(frozen=True)
@@ -256,10 +257,11 @@ def _record_usage(span: Span, usage: Usage) -> None:
 
 
 def _stopped(error: BaseException) -> str:
-    # A closed page cancels the turn. The cancellation's own text names internal tasks,
-    # which mean nothing to the operator.
+    # A cancellation's own text names internal tasks, which mean nothing to the operator.
+    if isinstance(error, asyncio.CancelledError) and error.args == (STOPPED_BY_OPERATOR,):
+        return "The turn was stopped by the operator."
     if isinstance(error, asyncio.CancelledError | GeneratorExit):
-        return "The turn stopped before it finished: the connection closed."
+        return "The turn stopped before it finished: it was cancelled."
     detail = f"{type(error).__name__}: {error}" if str(error) else type(error).__name__
     return f"The turn stopped before it finished ({detail})."
 

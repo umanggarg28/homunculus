@@ -40,7 +40,9 @@ interface ToolEvent {
   outcome: StepOutcome;
 }
 
-/** Owns the chat log and the streaming POST to /api/chat. Text accumulates onto
+/** Owns the chat log and the turn being watched. A turn runs on the server, so this
+ *  hook only watches it: leaving the page stops the watching, [stop] stops the turn,
+ *  and opening the page again rejoins a turn still in progress. Text accumulates onto
  *  the last assistant message in place, so re-renders stay cheap. */
 export function useChatStream(): UseChatStream {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -48,6 +50,7 @@ export function useChatStream(): UseChatStream {
   const [sending, setSending] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
+  const turnRef = useRef<string | null>(null);
 
   /** Load the conversation from the server, replacing what is shown. */
   const reload = useCallback(async () => {
@@ -61,40 +64,27 @@ export function useChatStream(): UseChatStream {
     }
   }, []);
 
-  useEffect(() => {
-    reload();
-  }, [reload]);
-
-  const send = useCallback(
-    async (text: string) => {
-      if (!text.trim() || sending) return;
-      setSending(true);
-      setToolCalls([]);
-      const assistantId = crypto.randomUUID();
-      const now = new Date().toISOString();
-      setMessages((prev) => [
-        ...prev,
-        { id: crypto.randomUUID(), role: "user", content: text, ts: now },
-        { id: assistantId, role: "assistant", content: "", inFlight: true, ts: now },
-      ]);
-      recordTurnEvent({ event: "user_message", text });
-
+  /** Read a turn's events until it ends, onto the assistant message `assistantId`.
+   *  If the connection drops first, reconnect with the last event id seen, so nothing
+   *  is missed or shown twice. `opened` is called with the turn's message when its
+   *  first event arrives. */
+  const watch = useCallback(
+    async (first: Response, assistantId: string, opened?: (message: string) => void) => {
       const update = (change: (m: ChatMessage) => ChatMessage) =>
         setMessages((prev) => prev.map((m) => (m.id === assistantId ? change(m) : m)));
       const fail = (message: string) => {
         update((m) => ({ ...m, error: message }));
         recordTurnEvent({ event: "error", text: message });
       };
-
-      const abort = new AbortController();
-      abortRef.current = abort;
-      try {
-        const response = await api.chat(text, abort.signal);
+      const abort = abortRef.current;
+      let response = first;
+      let lastId = 0;
+      let finished = false;
+      while (!finished) {
         if (!response.ok || !response.body) throw new Error(`request failed (${response.status})`);
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        let finished = false;
         while (!finished) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -102,8 +92,12 @@ export function useChatStream(): UseChatStream {
           const { events, remainder } = parseSseChunks(buffer);
           buffer = remainder;
           for (const event of events) {
+            lastId = Number(event.id ?? lastId);
             const data = JSON.parse(event.data || "{}");
-            if (event.event === "delta") {
+            if (event.event === "turn") {
+              turnRef.current = data.id;
+              opened?.(data.message);
+            } else if (event.event === "delta") {
               update((m) => ({ ...m, content: m.content + data.text }));
             } else if (event.event === "tool") {
               const step = data as ToolEvent;
@@ -128,31 +122,90 @@ export function useChatStream(): UseChatStream {
             } else if (event.event === "error") {
               fail(data.message);
               finished = true;
+            } else if (event.event === "stopped") {
+              update((m) => ({ ...m, error: "stopped" }));
+              recordTurnEvent({ event: "stopped" });
+              finished = true;
             } else if (event.event === "done") {
               recordTurnEvent({ event: "assistant_reply" });
               finished = true;
             }
           }
         }
+        if (!finished) {
+          if (!turnRef.current) throw new Error("the reply ended before it began");
+          response = await api.turnEvents(turnRef.current, lastId, abort?.signal);
+        }
+      }
+    },
+    [],
+  );
+
+  /** Watch a turn from its first event: one sent from here, or one already running. */
+  const follow = useCallback(
+    async (start: (signal: AbortSignal) => Promise<Response>, text?: string) => {
+      setSending(true);
+      setToolCalls([]);
+      const assistantId = crypto.randomUUID();
+      const now = new Date().toISOString();
+      const placeholder = (message: string): ChatMessage[] => [
+        { id: crypto.randomUUID(), role: "user", content: message, ts: now },
+        { id: assistantId, role: "assistant", content: "", inFlight: true, ts: now },
+      ];
+      if (text !== undefined) {
+        setMessages((prev) => [...prev, ...placeholder(text)]);
+        recordTurnEvent({ event: "user_message", text });
+      }
+      const opened =
+        text === undefined
+          ? (message: string) => setMessages((prev) => [...prev, ...placeholder(message)])
+          : undefined;
+      const abort = new AbortController();
+      abortRef.current = abort;
+      try {
+        await watch(await start(abort.signal), assistantId, opened);
       } catch (error) {
-        if (!abort.signal.aborted) fail((error as Error).message);
-        else {
-          update((m) => ({ ...m, error: "stopped" }));
-          recordTurnEvent({ event: "stopped" });
+        // Leaving the page only stops the watching; the turn carries on on the server.
+        if (!abort.signal.aborted) {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === assistantId ? { ...m, error: (error as Error).message } : m)),
+          );
+          recordTurnEvent({ event: "error", text: (error as Error).message });
         }
       } finally {
         abortRef.current = null;
-        update((m) => ({ ...m, inFlight: false }));
+        turnRef.current = null;
+        setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, inFlight: false } : m)));
         setSending(false);
       }
     },
-    [sending],
+    [watch],
   );
 
-  /** Stop reading the reply. The server sees the connection close and leaves the
-   *  unfinished turn out of the conversation. Tool calls that already ran are not
-   *  undone. */
-  const cancel = useCallback(() => abortRef.current?.abort(), []);
+  useEffect(() => {
+    // Show the conversation, then rejoin a turn that is still running, such as one
+    // started before the page was reloaded.
+    (async () => {
+      await reload();
+      const running = await api.currentTurn().catch(() => null);
+      if (running) await follow((signal) => api.turnEvents(running.id, 0, signal));
+    })();
+    return () => abortRef.current?.abort();
+  }, [reload, follow]);
+
+  const send = useCallback(
+    async (text: string) => {
+      if (!text.trim() || sending) return;
+      await follow((signal) => api.chat(text, signal), text);
+    },
+    [sending, follow],
+  );
+
+  /** Stop the turn on the server. Its stream ends with a `stopped` event. Tool calls
+   *  that already ran are not undone. */
+  const cancel = useCallback(() => {
+    if (turnRef.current) api.stopTurn(turnRef.current).catch(() => undefined);
+  }, []);
 
   return { messages, toolCalls, sending, historyLoading, send, cancel, reload };
 }
