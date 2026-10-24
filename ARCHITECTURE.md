@@ -10,7 +10,7 @@ Homunculus is one always-on process that holds a small model loop, a few general
 | `loop` | Ask the model, run the tool it asks for, repeat until done | Full loop |
 | `prompt` | What the model is told at the start of every turn | Fixed instructions in `prompt.md`, shipped with the code and the same every turn; layers from memory and skills are planned |
 | `model` | One streaming call to the model provider | Streaming text and tool calls, privacy routing, error reporting |
-| `gate` | The answer for every proposed action | Decides from each tool's MCP annotations: read-only acts, outward or unannotated asks, destructive asks except `write` and `edit`; paths must stay in the workspace; unknown tools and unreadable calls are refused |
+| `gate` | The answer for every proposed action | Decides from each tool's MCP annotations: read-only acts, outward or unannotated asks, destructive asks except `write`, `edit` and `rename`; paths must stay in the workspace; unknown tools and unreadable calls are refused |
 | `tools` | Plain functions the model can ask to run, each described as an MCP `Tool` with annotations | `read`, `write`, `edit`, `list`, `search`, `delete`, `rename` in the workspace; results are MCP `CallToolResult`s |
 | `activity` | Append-only record of every step | Written by the loop and the server, never by a tool; kept outside the workspace; grouped into jobs with feedback |
 | `approvals` | Requests waiting for the operator | Saved to the data directory; approve, decline, or done for hand-offs |

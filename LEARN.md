@@ -545,7 +545,7 @@ Then it calls the model again with both added to the list. That is the loop's se
 | `idempotent_hint` | Calling it twice with the same arguments has no further effect | false |
 | `open_world_hint` | It reaches an open world of outside things, such as the web | true |
 
-The defaults assume the worst, so a tool that says nothing about itself is treated as risky. The gate decides from these annotations (chapter 5). A call returns an `mcp.CallToolResult`: some text `content`, and `is_error` set when the tool could not do what was asked. Built-in tools run inside the program, as Claude Code and OpenClaw run theirs. The same shape is what a real MCP server sends, so outside tools (#9) will fit without a second format. Only at the edge, in `Tool.schema()`, is a tool turned into the provider's `{"type": "function", ...}` format.
+The defaults assume the worst, so a tool that says nothing about itself is treated as risky. The gate decides from these annotations (chapter 5). A call returns an `mcp.CallToolResult`: some text `content`, and `is_error` set when the tool could not do what was asked. Built-in tools run inside the program. The same shape is what a real MCP server sends, so outside tools (#9) will fit without a second format. Only at the edge, in `Tool.schema()`, is a tool turned into the provider's `{"type": "function", ...}` format.
 
 **Few, general tools.** Homunculus has seven file tools: `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`. Their behaviour follows Anthropic's published memory-tool interface (view a file with numbered lines, create, replace text that appears exactly once, delete, rename). `search` is plain text search, the approach Claude Code takes with its Grep tool, instead of a pre-built index. Anthropic's "Seeing like an agent" notes that every extra tool is one more option the model has to weigh, so the bar for adding one is high. This project caps itself at 20.
 
@@ -647,6 +647,7 @@ The arguments only become valid JSON once every fragment has arrived. That is wh
 | Symbolic link leads outside the workspace | `Error: shortcut.md is outside the workspace.` |
 | Text to edit appears twice | `Error: the text appears 2 times in plan.md; it must appear once.` |
 | A required argument is missing | `Error: write needs the argument 'content'.` |
+| No tool has that name | `Error: there is no tool named search.` |
 | A bug inside the tool | `Error: write failed unexpectedly (TypeError: ...).` |
 | Deleting a folder | `Error: notes is a folder; only single files can be deleted.` |
 | Deleting or renaming a symbolic link | `Error: link.md is a link; links cannot be deleted or renamed.` |
@@ -708,20 +709,20 @@ The first four mirror the approval behaviours OpenAI documents for its always-on
 
 **Fail closed.** If anything goes wrong while deciding, such as arguments that are not valid JSON or a missing path, the answer is `REFUSE`. A broken safety check must never let an action through. `decide` wraps the real rules in `try`/`except Exception` for exactly this reason.
 
-**Decide from what the tool says it does.** The gate does not keep its own list of tool names. Each tool carries MCP annotations (chapter 4), and the gate reads them:
+**Decide from what the tool says it does.** Each tool carries MCP annotations (chapter 4), and the gate reads them, instead of listing which tool names may run. It keeps only two short lists: the hand-offs below, and the destructive tools you allowed.
 
 | The tool's annotations | Answer |
 |---|---|
 | read-only | `ACT` |
 | reaches the outside world, or does not say | `ASK` |
-| destructive, inside the program | `ASK`, except `write` and `edit` |
+| destructive, inside the program | `ASK`, except `write`, `edit` and `rename` |
 | only adds, inside the program | `ACT` |
 
-A missing hint takes the protocol's own default, which assumes the worst: not read-only, destructive, and outward. So a new tool that says nothing about itself asks first. `write` and `edit` are honestly destructive, since they can replace text, but you decided they may act without asking, because they only change the agent's own workspace and saving notes there is everyday work. That exception is written in the gate as `ALLOWED_DESTRUCTIVE`, so the annotations stay true and the policy stays visible. `delete` has no exception, so every delete waits for you.
+A missing hint takes the protocol's own default, which assumes the worst: not read-only, destructive, and outward. So a new tool that says nothing about itself asks first. `write` and `edit` are honestly destructive, since they can replace text. `rename` is too, since the old name stops existing. You decided `write` and `edit` may act without asking, because they only change the agent's own workspace and saving notes there is everyday work. `rename` never loses any content, so it keeps acting as it did before. Those three are listed in the gate as `ALLOWED_DESTRUCTIVE`. The annotations still describe each tool truthfully, and the exception is written where you can read it. `delete` has no exception, so every delete waits for you.
 
 **Annotations are trusted only from our own tools.** The MCP specification says clients "MUST consider tool annotations to be untrusted unless they come from trusted servers". Every tool today is the program's own. When outside MCP servers arrive (#9), their annotations must not decide anything.
 
-**Before the annotations: names, the tool itself, and paths.** Payments, passwords and verification codes (`pay`, `enter_password`, `enter_verification_code`) are answered `HAND_OFF`: only you should do them. No such tool exists yet, so this row is policy written down before it is needed. A name with no tool behind it is `REFUSE`, because nothing could run. Then each argument listed in the tool's `workspace_paths` must be a relative path with no `..` part, or the answer is `REFUSE`. For `rename` both `path` and `to` are checked. The tools check again on their own, following symbolic links (chapter 4). What happens to `ASK` and `HAND_OFF` answers is chapter 8.
+**Before the annotations: readable arguments, hand-offs, the tool itself, and paths.** Arguments that are not a JSON object are refused first, whatever the tool. Payments, passwords and verification codes (`pay`, `enter_password`, `enter_verification_code`) are answered `HAND_OFF`: only you should do them. No such tool exists yet, so this row is policy written down before it is needed. A name with no tool behind it is `REFUSE`, because nothing could run. Then each argument listed in the tool's `workspace_paths` must be a relative path with no `..` part, or the answer is `REFUSE`. For `rename` both `path` and `to` are checked. The tools check again on their own, following symbolic links (chapter 4). What happens to `ASK` and `HAND_OFF` answers is chapter 8.
 
 ### A picture
 
@@ -729,13 +730,16 @@ A missing hint takes the protocol's own default, which assumes the worst: not re
   ToolCall(name, arguments), and the tool with that name (or None)
            │
            ▼
+   arguments a JSON object? ── no ──► REFUSE
+           │ yes
+           ▼
    a payment, password or code? ── yes ──► HAND_OFF
            │ no
            ▼
    is there such a tool? ── no ──► REFUSE
            │ yes
            ▼
-   arguments a JSON object, every workspace path inside? ── no ──► REFUSE
+   every workspace path inside? ── no ──► REFUSE
            │ yes
            ▼
    read-only? ── yes ──► ACT
@@ -744,7 +748,7 @@ A missing hint takes the protocol's own default, which assumes the worst: not re
    reaches outside, or does not say? ── yes ──► ASK
            │ no
            ▼
-   destructive, and not write or edit? ── yes ──► ASK
+   destructive, and not write, edit or rename? ── yes ──► ASK
            │ no
            ▼
           ACT
@@ -761,7 +765,7 @@ decide(ToolCall("call_3", "write", '{"path": "../activity.jsonl", "content": "x"
 decide(ToolCall("call_4", "write", '{not json'), tools["write"])                               -> Answer.REFUSE
 ```
 
-Following the first: `"write"` is not a hand-off, and the tool exists. `json.loads` gives `{"path": "tea.md", "content": "Green"}`, a dict. `tools["write"].workspace_paths` is `("path",)`, a tuple of 1. `arguments.get("path")` is `"tea.md"`, and `_stays_in_workspace("tea.md")` builds `PurePosixPath("tea.md")`, whose `.parts` is `("tea.md",)`, with no `".."` and not absolute, so it returns `True`. Then the annotations:
+Following the first: `json.loads` gives `{"path": "tea.md", "content": "Green"}`, a dict. `"write"` is not a hand-off, and the tool exists. `tools["write"].workspace_paths` is `("path",)`, a tuple of 1. `arguments.get("path")` is `"tea.md"`, and `_stays_in_workspace("tea.md")` builds `PurePosixPath("tea.md")`, whose `.parts` is `("tea.md",)`, with no `".."` and not absolute, so it returns `True`. Then the annotations:
 
 ```
 hints = tools["write"].definition.annotations
@@ -779,7 +783,7 @@ The third: `PurePosixPath("../activity.jsonl").parts` is `("..", "activity.jsonl
 
 The fourth: `json.loads('{not json')` raises `json.JSONDecodeError` inside `_decide`. The `except` in `decide` catches it, and the answer is `REFUSE`.
 
-**Where answers are used.** The loop reads the answer, and the activity log stores it as text (`answer.value`, such as `"act"`). The model only ever sees the effect: a result, a "Waiting" message, or a "Not done" message. The annotations are read only here, by the gate. The model is never sent them.
+**Where answers are used.** The loop reads the answer, and the activity log stores it as text (`answer.value`, such as `"act"`). The model only ever sees the effect of the answer, never the answer's name. The annotations are read only here, by the gate. The model is never sent them.
 
 ### The test
 
@@ -791,13 +795,13 @@ def test_a_tool_that_says_nothing_about_itself_asks_first() -> None:
 
 In plain English: "A tool that does not say what it does waits for your approval." `stand_in("send_email")` is a tool with no annotations at all. This one line is what makes a new, careless tool safe by default.
 
-The other gate tests say: read-only tools are allowed; `write` and `edit` are allowed; `delete` asks; `rename` is allowed; a tool that reaches outside asks; an additive tool inside the program is allowed, and a destructive one asks; a tool that does not exist is refused; a call the gate cannot read is refused; a file action without a path, or with a path leading outside, is refused; and payments, passwords and codes are handed to you.
+The other gate tests say: read-only tools are allowed; `write` and `edit` are allowed; `delete` asks; `rename` is allowed; a hand-off the gate cannot read is refused; a tool that reaches outside asks; an additive tool inside the program is allowed, and a destructive one asks; a tool that does not exist is refused; a call the gate cannot read is refused; a file action without a path, or with a path leading outside, is refused; and payments, passwords and codes are handed to you.
 
 ### Change it yourself
 
 1. In `gate.py`, change `return Answer.REFUSE` inside `decide`'s `except` to `return Answer.ASK`.
 2. Run `uv run pytest tests/test_gate.py`. The cannot-read test fails. A request the gate cannot understand would now wait for approval instead of being refused outright, and it could be approved by accident. Undo the change.
-3. Now take `"edit"` out of `ALLOWED_DESTRUCTIVE`, so it reads `{"write"}`.
+3. Now take `"edit"` out of `ALLOWED_DESTRUCTIVE`, so it reads `{"write", "rename"}`.
 4. Run `uv run pytest`. The gate test for `edit` fails, and so do the tool tests that edit a file through the loop, because each edit now waits for your approval. That is what a policy change looks like: the tests that described the old policy fail, and you decide whether to update them or undo the change.
 5. Undo the change.
 

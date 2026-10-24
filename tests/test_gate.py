@@ -100,3 +100,7 @@ def test_a_rename_aimed_outside_the_workspace_is_refused(to: str, tools: dict[st
 @pytest.mark.parametrize("name", ["pay", "enter_password", "enter_verification_code"])
 def test_payments_passwords_and_codes_are_handed_to_the_operator(name: str) -> None:
     assert decide(call(name, "{}"), stand_in(name)) is Answer.HAND_OFF
+
+
+def test_a_hand_off_the_gate_cannot_read_is_refused() -> None:
+    assert decide(call("pay", "{not json"), stand_in("pay")) is Answer.REFUSE

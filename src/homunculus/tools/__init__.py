@@ -28,16 +28,21 @@ class Tool:
     def name(self) -> str:
         return self.definition.name
 
+    @property
+    def required(self) -> list[str]:
+        """The arguments the tool's schema marks as required."""
+        return list(self.definition.input_schema.get("required", []))
+
     def call(self, arguments: dict[str, Any]) -> mcp.CallToolResult:
         """Run the tool after checking the model supplied every required argument. A
         failure the tool reports is a result with `is_error` set, never an exception."""
         try:
-            for name in self.definition.input_schema.get("required", []):
+            for name in self.required:
                 if name not in arguments:
                     raise ToolError(f"{self.name} needs the argument '{name}'.")
-            return text_result(self.run(arguments))
+            return make_result(self.run(arguments))
         except ToolError as error:
-            return text_result(str(error), is_error=True)
+            return make_result(str(error), is_error=True)
 
     def schema(self) -> dict[str, Any]:
         """The tool as the model provider expects it, in the Chat Completions format."""
@@ -51,7 +56,8 @@ class Tool:
         }
 
 
-def text_result(text: str, is_error: bool = False) -> mcp.CallToolResult:
+def make_result(text: str, is_error: bool = False) -> mcp.CallToolResult:
+    """A result holding one piece of text."""
     return mcp.CallToolResult(content=[mcp.TextContent(type="text", text=text)], is_error=is_error)
 
 

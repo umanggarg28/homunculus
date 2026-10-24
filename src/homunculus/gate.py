@@ -23,8 +23,9 @@ HAND_OFF_ACTIONS = {"pay", "enter_password", "enter_verification_code"}
 
 # Destructive tools the operator allows without asking, because they only change the
 # agent's own workspace and saving notes there is everyday work (decided 24 Oct 2026).
-# Every other destructive action, such as delete, asks.
-ALLOWED_DESTRUCTIVE = {"write", "edit"}
+# rename never loses content, so it stays allowed as before. Every other destructive
+# action, such as delete, asks.
+ALLOWED_DESTRUCTIVE = {"write", "edit", "rename"}
 
 
 def decide(call: ToolCall, tool: Tool | None) -> Answer:
@@ -37,17 +38,16 @@ def decide(call: ToolCall, tool: Tool | None) -> Answer:
 
 
 def _decide(call: ToolCall, tool: Tool | None) -> Answer:
+    arguments = json.loads(call.arguments)
+    if not isinstance(arguments, dict):
+        return Answer.REFUSE
     if call.name in HAND_OFF_ACTIONS:
         return Answer.HAND_OFF
     if tool is None:
         return Answer.REFUSE
-    arguments = json.loads(call.arguments)
-    if not isinstance(arguments, dict):
-        return Answer.REFUSE
-    required = tool.definition.input_schema.get("required", [])
     for name in tool.workspace_paths:
         path = arguments.get(name)
-        if path is None and name not in required:
+        if path is None and name not in tool.required:
             continue
         if not isinstance(path, str) or not _stays_in_workspace(path):
             return Answer.REFUSE

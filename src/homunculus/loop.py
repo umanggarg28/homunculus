@@ -13,7 +13,7 @@ from homunculus import gate, prompt
 from homunculus.activity import ActivityLog
 from homunculus.approvals import Approvals, Kind
 from homunculus.model import Message, Model, ModelError, ToolCall
-from homunculus.tools import Tool, result_text, text_result
+from homunculus.tools import Tool, make_result, result_text
 
 
 @dataclass(frozen=True)
@@ -117,6 +117,10 @@ def _carry_out(
             f"Waiting for the operator's approval (request {request.id}). Carry on with other "
             "work; you will be told the outcome."
         )
+    elif call.name not in by_name:
+        # Said plainly, so the model can correct the name instead of retrying.
+        result = f"Error: there is no tool named {call.name}."
+        outcome = "failed"
     else:
         result = f"Not done: the gate answered '{answer.value}' for this action."
         outcome = "failed"
@@ -155,13 +159,13 @@ def run_tool(name: str, arguments: str, by_name: dict[str, Tool]) -> mcp.CallToo
     never raised."""
     try:
         if name not in by_name:
-            return text_result(f"there is no tool named {name}.", is_error=True)
+            return make_result(f"there is no tool named {name}.", is_error=True)
         return by_name[name].call(json.loads(arguments))
     except Exception as error:
         # A bug or bad input inside a tool must not end the whole reply. The model is
         # told, the step is recorded, and the loop carries on.
         detail = f"{name} failed unexpectedly ({type(error).__name__}: {error})."
-        return text_result(detail, is_error=True)
+        return make_result(detail, is_error=True)
 
 
 def as_text(result: mcp.CallToolResult) -> str:

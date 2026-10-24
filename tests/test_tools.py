@@ -125,7 +125,7 @@ async def test_a_tool_that_does_not_exist_is_refused(tmp_path: Path, workspace: 
 
     _ = [chunk async for chunk in loop.run(model, no_tools, activity, approvals, [], "Search")]
 
-    assert tool_result(model) == "Not done: the gate answered 'refuse' for this action."
+    assert tool_result(model) == "Error: there is no tool named search."
 
 
 async def test_a_link_that_leads_outside_the_workspace_is_refused(

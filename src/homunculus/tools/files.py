@@ -14,10 +14,14 @@ MAX_SEARCH_RESULTS = 50
 # What each kind of file tool does to its surroundings, in the Model Context Protocol's
 # terms. None of them reaches outside the workspace.
 READS = mcp.ToolAnnotations(read_only_hint=True, open_world_hint=False)
-# write and edit can replace text, and delete removes a file, so all three are destructive.
-REPLACES = mcp.ToolAnnotations(read_only_hint=False, destructive_hint=True, open_world_hint=False)
-# rename never overwrites, so nothing is lost.
-MOVES = mcp.ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=False)
+# write can replace a file and delete removes one. Repeating either changes nothing more.
+REPLACES = mcp.ToolAnnotations(
+    read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
+)
+# edit replaces text, and rename removes the old name. Neither is safe to repeat blindly.
+CHANGES = mcp.ToolAnnotations(
+    read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=False
+)
 
 
 def file_tools(workspace: Path) -> list[Tool]:
@@ -47,7 +51,7 @@ def _file_tool(
             },
             "required": list(arguments),
         },
-        annotations=annotations.model_copy(update={"title": title}),
+        annotations=annotations,
     )
     return Tool(definition, run, workspace_paths=paths)
 
@@ -78,7 +82,7 @@ class Files:
                     "old": "The exact text to replace.",
                     "new": "The text to put in its place.",
                 },
-                REPLACES,
+                CHANGES,
                 self.edit,
             ),
             _file_tool(
@@ -123,7 +127,7 @@ class Files:
                     "path": "The file to move, relative to the workspace.",
                     "to": "Its new path, relative to the workspace.",
                 },
-                MOVES,
+                CHANGES,
                 self.rename,
                 paths=("path", "to"),
             ),
