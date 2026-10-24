@@ -83,7 +83,7 @@ export const api = {
   /** The turn in progress, if any. */
   async currentTurn(): Promise<{ id: string } | null> {
     const response = await fetch("/api/turns/current");
-    if (response.status === 404) return null;
+    if (response.status === 204) return null;
     if (!response.ok) throw new Error(`current turn failed: ${response.status}`);
     return response.json();
   },

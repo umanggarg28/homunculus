@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -101,12 +101,13 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"there is no turn {turn_id}")
         return found
 
-    @app.get("/api/turns/current")
-    async def current_turn() -> dict[str, Any]:
-        """The turn in progress, so a page that was closed or reloaded can rejoin it."""
+    @app.get("/api/turns/current", response_model=None)
+    async def current_turn() -> dict[str, Any] | Response:
+        """The turn in progress, so a page that was closed or reloaded can rejoin it. With
+        none running, the answer is 204 No Content: nothing to return, and no error."""
         running = turns.current()
         if running is None:
-            raise HTTPException(status_code=404, detail="no turn is in progress")
+            return Response(status_code=204)
         return {"id": running.id}
 
     @app.get("/api/turns/{turn_id}/events")

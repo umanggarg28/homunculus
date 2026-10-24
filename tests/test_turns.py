@@ -108,14 +108,15 @@ async def test_stop_ends_a_running_turn_and_leaves_the_conversation_as_it_was(
 
 async def test_only_a_running_turn_can_be_stopped_or_named_current(tmp_path: Path) -> None:
     async with client_for(ScriptedModel([["Hello."]]), tmp_path) as client:
-        assert (await client.get("/api/turns/current")).status_code == 404
+        # No turn running is an answer with nothing in it, not an error.
+        assert (await client.get("/api/turns/current")).status_code == 204
         first = parse((await client.post("/api/chat", json={"message": "Hi"})).text)
         turn = first[0]["data"].split('"')[3]
 
         assert (await client.post(f"/api/turns/{turn}/stop")).status_code == 409
         assert (await client.post("/api/turns/nope/stop")).status_code == 404
         assert (await client.get("/api/turns/nope/events")).status_code == 404
-        assert (await client.get("/api/turns/current")).status_code == 404
+        assert (await client.get("/api/turns/current")).status_code == 204
 
 
 class Crashes(ScriptedModel):

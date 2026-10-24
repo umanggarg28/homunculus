@@ -52,7 +52,7 @@ A turn runs on the server whoever is watching, as OpenAI's background responses,
 
 | Endpoint | Effect |
 |---|---|
-| `GET /api/turns/current` | The turn in progress, or 404 |
+| `GET /api/turns/current` | The turn in progress, or 204 No Content when none is running |
 | `GET /api/turns/{id}/events` | That turn's events from the start, or after `Last-Event-ID`, then live |
 | `POST /api/turns/{id}/stop` | Stops a running turn (202); 409 if it has ended. Its trace ends with "The turn was stopped by the operator." |
 
