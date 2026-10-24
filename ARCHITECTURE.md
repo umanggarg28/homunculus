@@ -12,7 +12,7 @@ Homunculus is one always-on process that holds a small model loop, a few general
 | `model` | One streaming call to the model provider | Streaming text and tool calls, privacy routing, error reporting |
 | `gate` | The answer for every proposed action | Decides from each tool's MCP annotations: read-only acts, outward or unannotated asks, destructive asks except `write`, `edit` and `rename`; paths must stay in the workspace; unknown tools and unreadable calls are refused |
 | `tools` | Plain functions the model can ask to run, each described as an MCP `Tool` with annotations | `read`, `write`, `edit`, `list`, `search`, `delete`, `rename` in the workspace; results are MCP `CallToolResult`s |
-| `activity` | Append-only record of every step | Written by the loop and the server, never by a tool; kept outside the workspace; grouped into jobs with feedback |
+| `activity` | Append-only record of every step, as OpenTelemetry traces | Written by the loop and the server, never by a tool; `traces.jsonl` in OpenTelemetry's file format, following the GenAI conventions; ratings and decisions in `operator.jsonl`; kept outside the workspace |
 | `approvals` | Requests waiting for the operator | Saved to the data directory; approve, decline, or done for hand-offs |
 | `skills` | Skill folders in the Agent Skills format | Planned |
 | `memory` | The wiki, raw sources, profile and goals, as files | Planned |
@@ -47,14 +47,14 @@ If the model call fails at any point, `model` raises `ModelError`, `server` send
 
 ## Activity
 
-Every line the loop writes to the activity log carries the turn's job id. `jobs()` groups the lines into one job per turn: the message, each tool step with its outcome, and the reply or error that ended it. A turn cut short by anything, not only a failed model call, still writes an error line. An approval request remembers the job that made it, so an approved action that runs later is shown as a step of that job.
+Each turn is one OpenTelemetry trace, recorded with the official SDK and named as the GenAI semantic conventions say: an `invoke_agent Homunculus` root span, a `chat` span for each model call with its token counts, and an `execute_tool` span for each tool call. Each span is written to `traces.jsonl` in the data directory as soon as it ends, in OpenTelemetry's file exporter format (JSON lines of `TracesData` in OTLP JSON), so any OTLP tool can read it. Nothing is sent over the network. A turn cut short by anything, not only a failed model call, ends its root span with an error status. An approval request stores the turn's W3C `traceparent`, so an approved action that runs later joins the same trace. `jobs()` groups the spans into one job per trace. Ratings and approval decisions are the operator's, not the agent's, so they go to `operator.jsonl`, keyed by trace id.
 
 | Endpoint | Effect |
 |---|---|
 | `GET /api/activity` | The 100 most recent jobs, newest first |
-| `POST /api/activity/{job}/feedback` | `{"rating": "up" \| "down", "reason": "..."}`. Appends a feedback line; the latest rating for a job counts |
+| `POST /api/activity/{job}/feedback` | `{"rating": "up" \| "down", "reason": "..."}`. Appends a rating to `operator.jsonl`; the latest rating for a job counts. `job` is the trace id |
 
-Feedback is a new line in the log, never an edit, so the log stays append-only.
+A rating is a new line in `operator.jsonl`, never an edit, so both files stay append-only.
 
 ## Approvals
 
@@ -88,16 +88,16 @@ class Model(Protocol):
 
 def decide(call: ToolCall) -> Answer: ...              # ACT, ACT_WHEN_ASKED, ASK, HAND_OFF, REFUSE
 
-async def run(model: Model, tools: list[Tool], activity: ActivityLog,
+async def run(model: Model, tools: list[Tool], activity: Activity,
               history: list[Message], text: str) -> AsyncIterator[str | ToolStep]: ...
 
-def create_app(model: Model, tools: list[Tool], activity: ActivityLog,
+def create_app(model: Model, tools: list[Tool], activity: Activity,
                console: Path | None = None) -> FastAPI: ...
 ```
 
 `create_app` takes the model, tools and activity log as arguments, so tests can pass a scripted stand-in and temporary folders, and the real program passes `OpenRouterModel` and the data directory.
 
-The data directory is the operating system's place for application data (`~/Library/Application Support/homunculus` on macOS, `~/.local/share/homunculus` on Linux), found with `platformdirs`, or `HOMUNCULUS_HOME` when set. It holds `workspace/` and `activity.jsonl`, and stays outside the repository.
+The data directory is the operating system's place for application data (`~/Library/Application Support/homunculus` on macOS, `~/.local/share/homunculus` on Linux), found with `platformdirs`, or `HOMUNCULUS_HOME` when set. It holds `workspace/`, `traces.jsonl`, `operator.jsonl` and `approvals.json`, and stays outside the repository.
 
 ## Design rules
 
@@ -119,7 +119,8 @@ Tests sit at agreed seams and fake only the outside world.
 |---|---|---|
 | Loop | Streaming, when the loop stops, history handling, and every tool through a scripted tool call | The model (a scripted stand-in) |
 | Gate | Each answer from annotations, the protocol's defaults for a missing hint, the workspace fence, hand-offs, unknown tools, and refusal when a call cannot be read | Nothing |
-| Server HTTP API: activity | Jobs grouped from the log, feedback kept and replaced by a later rating, failed and cut-short jobs, approved actions shown in the job that asked, decision follow-ups marked as notices | The model |
+| Server HTTP API: the trace file | One trace per turn with a span per model call and tool, read from the file as OTLP JSON; GenAI attributes; token counts; error status on a failed turn | The model |
+| Server HTTP API: activity | Jobs grouped from the traces, feedback kept and replaced by a later rating, failed and cut-short jobs, approved actions shown in the job that asked, decision follow-ups marked as notices | The model |
 | Server HTTP API: prompt | The fixed instructions come first, in order, and are the same on every turn; every tool says when to use it | The model |
 | Server HTTP API: approvals | Waiting instead of running, approve, decline, hand-off done, decided once, survives a restart, notices | The model; stand-in tools that record their calls |
 | Server HTTP API | Event format including tool steps, errors, one reply at a time, privacy routing on every request, tools offered and streamed tool calls run, history, serving the console | The model, or only the network beneath the real model |

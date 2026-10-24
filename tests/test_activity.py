@@ -10,9 +10,9 @@ import mcp_types as mcp
 from fastapi.testclient import TestClient
 from scripted_model import ScriptedModel
 
-from homunculus.activity import ActivityLog
+from homunculus.activity import Activity
 from homunculus.approvals import Approvals
-from homunculus.model import Message, ModelError, ToolCall
+from homunculus.model import Message, ModelError, ToolCall, Usage
 from homunculus.server import create_app
 from homunculus.tools import Tool
 from homunculus.tools.files import file_tools
@@ -27,7 +27,7 @@ def server(model: ScriptedModel, tmp_path: Path, *extra: Tool) -> TestClient:
     app = create_app(
         model,
         [*file_tools(workspace), *extra],
-        ActivityLog(tmp_path / "activity.jsonl"),
+        Activity(tmp_path),
         Approvals(tmp_path / "approvals.json"),
     )
     # A server error is checked through what the log shows, not raised in the test.
@@ -93,7 +93,7 @@ def test_feedback_must_name_a_real_job_and_a_rating_of_up_or_down(tmp_path: Path
 class Unreachable(ScriptedModel):
     async def stream(
         self, messages: list[Message], tools: list[dict[str, Any]]
-    ) -> AsyncIterator[str | ToolCall]:
+    ) -> AsyncIterator[str | ToolCall | Usage]:
         raise ModelError("Could not reach the model: connection refused")
         yield ""  # makes this an async generator
 
@@ -143,7 +143,7 @@ def test_an_approved_action_shows_in_the_job_that_asked_for_it(tmp_path: Path) -
 class Breaks(ScriptedModel):
     async def stream(
         self, messages: list[Message], tools: list[dict[str, Any]]
-    ) -> AsyncIterator[str | ToolCall]:
+    ) -> AsyncIterator[str | ToolCall | Usage]:
         yield "Let me"
         raise RuntimeError("a bug")
 
@@ -161,7 +161,7 @@ def test_a_turn_cut_short_by_an_unexpected_failure_still_ends(tmp_path: Path) ->
 class Cancelled(ScriptedModel):
     async def stream(
         self, messages: list[Message], tools: list[dict[str, Any]]
-    ) -> AsyncIterator[str | ToolCall]:
+    ) -> AsyncIterator[str | ToolCall | Usage]:
         yield "Let me"
         raise asyncio.CancelledError("Cancelled via cancel scope 10b6a9090 by <Task pending>")
 

@@ -44,7 +44,8 @@ export interface Job {
   job: string;
   started: string;
   ended: string | null;
-  message: string;
+  /** Null until the job's root span is written, when the job ends. */
+  message: string | null;
   /** The turn that told the agent the outcome of a decision, not a typed message. */
   notice: boolean;
   steps: ActivityStep[];

@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from scripted_model import ScriptedModel
 
-from homunculus.activity import ActivityLog
+from homunculus.activity import Activity
 from homunculus.approvals import Approvals
 from homunculus.server import create_app
 from homunculus.tools.files import file_tools
@@ -17,7 +17,7 @@ def server(model: ScriptedModel, tmp_path: Path) -> TestClient:
     app = create_app(
         model,
         file_tools(workspace),
-        ActivityLog(tmp_path / "activity.jsonl"),
+        Activity(tmp_path),
         Approvals(tmp_path / "approvals.json"),
     )
     return TestClient(app)

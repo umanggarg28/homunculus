@@ -10,9 +10,9 @@ import pytest
 from fastapi.testclient import TestClient
 from scripted_model import ScriptedModel
 
-from homunculus.activity import ActivityLog
+from homunculus.activity import Activity
 from homunculus.approvals import Approvals
-from homunculus.model import Message, ModelError, ToolCall
+from homunculus.model import Message, ModelError, ToolCall, Usage
 from homunculus.server import create_app
 from homunculus.tools import Tool
 from homunculus.tools.files import file_tools
@@ -47,7 +47,7 @@ def server(model: ScriptedModel, tmp_path: Path, *tools: StandIn) -> TestClient:
     app = create_app(
         model,
         [t.tool for t in tools],
-        ActivityLog(tmp_path / "activity.jsonl"),
+        Activity(tmp_path),
         Approvals(tmp_path / "approvals.json"),
     )
     return TestClient(app)
@@ -197,7 +197,7 @@ class FailingFollowUp(ScriptedModel):
 
     async def stream(
         self, messages: list[Message], tools: list[dict[str, Any]]
-    ) -> AsyncIterator[str | ToolCall]:
+    ) -> AsyncIterator[str | ToolCall | Usage]:
         if len(self.received) >= 2:
             self.received.append(list(messages))
             raise ModelError("Model request failed (503): no providers available")
@@ -257,7 +257,7 @@ def test_a_delete_waits_for_approval_and_then_removes_the_file(tmp_path: Path) -
     app = create_app(
         model,
         file_tools(workspace),
-        ActivityLog(tmp_path / "activity.jsonl"),
+        Activity(tmp_path),
         Approvals(tmp_path / "approvals.json"),
     )
     client = TestClient(app)

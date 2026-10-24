@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from homunculus import loop
-from homunculus.activity import ActivityLog, jobs
+from homunculus.activity import Activity, context_of, fail, feedback_of, trace_id_of
 from homunculus.approvals import Approval, ApprovalError, Approvals, Kind, Status
 from homunculus.model import Message, Model, ModelError
 from homunculus.tools import Tool
@@ -45,7 +45,7 @@ def sse(event: str, data: dict[str, Any]) -> str:
 def create_app(
     model: Model,
     tools: list[Tool],
-    activity: ActivityLog,
+    activity: Activity,
     approvals: Approvals,
     console: Path | None = None,
 ) -> FastAPI:
@@ -121,7 +121,14 @@ def create_app(
             decided = approvals.decide(approval_id, status, note)
         except ApprovalError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
-        activity.record("approval", id=approval_id, tool=decided.tool, status=status, note=note)
+        activity.record_operator(
+            "decision",
+            trace_id_of(decided.traceparent),
+            id=approval_id,
+            tool=decided.tool,
+            status=status,
+            note=note,
+        )
         return decided
 
     @app.post("/api/approvals/{approval_id}/approve")
@@ -132,19 +139,24 @@ def create_app(
         # Inside the turn lock, so the action never runs alongside a chat turn's own tools,
         # and in a worker thread, so a slow tool does not stall other requests.
         async with turn:
-            done = await asyncio.to_thread(loop.run_tool, decided.tool, decided.arguments, by_name)
-        result = loop.as_text(done)
-        decided = approvals.record_result(approval_id, result)
-        activity.record(
-            "tool",
-            job=decided.job,
-            name=decided.tool,
-            arguments=decided.arguments,
-            answer="act",
-            result=result,
-            outcome=loop.outcome_of(done),
-            request=approval_id,
-        )
+            # The run joins the trace of the job that asked for it, so it is shown there.
+            span = activity.start_tool(
+                decided.tool,
+                decided.arguments,
+                context_of(decided.traceparent),
+                call_id=decided.tool_call_id,
+            )
+            try:
+                done = await asyncio.to_thread(
+                    loop.run_tool, decided.tool, decided.arguments, by_name
+                )
+                result = loop.as_text(done)
+                decided = approvals.record_result(approval_id, result)
+            except BaseException as error:
+                fail(span, error, str(error) or type(error).__name__)
+                raise
+            # The gate's answer was "ask"; the outcome records what the run itself did.
+            activity.end_tool(span, "ask", result, loop.outcome_of(done), approval_id)
         background.add_task(
             tell_the_agent, approval_id, f"Approved: {_request_summary(decided)}. Result: {result}"
         )
@@ -174,18 +186,21 @@ def create_app(
 
     @app.get("/api/activity")
     async def list_activity() -> list[dict[str, Any]]:
-        """What the agent did, one job per turn, newest first."""
-        return jobs(activity.entries())[:RECENT_JOBS]
+        """What the agent did, one job per trace, newest first."""
+        return activity.jobs()[:RECENT_JOBS]
 
     @app.post("/api/activity/{job}/feedback")
     async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:
         """Record the operator's view of one piece of work. A later rating replaces an
-        earlier one; the log keeps both, since it is only ever added to."""
-        entries = activity.entries()
-        if not any(e["kind"] == "message" and e.get("job") == job for e in entries):
+        earlier one; the file keeps both, since it is only ever added to."""
+        found = next((j for j in activity.jobs() if j["job"] == job), None)
+        if found is None:
             raise HTTPException(status_code=404, detail=f"there is no job {job}")
-        line = activity.record("feedback", job=job, rating=feedback.rating, reason=feedback.reason)
-        return next(j for j in jobs([*entries, line]) if j["job"] == job)
+        line = activity.record_operator(
+            "rating", job, rating=feedback.rating, reason=feedback.reason
+        )
+        found["feedback"] = feedback_of(line)
+        return found
 
     @app.get("/api/history")
     async def conversation() -> list[dict[str, Any]]:

@@ -7,7 +7,8 @@ code it refers to in backticks:
 
 The quoted code must appear in the linked lines, ignoring spacing. `...` stands for
 any text in between. A line number written without a link is an error, because
-nothing could check it.
+nothing could check it. A test quoted in a python code block must be the whole of the
+test of that name in tests/, exactly as written there.
 
 Run: uv run python scripts/check_learn_links.py
      uv run python scripts/check_learn_links.py --fix
@@ -16,6 +17,7 @@ With --fix, a link whose quoted code has moved is pointed at its new lines, but 
 when the code now appears in exactly one place. Anything else is left for a person.
 """
 
+import ast
 import re
 import sys
 from pathlib import Path
@@ -124,9 +126,54 @@ def fix() -> int:
     return updated
 
 
+TEST_START = re.compile(r"^(async )?def (test_\w+)\(")
+
+
+def quoted_tests(lines: list[str]) -> list[tuple[int, str, str]]:
+    """Each test quoted in a python code block, as (line number, test name, its code)."""
+    found: list[tuple[int, str, str]] = []
+    block: list[str] | None = None
+    start = 0
+    for number, line in enumerate(lines, start=1):
+        if line.strip() == "```python":
+            block, start = [], number + 1
+        elif line.strip() == "```" and block is not None:
+            if block and (match := TEST_START.match(block[0])):
+                found.append((start, match.group(2), "\n".join(block).rstrip()))
+            block = None
+        elif block is not None:
+            block.append(line)
+    return found
+
+
+def tests_by_name() -> dict[str, str]:
+    """Every test function in tests/, from its `def` line to its last line, as Python's
+    own parser finds it."""
+    found: dict[str, str] = {}
+    for path in sorted((ROOT / "tests").rglob("*.py")):
+        source = path.read_text()
+        lines = source.splitlines()
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                if node.name.startswith("test_") and node.end_lineno is not None:
+                    found[node.name] = "\n".join(lines[node.lineno - 1 : node.end_lineno])
+    return found
+
+
+def test_problems(lines: list[str]) -> list[str]:
+    """A quoted test that is not exactly the test of that name in tests/."""
+    real = tests_by_name()
+    return [
+        f"LEARN.md:{number}: the quoted {name} is not the test in tests/, exactly"
+        for number, name, code in quoted_tests(lines)
+        if real.get(name) != code
+    ]
+
+
 def problems() -> list[str]:
-    found: list[str] = []
-    for index, line, in_code_block in outside_code_blocks(DOCUMENT.read_text().splitlines()):
+    lines = DOCUMENT.read_text().splitlines()
+    found: list[str] = test_problems(lines)
+    for index, line, in_code_block in outside_code_blocks(lines):
         where = f"LEARN.md:{index + 1}"
         if in_code_block:
             # A code block cannot hold a link, so it must not cite line numbers either.

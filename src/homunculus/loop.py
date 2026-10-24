@@ -2,17 +2,28 @@
 
 import asyncio
 import json
-import secrets
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import mcp_types as mcp
+from opentelemetry import trace
+from opentelemetry.context import Context
+from opentelemetry.trace import Span, SpanKind
 
 from homunculus import gate, prompt
-from homunculus.activity import ActivityLog
+from homunculus.activity import (
+    AGENT,
+    ROOT_SPAN,
+    Activity,
+    fail,
+    input_messages,
+    output_messages,
+    traceparent_of,
+)
 from homunculus.approvals import Approvals, Kind
-from homunculus.model import Message, Model, ModelError, ToolCall
+from homunculus.model import Message, Model, ModelError, ToolCall, Usage
 from homunculus.tools import Tool, make_result, result_text
 
 
@@ -34,7 +45,7 @@ class ToolStep:
 async def run(
     model: Model,
     tools: list[Tool],
-    activity: ActivityLog,
+    activity: Activity,
     approvals: Approvals,
     history: list[Message],
     text: str,
@@ -53,25 +64,40 @@ async def run(
     by_name = {tool.name: tool for tool in tools}
     schemas = [tool.schema() for tool in tools]
     system: Message = {"role": "system", "content": prompt.system_prompt()}
-    # Every line this turn writes to the activity log carries the same job id, so the
-    # activity screen can show the turn as one piece of work.
-    job = secrets.token_hex(8)
     opening: Message = {"role": "user", "content": text}
     if notice:
         opening["notice"] = True
     turn: list[Message] = [opening]
-    activity.record("message", job=job, text=text, notice=notice)
+    # The whole turn is one trace. Each span below names its parent explicitly, because
+    # the "current span" of a context does not survive the yields of a generator.
+    root = activity.tracer.start_span(
+        ROOT_SPAN,
+        attributes={
+            "gen_ai.operation.name": "invoke_agent",
+            "gen_ai.agent.name": AGENT,
+            "gen_ai.provider.name": model.provider,
+            "gen_ai.request.model": model.name,
+            "gen_ai.conversation.id": activity.conversation_id,
+            "gen_ai.input.messages": input_messages(text),
+            "homunculus.notice": notice,
+        },
+    )
+    parent = trace.set_span_in_context(root)
     try:
         while True:
             parts: list[str] = []
             calls: list[ToolCall] = []
             messages = [system, *history, *turn]
-            async for item in model.stream(messages, schemas):
-                if isinstance(item, ToolCall):
-                    calls.append(item)
-                else:
-                    parts.append(item)
-                    yield item
+            with _model_call(activity, model, parent) as chat:
+                async for item in model.stream(messages, schemas):
+                    if isinstance(item, ToolCall):
+                        calls.append(item)
+                    elif isinstance(item, Usage):
+                        _record_usage(chat, item)
+                    else:
+                        parts.append(item)
+                        yield item
+                chat.set_attribute("gen_ai.output.messages", output_messages("".join(parts), calls))
             reply: Message = {"role": "assistant", "content": "".join(parts)}
             if calls:
                 reply["tool_calls"] = [_as_message(call) for call in calls]
@@ -79,31 +105,54 @@ async def run(
             if not calls:
                 break
             for call in calls:
-                step = _carry_out(call, by_name, activity, approvals, job)
+                step = _carry_out(call, by_name, activity, approvals, parent)
                 turn.append({"role": "tool", "tool_call_id": call.id, "content": step.result})
                 yield step
     except ModelError as error:
-        activity.record("error", job=job, error=str(error))
+        fail(root, error, str(error))
         raise
     except BaseException as error:
         # Anything else that ends the turn early, such as a bug or the operator closing
         # the page, still ends the job, so the activity screen never shows it as running.
-        activity.record("error", job=job, error=_stopped(error))
+        fail(root, error, _stopped(error))
         raise
-    activity.record("reply", job=job, text=reply["content"])
+    root.set_attribute("gen_ai.output.messages", output_messages(reply["content"]))
+    root.end()
     history += turn
 
 
 def _carry_out(
     call: ToolCall,
     by_name: dict[str, Tool],
-    activity: ActivityLog,
+    activity: Activity,
     approvals: Approvals,
-    job: str,
+    parent: Context,
 ) -> ToolStep:
     """Put one tool call through the gate and, if allowed, run it. The step's result is
     what the model sees."""
     started = time.monotonic()
+    span = activity.start_tool(call.name, call.arguments, parent, call_id=call.id)
+    try:
+        answer, result, outcome, request_id = _decide_and_run(call, by_name, approvals, parent)
+    except BaseException as error:
+        fail(span, error, str(error) or type(error).__name__)
+        raise
+    activity.end_tool(span, answer.value, result, outcome, request_id)
+    return ToolStep(
+        name=call.name,
+        arguments=call.arguments,
+        answer=answer.value,
+        result=result,
+        duration_ms=round((time.monotonic() - started) * 1000),
+        outcome=outcome,
+    )
+
+
+def _decide_and_run(
+    call: ToolCall, by_name: dict[str, Tool], approvals: Approvals, parent: Context
+) -> tuple[gate.Answer, str, str, str | None]:
+    """The gate's answer, the result the model sees, the outcome, and the approval
+    request made, if any."""
     answer = gate.decide(call, by_name.get(call.name))
     request_id = None
     if answer is gate.Answer.ACT:
@@ -111,7 +160,13 @@ def _carry_out(
         result, outcome = as_text(done), outcome_of(done)
     elif answer in WAITS_FOR_OPERATOR:
         outcome = "waiting"
-        request = approvals.request(call.name, call.arguments, WAITS_FOR_OPERATOR[answer], job)
+        request = approvals.request(
+            call.name,
+            call.arguments,
+            WAITS_FOR_OPERATOR[answer],
+            traceparent=traceparent_of(parent),
+            tool_call_id=call.id,
+        )
         request_id = request.id
         result = (
             f"Waiting for the operator's approval (request {request.id}). Carry on with other "
@@ -124,24 +179,7 @@ def _carry_out(
     else:
         result = f"Not done: the gate answered '{answer.value}' for this action."
         outcome = "failed"
-    activity.record(
-        "tool",
-        job=job,
-        name=call.name,
-        arguments=call.arguments,
-        answer=answer.value,
-        result=result,
-        outcome=outcome,
-        request=request_id,
-    )
-    return ToolStep(
-        name=call.name,
-        arguments=call.arguments,
-        answer=answer.value,
-        result=result,
-        duration_ms=round((time.monotonic() - started) * 1000),
-        outcome=outcome,
-    )
+    return answer, result, outcome, request_id
 
 
 # Answers that wait for the operator, and the kind of request each one creates. An
@@ -178,6 +216,35 @@ def as_text(result: mcp.CallToolResult) -> str:
 def outcome_of(result: mcp.CallToolResult) -> str:
     """Whether a tool that ran succeeded: "ok", or "failed" when it reported an error."""
     return "failed" if result.is_error else "ok"
+
+
+@contextmanager
+def _model_call(activity: Activity, model: Model, parent: Context) -> Iterator[Span]:
+    """The span of one model call, ended when the call is, with an error status if it
+    failed."""
+    span = activity.tracer.start_span(
+        f"chat {model.name}",
+        context=parent,
+        kind=SpanKind.CLIENT,
+        attributes={
+            "gen_ai.operation.name": "chat",
+            "gen_ai.provider.name": model.provider,
+            "gen_ai.request.model": model.name,
+        },
+    )
+    try:
+        yield span
+    except BaseException as error:
+        fail(span, error, str(error) or type(error).__name__)
+        raise
+    span.end()
+
+
+def _record_usage(span: Span, usage: Usage) -> None:
+    span.set_attribute("gen_ai.usage.input_tokens", usage.input_tokens)
+    span.set_attribute("gen_ai.usage.output_tokens", usage.output_tokens)
+    if usage.cached_input_tokens:
+        span.set_attribute("gen_ai.usage.cache_read.input_tokens", usage.cached_input_tokens)
 
 
 def _stopped(error: BaseException) -> str:
