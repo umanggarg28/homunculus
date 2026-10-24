@@ -1,17 +1,23 @@
 """File tools for the agent's workspace."""
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import mcp_types as mcp
+
 from homunculus.tools import Tool, ToolError
-
-
-def _path_parameter(description: str) -> dict[str, Any]:
-    return {"type": "string", "description": description}
-
 
 # Enough to answer most questions without flooding the model's context.
 MAX_SEARCH_RESULTS = 50
+
+# What each kind of file tool does to its surroundings, in the Model Context Protocol's
+# terms. None of them reaches outside the workspace.
+READS = mcp.ToolAnnotations(read_only_hint=True, open_world_hint=False)
+# write and edit can replace text, and delete removes a file, so all three are destructive.
+REPLACES = mcp.ToolAnnotations(read_only_hint=False, destructive_hint=True, open_world_hint=False)
+# rename never overwrites, so nothing is lost.
+MOVES = mcp.ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=False)
 
 
 def file_tools(workspace: Path) -> list[Tool]:
@@ -19,105 +25,116 @@ def file_tools(workspace: Path) -> list[Tool]:
     return Files(workspace).tools()
 
 
+def _file_tool(
+    name: str,
+    title: str,
+    description: str,
+    arguments: dict[str, str],
+    annotations: mcp.ToolAnnotations,
+    run: Callable[[dict[str, Any]], str],
+    paths: tuple[str, ...] = ("path",),
+) -> Tool:
+    """A file tool whose arguments are all required strings, described by `arguments`."""
+    definition = mcp.Tool(
+        name=name,
+        title=title,
+        description=description,
+        input_schema={
+            "type": "object",
+            "properties": {
+                argument: {"type": "string", "description": text}
+                for argument, text in arguments.items()
+            },
+            "required": list(arguments),
+        },
+        annotations=annotations.model_copy(update={"title": title}),
+    )
+    return Tool(definition, run, workspace_paths=paths)
+
+
 class Files:
     def __init__(self, workspace: Path) -> None:
         self._root = workspace.resolve()
 
     def tools(self) -> list[Tool]:
+        in_workspace = "Path relative to the workspace."
         return [
-            Tool(
+            _file_tool(
                 "read",
+                "Read file",
                 "Read a text file in the workspace. Lines are numbered from 1. "
                 "Use it freely, before asking the operator something a file may answer.",
-                {
-                    "type": "object",
-                    "properties": {"path": _path_parameter("Path relative to the workspace.")},
-                    "required": ["path"],
-                },
+                {"path": in_workspace},
+                READS,
                 self.read,
             ),
-            Tool(
+            _file_tool(
                 "edit",
+                "Edit file",
                 "Replace a piece of text in a workspace file. The old text must appear "
                 "exactly once. Use it when only part of a file needs to change.",
                 {
-                    "type": "object",
-                    "properties": {
-                        "path": _path_parameter("Path relative to the workspace."),
-                        "old": {"type": "string", "description": "The exact text to replace."},
-                        "new": {"type": "string", "description": "The text to put in its place."},
-                    },
-                    "required": ["path", "old", "new"],
+                    "path": in_workspace,
+                    "old": "The exact text to replace.",
+                    "new": "The text to put in its place.",
                 },
+                REPLACES,
                 self.edit,
             ),
-            Tool(
+            _file_tool(
                 "list",
+                "List folder",
                 "List the folders and files in a workspace folder. Folders end with '/'. "
                 "Use it freely to see what the workspace holds.",
-                {
-                    "type": "object",
-                    "properties": {
-                        "path": _path_parameter("Folder relative to the workspace; '.' is the top.")
-                    },
-                    "required": ["path"],
-                },
+                {"path": "Folder relative to the workspace; '.' is the top."},
+                READS,
                 self.list_folder,
             ),
-            Tool(
+            _file_tool(
                 "search",
+                "Search files",
                 "Find lines containing some text, in every file under a workspace folder. "
                 "Matching ignores case. Each result is 'file:line: text'. "
                 "Use it freely to find something before asking the operator.",
                 {
-                    "type": "object",
-                    "properties": {
-                        "path": _path_parameter("Folder to search; '.' is the whole workspace."),
-                        "text": {"type": "string", "description": "The text to look for."},
-                    },
-                    "required": ["path", "text"],
+                    "path": "Folder to search; '.' is the whole workspace.",
+                    "text": "The text to look for.",
                 },
+                READS,
                 self.search,
             ),
-            Tool(
+            _file_tool(
                 "delete",
+                "Delete file",
                 "Delete one file in the workspace. Folders and links cannot be deleted. "
-                "It cannot be undone. Only use it when the operator asked for the file to "
-                "be deleted, or for a file you made that is no longer needed.",
-                {
-                    "type": "object",
-                    "properties": {"path": _path_parameter("Path relative to the workspace.")},
-                    "required": ["path"],
-                },
+                "It cannot be undone, so the operator approves each delete. Only use it "
+                "when the operator asked for the file to be deleted, or for a file you made "
+                "that is no longer needed.",
+                {"path": in_workspace},
+                REPLACES,
                 self.delete,
             ),
-            Tool(
+            _file_tool(
                 "rename",
+                "Move file",
                 "Move or rename one file in the workspace. Never overwrites an existing file. "
                 "Use it when a file needs a new name or place.",
                 {
-                    "type": "object",
-                    "properties": {
-                        "path": _path_parameter("The file to move, relative to the workspace."),
-                        "to": _path_parameter("Its new path, relative to the workspace."),
-                    },
-                    "required": ["path", "to"],
+                    "path": "The file to move, relative to the workspace.",
+                    "to": "Its new path, relative to the workspace.",
                 },
+                MOVES,
                 self.rename,
+                paths=("path", "to"),
             ),
-            Tool(
+            _file_tool(
                 "write",
+                "Write file",
                 "Create or overwrite a text file in the workspace. Use it to save work. "
                 "Overwriting replaces the whole file, so read a file first if it may hold "
                 "something worth keeping.",
-                {
-                    "type": "object",
-                    "properties": {
-                        "path": _path_parameter("Path relative to the workspace."),
-                        "content": {"type": "string", "description": "The full file content."},
-                    },
-                    "required": ["path", "content"],
-                },
+                {"path": in_workspace, "content": "The full file content."},
+                REPLACES,
                 self.write,
             ),
         ]

@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+import mcp_types as mcp
 from fastapi.testclient import TestClient
 from scripted_model import ScriptedModel
 
@@ -15,6 +16,9 @@ from homunculus.model import Message, ModelError, ToolCall
 from homunculus.server import create_app
 from homunculus.tools import Tool
 from homunculus.tools.files import file_tools
+
+# A stand-in outward tool. It has no annotations, so by the protocol's defaults it asks.
+SEND_EMAIL = Tool(mcp.Tool(name="send_email", input_schema={"type": "object"}), lambda _: "Sent.")
 
 
 def server(model: ScriptedModel, tmp_path: Path, *extra: Tool) -> TestClient:
@@ -108,7 +112,7 @@ def test_a_failed_reply_shows_as_a_job_that_ended_in_an_error(tmp_path: Path) ->
 def test_the_turn_that_tells_the_agent_a_decision_is_marked_as_a_notice(tmp_path: Path) -> None:
     send = ToolCall(id="call_1", name="send_email", arguments='{"to": "sam@example.com"}')
     model = ScriptedModel([[send], ["I have asked."], ["Sent, thanks."]])
-    client = server(model, tmp_path)
+    client = server(model, tmp_path, SEND_EMAIL)
     client.post("/api/chat", json={"message": "Email Sam"})
     [request] = client.get("/api/approvals").json()
 
@@ -122,10 +126,9 @@ def test_the_turn_that_tells_the_agent_a_decision_is_marked_as_a_notice(tmp_path
 
 
 def test_an_approved_action_shows_in_the_job_that_asked_for_it(tmp_path: Path) -> None:
-    send_email = Tool("send_email", "Stand-in send_email.", {"type": "object"}, lambda _: "Sent.")
     send = ToolCall(id="call_1", name="send_email", arguments='{"to": "sam@example.com"}')
     model = ScriptedModel([[send], ["I have asked."], ["Sent, thanks."]])
-    client = server(model, tmp_path, send_email)
+    client = server(model, tmp_path, SEND_EMAIL)
     client.post("/api/chat", json={"message": "Email Sam"})
     [request] = client.get("/api/approvals").json()
 

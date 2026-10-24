@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import mcp_types as mcp
 from fastapi.testclient import TestClient
 from scripted_model import ScriptedModel, SlowScriptedModel
 
@@ -98,7 +99,10 @@ def test_only_the_api_fields_of_a_message_are_sent_to_the_model(tmp_path: Path) 
             return httpx.Response(200, text=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n")
         return httpx.Response(200, text=openrouter_stream("Done."))
 
-    send = Tool("send_email", "Send an email.", {"type": "object"}, lambda arguments: "Sent.")
+    send = Tool(
+        mcp.Tool(name="send_email", description="Send an email.", input_schema={"type": "object"}),
+        lambda arguments: "Sent.",
+    )
     client = server(openrouter_model(network), tmp_path, [send])
     chat(client, "Email Sam")
     [request] = client.get("/api/approvals").json()

@@ -132,9 +132,8 @@ def create_app(
         # Inside the turn lock, so the action never runs alongside a chat turn's own tools,
         # and in a worker thread, so a slow tool does not stall other requests.
         async with turn:
-            result = await asyncio.to_thread(
-                loop.run_tool, decided.tool, decided.arguments, by_name
-            )
+            done = await asyncio.to_thread(loop.run_tool, decided.tool, decided.arguments, by_name)
+        result = loop.as_text(done)
         decided = approvals.record_result(approval_id, result)
         activity.record(
             "tool",
@@ -143,7 +142,7 @@ def create_app(
             arguments=decided.arguments,
             answer="act",
             result=result,
-            outcome=loop.outcome_of(result),
+            outcome=loop.outcome_of(done),
             request=approval_id,
         )
         background.add_task(

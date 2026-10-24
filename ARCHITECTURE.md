@@ -10,8 +10,8 @@ Homunculus is one always-on process that holds a small model loop, a few general
 | `loop` | Ask the model, run the tool it asks for, repeat until done | Full loop |
 | `prompt` | What the model is told at the start of every turn | Fixed instructions in `prompt.md`, shipped with the code and the same every turn; layers from memory and skills are planned |
 | `model` | One streaming call to the model provider | Streaming text and tool calls, privacy routing, error reporting |
-| `gate` | The answer for every proposed action | Workspace file tools act when the path stays in the workspace; anything else asks; unreadable calls are refused |
-| `tools` | Plain functions the model can ask to run | `read`, `write`, `edit`, `list`, `search`, `delete`, `rename` in the workspace |
+| `gate` | The answer for every proposed action | Decides from each tool's MCP annotations: read-only acts, outward or unannotated asks, destructive asks except `write` and `edit`; paths must stay in the workspace; unknown tools and unreadable calls are refused |
+| `tools` | Plain functions the model can ask to run, each described as an MCP `Tool` with annotations | `read`, `write`, `edit`, `list`, `search`, `delete`, `rename` in the workspace; results are MCP `CallToolResult`s |
 | `activity` | Append-only record of every step | Written by the loop and the server, never by a tool; kept outside the workspace; grouped into jobs with feedback |
 | `approvals` | Requests waiting for the operator | Saved to the data directory; approve, decline, or done for hand-offs |
 | `skills` | Skill folders in the Agent Skills format | Planned |
@@ -27,7 +27,7 @@ Each module has one job. A new module needs a stated reason. `activity` is separ
 3. `loop` builds the message list: the system message from `prompt.system_prompt()`, the earlier turns, then the messages of this turn so far. Each tool's description says when to use it.
 4. `model` sends that list and the tool schemas to OpenRouter with `stream: true` and the fixed privacy routing. It yields text chunks as they arrive, and each tool call once its fragments are complete.
 5. `loop` passes each text chunk up as it arrives. `server` wraps each one as a `delta` server-sent event.
-6. If the model asked for tools, `loop` puts each call through `gate.decide`. Allowed calls run; the rest are not run. Either way the result goes into the turn as a `tool` message, the step is recorded in the activity log, `loop` yields a `ToolStep` that `server` sends as a `tool` event, and the loop goes back to step 3.
+6. If the model asked for tools, `loop` puts each call through `gate.decide`, with the definition of the tool it names. Allowed calls run; the rest are not run. Either way the result goes into the turn as a `tool` message, the step is recorded in the activity log, `loop` yields a `ToolStep` that `server` sends as a `tool` event, and the loop goes back to step 3.
 7. When the model answers without asking for a tool, `loop` adds the whole turn to the history, and `server` sends `done`.
 
 If the model call fails at any point, `model` raises `ModelError`, `server` sends an `error` event with a readable message, and the history is left unchanged.
@@ -118,7 +118,7 @@ Tests sit at agreed seams and fake only the outside world.
 | Seam | What it covers | Fakes |
 |---|---|---|
 | Loop | Streaming, when the loop stops, history handling, and every tool through a scripted tool call | The model (a scripted stand-in) |
-| Gate | Each row of the table, and refusal when a call cannot be read | Nothing |
+| Gate | Each answer from annotations, the protocol's defaults for a missing hint, the workspace fence, hand-offs, unknown tools, and refusal when a call cannot be read | Nothing |
 | Server HTTP API: activity | Jobs grouped from the log, feedback kept and replaced by a later rating, failed and cut-short jobs, approved actions shown in the job that asked, decision follow-ups marked as notices | The model |
 | Server HTTP API: prompt | The fixed instructions come first, in order, and are the same on every turn; every tool says when to use it | The model |
 | Server HTTP API: approvals | Waiting instead of running, approve, decline, hand-off done, decided once, survives a restart, notices | The model; stand-in tools that record their calls |

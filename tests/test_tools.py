@@ -3,14 +3,17 @@
 import json
 from pathlib import Path
 
+import mcp_types as mcp
 import pytest
+from fastapi.testclient import TestClient
 from scripted_model import ScriptedModel
 
 from homunculus import loop
 from homunculus.activity import ActivityLog
 from homunculus.approvals import Approvals
 from homunculus.model import Message, ToolCall
-from homunculus.tools import Tool, ToolError
+from homunculus.server import create_app
+from homunculus.tools import Tool, result_text
 from homunculus.tools.files import file_tools
 
 
@@ -90,8 +93,10 @@ def test_the_file_tools_refuse_a_path_outside_the_workspace_on_their_own(
     """A second fence behind the gate, so one mistake in either cannot open the workspace."""
     write = next(tool for tool in file_tools(workspace) if tool.name == "write")
 
-    with pytest.raises(ToolError, match="is outside the workspace"):
-        write.call({"path": path, "content": "escaped"})
+    result = write.call({"path": path, "content": "escaped"})
+
+    assert result.is_error
+    assert "is outside the workspace" in result_text(result)
     assert not (tmp_path / "outside.md").exists()
 
 
@@ -110,9 +115,7 @@ async def test_no_tool_can_reach_the_activity_log(tmp_path: Path, workspace: Pat
     ]
 
 
-async def test_an_allowed_tool_that_does_not_exist_tells_the_model(
-    tmp_path: Path, workspace: Path
-) -> None:
+async def test_a_tool_that_does_not_exist_is_refused(tmp_path: Path, workspace: Path) -> None:
     model = ScriptedModel(
         [[ToolCall(id="call_1", name="search", arguments='{"path": "."}')], ["Sorry."]]
     )
@@ -122,7 +125,7 @@ async def test_an_allowed_tool_that_does_not_exist_tells_the_model(
 
     _ = [chunk async for chunk in loop.run(model, no_tools, activity, approvals, [], "Search")]
 
-    assert tool_result(model) == "Error: there is no tool named search."
+    assert tool_result(model) == "Not done: the gate answered 'refuse' for this action."
 
 
 async def test_a_link_that_leads_outside_the_workspace_is_refused(
@@ -187,7 +190,10 @@ async def test_an_action_that_needs_approval_is_not_run(tmp_path: Path, workspac
         ran.append(arguments)
         return "Sent."
 
-    send = Tool("send_email", "Send an email.", {"type": "object"}, send_email)
+    send = Tool(
+        mcp.Tool(name="send_email", description="Send an email.", input_schema={"type": "object"}),
+        send_email,
+    )
     model = ScriptedModel([[tool_call("send_email", to="someone@example.com")], ["I will ask."]])
     activity = ActivityLog(tmp_path / "activity.jsonl")
     approvals = Approvals(tmp_path / "approvals.json")
@@ -229,25 +235,29 @@ async def test_a_tool_that_fails_unexpectedly_is_reported_to_the_model(workspace
     assert reply == "Retrying."
 
 
-async def test_deleting_removes_a_file(workspace: Path) -> None:
-    (workspace / "old.md").write_text("stale")
-    model = ScriptedModel([[tool_call("delete", path="old.md")], ["Gone."]])
+def approved_delete(workspace: Path, path: str) -> str:
+    """Ask the agent to delete `path`, approve the request, and return the result."""
+    model = ScriptedModel([[tool_call("delete", path=path)], ["I have asked."], ["Noted."]])
+    app = create_app(
+        model,
+        file_tools(workspace),
+        ActivityLog(workspace.parent / "activity.jsonl"),
+        Approvals(workspace.parent / "approvals.json"),
+    )
+    client = TestClient(app)
+    client.post("/api/chat", json={"message": f"Delete {path}"})
+    [request] = client.get("/api/approvals").json()
+    return str(client.post(f"/api/approvals/{request['id']}/approve").json()["result"])
 
-    await run_job(model, workspace, "Delete old.md")
 
-    assert not (workspace / "old.md").exists()
-    assert tool_result(model) == "Deleted old.md."
-
-
-async def test_deleting_a_folder_is_refused(workspace: Path) -> None:
+def test_deleting_a_folder_is_refused_even_when_approved(workspace: Path) -> None:
     (workspace / "notes").mkdir()
     (workspace / "notes" / "tea.md").write_text("Green")
-    model = ScriptedModel([[tool_call("delete", path="notes")], ["Kept."]])
 
-    await run_job(model, workspace, "Delete notes")
+    result = approved_delete(workspace, "notes")
 
     assert (workspace / "notes" / "tea.md").exists()
-    assert tool_result(model) == "Error: notes is a folder; only single files can be deleted."
+    assert result == "Error: notes is a folder; only single files can be deleted."
 
 
 async def test_renaming_moves_a_file(workspace: Path) -> None:
@@ -272,12 +282,11 @@ async def test_renaming_never_overwrites_a_file(workspace: Path) -> None:
     assert tool_result(model) == "Error: b.md already exists; rename will not overwrite it."
 
 
-async def test_deleting_a_link_is_refused_and_the_real_file_is_kept(workspace: Path) -> None:
+def test_deleting_a_link_is_refused_and_the_real_file_is_kept(workspace: Path) -> None:
     (workspace / "real.md").write_text("keep me")
     (workspace / "link.md").symlink_to(workspace / "real.md")
-    model = ScriptedModel([[tool_call("delete", path="link.md")], ["Kept."]])
 
-    await run_job(model, workspace, "Delete link.md")
+    result = approved_delete(workspace, "link.md")
 
     assert (workspace / "real.md").read_text() == "keep me"
-    assert tool_result(model) == "Error: link.md is a link; links cannot be deleted or renamed."
+    assert result == "Error: link.md is a link; links cannot be deleted or renamed."
