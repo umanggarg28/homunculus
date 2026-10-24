@@ -111,10 +111,12 @@ def create_app(
 
     @app.get("/api/turns/{turn_id}/events")
     async def turn_events(
-        turn_id: str, last_event_id: int = Header(default=0, alias="Last-Event-ID")
+        turn_id: str, last_event_id: str = Header(default="", alias="Last-Event-ID")
     ) -> StreamingResponse:
-        """A turn's events from the start, or after `Last-Event-ID`, then live."""
-        return watch(find(turn_id), after=last_event_id)
+        """A turn's events from the start, or after `Last-Event-ID`, then live. The
+        standard treats the id as text; one this server did not send starts over."""
+        after = int(last_event_id) if last_event_id.isdecimal() else 0
+        return watch(find(turn_id), after=after)
 
     @app.post("/api/turns/{turn_id}/stop", status_code=202)
     async def stop_turn(turn_id: str) -> dict[str, Any]:
@@ -122,7 +124,7 @@ def create_app(
         running = find(turn_id)
         if running.done:
             raise HTTPException(status_code=409, detail=f"turn {turn_id} has already ended")
-        Turns.stop(running)
+        running.stop()
         return {"id": running.id}
 
     @app.get("/api/approvals")

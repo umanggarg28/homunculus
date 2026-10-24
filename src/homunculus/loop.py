@@ -26,7 +26,6 @@ from homunculus.activity import (
 from homunculus.approvals import Approvals, Kind
 from homunculus.model import Message, Model, ModelError, ToolCall, Usage
 from homunculus.tools import Tool, make_result, result_text
-from homunculus.turns import STOPPED_BY_OPERATOR
 
 
 @dataclass(frozen=True)
@@ -121,9 +120,9 @@ async def run(
         fail(root, error, str(error))
         raise
     except BaseException as error:
-        # Anything else that ends the turn early, such as a bug or the operator closing
-        # the page, still ends the job, so the activity screen never shows it as running.
-        fail(root, error, _stopped(error))
+        # Anything else that ends the turn early, such as a bug or the operator pressing
+        # stop, still ends the job, so the activity screen never shows it as running.
+        fail(root, error, stopped_message(error))
         raise
     root.set_attribute("gen_ai.output.messages", output_messages(reply["content"]))
     root.end()
@@ -256,8 +255,13 @@ def _record_usage(span: Span, usage: Usage) -> None:
         span.set_attribute("gen_ai.usage.cache_read.input_tokens", usage.cached_input_tokens)
 
 
-def _stopped(error: BaseException) -> str:
-    # A cancellation's own text names internal tasks, which mean nothing to the operator.
+# The reason given when the operator stops a turn, so its record can say who stopped it.
+STOPPED_BY_OPERATOR = "stopped by the operator"
+
+
+def stopped_message(error: BaseException) -> str:
+    """Why a turn ended early, in words for the operator. A cancellation's own text names
+    internal tasks, which mean nothing to the operator."""
     if isinstance(error, asyncio.CancelledError) and error.args == (STOPPED_BY_OPERATOR,):
         return "The turn was stopped by the operator."
     if isinstance(error, asyncio.CancelledError | GeneratorExit):

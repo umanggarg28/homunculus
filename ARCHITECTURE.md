@@ -46,6 +46,8 @@ If the model call fails at any point, `model` raises `ModelError`, `server` send
 | `error` | `{"message": "..."}` | The reply failed, and why |
 | `stopped` | `{}` | The operator stopped the turn |
 
+Every stream ends with one of `done`, `error` or `stopped`. A turn that fails for any other reason, such as a tool bug or the program shutting down, ends with `error`, in the same words its trace records.
+
 A turn runs on the server whoever is watching, as OpenAI's background responses, LangGraph's background runs and the Vercel AI SDK's resumable streams do. Rejoining follows the server-sent events standard: a page sends the last `id` it saw as `Last-Event-ID` and gets only what came after.
 
 | Endpoint | Effect |

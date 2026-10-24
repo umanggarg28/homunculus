@@ -38,7 +38,11 @@ function parseSingleEvent(block: string): ParsedSseEvent | null {
   for (const line of lines) {
     if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
     else if (line.startsWith("event:")) event = line.slice(6).trim();
-    else if (line.startsWith("id:")) id = line.slice(3).trim();
+    // The standard drops one space after the colon, and ignores an id holding NULL.
+    else if (line.startsWith("id:")) {
+      const value = line.slice(3).replace(/^ /, "");
+      if (!value.includes("\0")) id = value;
+    }
   }
   if (!dataLines.length && !event) return null;
   return { id, event, data: dataLines.join("\n") };

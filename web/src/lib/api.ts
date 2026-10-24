@@ -70,8 +70,6 @@ async function sendDecision(id: string, action: "approve" | "deny" | "done", not
 }
 
 export const api = {
-  /** Send a message. The reply streams back as server-sent events:
-   *  `delta` (text), `tool` (one tool step), then `done` or `error`. */
   /** Start a turn and watch its events. Closing this stream does not stop the turn. */
   chat(message: string, signal?: AbortSignal): Promise<Response> {
     return fetch("/api/chat", {
@@ -93,10 +91,9 @@ export const api = {
   /** A turn's events after `lastEventId`, then live: the server-sent events way to
    *  rejoin or reconnect. */
   turnEvents(id: string, lastEventId: number, signal?: AbortSignal): Promise<Response> {
-    return fetch(`/api/turns/${id}/events`, {
-      headers: { "Last-Event-ID": String(lastEventId) },
-      signal,
-    });
+    // Sent only once an event has been seen, as a browser's EventSource does.
+    const headers: Record<string, string> = lastEventId ? { "Last-Event-ID": String(lastEventId) } : {};
+    return fetch(`/api/turns/${id}/events`, { headers, signal });
   },
 
   /** Ask the server to stop a running turn. */
