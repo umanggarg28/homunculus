@@ -13,7 +13,7 @@ There is one chapter per module, in the order the modules were built. Every chap
 
 Read a chapter with the code open beside it. Each one takes about fifteen minutes.
 
-References to code are links to the exact line, followed by the code they point at, for example [loop.py:67](src/homunculus/loop.py#L67) `messages = [{"role": "system", ...}, *history, *turn]`. Click one to jump there. A check runs on every pull request and fails if any reference no longer matches its line, so they stay correct as the code changes.
+References to code are links to the exact line, followed by the code they point at, for example [loop.py:66](src/homunculus/loop.py#L66) `messages = [system, *history, *turn]`. Click one to jump there. A check runs on every pull request and fails if any reference no longer matches its line, so they stay correct as the code changes.
 
 Diagrams are plain text, so they read the same in any editor.
 
@@ -28,6 +28,7 @@ Diagrams are plain text, so they read the same in any editor.
 6. [The activity log](#6-the-activity-log)
 7. [The web console](#7-the-web-console)
 8. [Approvals](#8-approvals)
+9. [The prompt](#9-the-prompt)
 
 ---
 
@@ -82,7 +83,7 @@ Chat models do not take one string. They take a **list of messages**, each with 
 
 | Role | Who wrote it | Example |
 |---|---|---|
-| `system` | The program, before the conversation starts | "You are Homunculus, a personal agent..." |
+| `system` | The program, before the conversation starts | "## Who you are\nYou are Homunculus, a personal agent..." |
 | `user` | You | "I like tea." |
 | `assistant` | The model, in an earlier turn | "Noted." |
 
@@ -122,7 +123,7 @@ history = []                  # a list of message dicts; empty, since this is th
 text = "I like tea."          # a str
 ```
 
-**The opening message, then `turn`**: [loop.py:58-61](src/homunculus/loop.py#L58-L61) `opening: Message = ... turn: list[Message] = [opening]`
+**The opening message, then `turn`**: [loop.py:57-60](src/homunculus/loop.py#L57-L60) `opening: Message = ... turn: list[Message] = [opening]`
 
 ```python
 opening = {"role": "user", "content": "I like tea."}   # one message: a dict with two str keys
@@ -133,18 +134,18 @@ turn = [opening]                                         # a list of 1 message
 
 `turn` collects everything that happens in this one exchange. With tools, it grows to hold the tool calls and their results too.
 
-**[loop.py:67](src/homunculus/loop.py#L67) `messages = [{"role": "system", ...}, *history, *turn]`**
+**[loop.py:66](src/homunculus/loop.py#L66) `messages = [system, *history, *turn]`**
 
-`*history` and `*turn` spread their contents into the new list. `history` is empty, so `messages` is a list of 2 dicts:
+`system` is the system message, built once at the start of `run` from the fixed instructions (chapter 9). `*history` and `*turn` spread their contents into the new list. `history` is empty, so `messages` is a list of 2 dicts:
 
 ```python
-messages[0] = {"role": "system", "content": "You are Homunculus, a personal agent working on behalf of your operator."}
+messages[0] = {"role": "system", "content": "## Who you are\nYou are Homunculus, a personal agent. ..."}
 messages[1] = {"role": "user",   "content": "I like tea."}
 ```
 
 Read `messages[1]` aloud: "the user said: I like tea."
 
-**[loop.py:68](src/homunculus/loop.py#L68) `model.stream(messages, schemas)`** returns an async iterator. Each item is either a piece of text (`str`) or a finished tool request (`ToolCall`, chapter 4). Suppose the model's reply arrives as one piece of text:
+**[loop.py:67](src/homunculus/loop.py#L67) `model.stream(messages, schemas)`** returns an async iterator. Each item is either a piece of text (`str`) or a finished tool request (`ToolCall`, chapter 4). Suppose the model's reply arrives as one piece of text:
 
 ```python
 model.stream(messages, schemas) -> "Noted."      # yields 1 str, then ends
@@ -174,20 +175,20 @@ When a reply arrives in two pieces, `"Good "` and `"morning."`, each pull goes l
 
 `parts` is the loop's private notepad. It exists only so the full reply can be glued together at the end, and nothing outside `run` ever sees it.
 
-**[loop.py:74](src/homunculus/loop.py#L74) `reply: Message = {"role": "assistant", "content": "".join(parts)}`**
+**[loop.py:73](src/homunculus/loop.py#L73) `reply: Message = {"role": "assistant", "content": "".join(parts)}`**
 
-`"".join(["Noted."])` is `"Noted."`, so `reply` is `{"role": "assistant", "content": "Noted."}`. [loop.py:77](src/homunculus/loop.py#L77) `turn.append(reply)` appends it, and `turn` is now a list of 2.
+`"".join(["Noted."])` is `"Noted."`, so `reply` is `{"role": "assistant", "content": "Noted."}`. [loop.py:76](src/homunculus/loop.py#L76) `turn.append(reply)` appends it, and `turn` is now a list of 2.
 
-**[loop.py:78-79](src/homunculus/loop.py#L78-L79) `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
+**[loop.py:77-78](src/homunculus/loop.py#L77-L78) `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
 
-**[loop.py:93](src/homunculus/loop.py#L93) `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
+**[loop.py:92](src/homunculus/loop.py#L92) `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
 
 ```python
 history[0] = {"role": "user",      "content": "I like tea."}
 history[1] = {"role": "assistant", "content": "Noted."}
 ```
 
-The system message is **not** stored in `history`. It is added fresh on every call, so changing `SYSTEM_PROMPT` affects every later turn.
+The system message is **not** stored in `history`. It is built at the start of every turn by `prompt.system_prompt()` (chapter 9), so changing the instructions affects every later turn.
 
 **Now your second message, `"What do I like?"`.** `history` holds the 2 dicts above, so `messages` is a list of 4:
 
@@ -200,9 +201,9 @@ messages[3] == {"role": "user",      "content": "What do I like?"}
 
 The model sees the whole exchange and can answer "tea". That is the entire mechanism of conversation memory.
 
-**Where each piece is used.** `parts` and `calls` are rebuilt on every pass of the `while` loop. `turn` lives for one call to `run`. `history` outlives the call: the server owns it, and `run` only adds to it. `SYSTEM_PROMPT` is read by `run` and never stored anywhere.
+**Where each piece is used.** `parts` and `calls` are rebuilt on every pass of the `while` loop. `turn` lives for one call to `run`. `history` outlives the call: the server owns it, and `run` only adds to it. `system`, the system message, is built once per call to `run` and never stored anywhere.
 
-**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so [loop.py:93](src/homunculus/loop.py#L93) `history += turn` never runs and `history` stays as it was. On the way out, [loop.py:84-86](src/homunculus/loop.py#L84-L86) `except ModelError as error: ... raise` record the error in the activity log and pass it on. A failed turn leaves no half-finished reply in the conversation.
+**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so [loop.py:92](src/homunculus/loop.py#L92) `history += turn` never runs and `history` stays as it was. On the way out, [loop.py:83-85](src/homunculus/loop.py#L83-L85) `except ModelError as error: ... raise` record the error in the activity log and pass it on. A failed turn leaves no half-finished reply in the conversation.
 
 ### The test
 
@@ -230,7 +231,7 @@ The other loop tests say: the loop streams the reply and calls the model exactly
 
 ### Change it yourself
 
-1. In `loop.py`, make the history update happen **before** the model is called. Add `history += turn` on a new line just above [loop.py:63](src/homunculus/loop.py#L63) `try:`.
+1. In `loop.py`, make the history update happen **before** the model is called. Add `history += turn` on a new line just above the `try:` in [loop.py:61-62](src/homunculus/loop.py#L61-L62) `activity.record("message", ...) ... try:`.
 2. Run `uv run pytest tests/test_loop.py`.
 3. Two tests fail. Read their failure messages. One shows your message appearing twice in the list sent to the model. The other shows a failed turn leaving your message behind in `history`.
 4. Undo the change and run the tests again to see them pass.
@@ -560,7 +561,7 @@ Then it calls the model again with both added to the list. That is the loop's se
 
 You send `"Note that I like green tea."`. `tools` holds the seven file tools for the workspace, `~/Library/Application Support/homunculus/workspace` on a Mac.
 
-**[loop.py:53-54](src/homunculus/loop.py#L53-L54) `by_name = ... schemas = ...`** prepare the tools two ways:
+**[loop.py:51-52](src/homunculus/loop.py#L51-L52) `by_name = ... schemas = ...`** prepare the tools two ways:
 
 ```
 by_name = {"read": <Tool>, "write": <Tool>, ..., "rename": <Tool>}       a dict of 7, name to Tool
@@ -575,11 +576,11 @@ schemas = [{"type": "function", "function": {"name": "read", ...}}, ...]   a lis
 ToolCall(id="call_1", name="write", arguments='{"path": "tea.md", "content": "Green"}')
 ```
 
-`isinstance(item, ToolCall)` is true, so it goes into `calls` ([loop.py:70](src/homunculus/loop.py#L70) `calls.append(item)`), not `parts`. Nothing is yielded to you. `parts` stays `[]`.
+`isinstance(item, ToolCall)` is true, so it goes into `calls` ([loop.py:69](src/homunculus/loop.py#L69) `calls.append(item)`), not `parts`. Nothing is yielded to you. `parts` stays `[]`.
 
-**[loop.py:74-77](src/homunculus/loop.py#L74-L77) `reply: Message = ... turn.append(reply)`** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
+**[loop.py:73-76](src/homunculus/loop.py#L73-L76) `reply: Message = ... turn.append(reply)`** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
 
-**[loop.py:78](src/homunculus/loop.py#L78) `if not calls:`** is false, because `calls` is not empty, so there is no `break`. **[loop.py:81](src/homunculus/loop.py#L81) `step = _carry_out(...)`** hands the call to `_carry_out`:
+**[loop.py:77](src/homunculus/loop.py#L77) `if not calls:`** is false, because `calls` is not empty, so there is no `break`. **[loop.py:80](src/homunculus/loop.py#L80) `step = _carry_out(...)`** hands the call to `_carry_out`:
 
 ```
 gate.decide(call)                    -> Answer.ACT                      (chapter 5)
@@ -591,7 +592,7 @@ by_name["write"].call({...})         -> "Wrote tea.md."                 a str
 
 `activity.record("tool", job=job, name="write", arguments=..., answer="act", result="Wrote tea.md.", outcome="ok")` appends one line to the activity log, and `_carry_out` returns the result.
 
-**[loop.py:82](src/homunculus/loop.py#L82) `turn.append({"role": "tool", ...})`** adds the tool message, and [loop.py:83](src/homunculus/loop.py#L83) `yield step` yields the step as a `ToolStep`, which the server sends to you as a `tool` event (chapter 3). `turn` is now a list of 3:
+**[loop.py:81](src/homunculus/loop.py#L81) `turn.append({"role": "tool", ...})`** adds the tool message, and [loop.py:82](src/homunculus/loop.py#L82) `yield step` yields the step as a `ToolStep`, which the server sends to you as a `tool` event (chapter 3). `turn` is now a list of 3:
 
 ```
 turn[0] = {"role": "user",      "content": "Note that I like green tea."}
@@ -601,7 +602,7 @@ turn[2] = {"role": "tool",      "tool_call_id": "call_1", "content": "Wrote tea.
 
 Read `turn[2]` aloud: "the result of request call_1 was: Wrote tea.md."
 
-**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so [loop.py:79](src/homunculus/loop.py#L79) `break` ends the loop. `turn` ends as a list of 4, and [loop.py:93](src/homunculus/loop.py#L93) `history += turn` adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
+**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so [loop.py:78](src/homunculus/loop.py#L78) `break` ends the loop. `turn` ends as a list of 4, and [loop.py:92](src/homunculus/loop.py#L92) `history += turn` adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
 
 **How the real model streams a tool call.** OpenRouter sends the request in pieces, each tagged with an `index` saying which call it belongs to:
 
@@ -671,7 +672,7 @@ An agent that works by itself will sometimes propose something it should not do:
 
 ### The idea
 
-**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs ([loop.py:106](src/homunculus/loop.py#L106) `answer = gate.decide(call)`). It returns one of five answers:
+**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs ([loop.py:105](src/homunculus/loop.py#L105) `answer = gate.decide(call)`). It returns one of five answers:
 
 | Answer | Meaning |
 |---|---|
@@ -787,7 +788,7 @@ record("tool", job="9f3c41d2a07be815", name="write", arguments='{"path": "tea.md
 record("reply", job="9f3c41d2a07be815", text="Saved.")
 ```
 
-The first comes from [loop.py:62](src/homunculus/loop.py#L62) `activity.record("message", job=job, text=text, notice=notice)`, the second from `_carry_out`, and the third from [loop.py:92](src/homunculus/loop.py#L92) `activity.record("reply", job=job, text=reply["content"])`. Each carries the same `job` id, a random 16-character name made at the start of the turn, so the activity screen can group the three lines as one piece of work.
+The first comes from [loop.py:61](src/homunculus/loop.py#L61) `activity.record("message", job=job, text=text, notice=notice)`, the second from `_carry_out`, and the third from [loop.py:91](src/homunculus/loop.py#L91) `activity.record("reply", job=job, text=reply["content"])`. Each carries the same `job` id, a random 16-character name made at the start of the turn, so the activity screen can group the three lines as one piece of work.
 
 `record(kind, **details)` builds one dict: the current time in UTC, the kind, then every detail passed in. For the second call:
 
@@ -801,7 +802,7 @@ entry = {"time": "2026-10-21T09:15:02.481Z", "kind": "tool", "job": "9f3c41d2a07
 
 `entries()` reads them back: it splits the file into lines and parses each with `json.loads`, giving a list of 3 dicts. Read `entries()[1]` aloud: "at this time, the tool write was proposed with these arguments; the gate said act; the result was Wrote tea.md."
 
-If the model call had failed instead, the third line would be `{"kind": "error", "job": "9f3c41d2a07be815", "error": "Model stopped mid-reply: ..."}`, and there would be no reply line. Anything else that ends a turn early, such as a bug or you closing the page mid-reply, is caught by [loop.py:87](src/homunculus/loop.py#L87) `except BaseException as error:` and also writes an error line, for example `"The turn stopped before it finished (RuntimeError: a bug)."`, then lets the failure carry on. Closing the page cancels the turn, and that line reads `"The turn stopped before it finished: the connection closed."`, because the cancellation's own text only names internal tasks. So every job ends with a reply or an error, unless the whole process is killed.
+If the model call had failed instead, the third line would be `{"kind": "error", "job": "9f3c41d2a07be815", "error": "Model stopped mid-reply: ..."}`, and there would be no reply line. Anything else that ends a turn early, such as a bug or you closing the page mid-reply, is caught by [loop.py:86](src/homunculus/loop.py#L86) `except BaseException as error:` and also writes an error line, for example `"The turn stopped before it finished (RuntimeError: a bug)."`, then lets the failure carry on. Closing the page cancels the turn, and that line reads `"The turn stopped before it finished: the connection closed."`, because the cancellation's own text only names internal tasks. So every job ends with a reply or an error, unless the whole process is killed.
 
 ### From lines to jobs
 
@@ -1082,7 +1083,7 @@ loop.run(..., text='Approved: request 04fdba, send_email {"to": ...}. Result: Se
 
 **If the server stops mid-action**, a request can be left approved with no result. On the next start, `Approvals.mark_interrupted` gives each such request the result `Unknown: the server stopped while this action was running, so it may or may not have run.` Nothing can tell which happened, so the record says exactly that.
 
-**The notice.** [loop.py:58-60](src/homunculus/loop.py#L58-L60) `opening: Message = ... opening["notice"] = True` build the opening message with `"notice": True`. It is stored in `history` with that mark. Before sending, `model.py` keeps only `role`, `content`, `tool_calls` and `tool_call_id`, so OpenRouter receives a plain user message. `GET /api/history` passes the mark on, and the chat shows the line under DECIDED instead of YOU.
+**The notice.** [loop.py:57-59](src/homunculus/loop.py#L57-L59) `opening: Message = ... opening["notice"] = True` build the opening message with `"notice": True`. It is stored in `history` with that mark. Before sending, `model.py` keeps only `role`, `content`, `tool_calls` and `tool_call_id`, so OpenRouter receives a plain user message. `GET /api/history` passes the mark on, and the chat shows the line under DECIDED instead of YOU.
 
 **Where each value lives.** The request lives in `approvals.json` in the data directory and is kept there as a record after it is decided. The notice lives in `history`. The tool's result is in three places: on the request, in the activity log, and in the notice the agent read.
 
@@ -1121,6 +1122,87 @@ In plain English: "When the agent asks to send an email and I approve it, the em
 3. Two tests fail, the approve test among them: the tool ran with arguments you did not approve. The request stores the arguments it was given so that this cannot happen.
 4. Undo the change.
 
+
+---
+
+## 9. The prompt
+
+Code: `src/homunculus/prompt.py`, and the tool descriptions in `src/homunculus/tools/files.py`. Tests: `tests/test_prompt.py`.
+
+### The problem
+
+You type "Email Sam". Sam who? Saying what? A good assistant asks. A careless one guesses, writes an email you never wrote, and sends it in your name. Until this chapter, the only instruction the model had was one sentence: "You are Homunculus, a personal agent working on behalf of your operator." Whether it asked or guessed depended only on how the model was trained. Swap the model and the behaviour could change without any warning.
+
+The rules that must hold on every task have to be written down by the program and sent every time.
+
+### The idea
+
+**Fixed instructions, owned by the program.** Current personal agents build their prompt in layers. [OpenClaw](https://docs.openclaw.ai/concepts/system-prompt) starts with sections it writes itself, such as "Execution Bias" and "Care", then adds the user's own files, then a list of skills. Homunculus does the same. This chapter builds the first layer. Later tickets add your profile and the wiki index (#11) and the skill list (#15) after it.
+
+**Rules for every task belong in these instructions.** A skill is read only when the model decides it fits the task. "Ask before guessing" fits every task, so it cannot depend on that choice. Skills are for how to do one kind of work, such as the tone you like in emails.
+
+**Each tool says when to use it.** [OpenAI's GPT-5 prompting guide](https://developers.openai.com/cookbook/examples/gpt-5/gpt-5_prompting_guide) suggests a threshold for asking per tool: a payment tool should ask at the slightest doubt, a search tool almost never. Tool descriptions are sent on every call too, so each one carries its own rule. `read` says "Use it freely". `delete` says it cannot be undone, and should only be used when you asked for the file to be deleted, or for a file the agent made that is no longer needed.
+
+**The same text every turn.** Providers can reuse their work on the start of a prompt if it has not changed since the last call, which is faster and cheaper. So the fixed part holds nothing that changes, not even the time.
+
+### A picture
+
+```
+ system message, built by prompt.system_prompt()
+ ┌──────────────────────────────────────────┐
+ │ ## Who you are                           │  fixed, from prompt.FIXED_SECTIONS
+ │ ## When to ask                           │  the same text every turn
+ │ ## What you can and cannot do            │
+ ├──────────────────────────────────────────┤
+ │ profile, goals, wiki index      (#11)    │  layers added later,
+ │ skill list                      (#15)    │  after the fixed part
+ └──────────────────────────────────────────┘
+ then: history, then this turn's messages
+ and alongside: every tool's schema, each description saying when to use it
+```
+
+### One value, traced
+
+`FIXED_SECTIONS` is a tuple of 3 `Section` objects. Each is a frozen dataclass with two strings: `FIXED_SECTIONS[1].name` is `"When to ask"`, and `FIXED_SECTIONS[1].text` starts `"- If a request is missing something only the operator can tell you..."`.
+
+[prompt.py:46](src/homunculus/prompt.py#L46) `def system_prompt() -> str:` joins them:
+
+```
+system_prompt() -> "## Who you are\nYou are Homunculus, ...\n\n## When to ask\n- If a request ...\n\n## What you can and cannot do\n- If no tool ..."
+                   one str: each section is "## " + its name, a new line, then its text,
+                   and the sections are separated by a blank line
+```
+
+You send "Email Sam". In `run`, [loop.py:53](src/homunculus/loop.py#L53) `system: Message = {"role": "system", "content": prompt.system_prompt()}` wraps that string as the first message. Every pass of the loop sends `[system, *history, *turn]`, with the same `system` object.
+
+The real model reads "If a request is missing something only the operator can tell you, ... ask", and "If you can find the answer yourself, ... do that instead of asking". In a run against GLM it first called `search` with `{"path": ".", "text": "sam"}`. It found nothing, and replied asking for Sam's address and what the email should say. No email tool was called. That run used a stand-in `send_email` tool, since the real outward tools arrive in #9. Its description said to use it only once the operator has given the recipient and what to say. Given the address, subject and words, GLM called it straight away, and the gate turned that into an approval request (chapter 8). Its reply said the email "is prepared and waiting for your approval", not that it was sent, which follows the last section's rule.
+
+### The tests
+
+```python
+def test_the_fixed_instructions_are_the_same_on_every_turn(tmp_path: Path) -> None:
+    model = ScriptedModel([["Hello."], ["Still here."]])
+    client = server(model, tmp_path)
+
+    client.post("/api/chat", json={"message": "Hi"})
+    client.post("/api/chat", json={"message": "Are you there?"})
+
+    # The same opening text lets a provider reuse its cached work on that part.
+    assert model.received[0][0] == model.received[1][0]
+```
+
+In plain English: "Two turns apart, the model is sent exactly the same first message." `model.received` is a list with one entry per model call, and each entry is the list of messages sent, so `model.received[1][0]` is the first message of the second call. Two more tests check that the sections arrive by name in a set order, and that every tool offered says when to use it.
+
+A scripted model cannot show whether the real model follows the rules. That is checked by hand against GLM before each change to the instructions, and later by the evals in #20.
+
+### Change it yourself
+
+1. In `prompt.py`, add a fourth `Section` to `FIXED_SECTIONS`, for example `Section("Style", "Reply in one sentence.")`.
+2. Run `uv run pytest tests/test_prompt.py`. The order test fails: it lists the sections by name, so a section can only be added, moved or renamed on purpose, with the test changed to match.
+3. Add `"Style"` to the end of the list in that test and run it again. It passes. Start the program (README quick start) and ask it something. The replies should now be one sentence long, because the model reads your section on every turn. A model can still ignore an instruction, which is why the real model is checked by hand.
+4. Now change `system_prompt` to put the current time at the very start, `f"Now: {datetime.now()}\n\n" + ...`. Run the tests again. The same-on-every-turn test fails: the first characters now change every turn, so the provider could never reuse its cached work. The spec does want the time in the prompt, so it will go after the fixed part, where a change costs nothing.
+5. Undo both changes.
+
 ---
 
 ## The whole trip in one table
@@ -1146,4 +1228,4 @@ loop    run      history = [user "Hello", assistant "Good morning."]  saved, onl
 server  events   'event: done\ndata: {}\n\n'                          sent; lock released
 ```
 
-Never stored: `SYSTEM_PROMPT` is rebuilt every turn. Gone when `run` ends: `parts`. Never read by the server: `history`, which only the loop writes.
+Never stored: the system message is rebuilt every turn. Gone when `run` ends: `parts`. Never read by the server: `history`, which only the loop writes.
