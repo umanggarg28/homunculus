@@ -84,8 +84,8 @@ async def run(
         },
     )
     parent = trace.set_span_in_context(root)
-    # Written now, not when the turn ends, so the activity screen can show what was asked
-    # while the work is still going on, or after it was cut off.
+    # Written as the turn begins, so the activity screen can show what was asked while the
+    # work is still going on, or after it was cut off.
     activity.event(
         TURN_START,
         parent,

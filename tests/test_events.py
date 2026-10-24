@@ -77,12 +77,12 @@ def test_a_rating_is_a_genai_evaluation_result_on_the_job_it_rates(tmp_path: Pat
     up, down = named(records(tmp_path), "gen_ai.evaluation.result")
     assert (up["traceId"], up["spanId"]) == (root["traceId"], root["spanId"])
     assert up["attributes"] == {
-        "gen_ai.evaluation.name": "helpfulness",
+        "gen_ai.evaluation.name": "task_completion",
         "gen_ai.evaluation.score.value": 1.0,
         "gen_ai.evaluation.score.label": "pass",
     }
     assert down["attributes"] == {
-        "gen_ai.evaluation.name": "helpfulness",
+        "gen_ai.evaluation.name": "task_completion",
         "gen_ai.evaluation.score.value": 0.0,
         "gen_ai.evaluation.score.label": "fail",
         "gen_ai.evaluation.explanation": "Too short",
@@ -141,3 +141,19 @@ async def test_a_running_job_shows_its_message_before_it_ends(tmp_path: Path) ->
     [start] = named(records(tmp_path), "homunculus.turn.start")
     assert (job["message"], job["ended"]) == ("Plan my week", None)
     assert start["traceId"] == job["job"]
+
+
+async def test_a_job_cut_off_before_it_ended_still_shows_its_message(tmp_path: Path) -> None:
+    model = Waits()
+    transport = httpx.ASGITransport(app=app(model, tmp_path))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        turn = asyncio.create_task(client.post("/api/chat", json={"message": "Plan my week"}))
+        await model.started.wait()
+
+        # A second server reading the same folder sees what a restart after a crash
+        # would: the turn's start was written, its root span never was.
+        [job] = TestClient(app(ScriptedModel([]), tmp_path)).get("/api/activity").json()
+
+        model.finish.set()
+        await turn
+    assert (job["message"], job["ended"], job["reply"]) == ("Plan my week", None, None)

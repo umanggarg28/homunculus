@@ -201,7 +201,9 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"there is no job {job}")
         if found["span"] is None:
             raise HTTPException(status_code=409, detail=f"job {job} has nothing to rate yet")
-        found["feedback"] = activity.rate(found, feedback.rating, feedback.reason)
+        found["feedback"] = activity.rate(
+            found["job"], found["span"], feedback.rating, feedback.reason
+        )
         return found
 
     @app.get("/api/history")

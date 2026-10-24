@@ -834,9 +834,9 @@ Attributes use the conventions' names, such as `gen_ai.tool.name`, `gen_ai.tool.
 
 **A file any OpenTelemetry tool can read.** OpenTelemetry's [file exporter format](https://opentelemetry.io/docs/specs/otel/protocol/file-exporter/) is JSON lines: each line is one `TracesData` object in OTLP's JSON encoding, which writes ids as hex and 64-bit numbers as strings. The SDK has no file exporter of its own, so `SpanFileExporter` writes it, using the official OTLP encoder. The file is `traces.jsonl` in the data directory, beside the workspace and outside it, so the file tools' fence (chapters 4 and 5) keeps every tool away from it. Nothing is sent over the network.
 
-**Record what happened, when it happened.** A span is written the moment it ends ([activity.py:120](src/homunculus/activity.py#L120) `tracing.add_span_processor(SimpleSpanProcessor(SpanFileExporter(self._traces)))`). So the root span, which ends last, is written last.
+**Record what happened, when it happened.** A span is written the moment it ends ([activity.py:124](src/homunculus/activity.py#L124) `tracing.add_span_processor(SimpleSpanProcessor(SpanFileExporter(self._traces)))`). So the root span, which ends last, is written last.
 
-**Moments are events.** Some things have no length: a turn starting, you deciding on a request, you rating a job. OpenTelemetry records those as **log events**, each with a name, a time and attributes, attached to a span by its ids. They are written the moment they happen, to `logs.jsonl`, in the same file format with one `LogsData` object per line ([activity.py:124](src/homunculus/activity.py#L124) `logging.add_log_record_processor(SimpleLogRecordProcessor(LogFileExporter(self._logs)))`). The SDK still marks its logs API experimental, which is why it lives under `opentelemetry._logs`.
+**Moments are events.** Some things have no length: a turn starting, you deciding on a request, you rating a job. OpenTelemetry records those as **log events**, each with a name, a time and attributes, attached to a span by its ids. They are written the moment they happen, to `logs.jsonl`, in the same file format with one `LogsData` object per line ([activity.py:128](src/homunculus/activity.py#L128) `logging.add_log_record_processor(SimpleLogRecordProcessor(LogFileExporter(self._logs)))`). The SDK still marks its logs API experimental, which is why it lives under `opentelemetry._logs`.
 
 | Event | Name from | Attributes |
 |---|---|---|
@@ -857,7 +857,7 @@ The first two have no standard name, so they start with `homunculus.`, as OpenTe
 
  logs.jsonl, one line per event, each attached to the root span:
   homunculus.turn.start       "Note that I like green tea."
-  gen_ai.evaluation.result    helpfulness · 1.0 · pass
+  gen_ai.evaluation.result    task_completion · 1.0 · pass
 ```
 
 ### One value, traced
@@ -889,7 +889,7 @@ One line of the file, cut down:
     "attributes": [{"key": "gen_ai.tool.name", "value": {"stringValue": "write"}}, ...]}]}]}]}
 ```
 
-**From spans to jobs.** [activity.py:196](src/homunculus/activity.py#L196) `def jobs(spans: list[dict[str, Any]], events: list[dict[str, Any]]) -> list[dict[str, Any]]:` groups the spans and events by `traceId`. For each trace it finds the root ([activity.py:210](src/homunculus/activity.py#L210) `root = next((s for s in members if s["name"] == ROOT_SPAN), None)`), reads your message from the root, or from the turn's start event while the root is not written yet, and the reply from the root's attributes, and turns each `execute_tool` span into a step, in the order they started. Read the job aloud: "you asked me to note that you like green tea; I wrote tea.md, which worked; I replied Saved."
+**From spans to jobs.** [activity.py:200](src/homunculus/activity.py#L200) `def jobs(spans: list[dict[str, Any]], events: list[dict[str, Any]]) -> list[dict[str, Any]]:` groups the spans and events by `traceId`. For each trace it finds the root ([activity.py:214](src/homunculus/activity.py#L214) `root = next((s for s in members if s["name"] == ROOT_SPAN), None)`), reads your message from the root, or from the turn's start event while the root is not written yet, and the reply from the root's attributes, and turns each `execute_tool` span into a step, in the order they started. Read the job aloud: "you asked me to note that you like green tea; I wrote tea.md, which worked; I replied Saved."
 
 **An approved action joins its trace later.** When the gate asks, the approval request stores the turn's W3C `traceparent`, the standard text form of a trace context: `"00-9f3c41d2...-df12ff...-01"`, meaning version, trace id, parent span id and flags. When you approve, the server passes it to `context_of`, which turns the text back into a context with OpenTelemetry's own W3C propagator, and [server.py:145](src/homunculus/server.py#L145) `span = activity.start_tool(` starts the approved run's `execute_tool` span under the original root, with the original tool call id. Its `homunculus.gate.answer` is `"ask"`, because that is what the gate answered, and its outcome is what the run did. So the job reads: asked (◷), then approved and done (✓).
 
@@ -897,17 +897,17 @@ One line of the file, cut down:
 
 On the activity screen each job has a 👍 and a 👎, and either can carry a reason. Pressing 👎 and typing "Ask before saving" sends `POST /api/activity/9f3c41d2.../feedback` with `{"rating": "down", "reason": "Ask before saving"}`.
 
-The GenAI conventions define one event for judging an agent's output: `gen_ai.evaluation.result`. Microsoft Foundry documents how to record an end user's thumbs up or down with it, and this project follows that mapping:
+The GenAI conventions define one event for judging an agent's output: `gen_ai.evaluation.result`. Microsoft Foundry documents how to record an end user's thumbs up or down with it: a score of 1.0 labelled `pass`, or 0.0 labelled `fail`. The name, `task_completion`, is the one its own thumbs-up sample uses. This project follows both:
 
 ```
-👍  ->  gen_ai.evaluation.name = "helpfulness", score.value = 1.0, score.label = "pass"
-👎  ->  gen_ai.evaluation.name = "helpfulness", score.value = 0.0, score.label = "fail",
+👍  ->  gen_ai.evaluation.name = "task_completion", score.value = 1.0, score.label = "pass"
+👎  ->  gen_ai.evaluation.name = "task_completion", score.value = 0.0, score.label = "fail",
         gen_ai.evaluation.explanation = "Ask before saving"
 ```
 
-[server.py:195](src/homunculus/server.py#L195) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` finds the job, then [server.py:204](src/homunculus/server.py#L204) `found["feedback"] = activity.rate(found, feedback.rating, feedback.reason)` writes the event. `rate` attaches it to the job's root span by building a context from the job's trace id and root span id, so a trace viewer shows the rating on the work it judges.
+[server.py:195](src/homunculus/server.py#L195) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` finds the job, then [server.py:204](src/homunculus/server.py#L204) `found["feedback"] = activity.rate(` writes the event. `rate` attaches it to the job's root span by writing the job's trace id and root span id as a W3C traceparent and turning that into a context, the same way an approved action finds its trace, so a trace viewer shows the rating on the work it judges.
 
-If you change your mind and press 👍, a second event is written. `jobs` keeps the latest one ([activity.py:206](src/homunculus/activity.py#L206) `ratings = {e["traceId"]: e for e in events if e.get("eventName") == EVALUATION}`: a later event for the same trace replaces the earlier one in the dict). Both stay in the file. A new rating starts with an empty reason box, so the old reason is never sent with it. Nothing reads the ratings yet. Ticket #17, the daily learning pass, is where they will be used.
+If you change your mind and press 👍, a second event is written. `jobs` keeps the latest one ([activity.py:210](src/homunculus/activity.py#L210) `ratings = {e["traceId"]: e for e in events if _is_rating(e)}`: a later event for the same trace replaces the earlier one in the dict, and only this program's `task_completion` evaluations labelled `pass` or `fail` count). Both stay in the file. A new rating starts with an empty reason box, so the old reason is never sent with it. Nothing reads the ratings yet. Ticket #17, the daily learning pass, is where they will be used.
 
 ### The tests
 

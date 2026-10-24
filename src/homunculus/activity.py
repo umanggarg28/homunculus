@@ -25,8 +25,10 @@ from pathlib import Path
 from typing import Any
 
 from google.protobuf.json_format import MessageToDict
-from opentelemetry import trace
 from opentelemetry.context import Context
+
+# The logs encoder sits in a private module of the official exporter package, which
+# exports no public one yet.
 from opentelemetry.exporter.otlp.proto.common._log_encoder import encode_logs
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
 from opentelemetry.proto.logs.v1.logs_pb2 import LogsData
@@ -40,7 +42,7 @@ from opentelemetry.sdk._logs.export import (
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
-from opentelemetry.trace import NonRecordingSpan, Span, SpanContext, Status, StatusCode, TraceFlags
+from opentelemetry.trace import Span, Status, StatusCode
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from homunculus.model import ToolCall
@@ -58,9 +60,11 @@ TURN_START = "homunculus.turn.start"
 DECISION = "homunculus.approval.decision"
 
 # A thumbs up or down as a pass or fail evaluation, as Microsoft Foundry maps end-user
-# feedback onto `gen_ai.evaluation.result`: up is a score of 1.0, down is 0.0.
-EVALUATION_NAME = "helpfulness"
+# feedback onto `gen_ai.evaluation.result`: up is a score of 1.0 labelled "pass", down is
+# 0.0 labelled "fail". The name is the one its thumbs-up sample uses.
+EVALUATION_NAME = "task_completion"
 SCORES = {"up": (1.0, "pass"), "down": (0.0, "fail")}
+LABELS = {label: rating for rating, (_, label) in SCORES.items()}
 
 
 class _JsonLines:
@@ -164,13 +168,13 @@ class Activity:
         self._logger.emit(timestamp=now, context=parent, event_name=name, attributes=present)
         return now
 
-    def rate(self, job: dict[str, Any], rating: str, reason: str | None) -> dict[str, Any]:
+    def rate(self, trace_id: str, span_id: str, rating: str, reason: str | None) -> dict[str, Any]:
         """Record the operator's rating of a job as a `gen_ai.evaluation.result` event on
         its root span, and return the rating as the activity screen shows it."""
         score, label = SCORES[rating]
         at = self.event(
             EVALUATION,
-            _span_context(job["job"], job["span"]),
+            context_of(f"00-{trace_id}-{span_id}-01"),
             {
                 "gen_ai.evaluation.name": EVALUATION_NAME,
                 "gen_ai.evaluation.score.value": score,
@@ -203,7 +207,7 @@ def jobs(spans: list[dict[str, Any]], events: list[dict[str, Any]]) -> list[dict
         by_trace.setdefault(span["traceId"], []).append(span)
     starts = {e["traceId"]: e for e in events if e.get("eventName") == TURN_START}
     # A later rating of the same job replaces an earlier one here; both stay in the file.
-    ratings = {e["traceId"]: e for e in events if e.get("eventName") == EVALUATION}
+    ratings = {e["traceId"]: e for e in events if _is_rating(e)}
     found = []
     for trace_id in {*by_trace, *starts}:
         members = by_trace.get(trace_id, [])
@@ -214,13 +218,12 @@ def jobs(spans: list[dict[str, Any]], events: list[dict[str, Any]]) -> list[dict
             key=lambda s: int(s["startTimeUnixNano"]),
         )
         opened = root or start
-        began = (
-            int(root["startTimeUnixNano"])
-            if root
-            else int(start["timeUnixNano"])
-            if start
-            else min(int(s["startTimeUnixNano"]) for s in members)
-        )
+        if root is not None:
+            began = int(root["startTimeUnixNano"])
+        elif start is not None:
+            began = int(start["timeUnixNano"])
+        else:
+            began = min(int(s["startTimeUnixNano"]) for s in members)
         job: dict[str, Any] = {
             "job": trace_id,
             "span": opened["spanId"] if opened else None,
@@ -247,12 +250,22 @@ def jobs(spans: list[dict[str, Any]], events: list[dict[str, Any]]) -> list[dict
     return sorted(found, key=lambda job: job["started"], reverse=True)
 
 
+def _is_rating(event: dict[str, Any]) -> bool:
+    """An operator's rating: this program's evaluation, with one of the two labels it uses.
+    Any other evaluation in the file is left out of the activity screen."""
+    attributes = event["attributes"]
+    return (
+        event.get("eventName") == EVALUATION
+        and attributes.get("gen_ai.evaluation.name") == EVALUATION_NAME
+        and attributes.get("gen_ai.evaluation.score.label") in LABELS
+    )
+
+
 def _rating(event: dict[str, Any]) -> dict[str, Any]:
     """A `gen_ai.evaluation.result` event as the activity screen shows it."""
     attributes = event["attributes"]
-    passed = attributes.get("gen_ai.evaluation.score.label") == "pass"
     return {
-        "rating": "up" if passed else "down",
+        "rating": LABELS[attributes["gen_ai.evaluation.score.label"]],
         "reason": attributes.get("gen_ai.evaluation.explanation"),
         "time": _iso(int(event["timeUnixNano"])),
     }
@@ -286,8 +299,8 @@ def fail(span: Span, error: BaseException, message: str) -> None:
     span.end()
 
 
-# W3C trace context: how a later piece of work, such as an approved action, finds the
-# trace it belongs to. A traceparent reads "00-<trace id>-<parent span id>-<flags>".
+# W3C trace context: how a later piece of work, such as an approved action or a rating,
+# finds the span it belongs to. A traceparent reads "00-<trace id>-<parent span id>-<flags>".
 _PROPAGATOR = TraceContextTextMapPropagator()
 
 
@@ -323,24 +336,11 @@ def _step(span: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _span_context(trace_id: str, span_id: str) -> Context:
-    """A context naming an existing span by its ids, so an event can be attached to it
-    after the span has ended."""
-    span_context = SpanContext(
-        trace_id=int(trace_id, 16),
-        span_id=int(span_id, 16),
-        is_remote=False,
-        trace_flags=TraceFlags(TraceFlags.SAMPLED),
-    )
-    return trace.set_span_in_context(NonRecordingSpan(span_context))
-
-
-def _read(path: Path, *levels: str) -> list[dict[str, Any]]:
-    """Every item in an OTLP JSON lines file, found under `levels`, with attributes as a
-    dict."""
+def _read(path: Path, resources: str, scopes: str, items: str) -> list[dict[str, Any]]:
+    """Every item in an OTLP JSON lines file, such as each span under `resourceSpans`,
+    then `scopeSpans`, then `spans`, with its attributes as a dict."""
     if not path.exists():
         return []
-    resources, scopes, items = levels
     found = []
     for line in path.read_text(encoding="utf-8").splitlines():
         for resource in json.loads(line)[resources]:
