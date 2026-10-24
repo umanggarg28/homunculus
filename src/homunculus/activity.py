@@ -28,6 +28,9 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.trace import Span, Status, StatusCode
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+from homunculus.model import ToolCall
 
 AGENT = "Homunculus"
 ROOT_SPAN = f"invoke_agent {AGENT}"
@@ -93,10 +96,13 @@ class Activity:
         if request is not None:
             span.set_attribute("homunculus.approval.id", request)
         if outcome == "failed":
+            # A tool that ran and reported a failure, or an answer that stopped it running.
+            kind = "tool_error" if answer in ("act", "ask") else answer.replace(" ", "_")
+            span.set_attribute("error.type", kind)
             span.set_status(Status(StatusCode.ERROR, result))
         span.end()
 
-    def record(self, kind: str, job: str, **details: Any) -> dict[str, Any]:
+    def record_operator(self, kind: str, job: str | None, **details: Any) -> dict[str, Any]:
         """Add one line about the operator's view of a job, and return it."""
         entry = {"time": datetime.now(UTC).isoformat(), "kind": kind, "job": job, **details}
         with self._operator.open("a", encoding="utf-8") as file:
@@ -173,9 +179,54 @@ def feedback_of(rating: dict[str, Any]) -> dict[str, Any]:
     return {"rating": rating["rating"], "reason": rating.get("reason"), "time": rating["time"]}
 
 
-def as_messages(role: str, text: str) -> str:
-    """One text message in the GenAI conventions' message format, as JSON text."""
-    return json.dumps([{"role": role, "parts": [{"type": "text", "content": text}]}])
+def input_messages(text: str) -> str:
+    """The operator's message in the GenAI conventions' input message format, as JSON text."""
+    return json.dumps([{"role": "user", "parts": [{"type": "text", "content": text}]}])
+
+
+def output_messages(text: str, calls: Sequence[ToolCall] = ()) -> str:
+    """What the model said and asked for, in the GenAI conventions' output message format,
+    as JSON text. It finished because it asked for tools, or because it was done."""
+    parts: list[dict[str, Any]] = [{"type": "text", "content": text}] if text else []
+    for call in calls:
+        try:
+            arguments: Any = json.loads(call.arguments)
+        except json.JSONDecodeError:
+            arguments = call.arguments
+        parts.append(
+            {"type": "tool_call", "id": call.id, "name": call.name, "arguments": arguments}
+        )
+    finish_reason = "tool_call" if calls else "stop"
+    return json.dumps([{"role": "assistant", "parts": parts, "finish_reason": finish_reason}])
+
+
+def fail(span: Span, error: BaseException, message: str) -> None:
+    """End a span that failed, with the error's kind and a message for the operator."""
+    span.set_status(Status(StatusCode.ERROR, message))
+    span.set_attribute("error.type", type(error).__name__)
+    span.end()
+
+
+# W3C trace context: how a later piece of work, such as an approved action, finds the
+# trace it belongs to. A traceparent reads "00-<trace id>-<parent span id>-<flags>".
+_PROPAGATOR = TraceContextTextMapPropagator()
+
+
+def traceparent_of(context: Context) -> str:
+    carrier: dict[str, str] = {}
+    _PROPAGATOR.inject(carrier, context=context)
+    return carrier["traceparent"]
+
+
+def context_of(traceparent: str | None) -> Context:
+    """The context a traceparent names, or an empty one, which starts a new trace."""
+    return _PROPAGATOR.extract({"traceparent": traceparent} if traceparent else {})
+
+
+def trace_id_of(traceparent: str | None) -> str | None:
+    """The trace id a traceparent names, which is the job's id."""
+    span_context = trace.get_current_span(context_of(traceparent)).get_span_context()
+    return trace.format_trace_id(span_context.trace_id) if span_context.is_valid else None
 
 
 def _text(recorded: Any) -> str | None:
@@ -219,8 +270,3 @@ def _hex_ids(node: Any) -> Any:
     if isinstance(node, list):
         return [_hex_ids(item) for item in node]
     return node
-
-
-def trace_id(span: Span) -> str:
-    """A span's trace id as OTLP writes it, which is also the job's id."""
-    return trace.format_trace_id(span.get_span_context().trace_id)

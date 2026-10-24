@@ -54,7 +54,7 @@ Each turn is one OpenTelemetry trace, recorded with the official SDK and named a
 | `GET /api/activity` | The 100 most recent jobs, newest first |
 | `POST /api/activity/{job}/feedback` | `{"rating": "up" \| "down", "reason": "..."}`. Appends a rating to `operator.jsonl`; the latest rating for a job counts. `job` is the trace id |
 
-Feedback is a new line in the log, never an edit, so the log stays append-only.
+A rating is a new line in `operator.jsonl`, never an edit, so both files stay append-only.
 
 ## Approvals
 
@@ -119,7 +119,7 @@ Tests sit at agreed seams and fake only the outside world.
 |---|---|---|
 | Loop | Streaming, when the loop stops, history handling, and every tool through a scripted tool call | The model (a scripted stand-in) |
 | Gate | Each answer from annotations, the protocol's defaults for a missing hint, the workspace fence, hand-offs, unknown tools, and refusal when a call cannot be read | Nothing |
-| Server HTTP API: traces | One trace per turn with a span per model call and tool, read from the file as OTLP JSON; GenAI attributes; token counts; error status on a failed turn | The model |
+| Server HTTP API: the trace file | One trace per turn with a span per model call and tool, read from the file as OTLP JSON; GenAI attributes; token counts; error status on a failed turn | The model |
 | Server HTTP API: activity | Jobs grouped from the traces, feedback kept and replaced by a later rating, failed and cut-short jobs, approved actions shown in the job that asked, decision follow-ups marked as notices | The model |
 | Server HTTP API: prompt | The fixed instructions come first, in order, and are the same on every turn; every tool says when to use it | The model |
 | Server HTTP API: approvals | Waiting instead of running, approve, decline, hand-off done, decided once, survives a restart, notices | The model; stand-in tools that record their calls |

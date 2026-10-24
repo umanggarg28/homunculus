@@ -45,6 +45,8 @@ class Approval:
     # The W3C trace context of the job that asked, so an approved run joins its trace and
     # is shown with the rest of that work.
     traceparent: str | None = None
+    # The id the model gave its tool call, so the approved run's span carries it too.
+    tool_call_id: str | None = None
 
 
 class Approvals:
@@ -52,7 +54,12 @@ class Approvals:
         self._path = path
 
     def request(
-        self, tool: str, arguments: str, kind: Kind, traceparent: str | None = None
+        self,
+        tool: str,
+        arguments: str,
+        kind: Kind,
+        traceparent: str | None = None,
+        tool_call_id: str | None = None,
     ) -> Approval:
         requests = self.all()
         taken = {a.id for a in requests}
@@ -67,6 +74,7 @@ class Approvals:
             status="pending",
             created=_now(),
             traceparent=traceparent,
+            tool_call_id=tool_call_id,
         )
         self._save([*requests, approval])
         return approval

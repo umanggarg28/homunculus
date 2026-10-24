@@ -116,7 +116,14 @@ const OUTCOME_STYLE = {
 function StepRow({ step }: { step: ActivityStep }) {
   // An outcome this console does not know is shown as unknown, not guessed.
   const style = OUTCOME_STYLE[step.outcome] ?? { glyph: "?", color: "var(--color-text-faint)" };
-  const label = step.answer === "act" ? (step.request ? "approved" : null) : step.answer;
+  // A step with a request either waited for approval or is the approved run itself.
+  const label = step.request
+    ? step.outcome === "waiting"
+      ? step.answer
+      : "approved"
+    : step.answer === "act"
+      ? null
+      : step.answer;
   return (
     <div className="text-[11.5px] flex gap-2 min-w-0">
       <span style={{ color: style.color }}>{style.glyph}</span>

@@ -123,3 +123,78 @@ def test_a_failed_turn_ends_its_trace_with_an_error_status(tmp_path: Path) -> No
     assert root["status"]["code"] == STATUS_ERROR
     assert root["status"]["message"] == "Could not reach the model: connection refused"
     assert root["attributes"]["error.type"] == "ModelError"
+
+
+def test_a_model_call_records_what_the_model_said_and_asked_for(tmp_path: Path) -> None:
+    server(ScriptedModel([["Let me save it.", write("a.md")], ["Saved."]]), tmp_path).post(
+        "/api/chat", json={"message": "Save a.md"}
+    )
+
+    first, second = named(spans(tmp_path), "chat scripted")
+
+    [said] = json.loads(first["attributes"]["gen_ai.output.messages"])
+    assert said["role"] == "assistant" and said["finish_reason"] == "tool_call"
+    assert said["parts"] == [
+        {"type": "text", "content": "Let me save it."},
+        {
+            "type": "tool_call",
+            "id": "call_1",
+            "name": "write",
+            "arguments": {"path": "a.md", "content": "x"},
+        },
+    ]
+    [replied] = json.loads(second["attributes"]["gen_ai.output.messages"])
+    assert replied["finish_reason"] == "stop"
+
+
+def test_a_failed_tool_call_has_an_error_status_and_type(tmp_path: Path) -> None:
+    read = ToolCall(id="call_1", name="read", arguments='{"path": "missing.md"}')
+    server(ScriptedModel([[read], ["Not there."]]), tmp_path).post(
+        "/api/chat", json={"message": "Read missing.md"}
+    )
+
+    [tool] = named(spans(tmp_path), "execute_tool read")
+
+    assert tool["status"]["code"] == STATUS_ERROR
+    assert tool["attributes"]["error.type"] == "tool_error"
+
+
+def test_every_turn_carries_the_same_conversation_id(tmp_path: Path) -> None:
+    client = server(ScriptedModel([["Hello."], ["Again."]]), tmp_path)
+    client.post("/api/chat", json={"message": "Hi"})
+    client.post("/api/chat", json={"message": "Hi again"})
+
+    roots = named(spans(tmp_path), "invoke_agent Homunculus")
+
+    assert len({root["traceId"] for root in roots}) == 2
+    assert len({root["attributes"]["gen_ai.conversation.id"] for root in roots}) == 1
+
+
+def test_an_approved_action_runs_in_the_trace_that_asked_for_it(tmp_path: Path) -> None:
+    delete = ToolCall(id="call_7", name="delete", arguments='{"path": "old.md"}')
+    (tmp_path / "workspace").mkdir()
+    (tmp_path / "workspace" / "old.md").write_text("Old")
+    client = server(ScriptedModel([[delete], ["I have asked."], ["Deleted."]]), tmp_path)
+    client.post("/api/chat", json={"message": "Delete old.md"})
+    [request] = client.get("/api/approvals").json()
+
+    client.post(f"/api/approvals/{request['id']}/approve")
+
+    found = spans(tmp_path)
+    [asked, ran] = named(found, "execute_tool delete")
+    root = next(
+        s for s in named(found, "invoke_agent Homunculus") if s["traceId"] == asked["traceId"]
+    )
+    assert ran["traceId"] == root["traceId"] and ran["parentSpanId"] == root["spanId"]
+    assert ran["attributes"]["gen_ai.tool.call.id"] == "call_7"
+    assert ran["attributes"]["homunculus.gate.answer"] == "ask"
+    assert (asked["attributes"]["homunculus.outcome"], ran["attributes"]["homunculus.outcome"]) == (
+        "waiting",
+        "ok",
+    )
+    decisions = [
+        json.loads(line) for line in (tmp_path / "operator.jsonl").read_text().splitlines()
+    ]
+    assert [(d["kind"], d["job"], d["status"]) for d in decisions] == [
+        ("decision", root["traceId"], "approved")
+    ]
