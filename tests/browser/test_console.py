@@ -155,3 +155,9 @@ def test_a_piece_of_work_can_be_rated_and_the_rating_is_kept(page: Page, console
     page.reload()
 
     expect(page.get_by_text("“Ask before saving”")).to_be_visible()
+    # A new rating starts with no reason, so the old one is not carried over.
+    page.get_by_role("button", name="good work", exact=True).click()
+    page.get_by_placeholder("what was good? (optional)").fill("Clear plan")
+    page.get_by_role("button", name="[save]").click()
+    expect(page.get_by_text("“Clear plan”")).to_be_visible()
+    expect(page.get_by_text("“Ask before saving”")).to_have_count(0)

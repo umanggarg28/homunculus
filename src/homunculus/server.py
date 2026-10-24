@@ -138,10 +138,12 @@ def create_app(
         decided = approvals.record_result(approval_id, result)
         activity.record(
             "tool",
+            job=decided.job,
             name=decided.tool,
             arguments=decided.arguments,
             answer="act",
             result=result,
+            outcome=loop.outcome_of(result),
             request=approval_id,
         )
         background.add_task(
@@ -180,10 +182,11 @@ def create_app(
     async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:
         """Record the operator's view of one piece of work. A later rating replaces an
         earlier one; the log keeps both, since it is only ever added to."""
-        if not any(j["job"] == job for j in jobs(activity.entries())):
+        entries = activity.entries()
+        if not any(e["kind"] == "message" and e.get("job") == job for e in entries):
             raise HTTPException(status_code=404, detail=f"there is no job {job}")
-        activity.record("feedback", job=job, rating=feedback.rating, reason=feedback.reason)
-        return next(j for j in jobs(activity.entries()) if j["job"] == job)
+        line = activity.record("feedback", job=job, rating=feedback.rating, reason=feedback.reason)
+        return next(j for j in jobs([*entries, line]) if j["job"] == job)
 
     @app.get("/api/history")
     async def conversation() -> list[dict[str, Any]]:

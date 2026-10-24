@@ -180,7 +180,7 @@ When a reply arrives in two pieces, `"Good "` and `"morning."`, each pull goes l
 
 **[loop.py:77-78](src/homunculus/loop.py#L77-L78) `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
 
-**[loop.py:87](src/homunculus/loop.py#L87) `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
+**[loop.py:92](src/homunculus/loop.py#L92) `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
 
 ```python
 history[0] = {"role": "user",      "content": "I like tea."}
@@ -202,7 +202,7 @@ The model sees the whole exchange and can answer "tea". That is the entire mecha
 
 **Where each piece is used.** `parts` and `calls` are rebuilt on every pass of the `while` loop. `turn` lives for one call to `run`. `history` outlives the call: the server owns it, and `run` only adds to it. `SYSTEM_PROMPT` is read by `run` and never stored anywhere.
 
-**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so [loop.py:87](src/homunculus/loop.py#L87) `history += turn` never runs and `history` stays as it was. On the way out, [loop.py:83-85](src/homunculus/loop.py#L83-L85) `except ModelError as error: ... raise` record the error in the activity log and pass it on. A failed turn leaves no half-finished reply in the conversation.
+**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so [loop.py:92](src/homunculus/loop.py#L92) `history += turn` never runs and `history` stays as it was. On the way out, [loop.py:83-85](src/homunculus/loop.py#L83-L85) `except ModelError as error: ... raise` record the error in the activity log and pass it on. A failed turn leaves no half-finished reply in the conversation.
 
 ### The test
 
@@ -601,7 +601,7 @@ turn[2] = {"role": "tool",      "tool_call_id": "call_1", "content": "Wrote tea.
 
 Read `turn[2]` aloud: "the result of request call_1 was: Wrote tea.md."
 
-**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so [loop.py:78](src/homunculus/loop.py#L78) `break` ends the loop. `turn` ends as a list of 4, and [loop.py:87](src/homunculus/loop.py#L87) `history += turn` adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
+**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so [loop.py:78](src/homunculus/loop.py#L78) `break` ends the loop. `turn` ends as a list of 4, and [loop.py:92](src/homunculus/loop.py#L92) `history += turn` adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
 
 **How the real model streams a tool call.** OpenRouter sends the request in pieces, each tagged with an `index` saying which call it belongs to:
 
@@ -671,7 +671,7 @@ An agent that works by itself will sometimes propose something it should not do:
 
 ### The idea
 
-**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs ([loop.py:100](src/homunculus/loop.py#L100) `answer = gate.decide(call)`). It returns one of five answers:
+**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs ([loop.py:105](src/homunculus/loop.py#L105) `answer = gate.decide(call)`). It returns one of five answers:
 
 | Answer | Meaning |
 |---|---|
@@ -763,15 +763,15 @@ An agent that works while you are away has to leave a record you can trust. If t
 
 **Append-only JSON Lines.** The log is one file, `activity.jsonl`. Each line is one JSON object, one event. New events are only ever added at the end, and nothing is rewritten. JSON Lines is a common format for logs because it can be read one line at a time and a half-written last line never damages the lines before it.
 
-**Written by code, out of reach.** Only `loop.py` calls `activity.record`. The file sits in the data directory, next to the workspace and outside it, so the file tools' fence (chapters 4 and 5) keeps every tool away from it.
+**Written by code, out of reach.** Only plain code calls `activity.record`: the loop for each turn, and the server for your decisions and ratings. The model can only ask for tools, and no tool writes the log. The file sits in the data directory, next to the workspace and outside it, so the file tools' fence (chapters 4 and 5) keeps every tool away from it.
 
-**Record what happened, not what was meant.** An entry is written after the thing it describes: a tool entry after the gate answered and the tool ran or did not, a reply entry after the reply is complete, an error entry when the model call failed.
+**Record what happened, not what was meant.** An entry is written after the thing it describes: a tool entry after the gate answered and the tool ran or did not, a reply entry after the reply is complete, an error entry when the model call failed or the turn was cut short.
 
 ### A picture
 
 ```
  ~/Library/Application Support/homunculus/
- ├─ activity.jsonl      written only by loop.py, one line per event
+ ├─ activity.jsonl      written only by code, one line per event
  └─ workspace/          everything the file tools can touch
      └─ tea.md
 ```
@@ -781,18 +781,18 @@ An agent that works while you are away has to leave a record you can trust. If t
 You send `"Note that I like green tea."` (the trace from chapter 4). Three calls to `activity.record` happen, in this order:
 
 ```
-record("message", job="a1b2c3d4", text="Note that I like green tea.", notice=False)
-record("tool", job="a1b2c3d4", name="write", arguments='{"path": "tea.md", "content": "Green"}',
+record("message", job="9f3c41d2a07be815", text="Note that I like green tea.", notice=False)
+record("tool", job="9f3c41d2a07be815", name="write", arguments='{"path": "tea.md", "content": "Green"}',
        answer="act", result="Wrote tea.md.", outcome="ok")
-record("reply", job="a1b2c3d4", text="Saved.")
+record("reply", job="9f3c41d2a07be815", text="Saved.")
 ```
 
-The first comes from [loop.py:61](src/homunculus/loop.py#L61) `activity.record("message", job=job, text=text, notice=notice)`, the second from `_carry_out`, and the third from [loop.py:86](src/homunculus/loop.py#L86) `activity.record("reply", job=job, text=reply["content"])`. Each carries the same `job` id, a random 8-character name made at the start of the turn, so the activity screen can group the three lines as one piece of work.
+The first comes from [loop.py:61](src/homunculus/loop.py#L61) `activity.record("message", job=job, text=text, notice=notice)`, the second from `_carry_out`, and the third from [loop.py:91](src/homunculus/loop.py#L91) `activity.record("reply", job=job, text=reply["content"])`. Each carries the same `job` id, a random 16-character name made at the start of the turn, so the activity screen can group the three lines as one piece of work.
 
 `record(kind, **details)` builds one dict: the current time in UTC, the kind, then every detail passed in. For the second call:
 
 ```
-entry = {"time": "2026-10-21T09:15:02.481Z", "kind": "tool", "job": "a1b2c3d4", "name": "write",
+entry = {"time": "2026-10-21T09:15:02.481Z", "kind": "tool", "job": "9f3c41d2a07be815", "name": "write",
          "arguments": "{\"path\": \"tea.md\", \"content\": \"Green\"}",
          "answer": "act", "result": "Wrote tea.md.", "outcome": "ok"}
 ```
@@ -801,35 +801,58 @@ entry = {"time": "2026-10-21T09:15:02.481Z", "kind": "tool", "job": "a1b2c3d4", 
 
 `entries()` reads them back: it splits the file into lines and parses each with `json.loads`, giving a list of 3 dicts. Read `entries()[1]` aloud: "at this time, the tool write was proposed with these arguments; the gate said act; the result was Wrote tea.md."
 
-If the model call had failed instead, the third line would be `{"kind": "error", "job": "a1b2c3d4", "error": "Model stopped mid-reply: ..."}`, and there would be no reply line.
+If the model call had failed instead, the third line would be `{"kind": "error", "job": "9f3c41d2a07be815", "error": "Model stopped mid-reply: ..."}`, and there would be no reply line. Anything else that ends a turn early, such as a bug or you closing the page mid-reply, is caught by [loop.py:86](src/homunculus/loop.py#L86) `except BaseException as error:` and also writes an error line, for example `"The turn stopped before it finished (RuntimeError: a bug)."`, then lets the failure carry on. So every job ends with a reply or an error, unless the whole process is killed.
 
 ### From lines to jobs
 
-The log is a flat list of lines, but you think in pieces of work: "I asked it to save tea.md, and this is what it did." The activity screen shows exactly that, and the grouping is done by [activity.py:28](src/homunculus/activity.py#L28) `def jobs(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:`. It walks the lines in order and keeps a dict from job id to job, `by_id`:
+The log is a flat list of lines, but you think in pieces of work: "I asked it to save tea.md, and this is what it did." The activity screen shows exactly that, and the grouping is done by [activity.py:30](src/homunculus/activity.py#L30) `def jobs(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:`. It walks the lines in order and keeps a dict from job id to job, `by_id`:
 
 ```
-first   message  job a1b2c3d4  →  by_id["a1b2c3d4"] = {"message": "Note that I like green tea.", "steps": [], ...}
-second  tool     job a1b2c3d4  →  by_id["a1b2c3d4"]["steps"] gets {"name": "write", "outcome": "ok", ...}
-third   reply    job a1b2c3d4  →  by_id["a1b2c3d4"]["reply"] = "Saved.", ["ended"] = its time
+first   message  job 9f3c…  →  by_id["9f3c…"] = {"message": "Note that I like green tea.", "steps": [], ...}
+second  tool     job 9f3c…  →  by_id["9f3c…"]["steps"] gets {"name": "write", "outcome": "ok", ...}
+third   reply    job 9f3c…  →  by_id["9f3c…"]["reply"] = "Saved.", ["ended"] = its time
 ```
 
-A `message` line starts a job ([activity.py:42](src/homunculus/activity.py#L42) `by_id[job_id] = {`), a `tool` line adds a step ([activity.py:57](src/homunculus/activity.py#L57) `if kind == "tool":`), and a `reply` or `error` line ends it. Lines with no job, such as your decisions on approvals, belong to none. The result is reversed ([activity.py:70](src/homunculus/activity.py#L70) `return list(reversed(by_id.values()))`), so the newest job comes first.
+A `message` line starts a job ([activity.py:45](src/homunculus/activity.py#L45) `by_id[job_id] = {`), a `tool` line adds a step ([activity.py:61](src/homunculus/activity.py#L61) `if kind == "tool":`), and a `reply` or `error` line ends it. Lines with no job, such as your decisions on approvals, belong to none, and neither do lines written before the log carried job ids, so those older lines are not shown. The result is reversed ([activity.py:75](src/homunculus/activity.py#L75) `return list(reversed(by_id.values()))`), so the newest job comes first.
+
+A step can arrive after its job has ended. When the agent asks to send an email, the job gets a `waiting` step and ends with "I have asked." The approval request remembers that job's id. When you approve, the server runs the email and writes a second tool line with the same `job` and the request id, `outcome="ok"`. So the job reads: asked (◷), then approved and sent (✓). Both steps carry `request`, which is how the screen labels the second one "approved".
 
 `GET /api/activity` returns those jobs. Each one is a dict with `job`, `started`, `ended`, `message`, `notice`, `steps` (a list), `reply`, `error` and `feedback`.
 
 ### Feedback
 
-On the activity screen each finished job has a 👍 and a 👎, and a 👎 can carry a reason. Pressing 👎 and typing "Ask before saving" sends `POST /api/activity/a1b2c3d4/feedback` with `{"rating": "down", "reason": "Ask before saving"}`.
+Each job on the activity screen has a 👍 and a 👎, and either can carry a reason. Pressing 👎 and typing "Ask before saving" sends `POST /api/activity/9f3c41d2a07be815/feedback` with `{"rating": "down", "reason": "Ask before saving"}`.
 
-[server.py:180](src/homunculus/server.py#L180) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` checks the job exists ([server.py:183](src/homunculus/server.py#L183) `if not any(j["job"] == job for j in jobs(activity.entries())):`), then [server.py:185](src/homunculus/server.py#L185) `activity.record("feedback", job=job, rating=feedback.rating, reason=feedback.reason)` appends one more line:
+[server.py:182](src/homunculus/server.py#L182) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` reads the log once and checks that a message line has this job id ([server.py:186](src/homunculus/server.py#L186) `if not any(e["kind"] == "message" and e.get("job") == job for e in entries):`). Then [server.py:188](src/homunculus/server.py#L188) `line = activity.record("feedback", job=job, rating=feedback.rating, reason=feedback.reason)` appends one more line:
 
 ```
-{"time": "...", "kind": "feedback", "job": "a1b2c3d4", "rating": "down", "reason": "Ask before saving"}
+{"time": "...", "kind": "feedback", "job": "9f3c41d2a07be815", "rating": "down", "reason": "Ask before saving"}
 ```
 
-Nothing earlier is rewritten. If you change your mind and press 👍, a second feedback line is added, and `jobs` keeps the latest one ([activity.py:64](src/homunculus/activity.py#L64) `elif kind == "feedback":`). The log keeps both, which is the point of a log you can trust. The daily learning pass (#17) reads these ratings, with their reasons, to learn what good work looks like for you.
+`record` returns the line it wrote, so the server groups the lines it already read plus this new one, and sends back the updated job without reading the file again.
 
-### The test
+Nothing earlier is rewritten. If you change your mind and press 👍, a second feedback line is added, and `jobs` keeps the latest one ([activity.py:69](src/homunculus/activity.py#L69) `elif kind == "feedback":`). The log still holds both. A new rating starts with an empty reason box, so the old reason is never sent with the new rating. Nothing reads the ratings yet. Ticket #17, the daily learning pass, is where they will be used.
+
+### The tests
+
+```python
+def test_an_approved_action_shows_in_the_job_that_asked_for_it(tmp_path: Path) -> None:
+    send_email = Tool("send_email", "Stand-in send_email.", {"type": "object"}, lambda _: "Sent.")
+    send = ToolCall(id="call_1", name="send_email", arguments='{"to": "sam@example.com"}')
+    model = ScriptedModel([[send], ["I have asked."], ["Sent, thanks."]])
+    client = server(model, tmp_path, send_email)
+    client.post("/api/chat", json={"message": "Email Sam"})
+    [request] = client.get("/api/approvals").json()
+
+    client.post(f"/api/approvals/{request['id']}/approve")
+
+    _, original = client.get("/api/activity").json()
+    asked, ran = original["steps"]
+    assert (asked["outcome"], asked["request"]) == ("waiting", request["id"])
+    assert (ran["outcome"], ran["result"], ran["request"]) == ("ok", "Sent.", request["id"])
+```
+
+In plain English: "When the agent asks to send an email and you approve it, the job that asked shows both steps: the wait, then the email that was sent." `_` is the newer job, the follow-up turn that told the agent the result, which this test does not look at.
 
 ```python
 async def test_no_tool_can_reach_the_activity_log(tmp_path: Path, workspace: Path) -> None:
@@ -855,6 +878,7 @@ In plain English: "If the model tries to overwrite the activity log through the 
 2. In `loop.py`, find `activity.record("error", job=job, error=str(error))` inside the `except ModelError` block and delete that line, keeping the `raise`.
 3. Run `uv run pytest tests/test_loop.py`. The failed-reply test fails: the log now shows your message and then nothing, so a reader could not tell the job failed. That silence is exactly what this line exists to prevent.
 4. Undo the change.
+5. In `server.py`, find `job=decided.job,` in the approve endpoint and delete it. Run `uv run pytest tests/test_activity.py`. The approved-action test fails: the email ran, but its line has no job, so `jobs` skips it and the screen never shows that it was sent. Undo the change.
 
 ---
 
@@ -1023,14 +1047,15 @@ ToolCall(name="send_email", arguments='{"to": "sam@example.com", "subject": "Fri
 **In the loop, `_carry_out`.** `gate.decide` returns `Answer.ASK`. `WAITS_FOR_OPERATOR[Answer.ASK]` is `"ask"`, so the loop calls:
 
 ```
-approvals.request("send_email", '{"to": ...}', "ask")
+approvals.request("send_email", '{"to": ...}', "ask", "9f3c41d2a07be815")
   → Approval(id="04fdba", tool="send_email", arguments='{"to": ...}', kind="ask",
-             status="pending", created="2026-10-24T04:41:15Z", decided=None, note=None, result=None)
+             status="pending", created="2026-10-24T04:41:15Z", decided=None, note=None,
+             result=None, follow_up=None, job="9f3c41d2a07be815")
 ```
 
-`Approvals.request` reads the saved list (`approvals.json`), adds this one, and writes the whole list back. It writes to a temporary file and moves it into place, so a crash mid-write can never leave half a list. The tool step's result is the waiting sentence, so the model replies "I've drafted the email. It's waiting for your approval." and the turn ends.
+The last argument is this turn's job id (chapter 6), so the request remembers which piece of work asked for it. `Approvals.request` reads the saved list (`approvals.json`), adds this one, and writes the whole list back. It writes to a temporary file and moves it into place, so a crash mid-write can never leave half a list. The tool step's result is the waiting sentence, so the model replies "I've drafted the email. It's waiting for your approval." and the turn ends.
 
-**In the console.** `ApprovalsProvider` asks `GET /api/approvals` every ten seconds, and after every turn event. The list is one item, so the sidebar shows a badge of 1 and the screen shows the request with its arguments laid out as `to`, `subject` and `body`.
+**In the console.** `ApprovalsProvider` asks `GET /api/approvals` every ten seconds, and after every turn event. The list is one item, so the sidebar shows a badge of 1 and the screen shows the request with its arguments exactly as the agent proposed them, as formatted JSON, so you approve the real values and their types.
 
 **You press approve.** The console calls `POST /api/approvals/04fdba/approve`. In the server:
 
@@ -1040,7 +1065,10 @@ decide("04fdba", "approved", "ask", None)    checks the request exists, is still
 run_tool("send_email", '{"to": ...}', by_name)   the same function the loop uses for an allowed action
   → "Sent."
 approvals.record_result("04fdba", "Sent.")
+activity.record("tool", job="9f3c41d2a07be815", name="send_email", ..., outcome="ok", request="04fdba")
 ```
+
+The tool line carries the job id the request remembered, so the activity screen shows the sent email inside the job that asked for it (chapter 6).
 
 The tool runs inside the same lock as a chat message (chapter 3), so it never runs alongside another turn's tools, and in a worker thread (`asyncio.to_thread`), so a slow tool does not hold up the rest of the server.
 

@@ -53,7 +53,7 @@ async def run(
     schemas = [tool.schema() for tool in tools]
     # Every line this turn writes to the activity log carries the same job id, so the
     # activity screen can show the turn as one piece of work.
-    job = secrets.token_hex(4)
+    job = secrets.token_hex(8)
     opening: Message = {"role": "user", "content": text}
     if notice:
         opening["notice"] = True
@@ -83,6 +83,11 @@ async def run(
     except ModelError as error:
         activity.record("error", job=job, error=str(error))
         raise
+    except BaseException as error:
+        # Anything else that ends the turn early, such as a bug or the operator closing
+        # the page, still ends the job, so the activity screen never shows it as running.
+        activity.record("error", job=job, error=_stopped(error))
+        raise
     activity.record("reply", job=job, text=reply["content"])
     history += turn
 
@@ -98,12 +103,14 @@ def _carry_out(
     what the model sees."""
     started = time.monotonic()
     answer = gate.decide(call)
+    request_id = None
     if answer is gate.Answer.ACT:
         result = run_tool(call.name, call.arguments, by_name)
-        outcome = "failed" if result.startswith("Error:") else "ok"
+        outcome = outcome_of(result)
     elif answer in WAITS_FOR_OPERATOR:
         outcome = "waiting"
-        request = approvals.request(call.name, call.arguments, WAITS_FOR_OPERATOR[answer])
+        request = approvals.request(call.name, call.arguments, WAITS_FOR_OPERATOR[answer], job)
+        request_id = request.id
         result = (
             f"Waiting for the operator's approval (request {request.id}). Carry on with other "
             "work; you will be told the outcome."
@@ -119,6 +126,7 @@ def _carry_out(
         answer=answer.value,
         result=result,
         outcome=outcome,
+        request=request_id,
     )
     return ToolStep(
         name=call.name,
@@ -152,6 +160,16 @@ def run_tool(name: str, arguments: str, by_name: dict[str, Tool]) -> str:
         # A bug or bad input inside a tool must not end the whole reply. The model is
         # told, the step is recorded, and the loop carries on.
         return f"Error: {name} failed unexpectedly ({type(error).__name__}: {error})."
+
+
+def outcome_of(result: str) -> str:
+    """Whether a tool that ran succeeded: "ok", or "failed" when it reported an error."""
+    return "failed" if result.startswith("Error:") else "ok"
+
+
+def _stopped(error: BaseException) -> str:
+    detail = f"{type(error).__name__}: {error}" if str(error) else type(error).__name__
+    return f"The turn stopped before it finished ({detail})."
 
 
 def _as_message(call: ToolCall) -> dict[str, object]:

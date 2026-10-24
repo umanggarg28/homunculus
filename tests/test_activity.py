@@ -12,19 +12,21 @@ from homunculus.activity import ActivityLog
 from homunculus.approvals import Approvals
 from homunculus.model import Message, ModelError, ToolCall
 from homunculus.server import create_app
+from homunculus.tools import Tool
 from homunculus.tools.files import file_tools
 
 
-def server(model: ScriptedModel, tmp_path: Path) -> TestClient:
+def server(model: ScriptedModel, tmp_path: Path, *extra: Tool) -> TestClient:
     workspace = tmp_path / "workspace"
     workspace.mkdir(exist_ok=True)
     app = create_app(
         model,
-        file_tools(workspace),
+        [*file_tools(workspace), *extra],
         ActivityLog(tmp_path / "activity.jsonl"),
         Approvals(tmp_path / "approvals.json"),
     )
-    return TestClient(app)
+    # A server error is checked through what the log shows, not raised in the test.
+    return TestClient(app, raise_server_exceptions=False)
 
 
 def write(path: str, content: str) -> ToolCall:
@@ -116,3 +118,37 @@ def test_the_turn_that_tells_the_agent_a_decision_is_marked_as_a_notice(tmp_path
     assert follow_up["message"].startswith("Declined:")
     assert original["notice"] is False
     assert original["steps"][0]["outcome"] == "waiting"
+
+
+def test_an_approved_action_shows_in_the_job_that_asked_for_it(tmp_path: Path) -> None:
+    send_email = Tool("send_email", "Stand-in send_email.", {"type": "object"}, lambda _: "Sent.")
+    send = ToolCall(id="call_1", name="send_email", arguments='{"to": "sam@example.com"}')
+    model = ScriptedModel([[send], ["I have asked."], ["Sent, thanks."]])
+    client = server(model, tmp_path, send_email)
+    client.post("/api/chat", json={"message": "Email Sam"})
+    [request] = client.get("/api/approvals").json()
+
+    client.post(f"/api/approvals/{request['id']}/approve")
+
+    _, original = client.get("/api/activity").json()
+    asked, ran = original["steps"]
+    assert (asked["outcome"], asked["request"]) == ("waiting", request["id"])
+    assert (ran["outcome"], ran["result"], ran["request"]) == ("ok", "Sent.", request["id"])
+
+
+class Breaks(ScriptedModel):
+    async def stream(
+        self, messages: list[Message], tools: list[dict[str, Any]]
+    ) -> AsyncIterator[str | ToolCall]:
+        yield "Let me"
+        raise RuntimeError("a bug")
+
+
+def test_a_turn_cut_short_by_an_unexpected_failure_still_ends(tmp_path: Path) -> None:
+    client = server(Breaks([]), tmp_path)
+    client.post("/api/chat", json={"message": "Hi"})
+
+    [job] = client.get("/api/activity").json()
+
+    assert job["error"] == "The turn stopped before it finished (RuntimeError: a bug)."
+    assert job["ended"] is not None

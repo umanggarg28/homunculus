@@ -55,81 +55,96 @@ def new_location(quote: str, lines: list[str], span: int) -> tuple[int, int] | N
     return matches[0] if len(matches) == 1 else None
 
 
+def outside_code_blocks(lines: list[str]) -> list[tuple[int, str, bool]]:
+    """Each line as (index, text, inside a code block), skipping the fences themselves."""
+    marked, inside = [], False
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith("```"):
+            inside = not inside
+            continue
+        marked.append((index, line, inside))
+    return marked
+
+
+def link_problem(link: re.Match[str], line: str) -> str | None:
+    """Why this link does not point at the code quoted after it, or None if it does."""
+    path, first = ROOT / link.group(2), int(link.group(3))
+    last = int(link.group(4) or first)
+    if not path.is_file():
+        return f"{link.group(2)} does not exist"
+    lines = path.read_text().splitlines()
+    if not 1 <= first <= last <= len(lines):
+        return f"{link.group(2)} has no lines {first}-{last}"
+    quote = CODE.search(line, link.end())
+    if quote is None:
+        return f"{link.group(0)} is not followed by the code it points at"
+    if not quoted_code_is_there(quote.group(1), squeeze("".join(lines[first - 1 : last]))):
+        return f"{link.group(2)} lines {first}-{last} do not contain `{quote.group(1)}`"
+    return None
+
+
+def relinked(link: re.Match[str], line: str) -> str:
+    """The link pointed at its quoted code's new lines, or unchanged if that is not safe."""
+    path, first = ROOT / link.group(2), int(link.group(3))
+    last = int(link.group(4) or first)
+    quote = CODE.search(line, link.end())
+    if quote is None or not path.is_file() or link_problem(link, line) is None:
+        return link.group(0)
+    found = new_location(quote.group(1), path.read_text().splitlines(), last - first + 1)
+    if found is None:
+        return link.group(0)
+    new_first, new_last = found
+    lines = f"{new_first}" if new_first == new_last else f"{new_first}-{new_last}"
+    anchor = f"L{new_first}" if new_first == new_last else f"L{new_first}-L{new_last}"
+    # A label of the usual "file:lines" form follows the move; any other label is kept.
+    old_lines = f"{first}" if first == last else f"{first}-{last}"
+    label = link.group(1)
+    if label == f"{Path(link.group(2)).name}:{old_lines}":
+        label = f"{Path(link.group(2)).name}:{lines}"
+    return f"[{label}]({link.group(2)}#{anchor})"
+
+
 def fix() -> int:
     """Point moved links at their code's new lines. Returns how many were updated."""
     text = DOCUMENT.read_text().splitlines(keepends=True)
     updated = 0
-    for index, line in enumerate(text):
+    for index, line, in_code_block in outside_code_blocks(text):
+        if in_code_block:
+            continue
 
         def relink(link: re.Match[str], line: str = line) -> str:
-            nonlocal updated
-            path, first = ROOT / link.group(2), int(link.group(3))
-            last = int(link.group(4) or first)
-            quote = CODE.search(line, link.end())
-            if quote is None or not path.is_file():
-                return link.group(0)
-            lines = path.read_text().splitlines()
-            if 1 <= first <= last <= len(lines) and quoted_code_is_there(
-                quote.group(1), squeeze("".join(lines[first - 1 : last]))
-            ):
-                return link.group(0)
-            found = new_location(quote.group(1), lines, last - first + 1)
-            if found is None:
-                return link.group(0)
-            updated += 1
-            new_first, new_last = found
-            name = Path(link.group(2)).name
-            if new_first == new_last:
-                return f"[{name}:{new_first}]({link.group(2)}#L{new_first})"
-            return f"[{name}:{new_first}-{new_last}]({link.group(2)}#L{new_first}-L{new_last})"
+            return relinked(link, line)
 
-        text[index] = LINK.sub(relink, line)
-    DOCUMENT.write_text("".join(text))
+        new = LINK.sub(relink, line)
+        if new != line:
+            text[index] = new
+            updated += 1
+    if updated:
+        DOCUMENT.write_text("".join(text))
     return updated
 
 
 def problems() -> list[str]:
     found: list[str] = []
-    in_code_block = False
-    for number, line in enumerate(DOCUMENT.read_text().splitlines(), start=1):
-        if line.lstrip().startswith("```"):
-            in_code_block = not in_code_block
-            continue
-        where = f"LEARN.md:{number}"
+    for index, line, in_code_block in outside_code_blocks(DOCUMENT.read_text().splitlines()):
+        where = f"LEARN.md:{index + 1}"
         if in_code_block:
             # A code block cannot hold a link, so it must not cite line numbers either.
             if BARE_NUMBER.search(line) or re.search(r"\bline \d+ of", line):
                 found.append(f"{where}: a line number inside a code block cannot be checked")
             continue
         for link in LINK.finditer(line):
-            path, first = ROOT / link.group(2), int(link.group(3))
-            last = int(link.group(4) or first)
-            if not path.is_file():
-                found.append(f"{where}: {link.group(2)} does not exist")
-                continue
-            lines = path.read_text().splitlines()
-            if not 1 <= first <= last <= len(lines):
-                found.append(f"{where}: {link.group(2)} has no lines {first}-{last}")
-                continue
-            quote = CODE.search(line, link.end())
-            if quote is None:
-                found.append(f"{where}: {link.group(0)} is not followed by the code it points at")
-                continue
-            cited = squeeze("".join(lines[first - 1 : last]))
-            if not quoted_code_is_there(quote.group(1), cited):
-                found.append(
-                    f"{where}: {link.group(2)} lines {first}-{last} do not contain "
-                    f"`{quote.group(1)}`"
-                )
-        without_links = LINK.sub("", line)
-        if BARE_NUMBER.search(without_links):
+            problem = link_problem(link, line)
+            if problem is not None:
+                found.append(f"{where}: {problem}")
+        if BARE_NUMBER.search(LINK.sub("", line)):
             found.append(f"{where}: a line number without a link: {line.strip()[:80]}")
     return found
 
 
 if __name__ == "__main__":
     if "--fix" in sys.argv:
-        print(f"Updated {fix()} link(s).")
+        print(f"Updated {fix()} line(s).")
     issues = problems()
     for issue in issues:
         print(issue)

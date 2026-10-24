@@ -32,7 +32,12 @@ export interface ActivityStep {
   answer: string;
   result: string;
   outcome: StepOutcome;
+  /** The approval request this step created, or ran once it was approved. */
+  request: string | null;
 }
+
+/** The operator's verdict on a piece of work. */
+export type Rating = "up" | "down";
 
 /** One piece of work: a message and everything the agent did for it. */
 export interface Job {
@@ -45,7 +50,7 @@ export interface Job {
   steps: ActivityStep[];
   reply: string | null;
   error: string | null;
-  feedback: { rating: "up" | "down"; reason: string | null; time: string } | null;
+  feedback: { rating: Rating; reason: string | null; time: string } | null;
 }
 
 async function sendDecision(id: string, action: "approve" | "deny" | "done", note?: string): Promise<Approval> {
@@ -95,7 +100,7 @@ export const api = {
   },
 
   /** Rate one piece of work. A later rating replaces an earlier one. */
-  async feedback(job: string, rating: "up" | "down", reason?: string): Promise<Job> {
+  async feedback(job: string, rating: Rating, reason?: string): Promise<Job> {
     const response = await fetch(`/api/activity/${job}/feedback`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
