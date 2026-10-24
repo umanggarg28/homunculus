@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from homunculus import loop
-from homunculus.activity import Activity, context_of, fail, feedback_of, trace_id_of
+from homunculus.activity import DECISION, Activity, context_of, fail
 from homunculus.approvals import Approval, ApprovalError, Approvals, Kind, Status
 from homunculus.model import Message, Model, ModelError
 from homunculus.tools import Tool
@@ -121,13 +121,15 @@ def create_app(
             decided = approvals.decide(approval_id, status, note)
         except ApprovalError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
-        activity.record_operator(
-            "decision",
-            trace_id_of(decided.traceparent),
-            id=approval_id,
-            tool=decided.tool,
-            status=status,
-            note=note,
+        activity.event(
+            DECISION,
+            context_of(decided.traceparent),
+            {
+                "homunculus.approval.id": approval_id,
+                "homunculus.approval.status": status,
+                "homunculus.approval.note": note,
+                "gen_ai.tool.name": decided.tool,
+            },
         )
         return decided
 
@@ -191,15 +193,15 @@ def create_app(
 
     @app.post("/api/activity/{job}/feedback")
     async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:
-        """Record the operator's view of one piece of work. A later rating replaces an
-        earlier one; the file keeps both, since it is only ever added to."""
+        """Record the operator's view of one piece of work, as an evaluation event on it.
+        A later rating replaces an earlier one; the file keeps both, since it is only ever
+        added to."""
         found = next((j for j in activity.jobs() if j["job"] == job), None)
         if found is None:
             raise HTTPException(status_code=404, detail=f"there is no job {job}")
-        line = activity.record_operator(
-            "rating", job, rating=feedback.rating, reason=feedback.reason
-        )
-        found["feedback"] = feedback_of(line)
+        if found["span"] is None:
+            raise HTTPException(status_code=409, detail=f"job {job} has nothing to rate yet")
+        found["feedback"] = activity.rate(found, feedback.rating, feedback.reason)
         return found
 
     @app.get("/api/history")

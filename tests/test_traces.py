@@ -192,9 +192,11 @@ def test_an_approved_action_runs_in_the_trace_that_asked_for_it(tmp_path: Path) 
         "waiting",
         "ok",
     )
-    decisions = [
-        json.loads(line) for line in (tmp_path / "operator.jsonl").read_text().splitlines()
+    [decision] = [
+        record
+        for line in (tmp_path / "logs.jsonl").read_text().splitlines()
+        for resource in json.loads(line)["resourceLogs"]
+        for record in resource["scopeLogs"][0]["logRecords"]
+        if record.get("eventName") == "homunculus.approval.decision"
     ]
-    assert [(d["kind"], d["job"], d["status"]) for d in decisions] == [
-        ("decision", root["traceId"], "approved")
-    ]
+    assert (decision["traceId"], decision["spanId"]) == (root["traceId"], root["spanId"])
