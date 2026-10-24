@@ -41,7 +41,7 @@ Before the chapters, here is one message, `"Hello"`, going all the way through t
      │  POST /api/chat   {"message": "Hello"}
      ▼
 ┌──────────────┐
-│  server.py   │  chat()   takes the request, holds the lock
+│  server.py   │  chat()   starts a turn as its own task, and watches it
 └──────┬───────┘
        │  "Hello"
        ▼
@@ -56,9 +56,10 @@ Before the chapters, here is one message, `"Hello"`, going all the way through t
        │  "Good ", "morning."   (one piece at a time)
        ▼
     loop.py  ──►  server.py  ──►  you
-                                  event: delta  {"text": "Good "}
-                                  event: delta  {"text": "morning."}
-                                  event: done   {}
+                                  id 1  event: turn   {"id": "1f68…", "message": "Hello"}
+                                  id 2  event: delta  {"text": "Good "}
+                                  id 3  event: delta  {"text": "morning."}
+                                  id 4  event: done   {}
 ```
 
 An everyday picture. The **server** is the waiter: it takes your order at the door and brings the food back. The **loop** is the head chef: it decides what the cook needs to know, including everything you ordered before. The **model** is the phone line to an outside cook: it reads each dish out as soon as it is ready. The waiter never phones the cook, and the cook never sees you.
@@ -393,90 +394,117 @@ Then try the real thing. Follow the Quick start in the README with your own key,
 
 ## 3. The server
 
-Code: `src/homunculus/server.py`. Tests: `tests/test_server.py`.
+Code: `src/homunculus/server.py` and `src/homunculus/turns.py`. Tests: `tests/test_server.py` and `tests/test_turns.py`.
 
 ### The problem
 
-The loop and the model are Python functions. Your browser, `curl`, and later the web console and Discord cannot call a Python function. They speak HTTP. The server is the doorway: it accepts an HTTP request, runs the loop, and sends the reply back over the same connection as it is written.
+The loop and the model are Python functions. Your browser, `curl`, and later the web console and Discord cannot call a Python function. They speak HTTP. The server is the doorway: it accepts an HTTP request, starts the work, and sends the reply back as it is written.
 
-It also has to keep one rule the whole agent depends on: one piece of work at a time.
+It has to keep two rules the whole agent depends on. One piece of work at a time. And the work belongs to the agent, not to the page that asked for it: closing the page, or reloading it, must not stop what the agent is doing.
 
 ### The idea
 
 **FastAPI** is a Python web framework. You write an ordinary function, mark it with `@app.post("/api/chat")`, and FastAPI calls it whenever a `POST` request arrives at that path. It reads the JSON body into a typed object (`ChatRequest`, which has one field, `message: str`) and rejects anything that does not fit.
 
-**Streaming a response.** A normal HTTP response is built in full, then sent. A `StreamingResponse` is handed a generator instead, and FastAPI sends each piece the generator yields the moment it is yielded. The server's generator is `events()`.
+**A turn is a task of its own.** `asyncio.create_task` starts a coroutine that runs by itself, beside whatever started it. Each message becomes a turn running as such a task, in `turns.py`. Everything the turn does becomes a numbered `Event`, kept in a list on the turn. The page that sent the message only *watches* that list. When the page goes away, only the watching stops. OpenAI's background responses, LangGraph's background runs and the Vercel AI SDK's resumable streams are built the same way.
 
-**Server-sent events, from the other side.** In chapter 2 the model module *read* an SSE stream from OpenRouter. Here the server *writes* one for you, in the same standard format: an `event:` line naming the kind of event, a `data:` line with JSON, and a blank line to end it. Three kinds exist:
+**Server-sent events, from the other side.** In chapter 2 the model module *read* an SSE stream from OpenRouter. Here the server *writes* one for you, in the same standard format: an `id:` line with the event's number, an `event:` line naming its kind, a `data:` line with JSON, and a blank line to end it. These kinds exist:
 
 | Event | Data | Meaning |
 |---|---|---|
+| `turn` | `{"id", "message"}` | Always first: which turn this is, and the message it answers |
 | `tool` | `{"name", "arguments", "answer", "result", "duration_ms", "outcome"}` | One tool call the loop dealt with (chapter 4). `outcome` is `ok`, `waiting` or `failed` |
 | `delta` | `{"text": "..."}` | The next piece of the reply |
 | `done` | `{}` | The reply is complete |
 | `error` | `{"message": "..."}` | The reply failed, and why |
+| `stopped` | `{}` | You stopped the turn |
 
-A stream ends with exactly one `done` or one `error`, never both. The web console reads these events to draw the reply, the tool blocks and the robot's state.
+A stream ends with exactly one of `done`, `error` or `stopped`.
+
+**Coming back, the standard way.** The SSE standard (WHATWG HTML) says a client that reconnects sends the last `id` it saw in a `Last-Event-ID` header, and the server carries on after it. Three endpoints use that:
+
+| Endpoint | Effect |
+|---|---|
+| `GET /api/turns/current` | Which turn is in progress, if any |
+| `GET /api/turns/{id}/events` | That turn's events from the start, or after `Last-Event-ID`, then live |
+| `POST /api/turns/{id}/stop` | Stop it. Its stream ends with `stopped` |
 
 The server has two more jobs. `GET /api/history` returns the conversation so far, so the console can show it after a page reload. And when the console has been built, the server hands out its files: any address that is not under `/api/` gets the console's `index.html`, and the console itself works out which screen to show.
 
-**A lock for one turn at a time.** `asyncio.Lock` is a token only one task can hold. `async with turn:` waits until the token is free, takes it, and gives it back when the block ends, even if an error happens inside. The server holds it for the whole reply.
+**A lock for one turn at a time.** `asyncio.Lock` is a token only one task can hold. `async with turn:` waits until the token is free, takes it, and gives it back when the block ends, even if an error happens inside. Each turn holds it for its whole reply, so a second message waits for the first.
 
 ### A picture
 
 ```
- you                         server                         loop
-  │ POST /api/chat              │                              │
-  │ {"message": "Hello"}        │                              │
-  │ ──────────────────────────► │ wait for the lock            │
-  │                             │ run(model, history, "Hello") │
-  │                             │ ───────────────────────────► │
-  │                             │ ◄──────── "Good " ────────── │
-  │ ◄─ event: delta "Good " ─── │                              │
-  │                             │ ◄──────── "morning." ─────── │
-  │ ◄─ event: delta "morning." ─│                              │
-  │ ◄─ event: done ──────────── │ release the lock             │
+ you                       server                       turn task                   loop
+  │ POST /api/chat           │                              │                          │
+  │ {"message": "Hello"}     │ start the turn ────────────► │ add "turn" (id 1)        │
+  │                          │ watch it                     │ wait for the lock        │
+  │                          │                              │ run(..., "Hello") ─────► │
+  │                          │                              │ ◄────── "Good " ──────── │
+  │ ◄─ id 2 delta "Good " ── │ ◄── a new event ──────────── │ add "delta" (id 2)       │
+  │   (you close the page here: only the watching ends)     │                          │
+  │                          │                              │ ◄──── "morning." ─────── │
+  │                          │                              │ add "delta" (id 3)       │
+  │                          │                              │ add "done" (id 4)        │
+  │ GET .../events                                          │ release the lock         │
+  │ Last-Event-ID: 2   ────► │ events after 2 ─────────────────────► id 3, id 4        │
 ```
 
 ### One value, traced
 
 You run `curl -N -X POST http://127.0.0.1:8765/api/chat -d '{"message": "Hello"}'` (with the JSON content-type header from the README).
 
-**`create_app(model, tools, activity, approvals)`** ran once, when the program started. It made two values that live as long as the program:
+**`create_app(model, tools, activity, approvals)`** ran once, when the program started. It made three values that live as long as the program:
 
 ```python
-history = []            # list of message dicts, shared by every request
+history = []            # list of message dicts, shared by every turn
 turn = asyncio.Lock()   # free
+turns = Turns()         # running and recent turns, by id; empty
 ```
 
-Both are local variables of `create_app`. The `chat` function defined inside it can still reach them. This is called a closure, and it is why `history` survives between requests without being a global.
+All are local variables of `create_app`. The functions defined inside it can still reach them. This is called a closure, and it is why `history` survives between requests without being a global.
 
-**FastAPI reads the body** and calls `chat(request)` with:
-
-```python
-request = ChatRequest(message="Hello")    # request.message is the str "Hello"
-```
-
-**`chat` returns at once**, with `StreamingResponse(events(), media_type="text/event-stream")`. Nothing has run yet. Calling `events()` only creates the generator. FastAPI now pulls from it piece by piece.
-
-**Inside `events()`**, `async with turn:` takes the free lock. `loop.run(...)` yields `"Good "` (chapter 1). It is a `str`, not a `ToolStep`, so the server yields:
-
-```python
-sse("delta", {"text": "Good "}) -> 'event: delta\ndata: {"text": "Good "}\n\n'    # a str
-```
-
-`json.dumps({"text": "Good "})` produced the `data` part. The `\n\n` at the end is the blank line that closes the event. Your terminal prints:
+**FastAPI reads the body** and calls `chat(request)` with `request = ChatRequest(message="Hello")`. `chat` defines `work`, what this turn will do, and hands it to [turns.py:90](src/homunculus/turns.py#L90) `turn.task = asyncio.create_task(self._run(turn, work))`:
 
 ```
+turns.start(work) -> Turn(id="1f68ddcd07d2139a", events=[], done=False, task=<Task>)
+```
+
+Then [server.py:96](src/homunculus/server.py#L96) `return watch(turns.start(work))` returns at once with a `StreamingResponse` that follows this turn. Nothing has been sent yet.
+
+**The turn task runs.** `work` first adds the opening event, then takes the lock and runs the loop. Each item becomes an event with the next number:
+
+```
+add("turn",  {"id": "1f68...", "message": "Hello"})   -> Event(id=1, name="turn", ...)
+add("delta", {"text": "Good "})                        -> Event(id=2, name="delta", ...)
+add("delta", {"text": "morning."})                     -> Event(id=3, name="delta", ...)
+add("done",  {})                                       -> Event(id=4, name="done", ...)
+```
+
+Each `add` appends to `turn.events`, a list of `Event`, and wakes anyone waiting through an `asyncio.Condition`.
+
+**The watching.** [turns.py:51](src/homunculus/turns.py#L51) `async def follow(self, after: int = 0) -> AsyncIterator[Event]:` yields every event after number `after`, then waits for new ones until the turn is done. `watch` formats each one with `sse`:
+
+```
+sse(Event(2, "delta", {"text": "Good "})) -> 'id: 2\nevent: delta\ndata: {"text": "Good "}\n\n'
+```
+
+Your terminal prints:
+
+```
+id: 2
 event: delta
 data: {"text": "Good "}
 ```
 
-The same happens for `"morning."`. Then the loop ends, the code after the `try` block runs, and the server yields `sse("done", {})`, which is `'event: done\ndata: {}\n\n'`. The `async with` block ends and the lock is free again.
+**If you close the page after event 2**, FastAPI stops the `StreamingResponse`, and only `follow` is cancelled. The turn task never noticed anyone was watching, so it carries on, adds events 3 and 4, saves the exchange to `history` and releases the lock. Coming back later, `GET /api/turns/1f68.../events` with `Last-Event-ID: 2` is `follow(after=2)`, which yields only events 3 and 4.
 
-**If the model failed**, `loop.run` would raise `ModelError` partway through. `except ModelError as error:` catches it and yields `sse("error", {"message": str(error)})`, and `return` ends the generator, so `done` is never sent. The lock is released on the way out.
+**If you press stop**, `POST /api/turns/1f68.../stop` calls `running.stop()`, which is [turns.py:73](src/homunculus/turns.py#L73) `self.task.cancel(STOPPED_BY_OPERATOR)`. Python raises `CancelledError("stopped by the operator")` inside the turn wherever it is waiting. The loop ends the trace with "The turn was stopped by the operator." (chapter 6) and leaves `history` as it was. Then `Turns._run` catches the cancellation and adds a last `stopped` event, so everyone watching sees how the turn ended. Anything else that ends a turn early, such as a bug in a tool or the program shutting down, adds an `error` event instead, with the same words the trace records. And a turn stopped before its first step, which never runs any of `_run`, is closed by a callback on its task, so every stream ends with a last event.
 
-**Two messages at the same moment.** Suppose "I like tea." and "What do I like?" arrive together. The first request takes the lock. The second reaches `async with turn:` and waits. Only when the first reply is complete, and the loop has added that exchange to `history`, does the second take the lock. Its call to `loop.run` then sees `history` with 2 entries, so the model is asked "What do I like?" with "I like tea." already in front of it. Without the lock, both would read `history` while it was still empty.
+**If the model failed**, `loop.run` would raise `ModelError` partway through. `work` catches it and adds an `error` event, so `done` is never sent. The lock is released on the way out.
+
+**Two messages at the same moment.** Suppose "I like tea." and "What do I like?" arrive together. Both become turns at once. The first takes the lock. The second reaches `async with turn:` and waits. Only when the first reply is complete, and the loop has added that exchange to `history`, does the second take the lock. Its call to `loop.run` then sees `history` with 2 entries, so the model is asked "What do I like?" with "I like tea." already in front of it. Without the lock, both would read `history` while it was still empty.
 
 ### The test
 
@@ -498,16 +526,15 @@ In plain English: "When two messages arrive at the same time, the second is sent
 
 `SlowScriptedModel` pauses briefly between chunks, so the two requests really do overlap. `asyncio.gather` starts both at once. `httpx.ASGITransport` sends the requests straight into the FastAPI app in memory, with no network involved.
 
-The other server tests say: a reply is streamed as `delta` events followed by `done`; a rejected request and an error partway through each end with one `error` event and no `done`; and every request to the model carries the privacy routing (chapter 2).
+The other server tests say: a reply is streamed as a `turn` event, then `delta` events, then `done`; a rejected request and an error partway through each end with one `error` event and no `done`; and every request to the model carries the privacy routing (chapter 2). The tests in `tests/test_turns.py` say: a turn carries on after the page goes away; a page can rejoin a running turn from the start; a page that reconnects with `Last-Event-ID` gets only what it missed; stop ends a running turn and leaves the conversation as it was; and only a running turn can be stopped or named as current.
 
 ### Change it yourself
 
-1. In `server.py`, delete the line `async with turn:` and move the block under it one level to the left.
+1. In `server.py`, find `work` inside `chat`, delete the line `async with turn:` and move the block under it one level to the left.
 2. Run `uv run pytest tests/test_server.py`.
 3. The two-messages test fails. Its message shows the second call reaching the model with only "What do I like?" and no earlier exchange. This is the race the lock prevents.
 4. Undo the change.
-
-Then try a second change that keeps the tests green. Add a fourth kind of event, `start`, sent once before the first `delta`. Write the test first: copy `test_chat_streams_the_reply_then_signals_done` and expect `("start", {})` at the front of the list. Watch it fail, make it pass, then run the whole suite. You have now changed the API's behaviour the way every change in this project is made.
+5. Now find `turn_events` and change `watch(find(turn_id), after=after)` to `watch(find(turn_id))`, so the header is ignored. Run `uv run pytest tests/test_turns.py`. The reconnect test fails: a page coming back would be sent every event again and show the reply twice. Undo the change.
 
 ---
 
@@ -877,7 +904,7 @@ The span's trace id, `9f3c41d2...` (32 hex characters), is the job's id from now
 
 **The tool call.** In `_carry_out`, [loop.py:142](src/homunculus/loop.py#L142) `span = activity.start_tool(call.name, call.arguments, parent, call_id=call.id)` starts the `execute_tool write` span before the gate decides. After the write, [loop.py:148](src/homunculus/loop.py#L148) `activity.end_tool(span, answer.value, result, outcome, request_id)` sets `homunculus.gate.answer="act"`, `gen_ai.tool.call.result="Wrote tea.md."` and `homunculus.outcome="ok"`, and ends it. That is line two. A failed step gets an error status and `error.type`: `"tool_error"` when the tool ran and reported a failure, or the gate's answer, such as `"refuse"`, when it never ran. If anything goes wrong between starting the span and ending it, the `except` around it still ends the span, so no span is ever left open.
 
-**The second model call** answers "Saved." and becomes line three. Then [loop.py:128](src/homunculus/loop.py#L128) `root.end()` ends the root, with the reply in `gen_ai.output.messages`: line four. If the model had failed, `fail` would have set the root's status to error with the message, and `error.type` to `"ModelError"`. Anything else that cuts a turn short, such as you closing the page, does the same, in the `except` block whose comment starts [loop.py:123](src/homunculus/loop.py#L123) `# Anything else that ends the turn early, such as a bug or the operator closing`.
+**The second model call** answers "Saved." and becomes line three. Then [loop.py:128](src/homunculus/loop.py#L128) `root.end()` ends the root, with the reply in `gen_ai.output.messages`: line four. If the model had failed, `fail` would have set the root's status to error with the message, and `error.type` to `"ModelError"`. Anything else that cuts a turn short, such as you closing the page, does the same, in the `except` block whose comment starts [loop.py:123](src/homunculus/loop.py#L123) `# Anything else that ends the turn early, such as a bug or the operator pressing`.
 
 One line of the file, cut down:
 
@@ -891,7 +918,7 @@ One line of the file, cut down:
 
 **From spans to jobs.** [activity.py:200](src/homunculus/activity.py#L200) `def jobs(spans: list[dict[str, Any]], events: list[dict[str, Any]]) -> list[dict[str, Any]]:` groups the spans and events by `traceId`. For each trace it finds the root ([activity.py:214](src/homunculus/activity.py#L214) `root = next((s for s in members if s["name"] == ROOT_SPAN), None)`), reads your message from the root, or from the turn's start event while the root is not written yet, and the reply from the root's attributes, and turns each `execute_tool` span into a step, in the order they started. Read the job aloud: "you asked me to note that you like green tea; I wrote tea.md, which worked; I replied Saved."
 
-**An approved action joins its trace later.** When the gate asks, the approval request stores the turn's W3C `traceparent`, the standard text form of a trace context: `"00-9f3c41d2...-df12ff...-01"`, meaning version, trace id, parent span id and flags. When you approve, the server passes it to `context_of`, which turns the text back into a context with OpenTelemetry's own W3C propagator, and [server.py:145](src/homunculus/server.py#L145) `span = activity.start_tool(` starts the approved run's `execute_tool` span under the original root, with the original tool call id. Its `homunculus.gate.answer` is `"ask"`, because that is what the gate answered, and its outcome is what the run did. So the job reads: asked (◷), then approved and done (✓).
+**An approved action joins its trace later.** When the gate asks, the approval request stores the turn's W3C `traceparent`, the standard text form of a trace context: `"00-9f3c41d2...-df12ff...-01"`, meaning version, trace id, parent span id and flags. When you approve, the server passes it to `context_of`, which turns the text back into a context with OpenTelemetry's own W3C propagator, and [server.py:195](src/homunculus/server.py#L195) `span = activity.start_tool(` starts the approved run's `execute_tool` span under the original root, with the original tool call id. Its `homunculus.gate.answer` is `"ask"`, because that is what the gate answered, and its outcome is what the run did. So the job reads: asked (◷), then approved and done (✓).
 
 ### Feedback
 
@@ -905,7 +932,7 @@ The GenAI conventions define one event for judging an agent's output: `gen_ai.ev
         gen_ai.evaluation.explanation = "Ask before saving"
 ```
 
-[server.py:195](src/homunculus/server.py#L195) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` finds the job, then [server.py:204](src/homunculus/server.py#L204) `found["feedback"] = activity.rate(` writes the event. `rate` attaches it to the job's root span by writing the job's trace id and root span id as a W3C traceparent and turning that into a context, the same way an approved action finds its trace, so a trace viewer shows the rating on the work it judges.
+[server.py:245](src/homunculus/server.py#L245) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` finds the job, then [server.py:254](src/homunculus/server.py#L254) `found["feedback"] = activity.rate(` writes the event. `rate` attaches it to the job's root span by writing the job's trace id and root span id as a W3C traceparent and turning that into a context, the same way an approved action finds its trace, so a trace viewer shows the rating on the work it judges.
 
 If you change your mind and press 👍, a second event is written. `jobs` keeps the latest one ([activity.py:210](src/homunculus/activity.py#L210) `ratings = {e["traceId"]: e for e in events if _is_rating(e)}`: a later event for the same trace replaces the earlier one in the dict, and only this program's `task_completion` evaluations labelled `pass` or `fail` count). Both stay in the file. A new rating starts with an empty reason box, so the old reason is never sent with it. Nothing reads the ratings yet. Ticket #17, the daily learning pass, is where they will be used.
 
@@ -954,6 +981,8 @@ Chapters 1 to 6 end at the server, which sends a stream of text events. A person
 
 **Reading a stream with `fetch`.** The browser's `EventSource` reads server-sent events only for `GET` requests, and a chat message is a `POST`. So the console sends the request with `fetch` and reads the response body piece by piece through `response.body.getReader()`. Pieces arrive at whatever size the network delivers. One piece can hold half an event or three events, so the console keeps a buffer and only takes out complete events, those ended by a blank line.
 
+**Watching a turn, not owning it.** The turn runs on the server (chapter 3), so the console only watches it. The first event names the turn, and the console keeps its id. **[stop]** sends `POST /api/turns/{id}/stop`, and the stream then ends with `stopped`. Leaving the page closes only the watching. If the connection drops while the page is open, or ends before the turn's last event, the console waits a second and reconnects to `GET /api/turns/{id}/events` with the last event id it saw in `Last-Event-ID`, so nothing is missed or shown twice. It tries five times, as a browser's own `EventSource` keeps retrying, then says the connection was lost. When the chat screen opens, it loads the history, then asks `GET /api/turns/current`. If a turn is still running, such as one started before a reload, it rejoins it from the first event, so you see your message and the reply catching up, then arriving live. Then it asks again, so a message that was waiting behind that turn is followed too.
+
 **One source of truth for what is happening.** Every event the console receives is also recorded in `lib/turnEvents.ts`, a tiny in-page store. The robot in the sidebar and the thinking indicator read that store. The rule is that they show only what an event says. The console never guesses the agent's state.
 
 ### A picture
@@ -966,14 +995,16 @@ Chapters 1 to 6 end at the server, which sends a stream of text events. A person
       │  adds your message and an empty reply to `messages`
       │  records { event: "user_message" }            ──►  turnEvents  ──►  robot: THINKING
       ▼
- fetch POST /api/chat  ──►  server (chapter 3)
+ fetch POST /api/chat  ──►  server (chapter 3) starts the turn
       │
       ▼  response body, read piece by piece
  buffer += piece ──► parseSseChunks(buffer) ──► complete events + leftover
       │
+      ├─ turn   → keep the turn's id, for [stop] and for reconnecting
       ├─ tool   → add a ToolStep to `toolCalls`, record it  ──►  robot: WORKING
       ├─ delta  → append the text to the reply in `messages`
       ├─ error  → mark the reply failed, record it           ──►  robot: FAULT
+      ├─ stopped → mark the reply "stopped by you"
       └─ done   → record { event: "assistant_reply" }        ──►  robot: RESPONDING, DONE, IDLE
 ```
 
@@ -990,27 +1021,29 @@ messages[-1] = { id: "…", role: "assistant", content: "", inFlight: true, ts: 
 
 The empty reply is a placeholder that text will be added to. `recordTurnEvent({ event: "user_message" })` puts the first event in the store, and the robot switches to THINKING.
 
-**The first piece of the body arrives.** Suppose it is this text, with one complete event and half of the next:
+**The first event** is `turn`, `{"id": "1f68…", "message": "Save my priorities"}`. `follow` keeps the id in `turnRef`, for [stop] and for reconnecting. A [stop] pressed before this event arrived is remembered and sent now.
+
+**The next piece of the body arrives.** Suppose it is this text, with one complete event and half of the next:
 
 ```
-event: tool\ndata: {"name": "write", "arguments": "{…}", "answer": "act", "result": "Wrote priorities.md.", "duration_ms": 0, "outcome": "ok"}\n\nevent: del
+id: 2\nevent: tool\ndata: {"name": "write", "arguments": "{…}", "answer": "act", "result": "Wrote priorities.md.", "duration_ms": 0, "outcome": "ok"}\n\nid: 3\nevent: del
 ```
 
-`parseSseChunks(buffer)` splits on blank lines. That gives a list of 2 parts. The last part, `event: del`, may be incomplete, so it is returned as `remainder` and kept in `buffer` for next time:
+`parseSseChunks(buffer)` splits on blank lines. That gives a list of 2 parts. The last part, `id: 3\nevent: del`, may be incomplete, so it is returned as `remainder` and kept in `buffer` for next time:
 
 ```
-parseSseChunks(buffer) -> { events: [{ event: "tool", data: '{"name": "write", …}' }], remainder: "event: del" }
+parseSseChunks(buffer) -> { events: [{ id: "2", event: "tool", data: '{"name": "write", …}' }], remainder: "id: 3\nevent: del" }
 ```
 
-`events` is a list of 1. `JSON.parse(data)` gives an object with `name`, `arguments`, `answer`, `result`, `duration_ms` and `outcome`. Because the event is `tool`, `send` adds a `ToolStep` to `toolCalls` (a list of 1 now), which draws the WRITE block, and records the step in the store. The robot switches to WORKING. The server sent `"outcome": "ok"`, so the block reads `OK · 0MS` in green. The console never works out the outcome for itself; it shows what the server decided, so the block, the robot and the thinking indicator always agree.
+`events` is a list of 1. `JSON.parse(data)` gives an object with `name`, `arguments`, `answer`, `result`, `duration_ms` and `outcome`. `lastId` becomes 2. Because the event is `tool`, `follow` adds a `ToolStep` to `toolCalls` (a list of 1 now), which draws the WRITE block, and records the step in the store. The robot switches to WORKING. The server sent `"outcome": "ok"`, so the block reads `OK · 0MS` in green. The console never works out the outcome for itself; it shows what the server decided, so the block, the robot and the thinking indicator always agree.
 
-**The next piece** completes `event: delta\ndata: {"text": "Saved "}`. Now `buffer` is `event: del` plus the new text, which makes a whole event. `update` replaces the placeholder with a copy whose `content` is `"" + "Saved "`, so React redraws that one message. Each further `delta` appends again, and you watch the words arrive.
+**The next piece** completes `id: 3\nevent: delta\ndata: {"text": "Saved "}`. Now `buffer` is `id: 3\nevent: del` plus the new text, which makes a whole event. `update` replaces the placeholder with a copy whose `content` is `"" + "Saved "`, so React redraws that one message. Each further `delta` appends again, and you watch the words arrive.
 
 **`done` arrives.** `recordTurnEvent({ event: "assistant_reply" })` makes the robot show RESPONDING, then DONE 1.5 seconds later, then IDLE. `finished` becomes `true`, the reading loop stops, and in `finally` the reply's `inFlight` is set to `false` and `sending` to `false`, so the input is ready again.
 
-**After a reload**, the hook asks `GET /api/history` and gets a list of 2 entries, your message and the reply, without times. The log shows `--:--` instead of a time, because inventing one would claim the messages were written now.
+**After a reload**, the hook asks `GET /api/history` and gets a list of 2 entries, your message and the reply, without times. Then it asks `GET /api/turns/current`, which answers 404 because nothing is running. Had you reloaded mid-reply, it would have named the turn, and the hook would have rejoined it from event 1. The log shows `--:--` instead of a time, because inventing one would claim the messages were written now.
 
-**Where each value lives.** `messages` and `toolCalls` belong to `useChatStream` and are drawn by the chat log. The store in `turnEvents` is read by the robot (`useRobotState`) and the thinking indicator, and never by the log. `buffer` exists only inside one call to `send`.
+**Where each value lives.** `messages` and `toolCalls` belong to `useChatStream` and are drawn by the chat log. The store in `turnEvents` is read by the robot (`useRobotState`) and the thinking indicator, and never by the log. `buffer` and `lastId` exist only inside one call to `follow`.
 
 ### The test
 
@@ -1273,25 +1306,29 @@ A scripted model cannot show whether the real model follows the rules. That is c
 
 ## The whole trip in one table
 
-`"Hello"` and its reply, from creation to the end, across all three modules. Line numbers are in the module named on the left.
+`"Hello"` and its reply, from creation to the end, across the modules it passes through.
 
 ```
 where            value                                                what happens to it
 ───────────────  ───────────────────────────────────────────────────  ─────────────────────────────
 curl             '{"message": "Hello"}'  (bytes)                      sent
 server  chat     ChatRequest(message="Hello")                         checked; .message read
-server  events   "Hello"                                              handed to loop.run, lock held
+turns   start    Turn(id="1f68…", events=[])                          a task of its own starts
+server  work     Event(1, "turn", {"id": "1f68…", "message": "Hello"}) the first event, kept
+server  work     "Hello"                                              handed to loop.run, lock held
 loop    run      {"role": "user", "content": "Hello"}                 wrapped as a message
 loop    run      [system, user]  list of 2                            handed to model.stream
 model   stream   body dict                                            sent as JSON to OpenRouter
 model   stream   {"choices": [{"delta": {"content": "Good "}}]}       parsed from one data line
 model   stream   "Good "                                              yielded up
 loop    run      parts = ["Good "]; yields "Good "                    noted and passed up
-server  events   'event: delta\ndata: {"text": "Good "}\n\n'          sent to your terminal
+server  work     Event(2, "delta", {"text": "Good "})                 kept on the turn
+server  watch    'id: 2\nevent: delta\ndata: {"text": "Good "}\n\n'  sent to your terminal
    ... the same for "morning." ...
 model   stream   data: [DONE]                                         generator ends
 loop    run      history = [user "Hello", assistant "Good morning."]  saved, only now
-server  events   'event: done\ndata: {}\n\n'                          sent; lock released
+server  work     Event(4, "done", {})                                 kept; lock released
+server  watch    'id: 4\nevent: done\ndata: {}\n\n'                    sent; the stream ends
 ```
 
-Never stored: the system message is rebuilt every turn. Gone when `run` ends: `parts`. Never read by the server: `history`, which only the loop writes.
+Never stored: the system message is rebuilt every turn. Gone when `run` ends: `parts`. Never read by the server: `history`, which only the loop writes. Kept until the program stops: the turn's events, so a page can rejoin.

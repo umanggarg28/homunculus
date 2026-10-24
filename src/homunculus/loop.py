@@ -120,9 +120,9 @@ async def run(
         fail(root, error, str(error))
         raise
     except BaseException as error:
-        # Anything else that ends the turn early, such as a bug or the operator closing
-        # the page, still ends the job, so the activity screen never shows it as running.
-        fail(root, error, _stopped(error))
+        # Anything else that ends the turn early, such as a bug or the operator pressing
+        # stop, still ends the job, so the activity screen never shows it as running.
+        fail(root, error, stopped_message(error))
         raise
     root.set_attribute("gen_ai.output.messages", output_messages(reply["content"]))
     root.end()
@@ -255,11 +255,17 @@ def _record_usage(span: Span, usage: Usage) -> None:
         span.set_attribute("gen_ai.usage.cache_read.input_tokens", usage.cached_input_tokens)
 
 
-def _stopped(error: BaseException) -> str:
-    # A closed page cancels the turn. The cancellation's own text names internal tasks,
-    # which mean nothing to the operator.
+# The reason given when the operator stops a turn, so its record can say who stopped it.
+STOPPED_BY_OPERATOR = "stopped by the operator"
+
+
+def stopped_message(error: BaseException) -> str:
+    """Why a turn ended early, in words for the operator. A cancellation's own text names
+    internal tasks, which mean nothing to the operator."""
+    if isinstance(error, asyncio.CancelledError) and error.args == (STOPPED_BY_OPERATOR,):
+        return "The turn was stopped by the operator."
     if isinstance(error, asyncio.CancelledError | GeneratorExit):
-        return "The turn stopped before it finished: the connection closed."
+        return "The turn stopped before it finished: it was cancelled."
     detail = f"{type(error).__name__}: {error}" if str(error) else type(error).__name__
     return f"The turn stopped before it finished ({detail})."
 

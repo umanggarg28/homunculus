@@ -8,6 +8,7 @@ Homunculus is one always-on process that holds a small model loop, a few general
 |---|---|---|
 | `server` | HTTP API for the web console and chat channels, and the built console itself | Chat stream, history, console files |
 | `loop` | Ask the model, run the tool it asks for, repeat until done | Full loop |
+| `turns` | Turns running on the server, and their numbered events | Each turn a task of its own; events kept in memory for rejoining; stop on request |
 | `prompt` | What the model is told at the start of every turn | Fixed instructions in `prompt.md`, shipped with the code and the same every turn; layers from memory and skills are planned |
 | `model` | One streaming call to the model provider | Streaming text and tool calls, privacy routing, error reporting |
 | `gate` | The answer for every proposed action | Decides from each tool's MCP annotations: read-only acts, outward or unannotated asks, destructive asks except `write`, `edit` and `rename`; paths must stay in the workspace; unknown tools and unreadable calls are refused |
@@ -18,15 +19,15 @@ Homunculus is one always-on process that holds a small model loop, a few general
 | `memory` | The wiki, raw sources, profile and goals, as files | Planned |
 | `waker` | When the agent works unprompted | Planned |
 
-Each module has one job. A new module needs a stated reason. `activity` is separate from `memory` because it is written only by code and must stay out of reach of every tool, while memory is written by the agent through its tools. `prompt` is separate from `loop` because the loop decides what runs next, while the prompt decides what the model is told, and later tickets add layers to the prompt without touching the loop. `approvals` is separate from `gate` because the gate is a pure decision with no state, while requests are saved, wait for the operator and change status once.
+Each module has one job. A new module needs a stated reason. `activity` is separate from `memory` because it is written only by code and must stay out of reach of every tool, while memory is written by the agent through its tools. `turns` is separate from `server` because the server only wires HTTP to the work, while a turn outlives the request that started it and is watched by any number of pages. `prompt` is separate from `loop` because the loop decides what runs next, while the prompt decides what the model is told, and later tickets add layers to the prompt without touching the loop. `approvals` is separate from `gate` because the gate is a pure decision with no state, while requests are saved, wait for the operator and change status once.
 
 ## How a chat message flows
 
 1. `POST /api/chat` arrives at `server` with `{"message": "Hello"}`.
-2. `server` waits for any reply already in progress, then calls `loop.run` with the model, the conversation history and the text.
+2. `server` starts a turn as a task of its own (`turns`), and the response watches it. The turn waits for any reply already in progress, then calls `loop.run` with the model, the conversation history and the text. Closing the page ends only the watching.
 3. `loop` builds the message list: the system message from `prompt.system_prompt()`, the earlier turns, then the messages of this turn so far. Each tool's description says when to use it.
 4. `model` sends that list and the tool schemas to OpenRouter with `stream: true` and the fixed privacy routing. It yields text chunks as they arrive, and each tool call once its fragments are complete.
-5. `loop` passes each text chunk up as it arrives. `server` wraps each one as a `delta` server-sent event.
+5. `loop` passes each text chunk up as it arrives. The turn keeps each one as a numbered event, and `server` sends it as a `delta` server-sent event with that number as its `id`.
 6. If the model asked for tools, `loop` puts each call through `gate.decide`, with the definition of the tool it names. Allowed calls run; the rest are not run. Either way the result goes into the turn as a `tool` message, the step is recorded in the activity log, `loop` yields a `ToolStep` that `server` sends as a `tool` event, and the loop goes back to step 3.
 7. When the model answers without asking for a tool, `loop` adds the whole turn to the history, and `server` sends `done`.
 
@@ -34,14 +35,28 @@ If the model call fails at any point, `model` raises `ModelError`, `server` send
 
 ## The chat stream
 
-`POST /api/chat` with `{"message": "..."}` answers with server-sent events:
+`POST /api/chat` with `{"message": "..."}` starts a turn and answers with its server-sent events. Each has an `id`, counting up from 1:
 
 | Event | Data | Meaning |
 |---|---|---|
+| `turn` | `{"id", "message"}` | Always first: the turn's id and the message it answers |
 | `tool` | `{"name", "arguments", "answer", "result", "duration_ms", "outcome"}` | One tool call, after the gate answered and the tool ran or did not. `outcome` is `ok`, `waiting` or `failed`, so every reader classifies it the same way |
 | `delta` | `{"text": "..."}` | The next piece of the reply |
 | `done` | `{}` | The reply is complete |
 | `error` | `{"message": "..."}` | The reply failed, and why |
+| `stopped` | `{}` | The operator stopped the turn |
+
+Every stream ends with one of `done`, `error` or `stopped`. A turn that fails for any other reason, such as a tool bug or the program shutting down, ends with `error`, in the same words its trace records.
+
+A turn runs on the server whoever is watching, as OpenAI's background responses, LangGraph's background runs and the Vercel AI SDK's resumable streams do. Rejoining follows the server-sent events standard: a page sends the last `id` it saw as `Last-Event-ID` and gets only what came after.
+
+| Endpoint | Effect |
+|---|---|
+| `GET /api/turns/current` | The turn in progress, or 404 |
+| `GET /api/turns/{id}/events` | That turn's events from the start, or after `Last-Event-ID`, then live |
+| `POST /api/turns/{id}/stop` | Stops a running turn (202); 409 if it has ended. Its trace ends with "The turn was stopped by the operator." |
+
+Events are kept in memory for the 20 most recent finished turns, until the program stops. Keeping them across restarts belongs with the saved conversation (#30).
 
 `GET /api/history` returns the conversation as the operator saw it: their messages, notices of their decisions (marked `"notice": true`), and the replies, without tool messages. Any other path that is not under `/api/` is answered with the console's `index.html`, so the console can choose the screen from the address.
 
@@ -123,8 +138,9 @@ Tests sit at agreed seams and fake only the outside world.
 | Server HTTP API: the trace file | One trace per turn with a span per model call and tool, read from the file as OTLP JSON; GenAI attributes; token counts; error status on a failed turn | The model |
 | Server HTTP API: activity | Jobs grouped from the traces, feedback kept and replaced by a later rating, failed and cut-short jobs, approved actions shown in the job that asked, decision follow-ups marked as notices | The model |
 | Server HTTP API: prompt | The fixed instructions come first, in order, and are the same on every turn; every tool says when to use it | The model |
+| Server HTTP API: turns | A turn carries on after the page goes away, a page rejoins from the start, `Last-Event-ID` sends only what was missed, stop ends a turn and leaves the conversation, only a running turn can be stopped | The model (a stand-in that waits until the test lets it finish) |
 | Server HTTP API: approvals | Waiting instead of running, approve, decline, hand-off done, decided once, survives a restart, notices | The model; stand-in tools that record their calls |
 | Server HTTP API | Event format including tool steps, errors, one reply at a time, privacy routing on every request, tools offered and streamed tool calls run, history, serving the console | The model, or only the network beneath the real model |
-| Console in a browser | Sending a message shows the tool step and the reply, the conversation survives a reload, approving a request runs it and the agent carries on, and a rating on the activity screen is kept | The model only; real server, built console and Chromium |
+| Console in a browser | Sending a message shows the tool step and the reply, the conversation survives a reload, approving a request runs it and the agent carries on, a rating on the activity screen is kept, reloading during a turn still shows its whole reply, and [stop] ends the turn on the server | The model only; real server, built console and Chromium |
 
 Tests run with network access blocked, so a test that reaches the internet fails. Changes the model takes part in are also tried against the real model, as AGENTS.md describes. Browser tests are marked `browser` and run separately with `uv run pytest -m browser`, after `npm run build` in `web/` and `uv run playwright install chromium`.

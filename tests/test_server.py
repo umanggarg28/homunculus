@@ -27,11 +27,14 @@ def parse_events(body: str) -> list[tuple[str, dict[str, Any]]]:
 
 
 def chat(client: TestClient, text: str) -> list[tuple[str, dict[str, Any]]]:
-    """Send one chat message and return the streamed events."""
+    """Send one chat message and return the streamed events after the first, which
+    names the turn and the message it answers."""
     response = client.post("/api/chat", json={"message": text})
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
-    return parse_events(response.text)
+    (name, opening), *events = parse_events(response.text)
+    assert (name, opening["message"]) == ("turn", text)
+    return events
 
 
 def server(model: Model, tmp_path: Path, tools: list[Tool] | None = None) -> TestClient:

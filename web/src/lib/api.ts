@@ -70,8 +70,7 @@ async function sendDecision(id: string, action: "approve" | "deny" | "done", not
 }
 
 export const api = {
-  /** Send a message. The reply streams back as server-sent events:
-   *  `delta` (text), `tool` (one tool step), then `done` or `error`. */
+  /** Start a turn and watch its events. Closing this stream does not stop the turn. */
   chat(message: string, signal?: AbortSignal): Promise<Response> {
     return fetch("/api/chat", {
       method: "POST",
@@ -79,6 +78,28 @@ export const api = {
       body: JSON.stringify({ message }),
       signal,
     });
+  },
+
+  /** The turn in progress, if any. */
+  async currentTurn(): Promise<{ id: string } | null> {
+    const response = await fetch("/api/turns/current");
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`current turn failed: ${response.status}`);
+    return response.json();
+  },
+
+  /** A turn's events after `lastEventId`, then live: the server-sent events way to
+   *  rejoin or reconnect. */
+  turnEvents(id: string, lastEventId: number, signal?: AbortSignal): Promise<Response> {
+    // Sent only once an event has been seen, as a browser's EventSource does.
+    const headers: Record<string, string> = lastEventId ? { "Last-Event-ID": String(lastEventId) } : {};
+    return fetch(`/api/turns/${id}/events`, { headers, signal });
+  },
+
+  /** Ask the server to stop a running turn. */
+  async stopTurn(id: string): Promise<void> {
+    const response = await fetch(`/api/turns/${id}/stop`, { method: "POST" });
+    if (!response.ok && response.status !== 409) throw new Error(`stop failed: ${response.status}`);
   },
 
   /** Pending requests first, then the most recently decided ones. */

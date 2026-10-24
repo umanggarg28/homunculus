@@ -41,3 +41,22 @@ class SlowScriptedModel(ScriptedModel):
         async for item in super().stream(messages, tools):
             await asyncio.sleep(0.01)
             yield item
+
+
+class WaitingModel(ScriptedModel):
+    """A model that starts replying, then waits until the test lets it finish, so a test
+    can act while a turn is still running."""
+
+    def __init__(self) -> None:
+        super().__init__([])
+        self.started = asyncio.Event()
+        self.finish = asyncio.Event()
+
+    async def stream(
+        self, messages: list[Message], tools: list[dict[str, Any]]
+    ) -> AsyncIterator[str | ToolCall | Usage]:
+        self.received.append(list(messages))
+        yield "Working"
+        self.started.set()
+        await self.finish.wait()
+        yield " on it."

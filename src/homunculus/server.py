@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -17,6 +17,7 @@ from homunculus.activity import DECISION, Activity, context_of, fail
 from homunculus.approvals import Approval, ApprovalError, Approvals, Kind, Status
 from homunculus.model import Message, Model, ModelError
 from homunculus.tools import Tool
+from homunculus.turns import Event, Turn, Turns
 
 # How many decided requests the approvals list shows below the pending ones.
 RECENT_DECISIONS = 10
@@ -37,9 +38,21 @@ class Feedback(BaseModel):
     reason: str | None = None
 
 
-def sse(event: str, data: dict[str, Any]) -> str:
-    """Format one server-sent event."""
-    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+def sse(event: Event) -> str:
+    """Format one server-sent event. Its `id` is what a reconnecting page sends back as
+    `Last-Event-ID`."""
+    return f"id: {event.id}\nevent: {event.name}\ndata: {json.dumps(event.data)}\n\n"
+
+
+def watch(turn: Turn, after: int = 0) -> StreamingResponse:
+    """Stream a turn's events after the one numbered `after`. The page closing ends only
+    this stream, never the turn."""
+
+    async def events() -> AsyncIterator[str]:
+        async for event in turn.follow(after):
+            yield sse(event)
+
+    return StreamingResponse(events(), media_type="text/event-stream")
 
 
 def create_app(
@@ -57,25 +70,62 @@ def create_app(
     # One piece of work at a time: a second message waits until the first reply is complete,
     # so it is sent to the model with the earlier exchange already in the history.
     turn = asyncio.Lock()
+    # Turns run as tasks of their own, so a page closing does not stop the work.
+    turns = Turns()
 
     @app.post("/api/chat")
     async def chat(request: ChatRequest) -> StreamingResponse:
-        async def events() -> AsyncIterator[str]:
+        """Start a turn for the operator's message, and watch it."""
+
+        async def work(running: Turn) -> None:
+            await running.add("turn", {"id": running.id, "message": request.message})
             async with turn:
                 try:
                     async for item in loop.run(
                         model, tools, activity, approvals, history, request.message
                     ):
                         if isinstance(item, loop.ToolStep):
-                            yield sse("tool", dataclasses.asdict(item))
+                            await running.add("tool", dataclasses.asdict(item))
                         else:
-                            yield sse("delta", {"text": item})
+                            await running.add("delta", {"text": item})
                 except ModelError as error:
-                    yield sse("error", {"message": str(error)})
+                    await running.add("error", {"message": str(error)})
                     return
-                yield sse("done", {})
+            await running.add("done", {})
 
-        return StreamingResponse(events(), media_type="text/event-stream")
+        return watch(turns.start(work))
+
+    def find(turn_id: str) -> Turn:
+        found = turns.get(turn_id)
+        if found is None:
+            raise HTTPException(status_code=404, detail=f"there is no turn {turn_id}")
+        return found
+
+    @app.get("/api/turns/current")
+    async def current_turn() -> dict[str, Any]:
+        """The turn in progress, so a page that was closed or reloaded can rejoin it."""
+        running = turns.current()
+        if running is None:
+            raise HTTPException(status_code=404, detail="no turn is in progress")
+        return {"id": running.id}
+
+    @app.get("/api/turns/{turn_id}/events")
+    async def turn_events(
+        turn_id: str, last_event_id: str = Header(default="", alias="Last-Event-ID")
+    ) -> StreamingResponse:
+        """A turn's events from the start, or after `Last-Event-ID`, then live. The
+        standard treats the id as text; one this server did not send starts over."""
+        after = int(last_event_id) if last_event_id.isdecimal() else 0
+        return watch(find(turn_id), after=after)
+
+    @app.post("/api/turns/{turn_id}/stop", status_code=202)
+    async def stop_turn(turn_id: str) -> dict[str, Any]:
+        """Stop a running turn. Its stream ends with a `stopped` event."""
+        running = find(turn_id)
+        if running.done:
+            raise HTTPException(status_code=409, detail=f"turn {turn_id} has already ended")
+        running.stop()
+        return {"id": running.id}
 
     @app.get("/api/approvals")
     async def list_approvals() -> list[dict[str, Any]]:

@@ -5,12 +5,14 @@ console to be built (`npm run build` in web/) and a Playwright browser, so they
 run on their own: `uv run pytest -m browser`.
 """
 
+import asyncio
 import json
 import socket
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
+from typing import Any
 
 import mcp_types as mcp
 import pytest
@@ -21,7 +23,7 @@ from scripted_model import ScriptedModel
 
 from homunculus.activity import Activity
 from homunculus.approvals import Approvals
-from homunculus.model import ToolCall
+from homunculus.model import Message, ToolCall, Usage
 from homunculus.server import create_app
 from homunculus.tools import Tool
 from homunculus.tools.files import file_tools
@@ -165,3 +167,47 @@ def test_a_piece_of_work_can_be_rated_and_the_rating_is_kept(page: Page, console
     page.get_by_role("button", name="[save]").click()
     expect(page.get_by_text("“Clear plan”")).to_be_visible()
     expect(page.get_by_text("“Ask before saving”")).to_have_count(0)
+
+
+class PausingModel(ScriptedModel):
+    """Replies in two halves with a pause between, long enough to reload the page."""
+
+    def __init__(self, pause: float) -> None:
+        super().__init__([])
+        self.pause = pause
+
+    async def stream(
+        self, messages: list[Message], tools: list[dict[str, Any]]
+    ) -> AsyncIterator[str | ToolCall | Usage]:
+        yield "Working"
+        await asyncio.sleep(self.pause)
+        yield " on it."
+
+
+def test_reloading_during_a_turn_still_shows_the_whole_reply(
+    page: Page, tmp_path: Path, workspace: Path
+) -> None:
+    for url in start_server(console_app(PausingModel(3), file_tools(workspace), tmp_path)):
+        page.goto(f"{url}/chat")
+        page.locator("textarea").fill("Plan my week")
+        page.locator("textarea").press("Enter")
+        expect(page.get_by_text("Working", exact=True)).to_be_visible()
+
+        page.reload()
+
+        expect(page.get_by_text("Plan my week")).to_be_visible()
+        expect(page.get_by_text("Working on it.")).to_be_visible(timeout=10_000)
+
+
+def test_stop_ends_the_turn_on_the_server(page: Page, tmp_path: Path, workspace: Path) -> None:
+    for url in start_server(console_app(PausingModel(30), file_tools(workspace), tmp_path)):
+        page.goto(f"{url}/chat")
+        page.locator("textarea").fill("Plan my week")
+        page.locator("textarea").press("Enter")
+        expect(page.get_by_text("Working", exact=True)).to_be_visible()
+
+        page.get_by_role("button", name="[stop]").click()
+
+        expect(page.get_by_text("stopped by you")).to_be_visible()
+        page.get_by_role("link", name="ACTIVITY").first.click()
+        expect(page.get_by_text("The turn was stopped by the operator.")).to_be_visible()

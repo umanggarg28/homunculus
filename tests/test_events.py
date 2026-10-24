@@ -9,17 +9,16 @@ documents for end-user feedback.
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi.testclient import TestClient
-from scripted_model import ScriptedModel
+from scripted_model import ScriptedModel, WaitingModel
 
 from homunculus.activity import Activity
 from homunculus.approvals import Approvals
-from homunculus.model import Message, ToolCall, Usage
+from homunculus.model import ToolCall
 from homunculus.server import create_app
 from homunculus.tools.files import file_tools
 
@@ -110,25 +109,8 @@ def test_a_decision_is_an_event_on_the_job_that_asked(tmp_path: Path) -> None:
     }
 
 
-class Waits(ScriptedModel):
-    """A model that starts replying, then waits until the test lets it finish."""
-
-    def __init__(self) -> None:
-        super().__init__([])
-        self.started = asyncio.Event()
-        self.finish = asyncio.Event()
-
-    async def stream(
-        self, messages: list[Message], tools: list[dict[str, Any]]
-    ) -> AsyncIterator[str | ToolCall | Usage]:
-        yield "Working"
-        self.started.set()
-        await self.finish.wait()
-        yield " on it."
-
-
 async def test_a_running_job_shows_its_message_before_it_ends(tmp_path: Path) -> None:
-    model = Waits()
+    model = WaitingModel()
     transport = httpx.ASGITransport(app=app(model, tmp_path))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         turn = asyncio.create_task(client.post("/api/chat", json={"message": "Plan my week"}))
@@ -144,7 +126,7 @@ async def test_a_running_job_shows_its_message_before_it_ends(tmp_path: Path) ->
 
 
 async def test_a_job_cut_off_before_it_ended_still_shows_its_message(tmp_path: Path) -> None:
-    model = Waits()
+    model = WaitingModel()
     transport = httpx.ASGITransport(app=app(model, tmp_path))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         turn = asyncio.create_task(client.post("/api/chat", json={"message": "Plan my week"}))
