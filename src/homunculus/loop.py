@@ -1,5 +1,6 @@
 """The agent loop: ask the model, run the tools it asks for, repeat until it answers in words."""
 
+import asyncio
 import json
 import secrets
 import time
@@ -168,6 +169,10 @@ def outcome_of(result: str) -> str:
 
 
 def _stopped(error: BaseException) -> str:
+    # A closed page cancels the turn. The cancellation's own text names internal tasks,
+    # which mean nothing to the operator.
+    if isinstance(error, asyncio.CancelledError | GeneratorExit):
+        return "The turn stopped before it finished: the connection closed."
     detail = f"{type(error).__name__}: {error}" if str(error) else type(error).__name__
     return f"The turn stopped before it finished ({detail})."
 

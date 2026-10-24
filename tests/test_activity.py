@@ -1,5 +1,6 @@
 """The activity screen's API: what the agent did, grouped into jobs, with feedback."""
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -152,3 +153,23 @@ def test_a_turn_cut_short_by_an_unexpected_failure_still_ends(tmp_path: Path) ->
 
     assert job["error"] == "The turn stopped before it finished (RuntimeError: a bug)."
     assert job["ended"] is not None
+
+
+class Cancelled(ScriptedModel):
+    async def stream(
+        self, messages: list[Message], tools: list[dict[str, Any]]
+    ) -> AsyncIterator[str | ToolCall]:
+        yield "Let me"
+        raise asyncio.CancelledError("Cancelled via cancel scope 10b6a9090 by <Task pending>")
+
+
+def test_a_turn_cut_short_by_a_closed_connection_says_so_plainly(tmp_path: Path) -> None:
+    client = server(Cancelled([]), tmp_path)
+    try:
+        client.post("/api/chat", json={"message": "Hi"})
+    except asyncio.CancelledError:
+        pass  # the test client passes the cancellation on, as a real server would
+
+    [job] = client.get("/api/activity").json()
+
+    assert job["error"] == "The turn stopped before it finished: the connection closed."
