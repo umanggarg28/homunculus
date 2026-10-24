@@ -8,7 +8,7 @@ Homunculus is one always-on process that holds a small model loop, a few general
 |---|---|---|
 | `server` | HTTP API for the web console and chat channels, and the built console itself | Chat stream, history, console files |
 | `loop` | Ask the model, run the tool it asks for, repeat until done | Full loop |
-| `prompt` | What the model is told at the start of every turn | Fixed instructions, the same every turn; layers from memory and skills are planned |
+| `prompt` | What the model is told at the start of every turn | Fixed instructions in `prompt.md`, shipped with the code and the same every turn; layers from memory and skills are planned |
 | `model` | One streaming call to the model provider | Streaming text and tool calls, privacy routing, error reporting |
 | `gate` | The answer for every proposed action | Workspace file tools act when the path stays in the workspace; anything else asks; unreadable calls are refused |
 | `tools` | Plain functions the model can ask to run | `read`, `write`, `edit`, `list`, `search`, `delete`, `rename` in the workspace |
