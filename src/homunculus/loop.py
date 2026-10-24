@@ -7,13 +7,11 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
-from homunculus import gate
+from homunculus import gate, prompt
 from homunculus.activity import ActivityLog
 from homunculus.approvals import Approvals, Kind
 from homunculus.model import Message, Model, ModelError, ToolCall
 from homunculus.tools import Tool, ToolError
-
-SYSTEM_PROMPT = "You are Homunculus, a personal agent working on behalf of your operator."
 
 
 @dataclass(frozen=True)
@@ -52,6 +50,7 @@ async def run(
     """
     by_name = {tool.name: tool for tool in tools}
     schemas = [tool.schema() for tool in tools]
+    system: Message = {"role": "system", "content": prompt.system_prompt()}
     # Every line this turn writes to the activity log carries the same job id, so the
     # activity screen can show the turn as one piece of work.
     job = secrets.token_hex(8)
@@ -64,7 +63,7 @@ async def run(
         while True:
             parts: list[str] = []
             calls: list[ToolCall] = []
-            messages = [{"role": "system", "content": SYSTEM_PROMPT}, *history, *turn]
+            messages = [system, *history, *turn]
             async for item in model.stream(messages, schemas):
                 if isinstance(item, ToolCall):
                     calls.append(item)

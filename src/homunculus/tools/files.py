@@ -15,7 +15,7 @@ MAX_SEARCH_RESULTS = 50
 
 
 def file_tools(workspace: Path) -> list[Tool]:
-    """The five file tools, each confined to `workspace`."""
+    """The file tools, each confined to `workspace`."""
     return Files(workspace).tools()
 
 
@@ -27,7 +27,8 @@ class Files:
         return [
             Tool(
                 "read",
-                "Read a text file in the workspace. Lines are numbered from 1.",
+                "Read a text file in the workspace. Lines are numbered from 1. "
+                "Use it freely, before asking the operator something a file may answer.",
                 {
                     "type": "object",
                     "properties": {"path": _path_parameter("Path relative to the workspace.")},
@@ -38,7 +39,7 @@ class Files:
             Tool(
                 "edit",
                 "Replace a piece of text in a workspace file. "
-                "The old text must appear exactly once.",
+                "The old text must appear exactly once. Use it to change part of a file.",
                 {
                     "type": "object",
                     "properties": {
@@ -52,7 +53,8 @@ class Files:
             ),
             Tool(
                 "list",
-                "List the folders and files in a workspace folder. Folders end with '/'.",
+                "List the folders and files in a workspace folder. Folders end with '/'. "
+                "Use it freely to see what the workspace holds.",
                 {
                     "type": "object",
                     "properties": {
@@ -65,7 +67,8 @@ class Files:
             Tool(
                 "search",
                 "Find lines containing some text, in every file under a workspace folder. "
-                "Matching ignores case. Each result is 'file:line: text'.",
+                "Matching ignores case. Each result is 'file:line: text'. "
+                "Use it freely to find something before asking the operator.",
                 {
                     "type": "object",
                     "properties": {
@@ -78,7 +81,9 @@ class Files:
             ),
             Tool(
                 "delete",
-                "Delete one file in the workspace. Folders and links cannot be deleted.",
+                "Delete one file in the workspace. Folders and links cannot be deleted. "
+                "It cannot be undone. Only use it when the operator asked for the file to "
+                "be deleted, or for a file you made that is no longer needed.",
                 {
                     "type": "object",
                     "properties": {"path": _path_parameter("Path relative to the workspace.")},
@@ -88,7 +93,8 @@ class Files:
             ),
             Tool(
                 "rename",
-                "Move or rename one file in the workspace. Never overwrites an existing file.",
+                "Move or rename one file in the workspace. Never overwrites an existing file. "
+                "Use it to organise the workspace.",
                 {
                     "type": "object",
                     "properties": {
@@ -101,7 +107,9 @@ class Files:
             ),
             Tool(
                 "write",
-                "Create or overwrite a text file in the workspace.",
+                "Create or overwrite a text file in the workspace. Use it to save work. "
+                "Overwriting replaces the whole file, so read a file first if it may hold "
+                "something worth keeping.",
                 {
                     "type": "object",
                     "properties": {

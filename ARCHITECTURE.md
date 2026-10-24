@@ -8,6 +8,7 @@ Homunculus is one always-on process that holds a small model loop, a few general
 |---|---|---|
 | `server` | HTTP API for the web console and chat channels, and the built console itself | Chat stream, history, console files |
 | `loop` | Ask the model, run the tool it asks for, repeat until done | Full loop |
+| `prompt` | What the model is told at the start of every turn | Fixed instructions, the same every turn; layers from memory and skills are planned |
 | `model` | One streaming call to the model provider | Streaming text and tool calls, privacy routing, error reporting |
 | `gate` | The answer for every proposed action | Workspace file tools act when the path stays in the workspace; anything else asks; unreadable calls are refused |
 | `tools` | Plain functions the model can ask to run | `read`, `write`, `edit`, `list`, `search`, `delete`, `rename` in the workspace |
@@ -17,13 +18,13 @@ Homunculus is one always-on process that holds a small model loop, a few general
 | `memory` | The wiki, raw sources, profile and goals, as files | Planned |
 | `waker` | When the agent works unprompted | Planned |
 
-Each module has one job. A new module needs a stated reason. `activity` is separate from `memory` because it is written only by code and must stay out of reach of every tool, while memory is written by the agent through its tools. `approvals` is separate from `gate` because the gate is a pure decision with no state, while requests are saved, wait for the operator and change status once.
+Each module has one job. A new module needs a stated reason. `activity` is separate from `memory` because it is written only by code and must stay out of reach of every tool, while memory is written by the agent through its tools. `prompt` is separate from `loop` because the loop decides what runs next, while the prompt decides what the model is told, and later tickets add layers to the prompt without touching the loop. `approvals` is separate from `gate` because the gate is a pure decision with no state, while requests are saved, wait for the operator and change status once.
 
 ## How a chat message flows
 
 1. `POST /api/chat` arrives at `server` with `{"message": "Hello"}`.
 2. `server` waits for any reply already in progress, then calls `loop.run` with the model, the conversation history and the text.
-3. `loop` builds the message list: the system prompt, the earlier turns, then the messages of this turn so far.
+3. `loop` builds the message list: the system message from `prompt.system_prompt()`, the earlier turns, then the messages of this turn so far. Each tool's description says when to use it.
 4. `model` sends that list and the tool schemas to OpenRouter with `stream: true` and the fixed privacy routing. It yields text chunks as they arrive, and each tool call once its fragments are complete.
 5. `loop` passes each text chunk up as it arrives. `server` wraps each one as a `delta` server-sent event.
 6. If the model asked for tools, `loop` puts each call through `gate.decide`. Allowed calls run; the rest are not run. Either way the result goes into the turn as a `tool` message, the step is recorded in the activity log, `loop` yields a `ToolStep` that `server` sends as a `tool` event, and the loop goes back to step 3.
@@ -119,8 +120,9 @@ Tests sit at agreed seams and fake only the outside world.
 | Loop | Streaming, when the loop stops, history handling, and every tool through a scripted tool call | The model (a scripted stand-in) |
 | Gate | Each row of the table, and refusal when a call cannot be read | Nothing |
 | Server HTTP API: activity | Jobs grouped from the log, feedback kept and replaced by a later rating, failed and cut-short jobs, approved actions shown in the job that asked, decision follow-ups marked as notices | The model |
+| Server HTTP API: prompt | The fixed instructions come first, in order, and are the same on every turn; every tool says when to use it | The model |
 | Server HTTP API: approvals | Waiting instead of running, approve, decline, hand-off done, decided once, survives a restart, notices | The model; stand-in tools that record their calls |
 | Server HTTP API | Event format including tool steps, errors, one reply at a time, privacy routing on every request, tools offered and streamed tool calls run, history, serving the console | The model, or only the network beneath the real model |
 | Console in a browser | Sending a message shows the tool step and the reply, the conversation survives a reload, approving a request runs it and the agent carries on, and a rating on the activity screen is kept | The model only; real server, built console and Chromium |
 
-Tests run with network access blocked, so a test that reaches the internet fails. Browser tests are marked `browser` and run separately with `uv run pytest -m browser`, after `npm run build` in `web/` and `uv run playwright install chromium`.
+Tests run with network access blocked, so a test that reaches the internet fails. A scripted model cannot show how the real one behaves, so every change the model takes part in is also tried against the real model before merge, with the results in the pull request. Browser tests are marked `browser` and run separately with `uv run pytest -m browser`, after `npm run build` in `web/` and `uv run playwright install chromium`.
