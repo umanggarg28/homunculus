@@ -14,6 +14,9 @@ from homunculus.tools import Tool, ToolError
 # Opening one folder of a path: only a folder, and never through a link.
 FOLDER_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 LINK = "{path} is a link, or goes through one; links are not followed."
+# The largest file the tools read whole. A command can make a huge file that takes no
+# disk space, which read, edit or search would otherwise try to hold in memory.
+MAX_FILE_BYTES = 10 * 1024 * 1024
 
 # Enough to answer most questions without flooding the model's context.
 MAX_SEARCH_RESULTS = 50
@@ -278,15 +281,23 @@ def _parts(path: str) -> list[str]:
 
 @contextmanager
 def _opened(path: str, name: str, flags: int, folder: int) -> Iterator[IO[bytes]]:
-    """A regular file in `folder`, opened without following a link."""
+    """A regular file in `folder`, opened without following a link and without waiting:
+    a named pipe would otherwise hold the open until something wrote to it."""
     try:
-        handle = os.open(name, flags | os.O_NOFOLLOW, 0o644, dir_fd=folder)
+        handle = os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o644, dir_fd=folder)
     except OSError as error:
         _explain(path, name, folder, error, want_folder=False)
     file = os.fdopen(handle, "r+b" if flags & os.O_RDWR else "wb" if flags & os.O_WRONLY else "rb")
     with file:
-        if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+        found = os.fstat(file.fileno())
+        if stat.S_ISDIR(found.st_mode):
             raise ToolError(f"{path} does not exist.")
+        if not stat.S_ISREG(found.st_mode):
+            raise ToolError(f"{path} is not a regular file.")
+        if found.st_size > MAX_FILE_BYTES and not flags & os.O_TRUNC:
+            limit = f"the file tools read files up to {MAX_FILE_BYTES}."
+            raise ToolError(f"{path} is {found.st_size} bytes; {limit}")
+        os.set_blocking(file.fileno(), True)
         yield file
 
 
@@ -300,6 +311,8 @@ def _explain(path: str, part: str, folder: int, error: OSError, want_folder: boo
         raise ToolError(LINK.format(path=path)) from error
     if stat.S_ISDIR(found):
         raise ToolError(f"{path} is a folder.") from error
+    if not stat.S_ISREG(found) and not want_folder:
+        raise ToolError(f"{path} is not a regular file.") from error
     if want_folder:
         raise ToolError(f"{path} is not a folder.") from error
     raise ToolError(f"{path} does not exist.") from error

@@ -1381,7 +1381,7 @@ ToolCall(name="shell", arguments='{"command": "python3 -m venv /workspace/.venv 
 sandbox.run("python3 -m venv … && … pip install six", timeout_seconds=120.0)
 ```
 
-**Into the container.** [docker.py:150](src/homunculus/sandbox/docker.py#L150) `"docker", "exec", self._box,` runs:
+**Into the container.** [docker.py:161](src/homunculus/sandbox/docker.py#L161) `"docker", "exec", self._box,` runs:
 
 ```
 docker exec homunculus-sandbox timeout --kill-after=5 120 bash -c "python3 -m venv … && … pip install six"
@@ -1389,16 +1389,16 @@ docker exec homunculus-sandbox timeout --kill-after=5 120 bash -c "python3 -m ve
 
 `timeout` stops the command if it runs past 120 seconds, and kills it five seconds later if it will not stop.
 
-**The download.** `pip` reads `HTTPS_PROXY=http://homunculus-proxy:3128` and asks the proxy for a tunnel to `pypi.org:443`. Squid checks its rules in order, starting with [squid.conf:25](src/homunculus/sandbox/squid.conf#L25) `http_access deny private_addresses`. `pypi.org` is a public address, the request is a secure tunnel (`CONNECT`) to port 443, and the name is in `registries`, so the tunnel opens. A bare address, such as `https://151.101.0.223`, is refused even if its owner made it look up as `pypi.org`: `dstdomain -n` turns that reverse lookup off. Plain `http://` is refused too, since pip and npm never need it. Squid writes:
+**The download.** `pip` reads `HTTPS_PROXY=http://homunculus-proxy:3128` and asks the proxy for a tunnel to `pypi.org:443`. Squid checks its rules in order. The first ones need no lookup: the request must be a secure tunnel (`CONNECT`) to port 443, and the name must be on the `registries` list. Only then does `http_access deny private_addresses` look the name up, to check that `pypi.org` does not point at a private address. The order matters: a name looked up is a name sent to whoever runs its name servers, so a command could hide data in a made-up name and leak it through the lookup alone. With this order, a name not on the list is never looked up, and the proof test checks Squid's own record of lookup time. `pypi.org` passes every rule, so the tunnel opens. A bare address, such as `https://151.101.0.223`, is refused even if its owner made it look up as `pypi.org`: `dstdomain -n` turns that reverse lookup off. Plain `http://` is refused too, since pip and npm never need it. Squid writes:
 
 ```
-1793177088.225 CONNECT pypi.org:443 200 TCP_TUNNEL
+1793177088.225 CONNECT pypi.org:443 200 TCP_TUNNEL 0
 ```
 
 The server's log follower reads that line, and `parse` turns it into a `ProxyRequest`, which becomes an event:
 
 ```
-ProxyRequest(time=1793177088.225, method="CONNECT", target="pypi.org:443", status=200, allowed=True)
+ProxyRequest(time=1793177088.225, method="CONNECT", target="pypi.org:443", status=200, allowed=True, lookup_ms=0)
 attributes() -> {"http.request.method": "CONNECT", "server.address": "pypi.org", "server.port": 443,
                  "http.response.status_code": 200, "homunculus.sandbox.allowed": True}
 ```
@@ -1413,7 +1413,7 @@ CommandResult(exit_code=0, output="Collecting six\n…Successfully installed six
 
 **And example.com?** The same steps, until Squid's rules: `example.com` is not in `registries`, so `http_access deny all` refuses it, and the command sees `403 Forbidden`. The log line ends `TCP_DENIED`, and the event says `allowed: False`. Had the command skipped the proxy and connected directly, the internal network would have had no route for it at all.
 
-**Where each value lives.** The command and its output live in the turn and the trace. The workspace on your Mac holds `.venv`, which stays between runs. The containers and anything outside `/workspace` are removed when the program stops, by [docker.py:132](src/homunculus/sandbox/docker.py#L132) `def stop(self) -> None:`, and started fresh the next time.
+**Where each value lives.** The command and its output live in the turn and the trace. The workspace on your Mac holds `.venv`, which stays between runs. The containers and anything outside `/workspace` are removed when the program stops, by [docker.py:143](src/homunculus/sandbox/docker.py#L143) `def stop(self) -> None:`, and started fresh the next time.
 
 ### The tests
 
@@ -1428,7 +1428,7 @@ def test_the_operators_machine_and_network_are_refused(sandbox: DockerSandbox) -
         assert result.exit_code != 0 and "403" in result.output, url
 ```
 
-In plain English: "From inside the real sandbox, asking for your own machine, a home network or a cloud metadata address through the proxy is refused." `host_address()` is how a container names your machine: `host.docker.internal` on Docker Desktop, or the network's gateway on Linux. The proof in `tests/test_sandbox.py` runs against the real containers and checks every claim in this chapter: not root, read-only system files, only the workspace shared, no capabilities or new privileges, the limits, a flood of output kept short, the proxy locked down too, no Docker socket and no key, PyPI works, other sites, bare addresses, plain HTTP and your machine are refused, outside names cannot be looked up, nothing gets out without the proxy, and every request is logged. It needs Docker and the internet, so it runs on its own, with `uv run pytest -m sandbox`, and in its own CI job. `tests/test_shell.py` checks the tool itself with a stand-in sandbox.
+In plain English: "From inside the real sandbox, asking for your own machine, a home network or a cloud metadata address through the proxy is refused." `host_address()` is how a container names your machine: `host.docker.internal` on Docker Desktop, or the network's gateway on Linux. The proof in `tests/test_sandbox.py` runs against the real containers and checks every claim in this chapter: not root, read-only system files, only the workspace shared, no capabilities or new privileges, the limits, a flood of output kept short, the proxy locked down too, no Docker socket and no key, PyPI works, other sites, bare addresses, plain HTTP and your machine are refused, outside names cannot be looked up from the sandbox, a name not on the list is never looked up by the proxy, nothing gets out without the proxy, and every request is logged. It needs Docker and the internet, so it runs on its own, with `uv run pytest -m sandbox`, and in its own CI job. `tests/test_shell.py` checks the tool itself with a stand-in sandbox.
 
 ### Change it yourself
 

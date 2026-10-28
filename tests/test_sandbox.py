@@ -16,7 +16,7 @@ import pytest
 
 from homunculus.activity import Activity
 from homunculus.sandbox import CommandResult, docker
-from homunculus.sandbox.docker import DockerSandbox
+from homunculus.sandbox.docker import DockerSandbox, ProxyRequest
 
 # CI sets this, so a runner without Docker fails instead of skipping, and the proof can
 # never pass without having been run.
@@ -87,6 +87,16 @@ def test_a_flood_of_output_is_kept_short(sandbox: DockerSandbox) -> None:
     result = run(sandbox, "yes | head -c 10000000")  # ten million bytes
     assert len(result.output) <= 2 * 64 * 1024
     assert result.omitted == 10_000_000 - 2 * 64 * 1024
+
+
+def logged_soon(sandbox: DockerSandbox, target: str) -> list[ProxyRequest]:
+    """The proxy's log lines for `target`, waiting for them: the image copies the log
+    file to its output about once a second."""
+    for _ in range(50):
+        if found := [r for r in sandbox.requests() if r.target == target]:
+            return found
+        time.sleep(0.1)
+    return []
 
 
 def test_commands_run_as_a_user_who_is_not_root(sandbox: DockerSandbox) -> None:
@@ -171,9 +181,20 @@ def test_nothing_is_reached_without_the_proxy(sandbox: DockerSandbox) -> None:
         assert result.exit_code != 0, url
 
 
+def test_a_name_not_on_the_list_is_never_looked_up(sandbox: DockerSandbox) -> None:
+    # A lookup would reach that name's servers, so the name itself could carry data out.
+    unlisted = f"proof-{secrets.token_hex(8)}.example.com"
+    fetch(sandbox, f"https://{unlisted}/")
+
+    [request] = logged_soon(sandbox, f"{unlisted}:443")
+
+    assert (request.allowed, request.lookup_ms) == (False, 0)
+
+
 def test_every_request_through_the_proxy_is_logged(sandbox: DockerSandbox) -> None:
     fetch(sandbox, "https://pypi.org/simple/six/")
     fetch(sandbox, "https://example.com")
+    logged_soon(sandbox, "example.com:443")
 
     logged = {(request.target, request.allowed) for request in sandbox.requests()}
 

@@ -56,7 +56,7 @@ GRACE_SECONDS = 5
 # so it carries this program's name, as OpenTelemetry asks of application names.
 REQUEST_EVENT = "homunculus.sandbox.request"
 # A line of the proxy's access log, as `squid.conf` writes it.
-LOG_LINE = re.compile(r"^(\d+\.\d+) (\S+) (\S+) (\d+) (\S+)$")
+LOG_LINE = re.compile(r"^(\d+\.\d+) (\S+) (\S+) (\d+) (\S+) (\S+)$")
 
 
 @dataclass(frozen=True)
@@ -66,6 +66,7 @@ class ProxyRequest:
     target: str  # host:port for CONNECT, otherwise the full URL
     status: int
     allowed: bool
+    lookup_ms: int  # time spent looking up the name; 0 when it was never looked up
 
     def attributes(self) -> dict[str, Any]:
         """The request in OpenTelemetry's HTTP attribute names, with this program's own
@@ -95,9 +96,19 @@ class DockerSandbox:
         """Start the network and both containers, replacing any left from an earlier run.
         Raises RuntimeError if Docker is too old or a container will not start."""
         version = _docker("version", "--format", "{{.Server.Version}}").strip()
-        if int(version.split(".")[0]) < OLDEST_DOCKER:
-            raise RuntimeError(f"Docker {version} is too old; the sandbox needs {OLDEST_DOCKER}")
+        major = version.split(".")[0]
+        if not major.isdecimal() or int(major) < OLDEST_DOCKER:
+            raise RuntimeError(
+                f"Docker {version} is not supported; the sandbox needs {OLDEST_DOCKER}+"
+            )
         self.stop()
+        try:
+            self._start_containers()
+        except RuntimeError:
+            self.stop()  # leave nothing half-started behind
+            raise
+
+    def _start_containers(self) -> None:
         config = Path(str(files("homunculus.sandbox").joinpath("squid.conf")))
         _docker("network", "create", "--internal", self._network)
         writable = [f"--tmpfs={path}:uid=13,gid=13" for path in PROXY_WRITABLE]
@@ -105,7 +116,7 @@ class DockerSandbox:
             "run", "--detach", "--name", self._proxy,
             "--user", PROXY_USER, "--read-only", *writable,
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-            "--memory", "256m", "--pids-limit", "64",
+            "--cpus", "1", "--memory", "256m", "--pids-limit", "64",
             "--mount", f"type=bind,src={config},dst=/etc/squid/squid.conf,readonly",
             PROXY_IMAGE,
         )  # fmt: skip
@@ -228,10 +239,12 @@ def parse(line: str) -> ProxyRequest | None:
     match = LOG_LINE.match(line.strip())
     if match is None:
         return None
-    seconds, method, target, status, verdict = match.groups()
+    seconds, method, target, status, verdict, lookup = match.groups()
     if status == "0":
         return None
-    return ProxyRequest(float(seconds), method, target, int(status), "DENIED" not in verdict)
+    lookup_ms = int(lookup) if lookup.isdecimal() else 0  # "-" when no lookup was made
+    allowed = "DENIED" not in verdict
+    return ProxyRequest(float(seconds), method, target, int(status), allowed, lookup_ms)
 
 
 class _KeptOutput:

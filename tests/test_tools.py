@@ -1,6 +1,7 @@
 """File tools, exercised through the loop with a scripted model."""
 
 import json
+import os
 from pathlib import Path
 
 import mcp_types as mcp
@@ -316,3 +317,37 @@ async def test_writing_through_a_linked_folder_is_refused(tmp_path: Path, worksp
         tool_result(model)
         == "Error: notes/a.md is a link, or goes through one; links are not followed."
     )
+
+
+async def test_a_special_file_is_refused_without_waiting(workspace: Path) -> None:
+    # Opening a named pipe would wait for a writer that never comes.
+    os.mkfifo(workspace / "pipe")
+    model = ScriptedModel([[tool_call("read", path="pipe")], ["Refused."]])
+
+    await run_job(model, workspace, "Read the pipe")
+
+    assert tool_result(model) == "Error: pipe is not a regular file."
+
+
+async def test_a_file_too_large_to_read_is_refused(workspace: Path) -> None:
+    with (workspace / "huge.log").open("wb") as file:
+        file.truncate(100 * 1024 * 1024 * 1024)  # 100 GB, taking no disk space
+    model = ScriptedModel([[tool_call("read", path="huge.log")], ["Too big."]])
+
+    await run_job(model, workspace, "Read the log")
+
+    assert tool_result(model) == (
+        "Error: huge.log is 107374182400 bytes; the file tools read files up to 10485760."
+    )
+
+
+async def test_search_passes_over_special_and_huge_files(workspace: Path) -> None:
+    os.mkfifo(workspace / "pipe")
+    with (workspace / "huge.log").open("wb") as file:
+        file.truncate(100 * 1024 * 1024 * 1024)
+    (workspace / "notes.md").write_text("green tea")
+    model = ScriptedModel([[tool_call("search", path=".", text="tea")], ["Found it."]])
+
+    await run_job(model, workspace, "Find tea")
+
+    assert tool_result(model) == "notes.md:1: green tea"

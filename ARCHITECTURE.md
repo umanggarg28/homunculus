@@ -138,12 +138,12 @@ Commands run in a Docker container, started with the server and removed when it 
 | No special powers | `--cap-drop ALL`, `--security-opt no-new-privileges`, no Docker socket |
 | Limited | `--cpus 2 --memory 2g --pids-limit 256`; a command stops after 120 s (600 s at most) |
 | Sees only the workspace | the workspace is the only folder mounted; no secrets are passed in |
-| Reaches only the package registries | alone on an `--internal` network, with no lookups of outside names (Docker 26 or later); a Squid sidecar on that and the normal network allows only secure tunnels to PyPI and npm, refuses bare addresses (`dstdomain -n`), private, loopback, link-local and host addresses, and denies everything else |
-| The proxy locked down too | Squid's own user, `--read-only` with in-memory folders for its logs, `--cap-drop ALL`, `no-new-privileges`, memory and process limits |
+| Reaches only the package registries | alone on an `--internal` network, with no lookups of outside names (Docker 26 or later); a Squid sidecar on that and the normal network allows only secure tunnels to PyPI and npm; its rules refuse any other name before a lookup, so only registry names are ever resolved; it refuses bare addresses (`dstdomain -n`) and registry names pointing at private, loopback, link-local or host addresses |
+| The proxy locked down too | Squid's own user, `--read-only` with in-memory folders for its logs, `--cap-drop ALL`, `no-new-privileges`, CPU, memory and process limits |
 | Output cannot fill memory | the first and last 64 KiB of a command's output are kept as it streams |
 | Every request recorded | Squid's access log, followed by the server, each line a `homunculus.sandbox.request` event in `logs.jsonl` |
 
-Both images are pinned by digest: `python:3.12-slim` for the sandbox, and Canonical's `ubuntu/squid:6.6-24.04` for the proxy. The file tools stay in the server, behind their own fence: they reach each file one folder at a time from the workspace folder's own handle and never follow a link, so a link a command swaps in cannot steer them. What can still leave the machine, and the risk accepted, is in [SECURITY.md](SECURITY.md).
+Both images are pinned by digest: `python:3.12-slim` for the sandbox, and Canonical's `ubuntu/squid:6.6-24.04` for the proxy. The file tools stay in the server, behind their own fence: they reach each file one folder at a time from the workspace folder's own handle and never follow a link, so a link a command swaps in cannot steer them; they open without waiting, refuse anything but a regular file, and read files up to 10 MB. What can still leave the machine, and the risk accepted, is in [SECURITY.md](SECURITY.md).
 
 ## Testing
 
