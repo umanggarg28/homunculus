@@ -10,8 +10,11 @@ from platformdirs import user_data_path
 from homunculus.activity import Activity
 from homunculus.approvals import Approvals
 from homunculus.model import OpenRouterModel
+from homunculus.sandbox import docker
+from homunculus.sandbox.docker import DockerSandbox
 from homunculus.server import create_app
 from homunculus.tools.files import file_tools
+from homunculus.tools.shell import shell_tool
 
 PORT = 8765
 # The web console's production build, present after `npm run build` in web/.
@@ -27,12 +30,26 @@ def main() -> None:
     home = Path(os.environ.get("HOMUNCULUS_HOME") or user_data_path("homunculus", appauthor=False))
     workspace = home / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
+    activity = Activity(home)
+    tools = file_tools(workspace)
+    sandbox = DockerSandbox(workspace)
+    # Commands run only inside the sandbox. Without Docker there is no shell tool at all,
+    # never a shell on this machine.
+    if docker.available():
+        sandbox.start()
+        sandbox.record_requests(activity)
+        tools.append(shell_tool(sandbox))
+    else:
+        print("Docker is not running, so the agent has no shell tool this time.", file=sys.stderr)
     app = create_app(
         OpenRouterModel(api_key),
-        file_tools(workspace),
-        Activity(home),
+        tools,
+        activity,
         Approvals(home / "approvals.json"),
         console=CONSOLE if (CONSOLE / "index.html").is_file() else None,
     )
-    # Bound to this machine only: nothing else on the network can reach the API.
-    uvicorn.run(app, host="127.0.0.1", port=PORT)
+    try:
+        # Bound to this machine only: nothing else on the network can reach the API.
+        uvicorn.run(app, host="127.0.0.1", port=PORT)
+    finally:
+        sandbox.stop()

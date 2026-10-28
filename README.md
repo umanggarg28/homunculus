@@ -14,7 +14,11 @@ flowchart LR
   model -->|streamed reply or tool call| loop
   loop -->|every tool call| gate
   gate -->|allowed| tools["file tools"]
+  gate -->|allowed| shell
+  shell -->|docker exec| sandbox
+  sandbox -->|only the registries| proxy["Squid proxy"]
   tools -->|result| loop
+  shell -->|output| loop
   loop -->|every step| activity["activity log"]
   loop -->|chunks| server
   server -->|server-sent events| You
@@ -28,10 +32,11 @@ flowchart LR
 | `model` | One streaming call to the model through OpenRouter. |
 | `gate` | Decides for every tool call whether it may run, from what the tool says it does. Reading acts, deleting and anything outward waits for your approval, and anything it cannot read is refused. |
 | `approvals` | Actions waiting for you. You approve, decline, or mark a hand-off done, and the agent is told. |
-| `tools` | `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`, inside the agent's workspace only. Each is described as an MCP tool. |
+| `sandbox` | A locked-down Docker container where commands run. Its only way out is a proxy that allows the package registries and logs every request. |
+| `tools` | `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`, inside the agent's workspace only, and `shell`, which runs commands in the sandbox. Each is described as an MCP tool. |
 | `activity` | An append-only record of every step as OpenTelemetry traces, plus log events for each turn's start, your decisions and your ratings, written by code, out of reach of every tool. Any OpenTelemetry tool can read both files. The activity screen shows one job per message, and you can rate each one. |
 
-The full design, including the modules still to come (sandbox, skills, wiki, waker), is in [ARCHITECTURE.md](ARCHITECTURE.md). [LEARN.md](LEARN.md) teaches the code one module at a time.
+The full design, including the modules still to come (skills, wiki, waker), is in [ARCHITECTURE.md](ARCHITECTURE.md). [LEARN.md](LEARN.md) teaches the code one module at a time.
 
 ## Privacy
 
@@ -43,7 +48,7 @@ The agent's files live in a data directory outside this repository, in the opera
 
 ## Quick start
 
-Requires [uv](https://docs.astral.sh/uv/) and an [OpenRouter](https://openrouter.ai) API key.
+Requires [uv](https://docs.astral.sh/uv/), an [OpenRouter](https://openrouter.ai) API key, and [Docker](https://www.docker.com/products/docker-desktop/) running for the agent's sandbox. Without Docker the agent starts with no `shell` tool.
 
 ```bash
 uv sync

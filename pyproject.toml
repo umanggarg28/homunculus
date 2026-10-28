@@ -40,8 +40,11 @@ testpaths = ["tests"]
 pythonpath = ["tests"]
 asyncio_mode = "auto"
 # Tests never reach the network; the model and HTTP calls are faked at the boundary.
-addopts = "--disable-socket --allow-unix-socket -m 'not browser'"
-markers = ["browser: drives the built web console in a real browser; run with -m browser"]
+addopts = "--disable-socket --allow-unix-socket -m 'not browser and not sandbox'"
+markers = [
+    "browser: drives the built web console in a real browser; run with -m browser",
+    "sandbox: proves the real sandbox containers, needs Docker; run with -m sandbox",
+]
 
 [tool.ruff]
 line-length = 100

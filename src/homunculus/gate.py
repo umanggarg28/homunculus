@@ -56,6 +56,10 @@ def _decide(call: ToolCall, tool: Tool | None) -> Answer:
     hints = tool.definition.annotations or mcp.ToolAnnotations()
     if hints.read_only_hint is True:
         return Answer.ACT
+    # A sandboxed tool acts freely, as the spec's table says: the sandbox's own limits,
+    # not a question to the operator, keep it from the operator's machine and data.
+    if tool.runs_in_sandbox:
+        return Answer.ACT
     # A missing hint takes the protocol's default: outward, and destructive.
     if hints.open_world_hint is not False:
         return Answer.ASK
