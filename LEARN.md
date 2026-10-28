@@ -29,6 +29,7 @@ Diagrams are plain text, so they read the same in any editor.
 7. [The web console](#7-the-web-console)
 8. [Approvals](#8-approvals)
 9. [The prompt](#9-the-prompt)
+10. [The sandbox](#10-the-sandbox)
 
 ---
 
@@ -577,7 +578,7 @@ Then it calls the model again with both added to the list. That is the loop's se
 
 The defaults assume the worst, so a tool that says nothing about itself is treated as risky. The gate decides from these annotations (chapter 5). A call returns an `mcp.CallToolResult`: some text `content`, and `is_error` set when the tool could not do what was asked. Built-in tools run inside the program. The same shape is what a real MCP server sends, so outside tools (#9) will fit without a second format. Only at the edge, in `Tool.schema()`, is a tool turned into the provider's `{"type": "function", ...}` format.
 
-**Few, general tools.** Homunculus has seven file tools: `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`. Their behaviour follows Anthropic's published memory-tool interface (view a file with numbered lines, create, replace text that appears exactly once, delete, rename). `search` is plain text search, the approach Claude Code takes with its Grep tool, instead of a pre-built index. Anthropic's "Seeing like an agent" notes that every extra tool is one more option the model has to weigh, so the bar for adding one is high. This project caps itself at 20.
+**Few, general tools.** Homunculus has seven file tools, and one `shell` tool that runs commands in the sandbox (chapter 10). The file tools are `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`. Their behaviour follows Anthropic's published memory-tool interface (view a file with numbered lines, create, replace text that appears exactly once, delete, rename). `search` is plain text search, the approach Claude Code takes with its Grep tool, instead of a pre-built index. Anthropic's "Seeing like an agent" notes that every extra tool is one more option the model has to weigh, so the bar for adding one is high. This project caps itself at 20.
 
 **The workspace is a fence, with two layers.** The gate (chapter 5) refuses any path that is absolute or contains `..` before a tool runs. Then the tool resolves the path to its real location, following symbolic links, which only the tool can see, and refuses it if it lands outside the workspace folder. One mistake in either layer is not enough to get out. The activity log lives outside the workspace, so no tool can reach it.
 
@@ -600,7 +601,7 @@ The defaults assume the worst, so a tool that says nothing about itself is treat
 
 ### One value, traced
 
-You send `"Note that I like green tea."`. `tools` holds the seven file tools for the workspace, `~/Library/Application Support/homunculus/workspace` on a Mac.
+You send `"Note that I like green tea."`. `tools` holds the seven file tools for the workspace (and `shell`, when Docker is running), `~/Library/Application Support/homunculus/workspace` on a Mac.
 
 **[loop.py:65-66](src/homunculus/loop.py#L65-L66) `by_name = ... schemas = ...`** prepare the tools two ways:
 
@@ -630,7 +631,7 @@ ToolCall(id="call_1", name="write", arguments='{"path": "tea.md", "content": "Gr
 
 **[loop.py:109-112](src/homunculus/loop.py#L109-L112) `reply: Message = ... turn.append(reply)`** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
 
-**[loop.py:113](src/homunculus/loop.py#L113) `if not calls:`** is false, because `calls` is not empty, so there is no `break`. **[loop.py:116](src/homunculus/loop.py#L116) `step = _carry_out(...)`** hands the call to `_carry_out`:
+**[loop.py:113](src/homunculus/loop.py#L113) `if not calls:`** is false, because `calls` is not empty, so there is no `break`. **[loop.py:116](src/homunculus/loop.py#L116) `step = await _carry_out(...)`** hands the call to `_carry_out`, which runs the tool in a worker thread so a slow command does not hold up the server:
 
 ```
 gate.decide(call, by_name["write"])  -> Answer.ACT                      (chapter 5)
@@ -725,7 +726,7 @@ An agent that works by itself will sometimes propose something it should not do:
 
 ### The idea
 
-**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs ([loop.py:164](src/homunculus/loop.py#L164) `answer = gate.decide(call, by_name.get(call.name))`). It returns one of five answers:
+**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs ([loop.py:166](src/homunculus/loop.py#L166) `answer = gate.decide(call, by_name.get(call.name))`). It returns one of five answers:
 
 | Answer | Meaning |
 |---|---|
@@ -744,11 +745,14 @@ The first four mirror the approval behaviours OpenAI documents for its always-on
 | The tool's annotations | Answer |
 |---|---|
 | read-only | `ACT` |
+| runs in the sandbox | `ACT` |
 | reaches the outside world, or does not say | `ASK` |
 | destructive, inside the program | `ASK`, except `write`, `edit` and `rename` |
 | only adds, inside the program | `ACT` |
 
 A missing hint takes the protocol's own default, which assumes the worst: not read-only, destructive, and outward. So a new tool that says nothing about itself asks first. `write` and `edit` are honestly destructive, since they can replace text. `rename` is too, since the old name stops existing. You decided `write` and `edit` may act without asking, because they only change the agent's own workspace and saving notes there is everyday work. `rename` never loses any content, so it keeps acting as it did before. Those three are listed in the gate as `ALLOWED_DESTRUCTIVE`. The annotations still describe each tool truthfully, and the exception is written where you can read it. `delete` has no exception, so every delete waits for you.
+
+**A sandboxed tool acts.** `shell` is honestly destructive and outward: a command can delete anything in the workspace, and can download from the package registries. The spec says commands in the sandbox run without asking, because the sandbox's own limits keep them away from your machine and data (chapter 10). So a tool the program built with `runs_in_sandbox=True` acts, [gate.py:61](src/homunculus/gate.py#L61) `if tool.runs_in_sandbox:`. That is a flag on the program's own `Tool`, not a name, so a tool from elsewhere cannot claim it.
 
 **Annotations are trusted only from our own tools.** The MCP specification says clients "MUST consider tool annotations to be untrusted unless they come from trusted servers". Every tool today is the program's own. When outside MCP servers arrive (#9), their annotations must not decide anything.
 
@@ -773,6 +777,9 @@ A missing hint takes the protocol's own default, which assumes the worst: not re
            │ yes
            ▼
    read-only? ── yes ──► ACT
+           │ no
+           ▼
+   runs in the sandbox? ── yes ──► ACT
            │ no
            ▼
    reaches outside, or does not say? ── yes ──► ASK
@@ -825,7 +832,7 @@ def test_a_tool_that_says_nothing_about_itself_asks_first() -> None:
 
 In plain English: "A tool that does not say what it does waits for your approval." `stand_in("send_email")` is a tool with no annotations at all. This one line is what makes a new, careless tool safe by default.
 
-The other gate tests say: read-only tools are allowed; `write` and `edit` are allowed; `delete` asks; `rename` is allowed; a hand-off the gate cannot read is refused; a tool that reaches outside asks; an additive tool inside the program is allowed, and a destructive one asks; a tool that does not exist is refused; a call the gate cannot read is refused; a file action without a path, or with a path leading outside, is refused; and payments, passwords and codes are handed to you.
+The other gate tests say: read-only tools are allowed; a sandboxed tool is allowed; `write` and `edit` are allowed; `delete` asks; `rename` is allowed; a hand-off the gate cannot read is refused; a tool that reaches outside asks; an additive tool inside the program is allowed, and a destructive one asks; a tool that does not exist is refused; a call the gate cannot read is refused; a file action without a path, or with a path leading outside, is refused; and payments, passwords and codes are handed to you.
 
 ### Change it yourself
 
@@ -902,7 +909,7 @@ The span's trace id, `9f3c41d2...` (32 hex characters), is the job's id from now
 
 **The first model call.** [loop.py:99](src/homunculus/loop.py#L99) `with _model_call(activity, model, parent) as chat:` starts a `chat` span. The model streams a `ToolCall`, then, as its last item, `Usage(input_tokens=1195, output_tokens=85, cached_input_tokens=1044)`. [loop.py:104](src/homunculus/loop.py#L104) `_record_usage(chat, item)` copies those onto the span. Just before the `with` block ends, the span also records what the model said, in `gen_ai.output.messages`: here no text, one `tool_call` part with the tool's name, id and arguments, and `"finish_reason": "tool_call"`. If the model had written "Let me save that" before asking, that text would be recorded too. When the `with` block ends, the span ends and is written: the first line of the file.
 
-**The tool call.** In `_carry_out`, [loop.py:142](src/homunculus/loop.py#L142) `span = activity.start_tool(call.name, call.arguments, parent, call_id=call.id)` starts the `execute_tool write` span before the gate decides. After the write, [loop.py:148](src/homunculus/loop.py#L148) `activity.end_tool(span, answer.value, result, outcome, request_id)` sets `homunculus.gate.answer="act"`, `gen_ai.tool.call.result="Wrote tea.md."` and `homunculus.outcome="ok"`, and ends it. That is line two. A failed step gets an error status and `error.type`: `"tool_error"` when the tool ran and reported a failure, or the gate's answer, such as `"refuse"`, when it never ran. If anything goes wrong between starting the span and ending it, the `except` around it still ends the span, so no span is ever left open.
+**The tool call.** In `_carry_out`, [loop.py:142](src/homunculus/loop.py#L142) `span = activity.start_tool(call.name, call.arguments, parent, call_id=call.id)` starts the `execute_tool write` span before the gate decides. After the write, [loop.py:150](src/homunculus/loop.py#L150) `activity.end_tool(span, answer.value, result, outcome, request_id)` sets `homunculus.gate.answer="act"`, `gen_ai.tool.call.result="Wrote tea.md."` and `homunculus.outcome="ok"`, and ends it. That is line two. A failed step gets an error status and `error.type`: `"tool_error"` when the tool ran and reported a failure, or the gate's answer, such as `"refuse"`, when it never ran. If anything goes wrong between starting the span and ending it, the `except` around it still ends the span, so no span is ever left open.
 
 **The second model call** answers "Saved." and becomes line three. Then [loop.py:128](src/homunculus/loop.py#L128) `root.end()` ends the root, with the reply in `gen_ai.output.messages`: line four. If the model had failed, `fail` would have set the root's status to error with the message, and `error.type` to `"ModelError"`. Anything else that cuts a turn short, such as you closing the page, does the same, in the `except` block whose comment starts [loop.py:123](src/homunculus/loop.py#L123) `# Anything else that ends the turn early, such as a bug or the operator pressing`.
 
@@ -1301,6 +1308,131 @@ A scripted model cannot show whether the real model follows the rules. That is c
 3. Add `"Style"` to the end of the list in that test and run it again. It passes. Start the program (README quick start), since the file is read at start-up, and ask it something. The replies should now be one sentence long, because the model reads your section on every turn. A model can still ignore an instruction, which is why the real model is checked by hand.
 4. Now change `system_prompt` in `prompt.py` to put the current time at the very start, `return f"Now: {datetime.now()}\n\n" + _INSTRUCTIONS`. Run the tests again. The same-on-every-turn test fails: the first characters now change every turn, so the provider could never reuse its cached work. The spec does want the time in the prompt, so it will go after the fixed part, where a change costs nothing.
 5. Undo both changes.
+
+
+---
+
+## 10. The sandbox
+
+Code: `src/homunculus/sandbox/` (the interface in `__init__.py`, Docker in `docker.py`, the proxy's rules in `squid.conf`), and the tool in `src/homunculus/tools/shell.py`. Tests: `tests/test_shell.py`, and the proof in `tests/test_sandbox.py`.
+
+### The problem
+
+To be useful on its own, the agent has to run things: the code it writes, its tests, a script that tidies your notes, `pip install` for a library it needs. A command can do anything the computer running it can do. Run on your Mac, a mistaken or tricked command could read your files and keys, reach your other devices, or send your notes to a stranger's website. The agent needs a place where it can run anything at all, and where "anything" still cannot touch you.
+
+### The idea
+
+**A container.** A container is a sealed box for programs. It has its own files, its own users and its own network. On a Mac, Docker runs every container inside a small Linux virtual machine, so even a program that broke out of its box would land in that machine, not in macOS.
+
+**Locked down inside.** The sandbox box is set up the way security guides for containers recommend:
+
+| Setting | What it means |
+|---|---|
+| `--user` your own user id | Commands are never root, and files they make belong to you |
+| `--read-only`, `--tmpfs /tmp` | The system files cannot be changed; only `/tmp` and the workspace can be written |
+| `--cap-drop ALL` | None of Linux's special powers, such as changing the network or owning any file |
+| `--security-opt no-new-privileges` | No program inside can gain more power than it started with |
+| `--cpus 2 --memory 2g --pids-limit 256` | A runaway command cannot take over the machine |
+| `--volume <workspace>:/workspace` | The workspace is the one folder of yours it can see |
+
+There is no Docker socket inside, so nothing can ask Docker for more, and no API key, because none is passed in.
+
+**One door out, with a guard.** A command sometimes needs the internet, to download a package from PyPI or npm. Docker offers two networks, and the project measured both on a Mac. An *internal* network reaches nothing at all, not even the Mac. The *normal* network reaches everything, including the router and the Homunculus server itself. So the sandbox sits alone on an internal network, and beside it runs a second container, a **sidecar**, that sits on both. The sidecar is a **proxy**: it makes requests on the sandbox's behalf, and only the ones its rules allow. It is Squid, a forward proxy that companies have used for decades for exactly this. Commands find it through the standard `HTTP_PROXY` and `HTTPS_PROXY` settings, which is how Claude Code's own sandbox sends commands through its proxy.
+
+**Every request is written down.** Squid writes one line per request. The server follows that log and records each line in the activity log (chapter 6), as a `homunculus.sandbox.request` event with OpenTelemetry's HTTP attribute names.
+
+**Only commands go in the box.** The file tools stay in the server, behind their own fence (chapter 4), and work on the same workspace folder the sandbox sees. Claude Code, Codex and OpenClaw split their work the same way: the agent's own program runs normally, and only the commands it executes are sandboxed.
+
+### A picture
+
+```
+ your Mac
+ ┌──────────────────────────────────────────────────────────────────────────┐
+ │  Homunculus server ── shell tool ── docker exec ──┐                       │
+ │        │                                          ▼                       │
+ │        │ follows the log         ┌───────── internal network ─────────┐   │
+ │        │                         │  ┌──────────────┐     ┌──────────┐ │   │
+ │        └─────────────────────────┼──│ proxy: Squid │ ◄── │ sandbox  │ │   │
+ │                                  │  └──────┬───────┘     │ commands │ │   │
+ │  workspace folder ◄──────────────┼─────────┼──────────── │/workspace│ │   │
+ │                                  └─────────┼─────────────┴──────────┘ │   │
+ └────────────────────────────────────────────┼──────────────────────────────┘
+                                              ▼
+                        pypi.org ✓   files.pythonhosted.org ✓   registry.npmjs.org ✓
+                        any other site ✗   your Mac ✗   your network ✗   private addresses ✗
+```
+
+### One value, traced
+
+You ask "Make a virtual environment in the workspace and install six." The model calls:
+
+```
+ToolCall(name="shell", arguments='{"command": "python3 -m venv /workspace/.venv && /workspace/.venv/bin/pip install six"}')
+```
+
+**The gate.** The tool is not read-only, but [gate.py:61](src/homunculus/gate.py#L61) `if tool.runs_in_sandbox:` is true for `shell`, so the answer is `ACT` (chapter 5).
+
+**The tool.** `run` reads the command, and no `timeout`, so 120 seconds, and calls the sandbox:
+
+```
+sandbox.run("python3 -m venv … && … pip install six", timeout_seconds=120.0)
+```
+
+**Into the container.** [docker.py:125](src/homunculus/sandbox/docker.py#L125) `"docker", "exec", self._box,` runs:
+
+```
+docker exec homunculus-sandbox timeout --kill-after=5 120 bash -c "python3 -m venv … && … pip install six"
+```
+
+`timeout` stops the command if it runs past 120 seconds, and kills it five seconds later if it will not stop.
+
+**The download.** `pip` reads `HTTPS_PROXY=http://homunculus-proxy:3128` and asks the proxy for a tunnel to `pypi.org:443`. Squid checks its rules in order ([squid.conf:21](src/homunculus/sandbox/squid.conf#L21) `http_access deny private_addresses` first). `pypi.org` is a public address, the port is 443, and the name is in `registries`, so the tunnel opens. Squid writes:
+
+```
+1793177088.225 CONNECT pypi.org:443 200 TCP_TUNNEL
+```
+
+The server's log follower reads that line, and `parse` turns it into a `ProxyRequest`, which becomes an event:
+
+```
+ProxyRequest(time=1793177088.225, method="CONNECT", target="pypi.org:443", status=200, allowed=True)
+attributes() -> {"http.request.method": "CONNECT", "server.address": "pypi.org", "server.port": 443,
+                 "http.response.status_code": 200, "homunculus.sandbox.allowed": True}
+```
+
+**Back to the model.** `pip` finishes, and the sandbox returns:
+
+```
+CommandResult(exit_code=0, output="Collecting six\n…Successfully installed six-1.17.0\n", timed_out=False)
+```
+
+`run` adds `[exit code 0]`, and that text is what the model reads. Had the exit code been non-zero, the text would be the same with `Error: ` in front, and the step's outcome would be `failed`. Output longer than 30,000 characters keeps its first and last 15,000, with a note of how much was left out.
+
+**And example.com?** The same steps, until Squid's rules: `example.com` is not in `registries`, so `http_access deny all` refuses it, and the command sees `403 Forbidden`. The log line ends `TCP_DENIED`, and the event says `allowed: False`. Had the command skipped the proxy and connected directly, the internal network would have had no route for it at all.
+
+**Where each value lives.** The command and its output live in the turn and the trace. The workspace on your Mac holds `.venv`, which stays between runs. The containers and anything outside `/workspace` are removed when the program stops, by [docker.py:114](src/homunculus/sandbox/docker.py#L114) `def stop(self) -> None:`, and started fresh the next time.
+
+### The tests
+
+```python
+def test_the_operators_machine_and_network_are_refused(sandbox: DockerSandbox) -> None:
+    for url in [
+        f"http://{sandbox.host_address()}:8765/api/history",  # the operator's machine
+        "http://192.168.1.1/",  # a home network
+        "http://169.254.169.254/",  # a cloud metadata address
+    ]:
+        result = fetch(sandbox, url)
+        assert result.exit_code != 0 and "403" in result.output, url
+```
+
+In plain English: "From inside the real sandbox, asking for your own machine, a home network or a cloud metadata address through the proxy is refused." `host_address()` is how a container names your machine: `host.docker.internal` on Docker Desktop, or the network's gateway on Linux. The proof in `tests/test_sandbox.py` runs against the real containers and checks every claim in this chapter: not root, read-only system files, only the workspace shared, no capabilities or new privileges, the limits, no Docker socket and no key, PyPI works, other sites and your machine are refused, nothing gets out without the proxy, and every request is logged. It needs Docker and the internet, so it runs on its own, with `uv run pytest -m sandbox`, and in its own CI job. `tests/test_shell.py` checks the tool itself with a stand-in sandbox.
+
+### Change it yourself
+
+1. With Docker running, run `uv run pytest -m sandbox` and watch the twelve claims pass.
+2. In `squid.conf`, add `example.com` to the `registries` line, so it reads `acl registries dstdomain pypi.org files.pythonhosted.org registry.npmjs.org example.com`.
+3. Run the proof again. Three tests fail: `test_every_other_site_is_refused`, and the two that check the log, because each expects `example.com` to be refused and the guard now lets it through. That one line is the whole list of places a command can reach, so a change to it is a change to what the agent can send out.
+4. Undo the change.
 
 ---
 

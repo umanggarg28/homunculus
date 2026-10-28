@@ -113,7 +113,7 @@ async def run(
             if not calls:
                 break
             for call in calls:
-                step = _carry_out(call, by_name, activity, approvals, parent)
+                step = await _carry_out(call, by_name, activity, approvals, parent)
                 turn.append({"role": "tool", "tool_call_id": call.id, "content": step.result})
                 yield step
     except ModelError as error:
@@ -129,7 +129,7 @@ async def run(
     history += turn
 
 
-def _carry_out(
+async def _carry_out(
     call: ToolCall,
     by_name: dict[str, Tool],
     activity: Activity,
@@ -141,7 +141,9 @@ def _carry_out(
     started = time.monotonic()
     span = activity.start_tool(call.name, call.arguments, parent, call_id=call.id)
     try:
-        answer, result, outcome, request_id = _decide_and_run(call, by_name, approvals, parent)
+        answer, result, outcome, request_id = await _decide_and_run(
+            call, by_name, approvals, parent
+        )
     except BaseException as error:
         fail(span, error, str(error) or type(error).__name__)
         raise
@@ -156,7 +158,7 @@ def _carry_out(
     )
 
 
-def _decide_and_run(
+async def _decide_and_run(
     call: ToolCall, by_name: dict[str, Tool], approvals: Approvals, parent: Context
 ) -> tuple[gate.Answer, str, str, str | None]:
     """The gate's answer, the result the model sees, the outcome, and the approval
@@ -164,7 +166,9 @@ def _decide_and_run(
     answer = gate.decide(call, by_name.get(call.name))
     request_id = None
     if answer is gate.Answer.ACT:
-        done = run_tool(call.name, call.arguments, by_name)
+        # In a worker thread, so a slow command does not stop the server answering anyone
+        # else, such as a page asking to stop this very turn.
+        done = await asyncio.to_thread(run_tool, call.name, call.arguments, by_name)
         result, outcome = as_text(done), outcome_of(done)
     elif answer in WAITS_FOR_OPERATOR:
         outcome = "waiting"

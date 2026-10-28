@@ -5,3 +5,8 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .env
+
+# Written by the old v1 containers, which mount these folders from this path.
+# Homunculus keeps its own data outside the repository.
+/workspace/
+/secrets/
