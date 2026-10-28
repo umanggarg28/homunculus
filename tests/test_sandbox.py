@@ -132,6 +132,17 @@ def test_the_proxys_signing_key_never_reaches_the_sandbox(
     assert "/run" in json.loads(memory)
 
 
+def test_the_usual_certificate_authorities_are_not_trusted(sandbox: DockerSandbox) -> None:
+    # OpenSSL reads a file of authorities and a folder of them; both must point at the
+    # proxy's certificate only, or a tunnel the proxy did not open would be trusted too.
+    script = (
+        "import os, ssl; paths = ssl.get_default_verify_paths(); "
+        "print(paths.cafile, sorted(os.listdir(paths.capath)))"
+    )
+    found = run(sandbox, f"python -c {shlex.quote(script)}").output.strip()
+    assert found == "/etc/homunculus/proxy-ca.pem ['proxy-ca.pem']"
+
+
 def test_a_different_name_inside_the_request_is_refused(sandbox: DockerSandbox) -> None:
     # Domain fronting: the tunnel and the handshake say pypi.org, the request inside asks
     # its content network for another site.
@@ -140,6 +151,16 @@ def test_a_different_name_inside_the_request_is_refused(sandbox: DockerSandbox) 
     # Stopped by the proxy, which read the request, not left to the content network.
     [stopped] = logged_soon(sandbox, "https://example.com/simple/six/")
     assert not stopped.allowed
+
+
+def test_a_different_name_inside_the_request_is_never_looked_up(sandbox: DockerSandbox) -> None:
+    # A lookup would reach that name's servers, so the name inside could carry data out.
+    unlisted = f"proof-{secrets.token_hex(8)}.example.com"
+    by_hand(sandbox, "pypi.org", "pypi.org", unlisted)
+
+    [stopped] = logged_soon(sandbox, f"https://{unlisted}/simple/six/")
+
+    assert (stopped.allowed, stopped.lookup_ms) == (False, 0)
 
 
 def test_a_different_name_in_the_handshake_is_refused(sandbox: DockerSandbox) -> None:

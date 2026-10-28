@@ -44,9 +44,13 @@ PROXY_PORT = 3128
 PROXY_USER = "13:13"
 PROXY_WRITABLE = ("/var/log/squid", "/var/spool/squid", "/run", "/tmp")
 PROXY_CERTIFICATE = "/run/ca/ca.pem"
-# Where the sandbox finds the proxy's certificate, and the settings that make programs
-# trust it alone: OpenSSL's, which Python and curl read, pip's and the requests library's.
-TRUSTED = "/etc/homunculus/proxy-ca.pem"
+# Where the sandbox finds the proxy's certificate, and the settings that point programs
+# at it, in place of the usual authorities: OpenSSL's, which Python and curl read, pip's
+# and the requests library's. OpenSSL also reads a folder of authorities, so that is
+# pointed at the certificate's own folder, which holds nothing else. Node reads none of
+# these and needs its own.
+TRUSTED_FOLDER = "/etc/homunculus"
+TRUSTED_CERTIFICATE = f"{TRUSTED_FOLDER}/proxy-ca.pem"
 TRUST_SETTINGS = ("SSL_CERT_FILE", "PIP_CERT", "REQUESTS_CA_BUNDLE")
 CPUS = "2"
 MEMORY = "2g"
@@ -120,8 +124,8 @@ class DockerSandbox:
             proxy = Path(str(files("homunculus.sandbox").joinpath("proxy")))
             _docker("build", "--quiet", "--tag", PROXY_IMAGE, str(proxy), timeout=BUILD_SECONDS)
             self._start_containers()
-        except RuntimeError:
-            self.stop()  # leave nothing half-started behind
+        except BaseException:
+            self.stop()  # leave nothing half-started behind, whatever stopped the start
             raise
 
     def _start_containers(self) -> None:
@@ -137,7 +141,8 @@ class DockerSandbox:
         _docker("network", "connect", self._network, self._proxy)
         certificate = self._copy_proxy_certificate()
         proxy = f"http://{self._proxy}:{PROXY_PORT}"
-        trust = [f"--env={setting}={TRUSTED}" for setting in TRUST_SETTINGS]
+        trust = [f"--env={setting}={TRUSTED_CERTIFICATE}" for setting in TRUST_SETTINGS]
+        trust.append(f"--env=SSL_CERT_DIR={TRUSTED_FOLDER}")
         _docker(
             "run", "--detach", "--name", self._box,
             "--network", self._network,
@@ -147,7 +152,7 @@ class DockerSandbox:
             "--cpus", CPUS, "--memory", MEMORY, "--pids-limit", str(PROCESSES),
             "--init",
             "--mount", f"type=bind,src={self._workspace},dst=/workspace",
-            "--mount", f"type=bind,src={certificate},dst={TRUSTED},readonly",
+            "--mount", f"type=bind,src={certificate},dst={TRUSTED_CERTIFICATE},readonly",
             "--workdir", "/workspace",
             "--env", "HOME=/tmp",
             # Both spellings, since programs differ in which one they read.
@@ -245,10 +250,13 @@ class DockerSandbox:
         """The proxy's certificate, copied to a file of its own for the sandbox to mount,
         once the proxy has made it. Only the certificate leaves the proxy, never its key."""
         for _ in range(50):
-            read = subprocess.run(
-                ["docker", "exec", self._proxy, "cat", PROXY_CERTIFICATE],
-                capture_output=True, text=True,
-            )  # fmt: skip
+            try:
+                read = subprocess.run(
+                    ["docker", "exec", self._proxy, "cat", PROXY_CERTIFICATE],
+                    capture_output=True, text=True, timeout=10,
+                )  # fmt: skip
+            except subprocess.TimeoutExpired:
+                continue
             if read.returncode == 0 and "BEGIN CERTIFICATE" in read.stdout:
                 self._trust = Path(tempfile.mkdtemp(prefix="homunculus-trust-"))
                 certificate = self._trust / "proxy-ca.pem"

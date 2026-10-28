@@ -1348,9 +1348,9 @@ There is no Docker socket inside, so nothing can ask Docker for more, and no API
 2. the **handshake name** (SNI, for Server Name Indication), said at the start of the TLS handshake, before anything is encrypted;
 3. the **name inside**, the `Host:` line of the request, which travels encrypted.
 
-Think of PyPI's content network, Fastly, as one big apartment building with one street address, where PyPI lives next to thousands of strangers' sites. The first two names are what you tell the guard and the doorman; the third is written on the letter inside the sealed envelope. A command could say "pypi.org" twice and write a stranger's site on the letter, and a building that does not compare them delivers it. This is called **domain fronting**. Cloudflare, which serves npm, refuses it; Fastly did not in a 2025 test.
+Think of PyPI's content network, Fastly, as one big apartment building with one street address, where PyPI lives next to thousands of strangers' sites. The first two names are what you tell the guard and the doorman; the third is written on the letter inside the sealed envelope. A command could say "pypi.org" twice and write a stranger's site on the letter, and a building that does not compare them delivers it. This is called **domain fronting**. Cloudflare, which serves npm, says in its own documentation that it refuses it; Fastly did not in a 2025 test.
 
-So the proxy opens every allowed tunnel and reads the letter, which is called **TLS inspection** (Squid calls it SslBump). To do that without the command noticing a stranger in the middle, the proxy runs its own small **certificate authority**. A certificate is a site's ID card, stamped by an authority the program trusts; the proxy makes a fresh "pypi.org" card for each tunnel and stamps it with its own stamp. The sandbox is set to trust that stamp and no other, through `SSL_CERT_FILE`, `PIP_CERT` and `REQUESTS_CA_BUNDLE`. The stamp's private key is made in the proxy's memory each time it starts, by `start-proxy`, and never leaves it; the server copies out only the certificate. Office networks inspect traffic the same way. Once the letter is open, the proxy also checks what is asked: only reading (`GET` and `HEAD`), and only package pages, so a command cannot upload or publish.
+So the proxy opens every allowed tunnel and reads the letter, which is called **TLS inspection** (Squid calls it SslBump). To do that without the command noticing a stranger in the middle, the proxy runs its own small **certificate authority**. A certificate is a site's ID card, stamped by an authority the program trusts; the proxy makes a fresh "pypi.org" card for each tunnel and stamps it with its own stamp. The sandbox is set to trust that stamp and no other, through `SSL_CERT_FILE`, `SSL_CERT_DIR`, `PIP_CERT` and `REQUESTS_CA_BUNDLE`. The stamp's private key is made in the proxy's memory each time it starts, by `start-proxy`, and never leaves it; the server copies out only the certificate, in [docker.py:249](src/homunculus/sandbox/docker.py#L249) `def _copy_proxy_certificate(self) -> Path:`. Office networks inspect traffic the same way. Once the letter is open, the proxy also checks what is asked: only reading (`GET` and `HEAD`), and only package pages, so a command cannot upload or publish.
 
 The proxy's image is built on your machine from `proxy/Dockerfile` when the server first starts: Ubuntu 26.04 with Squid built with OpenSSL, which TLS inspection needs, from Ubuntu's own archive. Docker keeps the result, so later starts reuse it.
 
@@ -1408,7 +1408,7 @@ ToolCall(name="shell", arguments='{"command": "python3 -m venv /workspace/.venv 
 sandbox.run("python3 -m venv … && … pip install six", timeout_seconds=120.0)
 ```
 
-**Into the container.** [docker.py:182](src/homunculus/sandbox/docker.py#L182) `"docker", "exec", self._box,` runs:
+**Into the container.** [docker.py:187](src/homunculus/sandbox/docker.py#L187) `"docker", "exec", self._box,` runs:
 
 ```
 docker exec homunculus-sandbox timeout --kill-after=5 120 bash -c "python3 -m venv … && … pip install six"
@@ -1435,7 +1435,7 @@ attributes() -> {'http.request.method': 'GET', 'url.full': 'https://pypi.org/sim
                  'homunculus.sandbox.allowed': True}
 ```
 
-`allowed` means the proxy passed the request on to the site. It is `False` for a refusal (`TCP_DENIED`), a tunnel closed at the handshake (`terminate`), and a request Squid answered itself instead of fetching it (`NONE_NONE` inside a tunnel), which is what happens when the name inside does not match the tunnel's.
+`allowed` means the proxy passed the request on to the site, as [docker.py:303](src/homunculus/sandbox/docker.py#L303) `def _passed_on(method: str, verdict: str, bump: str) -> bool:` decides. It is `False` for a refusal (`TCP_DENIED`), a tunnel closed at the handshake (`terminate`), and a request Squid answered itself instead of fetching it (`NONE_NONE` inside a tunnel), which is what happens when the name inside does not match the tunnel's.
 
 **Back to the model.** `pip` finishes, and the sandbox returns:
 
@@ -1454,7 +1454,7 @@ CommandResult(exit_code=0, output="Collecting six\n…Successfully installed six
 
 and both events say `allowed: False`, with `error.type: "ERR_ACCESS_DENIED"`, OpenTelemetry's standard attribute for what went wrong. Had the command skipped the proxy and connected directly, the internal network would have had no route for it at all.
 
-**Where each value lives.** The command and its output live in the turn and the trace. The workspace on your Mac holds `.venv`, which stays between runs. The containers and anything outside `/workspace` are removed when the program stops, by [docker.py:161](src/homunculus/sandbox/docker.py#L161) `def stop(self) -> None:`, and started fresh the next time.
+**Where each value lives.** The command and its output live in the turn and the trace. The workspace on your Mac holds `.venv`, which stays between runs. The containers and anything outside `/workspace` are removed when the program stops, by [docker.py:166](src/homunculus/sandbox/docker.py#L166) `def stop(self) -> None:`, and started fresh the next time.
 
 ### The tests
 
@@ -1469,11 +1469,11 @@ def test_a_different_name_inside_the_request_is_refused(sandbox: DockerSandbox) 
     assert not stopped.allowed
 ```
 
-In plain English: "From inside the real sandbox, a tunnel that says pypi.org twice but asks inside for example.com gets no page, and the proxy's own log shows it stopped the request." `by_hand` sends the request one piece at a time, so each of the three names can be set on its own; ordinary programs always use one name for all three. The second check matters: before the proxy opened tunnels, Fastly happened to refuse example.com itself, so the first check alone would pass without the proxy doing anything. The proof in `tests/test_sandbox.py` runs against the real containers and checks every claim in this chapter: not root, read-only system files, only the workspace shared, no capabilities or new privileges, the limits, a flood of output kept short, the proxy locked down too, no Docker socket and no key, PyPI works through the proxy's own certificate, the proxy's key never reaches the sandbox, a different name in the handshake or inside the request is refused, the name inside is checked even with no handshake name, only package pages can be read, other sites, bare addresses, plain HTTP and your machine are refused, outside names cannot be looked up from the sandbox, a name not on the list is never looked up by the proxy, nothing gets out without the proxy, and every request is logged. It needs Docker and the internet, so it runs on its own, with `uv run pytest -m sandbox`, and in its own CI job. `tests/test_shell.py` checks the tool itself with a stand-in sandbox.
+In plain English: "From inside the real sandbox, a tunnel that says pypi.org twice but asks inside for example.com gets no page, and the proxy's own log shows it stopped the request." `by_hand` sends the request one piece at a time, so each of the three names can be set on its own; ordinary programs always use one name for all three. The second check matters: a content network may refuse a site it does not host by itself, so the first check alone could pass without the proxy doing anything. The proof in `tests/test_sandbox.py` runs against the real containers and checks every claim in this chapter: not root, read-only system files, only the workspace shared, no capabilities or new privileges, the limits, a flood of output kept short, the proxy locked down too, no Docker socket and no key, PyPI works through the proxy's own certificate, the proxy's key never reaches the sandbox, the usual certificate authorities are not trusted, a different name in the handshake or inside the request is refused, and never looked up, the name inside is checked even with no handshake name, only package pages can be read, other sites, bare addresses, plain HTTP and your machine are refused, outside names cannot be looked up from the sandbox, a name not on the list is never looked up by the proxy, nothing gets out without the proxy, and every request is logged. It needs Docker and the internet, so it runs on its own, with `uv run pytest -m sandbox`, and in its own CI job. `tests/test_shell.py` checks the tool itself with a stand-in sandbox.
 
 ### Change it yourself
 
-1. With Docker running, run `uv run pytest -m sandbox` and watch the 24 proofs pass.
+1. With Docker running, run `uv run pytest -m sandbox` and watch the 26 proofs pass.
 2. In `src/homunculus/sandbox/proxy/squid.conf`, delete `^/simple/ ` from the `pypi_pages` line, so it reads `acl pypi_pages urlpath_regex ^/pypi/[^/]+/json$ ^/pypi/[^/]+/[^/]+/json$`.
 3. Run the proof again. The server rebuilds the proxy's image with the new rules, and three tests fail: `test_a_registry_is_reached_through_the_proxys_own_certificate`, `test_without_a_name_in_the_handshake_the_name_inside_is_still_checked` and `test_packages_can_be_installed_from_the_registries`. Each asks for a page under `/simple/`, PyPI's package index, and pip cannot install anything without it. The tunnel still opens; it is the request inside that is refused. These lines are the whole list of what a command can read, so a change to them is a change to what the agent can do and send out.
 4. Undo the change.
