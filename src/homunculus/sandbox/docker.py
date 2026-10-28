@@ -5,7 +5,9 @@ Two containers and one network:
 - the **sandbox**, where commands run. It sits only on an internal network, which
   Docker gives no route to anywhere, not even to the operator's machine;
 - the **proxy**, Squid, which sits on that network and on Docker's normal one. It is
-  the sandbox's only way out, and lets through only what `squid.conf` allows.
+  the sandbox's only way out, and lets through only what `proxy/squid.conf` allows. It
+  opens up each secure tunnel to check it, so the sandbox trusts the proxy's own
+  certificate authority and no other.
 
 Both run as ordinary users, with read-only system files, no capabilities, no way to
 gain privileges, and limits on CPU, memory and processes. The only folder of the
@@ -14,7 +16,9 @@ operator's the sandbox sees is the workspace.
 
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -28,18 +32,22 @@ from opentelemetry.context import Context
 from homunculus.activity import Activity
 from homunculus.sandbox import CommandResult
 
-# Images pinned by digest, so the same bytes run every time.
+# Pinned by digest, so the same bytes run every time.
 SANDBOX_IMAGE = (
     "python:3.12-slim@sha256:6b25cbe6577518889d553cdd5a5da97d259348d8f6e45b527dd731caaba27a07"
 )
-PROXY_IMAGE = (
-    "ubuntu/squid:6.6-24.04_edge"
-    "@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c"
-)
+# Built on this machine from `proxy/`, whose Dockerfile pins its own base.
+PROXY_IMAGE = "homunculus-proxy:local"
 PROXY_PORT = 3128
-# Squid's own user in its image, and the folders it writes, kept in memory.
+# Squid's own user in its image, and the folders it writes, kept in memory. /run holds
+# the proxy's certificate authority, so its key is never on disk.
 PROXY_USER = "13:13"
 PROXY_WRITABLE = ("/var/log/squid", "/var/spool/squid", "/run", "/tmp")
+PROXY_CERTIFICATE = "/run/ca/ca.pem"
+# Where the sandbox finds the proxy's certificate, and the settings that make programs
+# trust it alone: OpenSSL's, which Python and curl read, pip's and the requests library's.
+TRUSTED = "/etc/homunculus/proxy-ca.pem"
+TRUST_SETTINGS = ("SSL_CERT_FILE", "PIP_CERT", "REQUESTS_CA_BUNDLE")
 CPUS = "2"
 MEMORY = "2g"
 PROCESSES = 256
@@ -49,6 +57,9 @@ OLDEST_DOCKER = 26
 # How much of a command's output is held: its start and its end, in bytes. A command
 # that prints for ten minutes cannot fill the server's memory.
 KEPT_BYTES = 64 * 1024
+# Building the proxy's image downloads packages the first time; a stalled download
+# must not hold up the server's start for ever.
+BUILD_SECONDS = 600
 # After a command's own time runs out, how long it has to stop before it is killed.
 GRACE_SECONDS = 5
 
@@ -56,7 +67,7 @@ GRACE_SECONDS = 5
 # so it carries this program's name, as OpenTelemetry asks of application names.
 REQUEST_EVENT = "homunculus.sandbox.request"
 # A line of the proxy's access log, as `squid.conf` writes it.
-LOG_LINE = re.compile(r"^(\d+\.\d+) (\S+) (\S+) (\d+) (\S+) (\S+)$")
+LOG_LINE = re.compile(r"^(\d+\.\d+) (\S+) (\S+) (\d+) (\S+) (\S+) (\S+) (\S+)$")
 
 
 @dataclass(frozen=True)
@@ -65,8 +76,10 @@ class ProxyRequest:
     method: str  # CONNECT for a secure connection, otherwise GET and so on
     target: str  # host:port for CONNECT, otherwise the full URL
     status: int
-    allowed: bool
+    allowed: bool  # passed on to the site, not refused or answered by the proxy itself
     lookup_ms: int  # time spent looking up the name; 0 when it was never looked up
+    error: str  # Squid's error, such as ERR_ACCESS_DENIED, or "" for none
+    bump: str  # what Squid did with a tunnel, such as bump or terminate, or ""
 
     def attributes(self) -> dict[str, Any]:
         """The request in OpenTelemetry's HTTP attribute names, with this program's own
@@ -78,10 +91,10 @@ class ProxyRequest:
         else:
             address = urlsplit(self.target)
             found |= {"url.full": self.target, "server.address": address.hostname or ""}
-        return found | {
-            "http.response.status_code": self.status,
-            "homunculus.sandbox.allowed": self.allowed,
-        }
+        found["http.response.status_code"] = self.status
+        if self.error:
+            found["error.type"] = self.error
+        return found | {"homunculus.sandbox.allowed": self.allowed}
 
 
 class DockerSandbox:
@@ -91,6 +104,7 @@ class DockerSandbox:
         self._box = f"{name}-sandbox"
         self._proxy = f"{name}-proxy"
         self._follower: subprocess.Popen[str] | None = None
+        self._trust: Path | None = None  # a folder holding the proxy's certificate
 
     def start(self) -> None:
         """Start the network and both containers, replacing any left from an earlier run.
@@ -103,13 +117,14 @@ class DockerSandbox:
             )
         self.stop()
         try:
+            proxy = Path(str(files("homunculus.sandbox").joinpath("proxy")))
+            _docker("build", "--quiet", "--tag", PROXY_IMAGE, str(proxy), timeout=BUILD_SECONDS)
             self._start_containers()
         except RuntimeError:
             self.stop()  # leave nothing half-started behind
             raise
 
     def _start_containers(self) -> None:
-        config = Path(str(files("homunculus.sandbox").joinpath("squid.conf")))
         _docker("network", "create", "--internal", self._network)
         writable = [f"--tmpfs={path}:uid=13,gid=13" for path in PROXY_WRITABLE]
         _docker(
@@ -117,11 +132,12 @@ class DockerSandbox:
             "--user", PROXY_USER, "--read-only", *writable,
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--cpus", "1", "--memory", "256m", "--pids-limit", "64",
-            "--mount", f"type=bind,src={config},dst=/etc/squid/squid.conf,readonly",
             PROXY_IMAGE,
         )  # fmt: skip
         _docker("network", "connect", self._network, self._proxy)
+        certificate = self._copy_proxy_certificate()
         proxy = f"http://{self._proxy}:{PROXY_PORT}"
+        trust = [f"--env={setting}={TRUSTED}" for setting in TRUST_SETTINGS]
         _docker(
             "run", "--detach", "--name", self._box,
             "--network", self._network,
@@ -131,11 +147,13 @@ class DockerSandbox:
             "--cpus", CPUS, "--memory", MEMORY, "--pids-limit", str(PROCESSES),
             "--init",
             "--mount", f"type=bind,src={self._workspace},dst=/workspace",
+            "--mount", f"type=bind,src={certificate},dst={TRUSTED},readonly",
             "--workdir", "/workspace",
             "--env", "HOME=/tmp",
             # Both spellings, since programs differ in which one they read.
             "--env", f"HTTP_PROXY={proxy}", "--env", f"HTTPS_PROXY={proxy}",
             "--env", f"http_proxy={proxy}", "--env", f"https_proxy={proxy}",
+            *trust,
             SANDBOX_IMAGE, "sleep", "infinity",
         )  # fmt: skip
         self._wait_for_proxy()
@@ -151,6 +169,9 @@ class DockerSandbox:
             subprocess.run(["docker", "network", "rm", self._network], capture_output=True)
         except FileNotFoundError:
             pass  # no docker command, so nothing was started
+        if self._trust is not None:
+            shutil.rmtree(self._trust, ignore_errors=True)
+            self._trust = None
 
     def run(self, command: str, timeout_seconds: float) -> CommandResult:
         # `timeout` inside the container stops the command, and kills it if it will not
@@ -220,6 +241,22 @@ class DockerSandbox:
         gateway = "{{(index .IPAM.Config 0).Gateway}}"
         return _docker("network", "inspect", "bridge", "--format", gateway).strip()
 
+    def _copy_proxy_certificate(self) -> Path:
+        """The proxy's certificate, copied to a file of its own for the sandbox to mount,
+        once the proxy has made it. Only the certificate leaves the proxy, never its key."""
+        for _ in range(50):
+            read = subprocess.run(
+                ["docker", "exec", self._proxy, "cat", PROXY_CERTIFICATE],
+                capture_output=True, text=True,
+            )  # fmt: skip
+            if read.returncode == 0 and "BEGIN CERTIFICATE" in read.stdout:
+                self._trust = Path(tempfile.mkdtemp(prefix="homunculus-trust-"))
+                certificate = self._trust / "proxy-ca.pem"
+                certificate.write_text(read.stdout)
+                return certificate
+            time.sleep(0.2)
+        raise RuntimeError("the sandbox's proxy did not make its certificate")
+
     def _wait_for_proxy(self) -> None:
         probe = (
             "import socket; "
@@ -239,12 +276,29 @@ def parse(line: str) -> ProxyRequest | None:
     match = LOG_LINE.match(line.strip())
     if match is None:
         return None
-    seconds, method, target, status, verdict, lookup = match.groups()
+    seconds, method, target, status, verdict, lookup, error, bump = match.groups()
     if status == "0":
         return None
     lookup_ms = int(lookup) if lookup.isdecimal() else 0  # "-" when no lookup was made
-    allowed = "DENIED" not in verdict
-    return ProxyRequest(float(seconds), method, target, int(status), allowed, lookup_ms)
+    return ProxyRequest(
+        time=float(seconds),
+        method=method,
+        target=target,
+        status=int(status),
+        allowed=_passed_on(method, verdict, bump),
+        lookup_ms=lookup_ms,
+        error="" if error == "-" else error,
+        bump="" if bump == "-" else bump,
+    )
+
+
+def _passed_on(method: str, verdict: str, bump: str) -> bool:
+    if "DENIED" in verdict or bump == "terminate":
+        return False
+    # Opening a tunnel fetches nothing, so Squid's verdict for it is always NONE. A
+    # request inside one is passed on only if Squid fetched it rather than answering
+    # it itself, as it does when the name inside does not match the tunnel.
+    return method == "CONNECT" or not verdict.startswith("NONE")
 
 
 class _KeptOutput:
@@ -277,8 +331,13 @@ def _user() -> str:
     return f"{os.getuid()}:{os.getgid()}"
 
 
-def _docker(*arguments: str) -> str:
-    completed = subprocess.run(["docker", *arguments], capture_output=True, text=True)
+def _docker(*arguments: str, timeout: float | None = None) -> str:
+    try:
+        completed = subprocess.run(
+            ["docker", *arguments], capture_output=True, text=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"docker {arguments[0]} took longer than {timeout:g} s") from None
     if completed.returncode != 0:
         raise RuntimeError(f"docker {arguments[0]} failed: {completed.stderr.strip()}")
     return completed.stdout

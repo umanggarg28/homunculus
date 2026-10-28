@@ -7,10 +7,12 @@ Each claim in ARCHITECTURE's sandbox section has a test here.
 import json
 import os
 import secrets
+import shlex
 import subprocess
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -73,6 +75,100 @@ def fetch(sandbox: DockerSandbox, url: str, use_proxy: bool = True) -> CommandRe
     return run(sandbox, f"python -c {json.dumps(script)}")
 
 
+# A request made by hand inside the sandbox, so that each of its three names can differ:
+# the one the tunnel asks for, the one in the TLS handshake ("-" for none), and the one
+# inside the request. Ordinary programs always use the same name for all three.
+BY_HAND = """
+import os, socket, ssl, sys
+from urllib.parse import urlsplit
+tunnel, handshake, inside, method, path = sys.argv[1:]
+proxy = urlsplit(os.environ["HTTPS_PROXY"])
+connection = socket.create_connection((proxy.hostname, proxy.port), timeout=15)
+connection.sendall(f"CONNECT {tunnel}:443 HTTP/1.1\\r\\nHost: {tunnel}:443\\r\\n\\r\\n".encode())
+print(connection.recv(4096).split(b"\\r\\n")[0].decode())
+context = ssl.create_default_context()
+context.check_hostname = handshake != "-"
+secure = context.wrap_socket(connection, server_hostname=None if handshake == "-" else handshake)
+issuer = dict(field[0] for field in secure.getpeercert()["issuer"])["commonName"]
+print("issued by", issuer)
+secure.sendall(
+    f"{method} {path} HTTP/1.1\\r\\nHost: {inside}\\r\\n"
+    "Content-Length: 0\\r\\nConnection: close\\r\\n\\r\\n".encode()
+)
+print(secure.recv(4096).split(b"\\r\\n")[0].decode())
+"""
+
+
+def by_hand(
+    sandbox: DockerSandbox,
+    tunnel: str,
+    handshake: str,
+    inside: str,
+    method: str = "GET",
+    path: str = "/simple/six/",
+) -> CommandResult:
+    names = " ".join(shlex.quote(part) for part in [tunnel, handshake, inside, method, path])
+    return run(sandbox, f"python -c {shlex.quote(BY_HAND)} {names}")
+
+
+def test_a_registry_is_reached_through_the_proxys_own_certificate(sandbox: DockerSandbox) -> None:
+    result = by_hand(sandbox, "pypi.org", "pypi.org", "pypi.org")
+    assert result.exit_code == 0, result.output
+    assert "issued by Homunculus sandbox proxy" in result.output
+    assert result.output.rstrip().endswith("HTTP/1.1 200 OK")
+
+
+def test_the_proxys_signing_key_never_reaches_the_sandbox(
+    sandbox: DockerSandbox, name: str
+) -> None:
+    trusted = run(sandbox, 'cat "$SSL_CERT_FILE"').output
+    assert "BEGIN CERTIFICATE" in trusted
+    assert "PRIVATE KEY" not in trusted
+    # The key lives only in the proxy's memory, and is gone when the proxy stops.
+    memory = subprocess.run(
+        ["docker", "inspect", f"{name}-proxy", "--format", "{{json .HostConfig.Tmpfs}}"],
+        capture_output=True, text=True,
+    ).stdout  # fmt: skip
+    assert "/run" in json.loads(memory)
+
+
+def test_a_different_name_inside_the_request_is_refused(sandbox: DockerSandbox) -> None:
+    # Domain fronting: the tunnel and the handshake say pypi.org, the request inside asks
+    # its content network for another site.
+    result = by_hand(sandbox, "pypi.org", "pypi.org", "example.com")
+    assert "200 OK" not in result.output
+    # Stopped by the proxy, which read the request, not left to the content network.
+    [stopped] = logged_soon(sandbox, "https://example.com/simple/six/")
+    assert not stopped.allowed
+
+
+def test_a_different_name_in_the_handshake_is_refused(sandbox: DockerSandbox) -> None:
+    result = by_hand(sandbox, "pypi.org", "example.com", "example.com")
+    assert result.exit_code != 0
+    assert "200 OK" not in result.output
+    [refused] = logged_soon(sandbox, "pypi.org:443", lambda r: r.bump == "terminate")
+    assert not refused.allowed
+
+
+def test_without_a_name_in_the_handshake_the_name_inside_is_still_checked(
+    sandbox: DockerSandbox,
+) -> None:
+    assert by_hand(sandbox, "pypi.org", "-", "pypi.org").output.rstrip().endswith("200 OK")
+    assert "200 OK" not in by_hand(sandbox, "pypi.org", "-", "example.com").output
+
+
+def test_only_package_pages_can_be_read(sandbox: DockerSandbox) -> None:
+    login = by_hand(sandbox, "pypi.org", "pypi.org", "pypi.org", path="/account/login/")
+    assert login.output.rstrip().endswith("403 Forbidden")
+    upload = by_hand(sandbox, "pypi.org", "pypi.org", "pypi.org", method="POST")
+    assert upload.output.rstrip().endswith("403 Forbidden")
+    publish = by_hand(
+        sandbox, "registry.npmjs.org", "registry.npmjs.org", "registry.npmjs.org",
+        method="PUT", path="/a-package",
+    )  # fmt: skip
+    assert publish.output.rstrip().endswith("403 Forbidden")
+
+
 def test_the_proxy_is_locked_down_too(sandbox: DockerSandbox, name: str) -> None:
     settings = subprocess.run(
         ["docker", "inspect", f"{name}-proxy", "--format",
@@ -89,11 +185,13 @@ def test_a_flood_of_output_is_kept_short(sandbox: DockerSandbox) -> None:
     assert result.omitted == 10_000_000 - 2 * 64 * 1024
 
 
-def logged_soon(sandbox: DockerSandbox, target: str) -> list[ProxyRequest]:
-    """The proxy's log lines for `target`, waiting for them: the image copies the log
-    file to its output about once a second."""
+def logged_soon(
+    sandbox: DockerSandbox, target: str, where: Callable[[ProxyRequest], bool] = lambda _: True
+) -> list[ProxyRequest]:
+    """The proxy's log lines for `target` that match `where`, waiting a little for them
+    to be written."""
     for _ in range(50):
-        if found := [r for r in sandbox.requests() if r.target == target]:
+        if found := [r for r in sandbox.requests() if r.target == target and where(r)]:
             return found
         time.sleep(0.1)
     return []
@@ -212,17 +310,28 @@ def test_each_request_becomes_an_event_in_the_activity_log(
     sandbox.record_requests(activity)
     fetch(sandbox, "https://example.com")
 
+    def tunnels_to_example() -> list[dict[str, Any]]:
+        return [
+            event
+            for event in activity.events()
+            if event["eventName"] == "homunculus.sandbox.request"
+            and event["attributes"].get("server.address") == "example.com"
+            and event["attributes"]["http.request.method"] == "CONNECT"
+        ]
+
     for _ in range(50):  # the log is followed as it is written
-        events = [e for e in activity.events() if e["eventName"] == "homunculus.sandbox.request"]
-        if any(e["attributes"].get("server.address") == "example.com" for e in events):
+        if tunnels_to_example():
             break
         time.sleep(0.1)
 
-    refused = next(e for e in events if e["attributes"].get("server.address") == "example.com")
+    refused = tunnels_to_example()[0]
+    # Squid accepts the tunnel only to show its refusal page inside it, so the tunnel's
+    # own status is 200 and the refusal is in the error.
     assert refused["attributes"] == {
         "http.request.method": "CONNECT",
         "server.address": "example.com",
         "server.port": 443,
-        "http.response.status_code": 403,
+        "http.response.status_code": 200,
+        "error.type": "ERR_ACCESS_DENIED",
         "homunculus.sandbox.allowed": False,
     }

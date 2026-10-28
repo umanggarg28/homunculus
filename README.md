@@ -32,7 +32,7 @@ flowchart LR
 | `model` | One streaming call to the model through OpenRouter. |
 | `gate` | Decides for every tool call whether it may run, from what the tool says it does. Reading acts, deleting and anything outward waits for your approval, and anything it cannot read is refused. |
 | `approvals` | Actions waiting for you. You approve, decline, or mark a hand-off done, and the agent is told. |
-| `sandbox` | A locked-down Docker container where commands run. Its only way out is a proxy that allows the package registries and logs every request. |
+| `sandbox` | A locked-down Docker container where commands run. Its only way out is a proxy that allows the package registries, opens each tunnel to check that only package pages are read, and logs every request. |
 | `tools` | `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`, inside the agent's workspace only, and `shell`, which runs commands in the sandbox. Each is described as an MCP tool. |
 | `activity` | An append-only record of every step as OpenTelemetry traces, plus log events for each turn's start, your decisions and your ratings, written by code, out of reach of every tool. Any OpenTelemetry tool can read both files. The activity screen shows one job per message, and you can rate each one. |
 

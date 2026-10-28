@@ -1,0 +1,18 @@
+#!/bin/sh
+# Make the proxy's certificate authority, then run Squid.
+#
+# The authority is made fresh each time the proxy starts, in /run, which is in memory,
+# so its key is never written to disk and is gone when the proxy stops. Python 3.13 and
+# later refuse an authority without the CA and key usage extensions, so both are set.
+set -eu
+umask 077
+mkdir -p /run/ca
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -noenc -days 30 \
+  -subj "/CN=Homunculus sandbox proxy" \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -keyout /run/ca/ca.key -out /run/ca/ca.pem 2>/dev/null
+# The certificate is public: the server copies it into the sandbox. The key stays here.
+chmod 644 /run/ca/ca.pem
+/usr/lib/squid/security_file_certgen -c -s /var/spool/squid/ssl_db -M 4MB >/dev/null
+exec squid -N -f /etc/squid/squid.conf
