@@ -104,3 +104,11 @@ def test_payments_passwords_and_codes_are_handed_to_the_operator(name: str) -> N
 
 def test_a_hand_off_the_gate_cannot_read_is_refused() -> None:
     assert decide(call("pay", "{not json"), stand_in("pay")) is Answer.REFUSE
+
+
+def test_a_tool_that_runs_in_the_sandbox_is_allowed() -> None:
+    # Honestly destructive and outward, yet the sandbox is its boundary.
+    outward = mcp.ToolAnnotations(destructive_hint=True, open_world_hint=True)
+    sandboxed = stand_in("shell", outward)
+    sandboxed = Tool(sandboxed.definition, sandboxed.run, runs_in_sandbox=True)
+    assert decide(call("shell", '{"command": "ls"}'), sandboxed) is Answer.ACT

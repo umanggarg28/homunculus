@@ -23,6 +23,8 @@ class Tool:
     run: Callable[[dict[str, Any]], str]
     # The arguments that name a path in the workspace, which the gate keeps inside it.
     workspace_paths: tuple[str, ...] = ()
+    # True for a tool that runs inside the sandbox, so the sandbox is its boundary.
+    runs_in_sandbox: bool = False
 
     @property
     def name(self) -> str:

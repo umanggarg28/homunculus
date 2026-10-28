@@ -11,15 +11,16 @@ Homunculus is one always-on process that holds a small model loop, a few general
 | `turns` | Turns running on the server, and their numbered events | Each turn a task of its own; events kept in memory for rejoining; stop on request |
 | `prompt` | What the model is told at the start of every turn | Fixed instructions in `prompt.md`, shipped with the code and the same every turn; layers from memory and skills are planned |
 | `model` | One streaming call to the model provider | Streaming text and tool calls, privacy routing, error reporting |
-| `gate` | The answer for every proposed action | Decides from each tool's MCP annotations: read-only acts, outward or unannotated asks, destructive asks except `write`, `edit` and `rename`; paths must stay in the workspace; unknown tools and unreadable calls are refused |
-| `tools` | Plain functions the model can ask to run, each described as an MCP `Tool` with annotations | `read`, `write`, `edit`, `list`, `search`, `delete`, `rename` in the workspace; results are MCP `CallToolResult`s |
+| `gate` | The answer for every proposed action | Decides from each tool's MCP annotations: read-only acts, a sandboxed tool acts, outward or unannotated asks, destructive asks except `write`, `edit` and `rename`; paths must stay in the workspace; unknown tools and unreadable calls are refused |
+| `tools` | Plain functions the model can ask to run, each described as an MCP `Tool` with annotations | `read`, `write`, `edit`, `list`, `search`, `delete`, `rename` in the workspace; results are MCP `CallToolResult`s; `shell` runs bash commands in the sandbox |
 | `activity` | Append-only record of every step, as OpenTelemetry traces | Written by the loop and the server, never by a tool; `traces.jsonl` in OpenTelemetry's file format, following the GenAI conventions; turn starts, decisions and ratings as OpenTelemetry log events in `logs.jsonl`; kept outside the workspace |
 | `approvals` | Requests waiting for the operator | Saved to the data directory; approve, decline, or done for hand-offs |
+| `sandbox` | Where the agent's commands run, apart from the operator's machine | Docker: a locked-down container on an internal network, with a Squid proxy sidecar as its only way out, to the package registries; every request logged |
 | `skills` | Skill folders in the Agent Skills format | Planned |
 | `memory` | The wiki, raw sources, profile and goals, as files | Planned |
 | `waker` | When the agent works unprompted | Planned |
 
-Each module has one job. A new module needs a stated reason. `activity` is separate from `memory` because it is written only by code and must stay out of reach of every tool, while memory is written by the agent through its tools. `turns` is separate from `server` because the server only wires HTTP to the work, while a turn outlives the request that started it and is watched by any number of pages. `prompt` is separate from `loop` because the loop decides what runs next, while the prompt decides what the model is told, and later tickets add layers to the prompt without touching the loop. `approvals` is separate from `gate` because the gate is a pure decision with no state, while requests are saved, wait for the operator and change status once.
+Each module has one job. A new module needs a stated reason. `activity` is separate from `memory` because it is written only by code and must stay out of reach of every tool, while memory is written by the agent through its tools. `sandbox` is separate from `tools` because a tool only says what to run, while the sandbox owns where it runs and what that place can reach; another backend can replace Docker without touching the tool. `turns` is separate from `server` because the server only wires HTTP to the work, while a turn outlives the request that started it and is watched by any number of pages. `prompt` is separate from `loop` because the loop decides what runs next, while the prompt decides what the model is told, and later tickets add layers to the prompt without touching the loop. `approvals` is separate from `gate` because the gate is a pure decision with no state, while requests are saved, wait for the operator and change status once.
 
 ## How a chat message flows
 
@@ -126,6 +127,24 @@ The data directory is the operating system's place for application data (`~/Libr
 - **Record only what happened.** The conversation history changes only after a reply completes. A failed call ends the stream with `error`, never `done`. The activity log is written by code, never by the model.
 - **Local only.** The server binds to `127.0.0.1`.
 
+## Sandbox
+
+Commands run in a Docker container, started with the server and removed when it stops. The program never runs a command on the operator's machine: without Docker, there is no `shell` tool.
+
+| Claim | How |
+|---|---|
+| Not root | `--user` the operator's own user id, never 0 |
+| System files cannot change | `--read-only`; only `/tmp` (a `tmpfs`) and the workspace are writable |
+| No special powers | `--cap-drop ALL`, `--security-opt no-new-privileges`, no Docker socket |
+| Limited | `--cpus 2 --memory 2g --pids-limit 256`; a command stops after 120 s (600 s at most) |
+| Sees only the workspace | the workspace is the only folder mounted; no secrets are passed in |
+| Reaches only the package registries | alone on an `--internal` network, with no lookups of outside names (Docker 26 or later); a Squid sidecar on that and the normal network allows only secure tunnels to PyPI and npm; its rules refuse any other name before a lookup, so only registry names are ever resolved; it refuses bare addresses (`dstdomain -n`) and registry names pointing at private, loopback, link-local or host addresses |
+| The proxy locked down too | Squid's own user, `--read-only` with in-memory folders for its logs, `--cap-drop ALL`, `no-new-privileges`, CPU, memory and process limits |
+| Output cannot fill memory | the first and last 64 KiB of a command's output are kept as it streams |
+| Every request recorded | Squid's access log, followed by the server, each line a `homunculus.sandbox.request` event in `logs.jsonl` |
+
+Both images are pinned by digest: `python:3.12-slim` for the sandbox, and Canonical's `ubuntu/squid:6.6-24.04` for the proxy. The file tools stay in the server, behind their own fence: they reach each file one folder at a time from the workspace folder's own handle and never follow a link, so a link a command swaps in cannot steer them; they open without waiting, refuse anything but a regular file, and read files up to 10 MB. What can still leave the machine, and the risk accepted, is in [SECURITY.md](SECURITY.md).
+
 ## Testing
 
 Tests sit at agreed seams and fake only the outside world.
@@ -138,9 +157,11 @@ Tests sit at agreed seams and fake only the outside world.
 | Server HTTP API: the trace file | One trace per turn with a span per model call and tool, read from the file as OTLP JSON; GenAI attributes; token counts; error status on a failed turn | The model |
 | Server HTTP API: activity | Jobs grouped from the traces, feedback kept and replaced by a later rating, failed and cut-short jobs, approved actions shown in the job that asked, decision follow-ups marked as notices | The model |
 | Server HTTP API: prompt | The fixed instructions come first, in order, and are the same on every turn; every tool says when to use it | The model |
+| Server HTTP API: shell | The tool offered, acting without asking, output and exit code, failures, timeouts in milliseconds capped at ten minutes, long output shortened | A stand-in sandbox |
+| Sandbox proof | Every claim in the sandbox table, against the real containers | Nothing; needs Docker and the internet |
 | Server HTTP API: turns | A turn carries on after the page goes away, a page rejoins from the start, `Last-Event-ID` sends only what was missed, stop ends a turn and leaves the conversation, only a running turn can be stopped | The model (a stand-in that waits until the test lets it finish) |
 | Server HTTP API: approvals | Waiting instead of running, approve, decline, hand-off done, decided once, survives a restart, notices | The model; stand-in tools that record their calls |
 | Server HTTP API | Event format including tool steps, errors, one reply at a time, privacy routing on every request, tools offered and streamed tool calls run, history, serving the console | The model, or only the network beneath the real model |
 | Console in a browser | Sending a message shows the tool step and the reply, the conversation survives a reload, approving a request runs it and the agent carries on, a rating on the activity screen is kept, reloading during a turn still shows its whole reply, and [stop] ends the turn on the server | The model only; real server, built console and Chromium |
 
-Tests run with network access blocked, so a test that reaches the internet fails. Changes the model takes part in are also tried against the real model, as AGENTS.md describes. Browser tests are marked `browser` and run separately with `uv run pytest -m browser`, after `npm run build` in `web/` and `uv run playwright install chromium`.
+Tests run with network access blocked, so a test that reaches the internet fails. Changes the model takes part in are also tried against the real model, as AGENTS.md describes. The sandbox proof is marked `sandbox` and runs with `uv run pytest -m sandbox` when Docker is running. Browser tests are marked `browser` and run separately with `uv run pytest -m browser`, after `npm run build` in `web/` and `uv run playwright install chromium`.
