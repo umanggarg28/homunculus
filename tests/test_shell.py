@@ -115,3 +115,21 @@ def test_long_output_keeps_its_start_and_end(tmp_path: Path) -> None:
 
     assert result.startswith("a" * 15_000 + "\n[10000 characters left out]\n" + "b" * 15_000)
     assert result.endswith("[exit code 0]")
+
+
+def test_a_command_killed_for_memory_is_not_called_too_slow(tmp_path: Path) -> None:
+    killed = CommandResult(exit_code=137, output="", timed_out=False)
+    model = ScriptedModel([[shell(command="python big.py")], ["It was killed."]])
+
+    result = chat(model, StandInSandbox(killed), tmp_path)
+
+    assert result == "Error: [exit code 137]"
+
+
+def test_output_the_sandbox_did_not_keep_is_counted_as_left_out(tmp_path: Path) -> None:
+    kept = "a" * 20_000 + "b" * 20_000  # the sandbox kept only the start and the end
+    model = ScriptedModel([[shell(command="yes")], ["Lots."]])
+
+    result = chat(model, StandInSandbox(CommandResult(0, kept, False, omitted=5_000)), tmp_path)
+
+    assert "\n[about 15000 characters left out]\n" in result

@@ -134,7 +134,10 @@ async def test_a_link_that_leads_outside_the_workspace_is_refused(
 
     await run_job(model, workspace, "Read the shortcut")
 
-    assert tool_result(model) == "Error: shortcut.md is outside the workspace."
+    assert (
+        tool_result(model)
+        == "Error: shortcut.md is a link, or goes through one; links are not followed."
+    )
 
 
 async def test_listing_shows_folders_and_files(workspace: Path) -> None:
@@ -284,3 +287,32 @@ def test_deleting_a_link_is_refused_and_the_real_file_is_kept(workspace: Path) -
 
     assert (workspace / "real.md").read_text() == "keep me"
     assert result == "Error: link.md is a link; links cannot be deleted or renamed."
+
+
+async def test_a_link_is_never_followed_even_into_the_workspace(workspace: Path) -> None:
+    # The sandbox can change the workspace while a file tool works on it. A link the
+    # tool refused to follow cannot be swapped to point somewhere else mid-way.
+    (workspace / "real.md").write_text("inside")
+    (workspace / "alias.md").symlink_to(workspace / "real.md")
+    model = ScriptedModel([[tool_call("read", path="alias.md")], ["Refused."]])
+
+    await run_job(model, workspace, "Read the alias")
+
+    assert (
+        tool_result(model)
+        == "Error: alias.md is a link, or goes through one; links are not followed."
+    )
+
+
+async def test_writing_through_a_linked_folder_is_refused(tmp_path: Path, workspace: Path) -> None:
+    (tmp_path / "elsewhere").mkdir()
+    (workspace / "notes").symlink_to(tmp_path / "elsewhere")
+    model = ScriptedModel([[tool_call("write", path="notes/a.md", content="x")], ["Refused."]])
+
+    await run_job(model, workspace, "Write a note")
+
+    assert not (tmp_path / "elsewhere" / "a.md").exists()
+    assert (
+        tool_result(model)
+        == "Error: notes/a.md is a link, or goes through one; links are not followed."
+    )

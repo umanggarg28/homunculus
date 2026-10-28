@@ -14,6 +14,8 @@ class CommandResult:
     exit_code: int
     output: str  # what the command printed, its errors mixed in as they came
     timed_out: bool  # stopped because it ran past its time
+    # Bytes from the middle of a very long output that were never kept.
+    omitted: int = 0
 
 
 class Sandbox(Protocol):

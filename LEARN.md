@@ -580,7 +580,7 @@ The defaults assume the worst, so a tool that says nothing about itself is treat
 
 **Few, general tools.** Homunculus has seven file tools, and one `shell` tool that runs commands in the sandbox (chapter 10). The file tools are `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`. Their behaviour follows Anthropic's published memory-tool interface (view a file with numbered lines, create, replace text that appears exactly once, delete, rename). `search` is plain text search, the approach Claude Code takes with its Grep tool, instead of a pre-built index. Anthropic's "Seeing like an agent" notes that every extra tool is one more option the model has to weigh, so the bar for adding one is high. This project caps itself at 20.
 
-**The workspace is a fence, with two layers.** The gate (chapter 5) refuses any path that is absolute or contains `..` before a tool runs. Then the tool resolves the path to its real location, following symbolic links, which only the tool can see, and refuses it if it lands outside the workspace folder. One mistake in either layer is not enough to get out. The activity log lives outside the workspace, so no tool can reach it.
+**The workspace is a fence, with two layers.** The gate (chapter 5) refuses any path that is absolute or contains `..` before a tool runs. Then the tool reaches the file one folder at a time, starting from a handle on the workspace folder itself, and never follows a link at any step: [files.py:15](src/homunculus/tools/files.py#L15) `FOLDER_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW`. A link is refused even when it points inside the workspace. That matters because the sandbox (chapter 10) can change the workspace while a tool is working: a tool that checked a path first and opened it afterwards could be sent anywhere by a link swapped in between. Walking with folder handles leaves no such gap. One mistake in either layer is not enough to get out. The activity log lives outside the workspace, so no tool can reach it.
 
 ### A picture
 
@@ -675,7 +675,7 @@ The arguments only become valid JSON once every fragment has arrived. That is wh
 |---|---|
 | File does not exist | `Error: nope.md does not exist.` |
 | Path is absolute or contains `..` | `Not done: the gate answered 'refuse' for this action.` |
-| Symbolic link leads outside the workspace | `Error: shortcut.md is outside the workspace.` |
+| A symbolic link, anywhere in the path | `Error: shortcut.md is a link, or goes through one; links are not followed.` |
 | Text to edit appears twice | `Error: the text appears 2 times in plan.md; it must appear once.` |
 | A required argument is missing | `Error: write needs the argument 'content'.` |
 | No tool has that name | `Error: there is no tool named search.` |
@@ -698,10 +698,13 @@ async def test_a_link_that_leads_outside_the_workspace_is_refused(
 
     await run_job(model, workspace, "Read the shortcut")
 
-    assert tool_result(model) == "Error: shortcut.md is outside the workspace."
+    assert (
+        tool_result(model)
+        == "Error: shortcut.md is a link, or goes through one; links are not followed."
+    )
 ```
 
-In plain English: "If the workspace holds a shortcut that points to a file outside it, reading through the shortcut is refused, and the model is told why." `shortcut.md` looks harmless to the gate, since it has no `..` and is not absolute, so this is the case only the tool's own fence can catch.
+In plain English: "If the workspace holds a shortcut that points to a file outside it, reading through the shortcut is refused, and the model is told why." `shortcut.md` looks harmless to the gate, since it has no `..` and is not absolute, so this is the case only the tool's own fence can catch. Two more tests go further: a link that points inside the workspace is refused too, and so is writing through a linked folder.
 
 `workspace` is a pytest fixture: an empty folder made fresh for each test, with the activity log beside it. `tool_result(model)` reads the last message the model was shown on its second call, which is the `tool` message. So the test checks what the model actually saw, through the loop, the same way it happens for real.
 
@@ -709,9 +712,9 @@ Other tool tests cover each tool, each error in the table above, a tool that doe
 
 ### Change it yourself
 
-1. In `tools/files.py`, find `_resolve` and change `(self._root / path).resolve()` to `self._root / path`, so the path is no longer resolved.
+1. In `tools/files.py`, find `FOLDER_FLAGS` and take out `| os.O_NOFOLLOW`, so a linked folder would be followed.
 2. Run `uv run pytest tests/test_tools.py`.
-3. Three tests fail: the symbolic-link test, and the direct fence test for `../outside.md` and `notes/../../outside.md`. Without resolving, those paths look as if they start inside the workspace, and the check is fooled. The loop tests with the same paths still pass, because the gate refuses them first. That is the two layers working: you broke one, and the other still held.
+3. The linked-folder test fails: writing `notes/a.md`, where `notes` is a link to a folder outside the workspace, now lands outside. The loop tests with `../` paths still pass, because the gate refuses them first. That is the two layers working: you broke one, and the other still held for the paths the gate can see. A link is invisible to the gate, so for links the tool's own fence is the only one.
 4. Undo the change.
 
 ---
@@ -756,7 +759,7 @@ A missing hint takes the protocol's own default, which assumes the worst: not re
 
 **Annotations are trusted only from our own tools.** The MCP specification says clients "MUST consider tool annotations to be untrusted unless they come from trusted servers". Every tool today is the program's own. When outside MCP servers arrive (#9), their annotations must not decide anything.
 
-**Before the annotations: readable arguments, hand-offs, the tool itself, and paths.** Arguments that are not a JSON object are refused first, whatever the tool. Payments, passwords and verification codes (`pay`, `enter_password`, `enter_verification_code`) are answered `HAND_OFF`: only you should do them. No such tool exists yet, so this row is policy written down before it is needed. A name with no tool behind it is `REFUSE`, because nothing could run. Then each argument listed in the tool's `workspace_paths` must be a relative path with no `..` part, or the answer is `REFUSE`. For `rename` both `path` and `to` are checked. The tools check again on their own, following symbolic links (chapter 4). What happens to `ASK` and `HAND_OFF` answers is chapter 8.
+**Before the annotations: readable arguments, hand-offs, the tool itself, and paths.** Arguments that are not a JSON object are refused first, whatever the tool. Payments, passwords and verification codes (`pay`, `enter_password`, `enter_verification_code`) are answered `HAND_OFF`: only you should do them. No such tool exists yet, so this row is policy written down before it is needed. A name with no tool behind it is `REFUSE`, because nothing could run. Then each argument listed in the tool's `workspace_paths` must be a relative path with no `..` part, or the answer is `REFUSE`. For `rename` both `path` and `to` are checked. The tools check again on their own, and never follow a link (chapter 4). What happens to `ASK` and `HAND_OFF` answers is chapter 8.
 
 ### A picture
 
@@ -1318,13 +1321,13 @@ Code: `src/homunculus/sandbox/` (the interface in `__init__.py`, Docker in `dock
 
 ### The problem
 
-To be useful on its own, the agent has to run things: the code it writes, its tests, a script that tidies your notes, `pip install` for a library it needs. A command can do anything the computer running it can do. Run on your Mac, a mistaken or tricked command could read your files and keys, reach your other devices, or send your notes to a stranger's website. The agent needs a place where it can run anything at all, and where "anything" still cannot touch you.
+To be useful on its own, the agent has to run things: the code it writes, its tests, a script that tidies your notes, `pip install` for a library it needs. A command can do anything the computer running it can do. Run on your Mac, a mistaken or tricked command could read your files and keys, reach your other devices, or send your notes to a stranger's website. The agent needs a place where it can run anything at all, and where that cannot reach your machine, your files or your other devices. What can still leave, and the risk that is accepted, is in SECURITY.md.
 
 ### The idea
 
-**A container.** A container is a sealed box for programs. It has its own files, its own users and its own network. On a Mac, Docker runs every container inside a small Linux virtual machine, so even a program that broke out of its box would land in that machine, not in macOS.
+**A container.** A container is a sealed box for programs. It has its own files, its own users and its own network. On a Mac, Docker runs every container inside a small Linux virtual machine. A program that broke out of its box would land in that machine, which by default can see your home folder, so the box itself has to be tight, and SECURITY.md lists this as a risk.
 
-**Locked down inside.** The sandbox box is set up the way security guides for containers recommend:
+**Locked down inside.** The sandbox box is set up the way security guides for containers, such as OWASP's Docker Security Cheat Sheet, recommend. The proxy's own box is locked down the same way, running as Squid's own user:
 
 | Setting | What it means |
 |---|---|
@@ -1341,7 +1344,7 @@ There is no Docker socket inside, so nothing can ask Docker for more, and no API
 
 **Every request is written down.** Squid writes one line per request. The server follows that log and records each line in the activity log (chapter 6), as a `homunculus.sandbox.request` event with OpenTelemetry's HTTP attribute names.
 
-**Only commands go in the box.** The file tools stay in the server, behind their own fence (chapter 4), and work on the same workspace folder the sandbox sees. Claude Code, Codex and OpenClaw split their work the same way: the agent's own program runs normally, and only the commands it executes are sandboxed.
+**Only commands go in the box.** The file tools stay in the server, behind their own fence (chapter 4), and work on the same workspace folder the sandbox sees. Claude Code runs its file tools outside its sandbox and only shell commands inside, and OpenClaw's documentation says "the Gateway process always stays on the host; only tool execution moves into the sandbox".
 
 ### A picture
 
@@ -1378,7 +1381,7 @@ ToolCall(name="shell", arguments='{"command": "python3 -m venv /workspace/.venv 
 sandbox.run("python3 -m venv … && … pip install six", timeout_seconds=120.0)
 ```
 
-**Into the container.** [docker.py:125](src/homunculus/sandbox/docker.py#L125) `"docker", "exec", self._box,` runs:
+**Into the container.** [docker.py:150](src/homunculus/sandbox/docker.py#L150) `"docker", "exec", self._box,` runs:
 
 ```
 docker exec homunculus-sandbox timeout --kill-after=5 120 bash -c "python3 -m venv … && … pip install six"
@@ -1386,7 +1389,7 @@ docker exec homunculus-sandbox timeout --kill-after=5 120 bash -c "python3 -m ve
 
 `timeout` stops the command if it runs past 120 seconds, and kills it five seconds later if it will not stop.
 
-**The download.** `pip` reads `HTTPS_PROXY=http://homunculus-proxy:3128` and asks the proxy for a tunnel to `pypi.org:443`. Squid checks its rules in order ([squid.conf:21](src/homunculus/sandbox/squid.conf#L21) `http_access deny private_addresses` first). `pypi.org` is a public address, the port is 443, and the name is in `registries`, so the tunnel opens. Squid writes:
+**The download.** `pip` reads `HTTPS_PROXY=http://homunculus-proxy:3128` and asks the proxy for a tunnel to `pypi.org:443`. Squid checks its rules in order, starting with [squid.conf:25](src/homunculus/sandbox/squid.conf#L25) `http_access deny private_addresses`. `pypi.org` is a public address, the request is a secure tunnel (`CONNECT`) to port 443, and the name is in `registries`, so the tunnel opens. A bare address, such as `https://151.101.0.223`, is refused even if its owner made it look up as `pypi.org`: `dstdomain -n` turns that reverse lookup off. Plain `http://` is refused too, since pip and npm never need it. Squid writes:
 
 ```
 1793177088.225 CONNECT pypi.org:443 200 TCP_TUNNEL
@@ -1403,14 +1406,14 @@ attributes() -> {"http.request.method": "CONNECT", "server.address": "pypi.org",
 **Back to the model.** `pip` finishes, and the sandbox returns:
 
 ```
-CommandResult(exit_code=0, output="Collecting six\n…Successfully installed six-1.17.0\n", timed_out=False)
+CommandResult(exit_code=0, output="Collecting six\n…Successfully installed six-1.17.0\n", timed_out=False, omitted=0)
 ```
 
-`run` adds `[exit code 0]`, and that text is what the model reads. Had the exit code been non-zero, the text would be the same with `Error: ` in front, and the step's outcome would be `failed`. Output longer than 30,000 characters keeps its first and last 15,000, with a note of how much was left out.
+`run` adds `[exit code 0]`, and that text is what the model reads. Had the exit code been non-zero, the text would be the same with `Error: ` in front, and the step's outcome would be `failed`. Output longer than 30,000 characters keeps its first and last 15,000, with a note of how much was left out. The sandbox itself holds only the first and last 64 KiB of a command's output as it streams in, so a command that prints for ten minutes cannot fill the server's memory.
 
 **And example.com?** The same steps, until Squid's rules: `example.com` is not in `registries`, so `http_access deny all` refuses it, and the command sees `403 Forbidden`. The log line ends `TCP_DENIED`, and the event says `allowed: False`. Had the command skipped the proxy and connected directly, the internal network would have had no route for it at all.
 
-**Where each value lives.** The command and its output live in the turn and the trace. The workspace on your Mac holds `.venv`, which stays between runs. The containers and anything outside `/workspace` are removed when the program stops, by [docker.py:114](src/homunculus/sandbox/docker.py#L114) `def stop(self) -> None:`, and started fresh the next time.
+**Where each value lives.** The command and its output live in the turn and the trace. The workspace on your Mac holds `.venv`, which stays between runs. The containers and anything outside `/workspace` are removed when the program stops, by [docker.py:132](src/homunculus/sandbox/docker.py#L132) `def stop(self) -> None:`, and started fresh the next time.
 
 ### The tests
 
@@ -1425,7 +1428,7 @@ def test_the_operators_machine_and_network_are_refused(sandbox: DockerSandbox) -
         assert result.exit_code != 0 and "403" in result.output, url
 ```
 
-In plain English: "From inside the real sandbox, asking for your own machine, a home network or a cloud metadata address through the proxy is refused." `host_address()` is how a container names your machine: `host.docker.internal` on Docker Desktop, or the network's gateway on Linux. The proof in `tests/test_sandbox.py` runs against the real containers and checks every claim in this chapter: not root, read-only system files, only the workspace shared, no capabilities or new privileges, the limits, no Docker socket and no key, PyPI works, other sites and your machine are refused, nothing gets out without the proxy, and every request is logged. It needs Docker and the internet, so it runs on its own, with `uv run pytest -m sandbox`, and in its own CI job. `tests/test_shell.py` checks the tool itself with a stand-in sandbox.
+In plain English: "From inside the real sandbox, asking for your own machine, a home network or a cloud metadata address through the proxy is refused." `host_address()` is how a container names your machine: `host.docker.internal` on Docker Desktop, or the network's gateway on Linux. The proof in `tests/test_sandbox.py` runs against the real containers and checks every claim in this chapter: not root, read-only system files, only the workspace shared, no capabilities or new privileges, the limits, a flood of output kept short, the proxy locked down too, no Docker socket and no key, PyPI works, other sites, bare addresses, plain HTTP and your machine are refused, outside names cannot be looked up, nothing gets out without the proxy, and every request is logged. It needs Docker and the internet, so it runs on its own, with `uv run pytest -m sandbox`, and in its own CI job. `tests/test_shell.py` checks the tool itself with a stand-in sandbox.
 
 ### Change it yourself
 

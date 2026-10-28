@@ -56,7 +56,7 @@ def shell_tool(sandbox: Sandbox) -> Tool:
         timeout_ms = min(int(arguments.get("timeout") or DEFAULT_TIMEOUT_MS), MAX_TIMEOUT_MS)
         seconds = timeout_ms / 1000
         result = sandbox.run(command, timeout_seconds=seconds)
-        output = _shortened(result.output)
+        output = _shortened(result.output, result.omitted)
         if output and not output.endswith("\n"):
             output += "\n"
         if result.timed_out:
@@ -69,9 +69,12 @@ def shell_tool(sandbox: Sandbox) -> Tool:
     return Tool(definition, run, runs_in_sandbox=True)
 
 
-def _shortened(output: str) -> str:
-    """The output, or its start and end when it is too long to show whole."""
-    if len(output) <= MAX_OUTPUT:
+def _shortened(output: str, omitted: int) -> str:
+    """The output, or its start and end when it is too long to show whole. Bytes the
+    sandbox never kept are counted as characters, so that count is "about"."""
+    if len(output) <= MAX_OUTPUT and not omitted:
         return output
-    keep = MAX_OUTPUT // 2
-    return f"{output[:keep]}\n[{len(output) - 2 * keep} characters left out]\n{output[-keep:]}"
+    keep = min(MAX_OUTPUT // 2, len(output) // 2)
+    left_out = len(output) - 2 * keep + omitted
+    count = f"about {left_out}" if omitted else str(left_out)
+    return f"{output[:keep]}\n[{count} characters left out]\n{output[len(output) - keep :]}"

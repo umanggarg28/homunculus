@@ -33,14 +33,17 @@ def main() -> None:
     activity = Activity(home)
     tools = file_tools(workspace)
     sandbox = DockerSandbox(workspace)
-    # Commands run only inside the sandbox. Without Docker there is no shell tool at all,
+    # Commands run only inside the sandbox. Without it there is no shell tool at all,
     # never a shell on this machine.
-    if docker.available():
+    try:
+        if not docker.available():
+            raise RuntimeError("Docker is not running")
         sandbox.start()
+    except RuntimeError as reason:
+        print(f"{reason}, so the agent has no shell tool this time.", file=sys.stderr)
+    else:
         sandbox.record_requests(activity)
         tools.append(shell_tool(sandbox))
-    else:
-        print("Docker is not running, so the agent has no shell tool this time.", file=sys.stderr)
     app = create_app(
         OpenRouterModel(api_key),
         tools,

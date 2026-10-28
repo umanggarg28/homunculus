@@ -5,8 +5,8 @@ Each claim in ARCHITECTURE's sandbox section has a test here.
 """
 
 import json
+import os
 import secrets
-import shutil
 import subprocess
 import time
 from collections.abc import Iterator
@@ -15,20 +15,17 @@ from pathlib import Path
 import pytest
 
 from homunculus.activity import Activity
-from homunculus.sandbox import CommandResult
+from homunculus.sandbox import CommandResult, docker
 from homunculus.sandbox.docker import DockerSandbox
 
-
-def docker_running() -> bool:
-    if shutil.which("docker") is None:
-        return False
-    return subprocess.run(["docker", "info"], capture_output=True).returncode == 0
-
+# CI sets this, so a runner without Docker fails instead of skipping, and the proof can
+# never pass without having been run.
+REQUIRED = os.environ.get("HOMUNCULUS_REQUIRE_DOCKER") == "1"
 
 pytestmark = [
     pytest.mark.sandbox,
     pytest.mark.enable_socket,
-    pytest.mark.skipif(not docker_running(), reason="Docker is not running"),
+    pytest.mark.skipif(not docker.available() and not REQUIRED, reason="Docker is not running"),
 ]
 
 SECRET = "sk-or-proof-not-a-real-key"
@@ -46,11 +43,16 @@ def home(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture(scope="module")
-def sandbox(home: Path) -> Iterator[DockerSandbox]:
+def name() -> str:
+    return f"hm-proof-{secrets.token_hex(3)}"
+
+
+@pytest.fixture(scope="module")
+def sandbox(home: Path, name: str) -> Iterator[DockerSandbox]:
     with pytest.MonkeyPatch.context() as patch:
         # A key in the server's environment, as in real use.
         patch.setenv("OPENROUTER_API_KEY", SECRET)
-        started = DockerSandbox(home / "workspace", name=f"hm-proof-{secrets.token_hex(3)}")
+        started = DockerSandbox(home / "workspace", name=name)
         started.start()
     yield started
     started.stop()
@@ -69,6 +71,22 @@ def fetch(sandbox: DockerSandbox, url: str, use_proxy: bool = True) -> CommandRe
         f"print(o.open({url!r}, timeout=10).status)"
     )
     return run(sandbox, f"python -c {json.dumps(script)}")
+
+
+def test_the_proxy_is_locked_down_too(sandbox: DockerSandbox, name: str) -> None:
+    settings = subprocess.run(
+        ["docker", "inspect", f"{name}-proxy", "--format",
+         "{{.Config.User}} {{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}} "
+         "{{.HostConfig.SecurityOpt}}"],
+        capture_output=True, text=True,
+    ).stdout.split()  # fmt: skip
+    assert settings == ["13:13", "true", "[ALL]", "[no-new-privileges]"]
+
+
+def test_a_flood_of_output_is_kept_short(sandbox: DockerSandbox) -> None:
+    result = run(sandbox, "yes | head -c 10000000")  # ten million bytes
+    assert len(result.output) <= 2 * 64 * 1024
+    assert result.omitted == 10_000_000 - 2 * 64 * 1024
 
 
 def test_commands_run_as_a_user_who_is_not_root(sandbox: DockerSandbox) -> None:
@@ -128,6 +146,23 @@ def test_the_operators_machine_and_network_are_refused(sandbox: DockerSandbox) -
     ]:
         result = fetch(sandbox, url)
         assert result.exit_code != 0 and "403" in result.output, url
+
+
+def test_a_bare_address_is_refused_whatever_name_it_claims(sandbox: DockerSandbox) -> None:
+    # Squid would otherwise look up the address's own name, which its owner chooses.
+    result = fetch(sandbox, "https://151.101.0.223/simple/six/")  # one of PyPI's addresses
+    assert result.exit_code != 0 and "403" in result.output
+
+
+def test_plain_http_is_refused_even_to_a_registry(sandbox: DockerSandbox) -> None:
+    result = fetch(sandbox, "http://pypi.org/simple/six/")
+    assert result.exit_code != 0 and "403" in result.output
+
+
+def test_names_outside_cannot_be_looked_up(sandbox: DockerSandbox) -> None:
+    # With no resolver for outside names, a lookup cannot carry data out either.
+    result = run(sandbox, "python -c \"import socket; socket.getaddrinfo('pypi.org', 443)\"")
+    assert result.exit_code != 0 and "gaierror" in result.output
 
 
 def test_nothing_is_reached_without_the_proxy(sandbox: DockerSandbox) -> None:

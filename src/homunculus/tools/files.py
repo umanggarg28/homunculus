@@ -1,12 +1,19 @@
 """File tools for the agent's workspace."""
 
-from collections.abc import Callable
-from pathlib import Path
-from typing import Any
+import os
+import stat
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
+from pathlib import Path, PurePosixPath
+from typing import IO, Any, NoReturn
 
 import mcp_types as mcp
 
 from homunculus.tools import Tool, ToolError
+
+# Opening one folder of a path: only a folder, and never through a link.
+FOLDER_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+LINK = "{path} is a link, or goes through one; links are not followed."
 
 # Enough to answer most questions without flooding the model's context.
 MAX_SEARCH_RESULTS = 50
@@ -143,87 +150,177 @@ class Files:
             ),
         ]
 
+    # Every operation reaches its file one folder at a time from the workspace's own
+    # folder handle, refusing a link at every step (the `openat` pattern, with
+    # O_NOFOLLOW). The sandbox can change the workspace while a tool works on it, so a
+    # path is never checked first and opened afterwards: a link swapped in between the
+    # two could lead anywhere.
+
     def write(self, arguments: dict[str, Any]) -> str:
-        target = self._resolve(arguments["path"])
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(arguments["content"])
-        return f"Wrote {arguments['path']}."
-
-    def _resolve(self, path: str) -> Path:
-        """The real location of `path`, which must be inside the workspace."""
-        target = (self._root / path).resolve()
-        if not target.is_relative_to(self._root):
-            raise ToolError(f"{path} is outside the workspace.")
-        return target
-
-    def _plain_file(self, path: str) -> Path:
-        """An existing regular file. Links are refused, so an operation on a link can
-        never reach the file it points to."""
-        if (self._root / path).is_symlink():
-            raise ToolError(f"{path} is a link; links cannot be deleted or renamed.")
-        target = self._resolve(path)
-        if target.is_dir():
-            raise ToolError(f"{path} is a folder; only single files can be deleted.")
-        return self._existing_file(path)
-
-    def _existing_file(self, path: str) -> Path:
-        target = self._resolve(path)
-        if not target.is_file():
-            raise ToolError(f"{path} does not exist.")
-        return target
+        path = arguments["path"]
+        *folders, name = _parts(path)
+        with self._folder(path, folders, create=True) as folder:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            with _opened(path, name, flags, folder) as file:
+                file.write(arguments["content"].encode())
+        return f"Wrote {path}."
 
     def read(self, arguments: dict[str, Any]) -> str:
-        lines = self._existing_file(arguments["path"]).read_text().splitlines()
+        path = arguments["path"]
+        *folders, name = _parts(path)
+        with (
+            self._folder(path, folders) as folder,
+            _opened(path, name, os.O_RDONLY, folder) as file,
+        ):
+            lines = file.read().decode().splitlines()
         return "\n".join(f"{number}\t{line}" for number, line in enumerate(lines, start=1))
-
-    def list_folder(self, arguments: dict[str, Any]) -> str:
-        folder = self._resolve(arguments["path"])
-        if not folder.is_dir():
-            raise ToolError(f"{arguments['path']} is not a folder.")
-        names = sorted(
-            f"{entry.name}/" if entry.is_dir() else entry.name for entry in folder.iterdir()
-        )
-        return "\n".join(names) or "(empty)"
 
     def edit(self, arguments: dict[str, Any]) -> str:
         path, old, new = arguments["path"], arguments["old"], arguments["new"]
-        target = self._existing_file(path)
-        text = target.read_text()
-        count = text.count(old)
-        if count != 1:
-            raise ToolError(f"the text appears {count} times in {path}; it must appear once.")
-        target.write_text(text.replace(old, new))
+        *folders, name = _parts(path)
+        with self._folder(path, folders) as folder, _opened(path, name, os.O_RDWR, folder) as file:
+            text = file.read().decode()
+            count = text.count(old)
+            if count != 1:
+                raise ToolError(f"the text appears {count} times in {path}; it must appear once.")
+            file.seek(0)
+            file.truncate()
+            file.write(text.replace(old, new).encode())
         return f"Edited {path}."
 
+    def list_folder(self, arguments: dict[str, Any]) -> str:
+        path = arguments["path"]
+        with self._folder(path, _parts(path), want_folder=True) as folder:
+            names = sorted(
+                f"{entry.name}/" if entry.is_dir(follow_symlinks=False) else entry.name
+                for entry in os.scandir(folder)
+            )
+        return "\n".join(names) or "(empty)"
+
     def search(self, arguments: dict[str, Any]) -> str:
-        folder = self._resolve(arguments["path"])
+        path = arguments["path"]
+        parts = _parts(path)
         wanted = arguments["text"].lower()
-        matches: list[str] = []
-        for file in sorted(folder.rglob("*")):
-            if not file.is_file() or not file.resolve().is_relative_to(self._root):
-                continue
-            try:
-                lines = file.read_text().splitlines()
-            except UnicodeDecodeError:
-                continue  # not a text file
-            relative = file.relative_to(self._root).as_posix()
-            for number, line in enumerate(lines, start=1):
-                if wanted in line.lower():
-                    matches.append(f"{relative}:{number}: {line}")
-        if len(matches) > MAX_SEARCH_RESULTS:
-            shown = matches[:MAX_SEARCH_RESULTS]
-            return "\n".join(shown) + f"\n({len(matches) - MAX_SEARCH_RESULTS} more not shown)"
-        return "\n".join(matches) or "No matches."
+        matches: list[tuple[str, int, str]] = []
+        with self._folder(path, parts, want_folder=True) as folder:
+            walk = os.fwalk(".", dir_fd=folder, follow_symlinks=False)
+            for here, _, names, here_fd in walk:
+                for name in names:
+                    relative = PurePosixPath(*parts, here, name).as_posix()
+                    try:
+                        with _opened(relative, name, os.O_RDONLY, here_fd) as file:
+                            lines = file.read().decode().splitlines()
+                    except (ToolError, UnicodeDecodeError):
+                        continue  # a link, or not a text file
+                    for number, line in enumerate(lines, start=1):
+                        if wanted in line.lower():
+                            matches.append((relative, number, line))
+        shown = [f"{file}:{number}: {line}" for file, number, line in sorted(matches)]
+        if len(shown) > MAX_SEARCH_RESULTS:
+            more = len(shown) - MAX_SEARCH_RESULTS
+            return "\n".join(shown[:MAX_SEARCH_RESULTS]) + f"\n({more} more not shown)"
+        return "\n".join(shown) or "No matches."
 
     def delete(self, arguments: dict[str, Any]) -> str:
-        self._plain_file(arguments["path"]).unlink()
-        return f"Deleted {arguments['path']}."
+        path = arguments["path"]
+        *folders, name = _parts(path)
+        with self._folder(path, folders) as folder:
+            _plain_file(path, name, folder)
+            os.unlink(name, dir_fd=folder)
+        return f"Deleted {path}."
 
     def rename(self, arguments: dict[str, Any]) -> str:
-        source = self._plain_file(arguments["path"])
-        target = self._resolve(arguments["to"])
-        if target.exists() or target.is_symlink():
-            raise ToolError(f"{arguments['to']} already exists; rename will not overwrite it.")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        source.rename(target)
-        return f"Moved {arguments['path']} to {arguments['to']}."
+        path, to = arguments["path"], arguments["to"]
+        *folders, name = _parts(path)
+        *new_folders, new_name = _parts(to)
+        with (
+            self._folder(path, folders) as folder,
+            self._folder(to, new_folders, create=True) as new_folder,
+        ):
+            _plain_file(path, name, folder)
+            if _exists(new_name, new_folder):
+                raise ToolError(f"{to} already exists; rename will not overwrite it.")
+            os.rename(name, new_name, src_dir_fd=folder, dst_dir_fd=new_folder)
+        return f"Moved {path} to {to}."
+
+    @contextmanager
+    def _folder(
+        self, path: str, parts: list[str], create: bool = False, want_folder: bool = False
+    ) -> Iterator[int]:
+        """A handle on the folder at `parts` inside the workspace, reached one folder at a
+        time with no link followed, making missing folders when `create` is set."""
+        handle = os.open(self._root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            for part in parts:
+                if create:
+                    with suppress(FileExistsError):
+                        os.mkdir(part, dir_fd=handle)
+                try:
+                    inner = os.open(part, FOLDER_FLAGS, dir_fd=handle)
+                except OSError as error:
+                    _explain(path, part, handle, error, want_folder)
+                os.close(handle)
+                handle = inner
+            yield handle
+        finally:
+            os.close(handle)
+
+
+def _parts(path: str) -> list[str]:
+    """The folders and name in a workspace path. The gate refuses these first; this is
+    the tools' own fence behind it."""
+    relative = PurePosixPath(path)
+    parts = [part for part in relative.parts if part != "."]
+    if relative.is_absolute() or ".." in parts:
+        raise ToolError(f"{path} is outside the workspace.")
+    return parts or ["."]
+
+
+@contextmanager
+def _opened(path: str, name: str, flags: int, folder: int) -> Iterator[IO[bytes]]:
+    """A regular file in `folder`, opened without following a link."""
+    try:
+        handle = os.open(name, flags | os.O_NOFOLLOW, 0o644, dir_fd=folder)
+    except OSError as error:
+        _explain(path, name, folder, error, want_folder=False)
+    file = os.fdopen(handle, "r+b" if flags & os.O_RDWR else "wb" if flags & os.O_WRONLY else "rb")
+    with file:
+        if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+            raise ToolError(f"{path} does not exist.")
+        yield file
+
+
+def _explain(path: str, part: str, folder: int, error: OSError, want_folder: bool) -> NoReturn:
+    """Turn a refusal to open `part` into the reason, in words for the model."""
+    try:
+        found = os.stat(part, dir_fd=folder, follow_symlinks=False).st_mode
+    except FileNotFoundError:
+        raise ToolError(f"{path} does not exist.") from error
+    if stat.S_ISLNK(found):
+        raise ToolError(LINK.format(path=path)) from error
+    if stat.S_ISDIR(found):
+        raise ToolError(f"{path} is a folder.") from error
+    if want_folder:
+        raise ToolError(f"{path} is not a folder.") from error
+    raise ToolError(f"{path} does not exist.") from error
+
+
+def _plain_file(path: str, name: str, folder: int) -> None:
+    """Refuse anything but a regular file: a link, so the operation cannot reach the file
+    it points to, or a folder."""
+    try:
+        found = os.stat(name, dir_fd=folder, follow_symlinks=False).st_mode
+    except FileNotFoundError as error:
+        raise ToolError(f"{path} does not exist.") from error
+    if stat.S_ISLNK(found):
+        raise ToolError(f"{path} is a link; links cannot be deleted or renamed.")
+    if stat.S_ISDIR(found):
+        raise ToolError(f"{path} is a folder; only single files can be deleted.")
+
+
+def _exists(name: str, folder: int) -> bool:
+    try:
+        os.stat(name, dir_fd=folder, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True

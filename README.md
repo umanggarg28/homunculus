@@ -36,7 +36,7 @@ flowchart LR
 | `tools` | `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`, inside the agent's workspace only, and `shell`, which runs commands in the sandbox. Each is described as an MCP tool. |
 | `activity` | An append-only record of every step as OpenTelemetry traces, plus log events for each turn's start, your decisions and your ratings, written by code, out of reach of every tool. Any OpenTelemetry tool can read both files. The activity screen shows one job per message, and you can rate each one. |
 
-The full design, including the modules still to come (skills, wiki, waker), is in [ARCHITECTURE.md](ARCHITECTURE.md). [LEARN.md](LEARN.md) teaches the code one module at a time.
+The full design, including the modules still to come (skills, wiki, waker), is in [ARCHITECTURE.md](ARCHITECTURE.md). What is protected, where data can leave, and the accepted risk are in [SECURITY.md](SECURITY.md). [LEARN.md](LEARN.md) teaches the code one module at a time.
 
 ## Privacy
 

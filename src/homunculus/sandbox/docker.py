@@ -7,9 +7,9 @@ Two containers and one network:
 - the **proxy**, Squid, which sits on that network and on Docker's normal one. It is
   the sandbox's only way out, and lets through only what `squid.conf` allows.
 
-The sandbox runs as an ordinary user, with read-only system files, no capabilities, no
-way to gain privileges, and limits on CPU, memory and processes. The only folder of the
-operator's it sees is the workspace.
+Both run as ordinary users, with read-only system files, no capabilities, no way to
+gain privileges, and limits on CPU, memory and processes. The only folder of the
+operator's the sandbox sees is the workspace.
 """
 
 import os
@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 from urllib.parse import urlsplit
 
 from opentelemetry.context import Context
@@ -37,9 +37,18 @@ PROXY_IMAGE = (
     "@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c"
 )
 PROXY_PORT = 3128
+# Squid's own user in its image, and the folders it writes, kept in memory.
+PROXY_USER = "13:13"
+PROXY_WRITABLE = ("/var/log/squid", "/var/spool/squid", "/run", "/tmp")
 CPUS = "2"
 MEMORY = "2g"
 PROCESSES = 256
+# Docker 26 stopped forwarding name lookups from internal networks (CVE-2024-29018).
+# On anything older, a lookup could carry data out past the proxy.
+OLDEST_DOCKER = 26
+# How much of a command's output is held: its start and its end, in bytes. A command
+# that prints for ten minutes cannot fill the server's memory.
+KEPT_BYTES = 64 * 1024
 # After a command's own time runs out, how long it has to stop before it is killed.
 GRACE_SECONDS = 5
 
@@ -64,7 +73,7 @@ class ProxyRequest:
         found: dict[str, Any] = {"http.request.method": self.method}
         if self.method == "CONNECT":
             host, _, port = self.target.rpartition(":")
-            found |= {"server.address": host, "server.port": int(port)}
+            found |= {"server.address": host.strip("[]"), "server.port": int(port)}
         else:
             address = urlsplit(self.target)
             found |= {"url.full": self.target, "server.address": address.hostname or ""}
@@ -80,15 +89,24 @@ class DockerSandbox:
         self._network = f"{name}-internal"
         self._box = f"{name}-sandbox"
         self._proxy = f"{name}-proxy"
+        self._follower: subprocess.Popen[str] | None = None
 
     def start(self) -> None:
-        """Start the network and both containers, replacing any left from an earlier run."""
+        """Start the network and both containers, replacing any left from an earlier run.
+        Raises RuntimeError if Docker is too old or a container will not start."""
+        version = _docker("version", "--format", "{{.Server.Version}}").strip()
+        if int(version.split(".")[0]) < OLDEST_DOCKER:
+            raise RuntimeError(f"Docker {version} is too old; the sandbox needs {OLDEST_DOCKER}")
         self.stop()
         config = Path(str(files("homunculus.sandbox").joinpath("squid.conf")))
         _docker("network", "create", "--internal", self._network)
+        writable = [f"--tmpfs={path}:uid=13,gid=13" for path in PROXY_WRITABLE]
         _docker(
             "run", "--detach", "--name", self._proxy,
-            "--volume", f"{config}:/etc/squid/squid.conf:ro",
+            "--user", PROXY_USER, "--read-only", *writable,
+            "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+            "--memory", "256m", "--pids-limit", "64",
+            "--mount", f"type=bind,src={config},dst=/etc/squid/squid.conf,readonly",
             PROXY_IMAGE,
         )  # fmt: skip
         _docker("network", "connect", self._network, self._proxy)
@@ -101,7 +119,7 @@ class DockerSandbox:
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--cpus", CPUS, "--memory", MEMORY, "--pids-limit", str(PROCESSES),
             "--init",
-            "--volume", f"{self._workspace}:/workspace",
+            "--mount", f"type=bind,src={self._workspace},dst=/workspace",
             "--workdir", "/workspace",
             "--env", "HOME=/tmp",
             # Both spellings, since programs differ in which one they read.
@@ -114,13 +132,20 @@ class DockerSandbox:
     def stop(self) -> None:
         """Remove the containers and the network. Nothing is kept from one run to the
         next except the workspace."""
-        subprocess.run(["docker", "rm", "--force", self._box, self._proxy], capture_output=True)
-        subprocess.run(["docker", "network", "rm", self._network], capture_output=True)
+        if self._follower is not None:
+            self._follower.terminate()
+            self._follower = None
+        try:
+            subprocess.run(["docker", "rm", "--force", self._box, self._proxy], capture_output=True)
+            subprocess.run(["docker", "network", "rm", self._network], capture_output=True)
+        except FileNotFoundError:
+            pass  # no docker command, so nothing was started
 
     def run(self, command: str, timeout_seconds: float) -> CommandResult:
         # `timeout` inside the container stops the command, and kills it if it will not
-        # stop. Exit code 124 is how `timeout` reports that it stopped a command.
-        completed = subprocess.run(
+        # stop. Exit code 124 is how `timeout` reports that it stopped a command; 137 is
+        # a kill, which can also be the memory limit, so it is reported as an exit code.
+        running = subprocess.Popen(
             [
                 "docker", "exec", self._box,
                 "timeout", f"--kill-after={GRACE_SECONDS}", f"{timeout_seconds:g}",
@@ -128,12 +153,21 @@ class DockerSandbox:
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            timeout=timeout_seconds + GRACE_SECONDS + 30,
         )  # fmt: skip
+        output = _KeptOutput()
+        reading = threading.Thread(target=output.read, args=(running.stdout,), daemon=True)
+        reading.start()
+        try:
+            exit_code = running.wait(timeout=timeout_seconds + GRACE_SECONDS + 30)
+        except subprocess.TimeoutExpired:
+            running.kill()
+            exit_code = running.wait()
+        reading.join()
         return CommandResult(
-            exit_code=completed.returncode,
-            output=completed.stdout.decode("utf-8", errors="replace"),
-            timed_out=completed.returncode in (124, 137),
+            exit_code=exit_code,
+            output=output.text(),
+            timed_out=exit_code == 124,
+            omitted=output.dropped,
         )
 
     def requests(self) -> list[ProxyRequest]:
@@ -143,8 +177,10 @@ class DockerSandbox:
 
     def record_requests(self, activity: Activity) -> None:
         """Record each request the proxy handles as an event in the activity log, as it
-        happens, for as long as the proxy runs."""
-        follow = subprocess.Popen(
+        happens, until the sandbox stops."""
+        if self._follower is not None:
+            return  # already recording
+        follow = self._follower = subprocess.Popen(
             ["docker", "logs", "--follow", self._proxy],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -154,8 +190,13 @@ class DockerSandbox:
         def record() -> None:
             assert follow.stdout is not None
             for line in follow.stdout:
-                if request := parse(line):
+                try:
+                    request = parse(line)
+                except ValueError:
+                    continue  # a line that looked like a request but was not one
+                if request:
                     activity.event(REQUEST_EVENT, Context(), request.attributes())
+            follow.wait()
 
         threading.Thread(target=record, name="proxy log", daemon=True).start()
 
@@ -191,6 +232,27 @@ def parse(line: str) -> ProxyRequest | None:
     if status == "0":
         return None
     return ProxyRequest(float(seconds), method, target, int(status), "DENIED" not in verdict)
+
+
+class _KeptOutput:
+    """A command's output as it streams in, keeping its first and last bytes only."""
+
+    def __init__(self) -> None:
+        self.start = bytearray()
+        self.end = bytearray()
+        self.dropped = 0
+
+    def read(self, stream: IO[bytes]) -> None:
+        for chunk in iter(lambda: stream.read(8192), b""):
+            room = KEPT_BYTES - len(self.start)
+            self.start += chunk[:room]
+            self.end += chunk[room:]
+            if len(self.end) > KEPT_BYTES:
+                self.dropped += len(self.end) - KEPT_BYTES
+                del self.end[: len(self.end) - KEPT_BYTES]
+
+    def text(self) -> str:
+        return (bytes(self.start) + bytes(self.end)).decode("utf-8", errors="replace")
 
 
 def _user() -> str:
