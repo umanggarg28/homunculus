@@ -48,7 +48,7 @@ The agent's files live in a data directory outside this repository, in the opera
 
 ## Quick start
 
-Requires [uv](https://docs.astral.sh/uv/), an [OpenRouter](https://openrouter.ai) API key, and [Docker](https://www.docker.com/products/docker-desktop/) running for the agent's sandbox. Without Docker the agent starts with no `shell` tool.
+Requires [uv](https://docs.astral.sh/uv/), an [OpenRouter](https://openrouter.ai) API key, and [Docker](https://www.docker.com/products/docker-desktop/) running for the agent's sandbox. Without Docker the agent starts with no `shell` tool. The first start builds the sandbox's and the proxy's images, about 1.2 GB, which takes a few minutes; later starts reuse them.
 
 ```bash
 uv sync

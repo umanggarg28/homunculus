@@ -35,7 +35,7 @@ from homunculus.sandbox import CommandResult
 # Both built on this machine from their folders, whose Dockerfiles pin their own base.
 SANDBOX_IMAGE = "homunculus-sandbox:local"
 PROXY_IMAGE = "homunculus-proxy:local"
-IMAGES = {SANDBOX_IMAGE: "box", PROXY_IMAGE: "proxy"}
+IMAGE_FOLDERS = {SANDBOX_IMAGE: "box", PROXY_IMAGE: "proxy"}
 PROXY_PORT = 3128
 # Squid's own user in its image, and the folders it writes, kept in memory. /run holds
 # the proxy's certificate authority, so its key is never on disk.
@@ -49,7 +49,7 @@ PROXY_CERTIFICATE = "/run/ca/ca.pem"
 # certificate's own folder, which holds nothing else.
 TRUSTED_FOLDER = "/etc/homunculus"
 TRUSTED_CERTIFICATE = f"{TRUSTED_FOLDER}/proxy-ca.pem"
-TRUST_SETTINGS = ("SSL_CERT_FILE", "PIP_CERT", "REQUESTS_CA_BUNDLE", "GIT_SSL_CAINFO")
+TRUSTED_FILE_SETTINGS = ("SSL_CERT_FILE", "PIP_CERT", "REQUESTS_CA_BUNDLE", "GIT_SSL_CAINFO")
 TRUSTED_FOLDER_SETTINGS = ("SSL_CERT_DIR", "GIT_SSL_CAPATH")
 CPUS = "2"
 MEMORY = "2g"
@@ -120,7 +120,7 @@ class DockerSandbox:
             )
         self.stop()
         try:
-            for image, folder in IMAGES.items():
+            for image, folder in IMAGE_FOLDERS.items():
                 source = Path(str(files("homunculus.sandbox").joinpath(folder)))
                 _docker("build", "--quiet", "--tag", image, str(source), timeout=BUILD_SECONDS)
             self._start_containers()
@@ -141,7 +141,7 @@ class DockerSandbox:
         _docker("network", "connect", self._network, self._proxy)
         certificate = self._copy_proxy_certificate()
         proxy = f"http://{self._proxy}:{PROXY_PORT}"
-        trust = [f"--env={setting}={TRUSTED_CERTIFICATE}" for setting in TRUST_SETTINGS]
+        trust = [f"--env={setting}={TRUSTED_CERTIFICATE}" for setting in TRUSTED_FILE_SETTINGS]
         trust += [f"--env={setting}={TRUSTED_FOLDER}" for setting in TRUSTED_FOLDER_SETTINGS]
         _docker(
             "run", "--detach", "--name", self._box,

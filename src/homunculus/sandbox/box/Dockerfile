@@ -11,6 +11,6 @@ RUN apt-get update \
 
 # Ubuntu marks its Python as managed by apt, so pip refuses to install outside a virtual
 # environment (PEP 668). The PEP lets an image that is never updated after it is built
-# leave the marker out, and this one cannot be: its root is read-only. pip then installs
-# for the user, under $HOME.
+# leave the marker out, and this one is not: the server runs it with a read-only root,
+# and rebuilds it rather than updating it. pip then installs for the user, under $HOME.
 RUN rm /usr/lib/python3*/EXTERNALLY-MANAGED
