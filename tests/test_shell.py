@@ -59,13 +59,13 @@ def test_the_model_is_offered_a_shell_that_takes_a_command_and_a_timeout(tmp_pat
 
 
 def test_a_command_runs_in_the_sandbox_without_asking(tmp_path: Path) -> None:
-    sandbox = StandInSandbox(CommandResult(exit_code=0, output="3.12.13\n", timed_out=False))
-    model = ScriptedModel([[shell(command="python --version")], ["Python 3.12."]])
+    sandbox = StandInSandbox(CommandResult(exit_code=0, output="3.14.4\n", timed_out=False))
+    model = ScriptedModel([[shell(command="python --version")], ["Python 3.14."]])
 
     result = chat(model, sandbox, tmp_path)
 
     assert sandbox.ran == [("python --version", 120.0)]
-    assert result == "3.12.13\n[exit code 0]"
+    assert result == "3.14.4\n[exit code 0]"
 
 
 def test_a_failing_command_is_reported_with_its_output_and_exit_code(tmp_path: Path) -> None:

@@ -143,6 +143,26 @@ def test_the_usual_certificate_authorities_are_not_trusted(sandbox: DockerSandbo
     assert found == "/etc/homunculus/proxy-ca.pem ['proxy-ca.pem']"
 
 
+def test_git_trusts_only_the_proxy_too(sandbox: DockerSandbox) -> None:
+    # git reads its own two settings, not OpenSSL's, and with only the file set it
+    # still trusts the usual folder of authorities.
+    settings = run(sandbox, 'echo "$GIT_SSL_CAINFO $GIT_SSL_CAPATH"').output.strip()
+    assert settings == "/etc/homunculus/proxy-ca.pem /etc/homunculus"
+    # pypi.org is no git host, so git gets PyPI's 404, after a handshake it trusted.
+    reached = run(sandbox, "git ls-remote https://pypi.org/simple/six/")
+    assert "remote: 404 Not Found" in reached.output
+    # With the settings naming another authority, the same handshake is not trusted, so
+    # git trusts what they name and nothing built in.
+    other = run(
+        sandbox,
+        "openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -noenc -days 1 "
+        "-subj /CN=other -keyout /tmp/other.key -out /tmp/other.pem 2>/dev/null "
+        "&& mkdir -p /tmp/none && GIT_SSL_CAINFO=/tmp/other.pem GIT_SSL_CAPATH=/tmp/none "
+        "git ls-remote https://pypi.org/simple/six/",
+    )
+    assert "certificate signer not trusted" in other.output
+
+
 def test_a_different_name_inside_the_request_is_refused(sandbox: DockerSandbox) -> None:
     # Domain fronting: the tunnel and the handshake say pypi.org, the request inside asks
     # its content network for another site.
@@ -256,15 +276,56 @@ def test_there_is_no_docker_socket_and_no_secret(sandbox: DockerSandbox) -> None
     assert "OPENROUTER" not in environment
 
 
-def test_packages_can_be_installed_from_the_registries(sandbox: DockerSandbox) -> None:
-    result = run(sandbox, "python -m pip download --no-deps --quiet --dest /tmp six")
+def test_the_tools_the_shell_tool_describes_are_there(sandbox: DockerSandbox) -> None:
+    tools = "bash curl git jq rg unzip gcc make python pip node npm"
+    missing = run(sandbox, f"for t in {tools}; do command -v $t >/dev/null || echo $t; done")
+    assert missing.output == ""
+    # In the workspace: nothing under /tmp may be run as a program.
+    venv = run(sandbox, "python -m venv /workspace/.venv && .venv/bin/pip --version")
+    assert venv.exit_code == 0, venv.output
+    versions = run(sandbox, "python --version; node --version").output.split()
+    assert versions[1].startswith("3.14.") and versions[2].startswith("v22.")
+
+
+def test_sudo_gh_and_wget_are_left_out(sandbox: DockerSandbox) -> None:
+    present = run(sandbox, "for t in sudo su gh wget; do command -v $t; done")
+    # `su` is part of every Ubuntu image. It needs its setuid bit to become root, which
+    # grants nothing once no new privileges may be gained, as a test above proves.
+    assert present.output.split() == ["/usr/bin/su"]
+
+
+def test_python_packages_can_be_installed_from_the_registries(sandbox: DockerSandbox) -> None:
+    result = run(sandbox, "pip install --quiet six && python -c 'import six'")
     assert result.exit_code == 0, result.output
+
+
+def test_node_packages_can_be_installed_from_the_registry(sandbox: DockerSandbox) -> None:
+    result = run(
+        sandbox,
+        # npm only sends its audit report from a project, which has a package.json.
+        "mkdir -p /tmp/node && cd /tmp/node && npm init -y && npm install left-pad "
+        "&& node -e \"require('left-pad')\"",
+    )
+    assert result.exit_code == 0, result.output
+    # Installing is only reading. npm's audit report would be a POST the proxy refuses,
+    # to one of the registry's security addresses.
+    time.sleep(2)  # for the proxy's last lines to be written
+    audits = "https://registry.npmjs.org/-/npm/v1/security/"
+    assert not [r for r in sandbox.requests() if r.target.startswith(audits)]
+
+
+def refused_by_the_proxy(sandbox: DockerSandbox, target: str) -> bool:
+    """Whether the proxy refused the tunnel to `target`, a host and port. Python sees a
+    certificate error, not the 403: the certificate Squid makes for its refusal page
+    lacks a field Python 3.13 and later require."""
+    found = logged_soon(sandbox, target, where=lambda r: r.method == "CONNECT")
+    return bool(found) and all(r.error == "ERR_ACCESS_DENIED" for r in found)
 
 
 def test_every_other_site_is_refused(sandbox: DockerSandbox) -> None:
     result = fetch(sandbox, "https://example.com")
     assert result.exit_code != 0
-    assert "403" in result.output
+    assert refused_by_the_proxy(sandbox, "example.com:443")
 
 
 def test_the_operators_machine_and_network_are_refused(sandbox: DockerSandbox) -> None:
@@ -280,7 +341,8 @@ def test_the_operators_machine_and_network_are_refused(sandbox: DockerSandbox) -
 def test_a_bare_address_is_refused_whatever_name_it_claims(sandbox: DockerSandbox) -> None:
     # Squid would otherwise look up the address's own name, which its owner chooses.
     result = fetch(sandbox, "https://151.101.0.223/simple/six/")  # one of PyPI's addresses
-    assert result.exit_code != 0 and "403" in result.output
+    assert result.exit_code != 0
+    assert refused_by_the_proxy(sandbox, "151.101.0.223:443")
 
 
 def test_plain_http_is_refused_even_to_a_registry(sandbox: DockerSandbox) -> None:

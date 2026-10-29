@@ -25,10 +25,11 @@ def shell_tool(sandbox: Sandbox) -> Tool:
         name="shell",
         title="Run a command",
         description=(
-            "Run a bash command in your sandbox: a Linux container with Python 3.12, "
-            "whose only shared folder is your workspace, at /workspace, the folder you "
-            "start in. Use it to run code, scripts and tests, and to install packages "
-            "with pip or npm. The package registries are the only sites it can reach; "
+            "Run a bash command in your sandbox: an Ubuntu container with Python 3.14, "
+            "Node 22, git, curl, jq, ripgrep, unzip and a C compiler, whose only shared "
+            "folder is your workspace, at /workspace, the folder you start in. Use it to "
+            "run code, scripts and tests, and to install packages with pip or npm. The "
+            "package registries are the only sites it can reach; "
             "others are refused, and a refused HTTPS request may fail with a "
             "certificate error. "
             "It returns what the command printed and its exit code. Long output is "
