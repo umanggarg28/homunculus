@@ -32,12 +32,10 @@ from opentelemetry.context import Context
 from homunculus.activity import Activity
 from homunculus.sandbox import CommandResult
 
-# Pinned by digest, so the same bytes run every time.
-SANDBOX_IMAGE = (
-    "python:3.12-slim@sha256:6b25cbe6577518889d553cdd5a5da97d259348d8f6e45b527dd731caaba27a07"
-)
-# Built on this machine from `proxy/`, whose Dockerfile pins its own base.
+# Both built on this machine from their folders, whose Dockerfiles pin their own base.
+SANDBOX_IMAGE = "homunculus-sandbox:local"
 PROXY_IMAGE = "homunculus-proxy:local"
+IMAGES = {SANDBOX_IMAGE: "box", PROXY_IMAGE: "proxy"}
 PROXY_PORT = 3128
 # Squid's own user in its image, and the folders it writes, kept in memory. /run holds
 # the proxy's certificate authority, so its key is never on disk.
@@ -45,13 +43,14 @@ PROXY_USER = "13:13"
 PROXY_WRITABLE = ("/var/log/squid", "/var/spool/squid", "/run", "/tmp")
 PROXY_CERTIFICATE = "/run/ca/ca.pem"
 # Where the sandbox finds the proxy's certificate, and the settings that point programs
-# at it, in place of the usual authorities: OpenSSL's, which Python and curl read, pip's
-# and the requests library's. OpenSSL also reads a folder of authorities, so that is
-# pointed at the certificate's own folder, which holds nothing else. Node reads none of
-# these and needs its own.
+# at it, in place of the usual authorities: OpenSSL's, which Python, curl and Ubuntu's
+# Node read, pip's, the requests library's and git's, which uses another TLS library.
+# OpenSSL and git each also read a folder of authorities, so those are pointed at the
+# certificate's own folder, which holds nothing else.
 TRUSTED_FOLDER = "/etc/homunculus"
 TRUSTED_CERTIFICATE = f"{TRUSTED_FOLDER}/proxy-ca.pem"
-TRUST_SETTINGS = ("SSL_CERT_FILE", "PIP_CERT", "REQUESTS_CA_BUNDLE")
+TRUST_SETTINGS = ("SSL_CERT_FILE", "PIP_CERT", "REQUESTS_CA_BUNDLE", "GIT_SSL_CAINFO")
+TRUSTED_FOLDER_SETTINGS = ("SSL_CERT_DIR", "GIT_SSL_CAPATH")
 CPUS = "2"
 MEMORY = "2g"
 PROCESSES = 256
@@ -61,8 +60,8 @@ OLDEST_DOCKER = 26
 # How much of a command's output is held: its start and its end, in bytes. A command
 # that prints for ten minutes cannot fill the server's memory.
 KEPT_BYTES = 64 * 1024
-# Building the proxy's image downloads packages the first time; a stalled download
-# must not hold up the server's start for ever.
+# Building an image downloads packages the first time; a stalled download must not hold
+# up the server's start for ever.
 BUILD_SECONDS = 600
 # After a command's own time runs out, how long it has to stop before it is killed.
 GRACE_SECONDS = 5
@@ -121,8 +120,9 @@ class DockerSandbox:
             )
         self.stop()
         try:
-            proxy = Path(str(files("homunculus.sandbox").joinpath("proxy")))
-            _docker("build", "--quiet", "--tag", PROXY_IMAGE, str(proxy), timeout=BUILD_SECONDS)
+            for image, folder in IMAGES.items():
+                source = Path(str(files("homunculus.sandbox").joinpath(folder)))
+                _docker("build", "--quiet", "--tag", image, str(source), timeout=BUILD_SECONDS)
             self._start_containers()
         except BaseException:
             self.stop()  # leave nothing half-started behind, whatever stopped the start
@@ -142,7 +142,7 @@ class DockerSandbox:
         certificate = self._copy_proxy_certificate()
         proxy = f"http://{self._proxy}:{PROXY_PORT}"
         trust = [f"--env={setting}={TRUSTED_CERTIFICATE}" for setting in TRUST_SETTINGS]
-        trust.append(f"--env=SSL_CERT_DIR={TRUSTED_FOLDER}")
+        trust += [f"--env={setting}={TRUSTED_FOLDER}" for setting in TRUSTED_FOLDER_SETTINGS]
         _docker(
             "run", "--detach", "--name", self._box,
             "--network", self._network,
@@ -159,6 +159,8 @@ class DockerSandbox:
             "--env", f"HTTP_PROXY={proxy}", "--env", f"HTTPS_PROXY={proxy}",
             "--env", f"http_proxy={proxy}", "--env", f"https_proxy={proxy}",
             *trust,
+            # npm reports each install for a security audit, a POST the proxy refuses.
+            "--env", "npm_config_audit=false",
             SANDBOX_IMAGE, "sleep", "infinity",
         )  # fmt: skip
         self._wait_for_proxy()
