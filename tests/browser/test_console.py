@@ -177,7 +177,8 @@ def test_approving_a_request_runs_it_and_the_agent_carries_on(page: Page, tmp_pa
         page.locator("textarea").fill("Email Sam")
         page.locator("textarea").press("Enter")
         expect(thread(page).get_by_text("I have asked you first.")).to_be_visible()
-        expect(thread(page).get_by_role("button", name=re.compile(r"^Step 1, Needs your approval"))).to_be_visible()
+        held = thread(page).get_by_role("button", name=re.compile(r"^Step 1, Needs your approval"))
+        expect(held).to_be_visible()
         expect(status(page)).to_have_text("Needs approval")
 
         expect(side(page).get_by_text("sam@example.com").first).to_be_visible()
