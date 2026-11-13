@@ -8,6 +8,7 @@ import "./design/tokens.css";
 import "./design/base.css";
 import "./design/layout.css";
 import "./design/theme.css";
+import "./design/markdown.css";
 import "./design/console.css";
 
 // A new build replaces the hashed chunk files, so a tab opened on an earlier

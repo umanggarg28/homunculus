@@ -14,7 +14,7 @@ function parseLang(className?: string): string | null {
 }
 
 const components: Components = {
-  // Wrap <pre> to add a language badge + left accent border.
+  // Wrap <pre> to name its language in a corner.
   pre({ children, ...props }) {
     // Pull language out of nested <code> className if possible.
     let lang: string | null = null;
@@ -23,11 +23,11 @@ const components: Components = {
       lang = parseLang(codeEl.props?.className);
     }
     return (
-      <div className="brut-md-pre-wrap">
+      <div className="md-pre-wrap">
         {lang && (
-          <div className="brut-md-lang-badge">{lang}</div>
+          <div className="md-lang">{lang}</div>
         )}
-        <pre className="brut-md-pre" {...props}>
+        <pre className="md-pre" {...props}>
           {children}
         </pre>
       </div>
@@ -38,22 +38,22 @@ const components: Components = {
     const isBlock = !!className || String(children).includes("\n");
     if (isBlock) {
       return (
-        <code className={`brut-md-code-block ${className ?? ""}`} {...props}>
+        <code className={`md-code-block ${className ?? ""}`} {...props}>
           {children}
         </code>
       );
     }
     return (
-      <code className="brut-md-inline-code" {...props}>
+      <code className="md-inline-code" {...props}>
         {children}
       </code>
     );
   },
-  // Tables with phosphor borders
+  // Tables scroll sideways on narrow screens rather than squeezing their columns.
   table({ children }) {
     return (
-      <div className="brut-md-table-wrap">
-        <table className="brut-md-table">{children}</table>
+      <div className="md-table-wrap">
+        <table className="md-table">{children}</table>
       </div>
     );
   },
@@ -61,12 +61,12 @@ const components: Components = {
 
 /** Markdown renderer for agent replies.
  *
- * Styling lives in index.css under .brut-md* classes.
+ * Styling lives in design/markdown.css.
  * rehype-highlight adds .hljs classes for syntax coloring.
  */
 export function MarkdownMessage({ text }: { text: string }) {
   return (
-    <div className="brut-md">
+    <div className="md">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
         rehypePlugins={[rehypeHighlight, rehypeKatex]}

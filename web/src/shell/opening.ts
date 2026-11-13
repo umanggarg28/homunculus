@@ -7,6 +7,8 @@
  *  Each stage is a value of `data-intro` on <html>, and the CSS in design/layout.css
  *  says what each stage shows. This file only moves through them on time, and centres
  *  the stage on the screen, which CSS cannot measure. Returns a function that stops it. */
+import { drawBus } from "@/presence/overlay";
+
 export function playOpening(): () => void {
   const root = document.documentElement;
   const stage = document.querySelector<HTMLElement>(".stage");
@@ -105,6 +107,17 @@ export function playOpening(): () => void {
   });
   at(2400, () => (root.dataset.intro = "1"));
   at(2750, () => (root.dataset.intro = "2"));
+  // The bus draws out from the presence as the panels reach their places.
+  drawBus(0);
+  at(2900, () => {
+    const t0 = performance.now();
+    const grow = (t: number) => {
+      const k = Math.min(1, (t - t0) / 900);
+      drawBus(1 - Math.pow(1 - k, 3));
+      if (k < 1) requestAnimationFrame(grow);
+    };
+    requestAnimationFrame(grow);
+  });
   at(3100, () => (root.dataset.intro = "3"));
   at(4300, () => (root.dataset.intro = "done"));
 
@@ -112,5 +125,6 @@ export function playOpening(): () => void {
     timers.forEach(clearTimeout);
     // Stopped part-way (as React does once in development): show the docked layout.
     if (root.dataset.intro !== "0") root.dataset.intro = "done";
+    drawBus(1);
   };
 }

@@ -59,7 +59,15 @@ export function voiceOf(state: AgentState, doneToday: number | null, now: Date):
       return { say: "Thinking it over.", meta: state.since ? `Since ${hhmm(state.since)}` : "", pill: "Thinking" };
     case "working": {
       const name = state.last?.name ?? "";
-      const line = DOING[name]?.(subject(state.last?.arguments)) ?? `Using ${name}.`;
+      const doing = DOING[name]?.(subject(state.last?.arguments)) ?? `Using ${name}.`;
+      // The latest step did not simply run: say what really happened to it.
+      const outcome = state.last?.outcome;
+      const line =
+        outcome === "waiting"
+          ? `Asking you before ${doing[0].toLowerCase()}${doing.slice(1)}`
+          : outcome === "failed"
+            ? "That step didn’t work."
+            : doing;
       return { say: line, meta: `Step ${state.step}, ${name}`, pill: `Working, step ${state.step}` };
     }
     case "waiting":

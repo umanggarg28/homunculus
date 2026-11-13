@@ -7,6 +7,7 @@ run on their own: `uv run pytest -m browser`.
 
 import asyncio
 import json
+import re
 import socket
 import threading
 import time
@@ -106,6 +107,14 @@ def side(page: Page) -> Locator:
     return page.get_by_role("complementary", name="Needs approval and activity")
 
 
+def hold(button: Locator, ms: int = 900) -> None:
+    """Press and hold, the way allowing a request works: a click alone does nothing."""
+    button.hover()
+    button.page.mouse.down()
+    button.page.wait_for_timeout(ms)
+    button.page.mouse.up()
+
+
 def status(page: Page) -> Locator:
     """The status pill in the top bar, which says what the agent is doing now."""
     return page.locator("#status")
@@ -138,8 +147,9 @@ def test_sending_a_message_shows_the_tool_step_and_the_reply(
     page.locator("textarea").press("Enter")
 
     expect(thread(page).get_by_text("Saved priorities.md.")).to_be_visible()
-    expect(thread(page).get_by_text("write", exact=True)).to_be_visible()
-    expect(thread(page).get_by_text("OK ·")).to_be_visible()
+    step = thread(page).get_by_role("button", name=re.compile(r"^Step 1, Wrote priorities\.md"))
+    expect(step).to_be_visible()
+    expect(step).not_to_have_class(re.compile(r"is-bad"))
     assert (workspace / "priorities.md").read_text() == "1. Rest"
     expect(status(page)).to_have_text("Ready")
 
@@ -167,14 +177,18 @@ def test_approving_a_request_runs_it_and_the_agent_carries_on(page: Page, tmp_pa
         page.locator("textarea").fill("Email Sam")
         page.locator("textarea").press("Enter")
         expect(thread(page).get_by_text("I have asked you first.")).to_be_visible()
-        expect(thread(page).get_by_text("ASK ·")).to_be_visible()
+        held = thread(page).get_by_role("button", name=re.compile(r"^Step 1, Needs your approval"))
+        expect(held).to_be_visible()
         expect(status(page)).to_have_text("Needs approval")
 
         expect(side(page).get_by_text("sam@example.com").first).to_be_visible()
-        assert sent == []
-        side(page).get_by_role("button", name="[approve]").click()
+        allow = side(page).get_by_role("button", name=re.compile(r"Hold to allow once"))
+        allow.click()
+        page.wait_for_timeout(500)
+        assert sent == [], "a click alone must not allow it"
+        hold(allow)
 
-        expect(side(page).get_by_text("result: Sent.")).to_be_visible()
+        expect(side(page).get_by_text("Result: Sent.")).to_be_visible()
         assert sent == [{"to": "sam@example.com"}]
         expect(thread(page).get_by_text("Sam is emailed.")).to_be_visible()
 
@@ -242,7 +256,7 @@ def test_stop_ends_the_turn_on_the_server(page: Page, tmp_path: Path, workspace:
         page.locator("textarea").press("Enter")
         expect(thread(page).get_by_text("Working", exact=True)).to_be_visible()
 
-        page.get_by_role("button", name="[stop]").click()
+        page.get_by_role("button", name="Stop").click()
 
         expect(thread(page).get_by_text("stopped by you")).to_be_visible()
         expect(status(page)).to_have_text("Stopped")
