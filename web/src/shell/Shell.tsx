@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { AskPanel, askTitle } from "@/approvals/AskPanel";
+import { useApprovals } from "@/hooks/useApprovals";
 import { useAgentState, type AgentKind } from "@/state/agentState";
 import { useJobsToday } from "@/hooks/useJobsToday";
 import { Presence } from "@/presence/Presence";
+import { listenForUnfocus, unfocus } from "@/presence/focus";
+import { attachOverlay } from "@/presence/overlay";
+import { Thread } from "@/thread/Thread";
 import { InstallButton } from "./InstallButton";
 import { playOpening } from "./opening";
 import { TAB_ICONS } from "./tabIcons";
@@ -32,29 +37,32 @@ const LATER: Record<Later, string> = {
 const NOTE_MS = 4200;
 
 interface ShellProps {
-  thread: ReactNode;
-  approvals: ReactNode;
   activity: ReactNode;
 }
 
 /** The console's one screen: a top bar with the status pill, the conversation in the
  *  middle under the agent's presence, and what needs approval and what the agent did
  *  beside it. Below 48rem the two columns share the screen through a tab bar. */
-export function Shell({ thread, approvals, activity }: ShellProps) {
+export function Shell({ activity }: ShellProps) {
   const state = useAgentState();
   const today = useJobsToday();
+  const firstAsk = useApprovals().approvals.find((a) => a.status === "pending");
   const [now, setNow] = useState(() => new Date());
   const voice = voiceOf(state, today, now);
   const [view, setView] = useState<View>("chat");
   const [note, setNote] = useState<{ text: string; left: number; top?: number; bottom?: number } | null>(null);
   const noteTimer = useRef<number>();
+  const bus = useRef<HTMLCanvasElement>(null);
+  const fx = useRef<HTMLCanvasElement>(null);
 
   // The greeting follows the clock, so check it now and then.
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 60_000);
     return () => clearInterval(timer);
   }, []);
+  useEffect(() => (bus.current && fx.current ? attachOverlay(bus.current, fx.current) : undefined), []);
   useEffect(() => playOpening(), []);
+  useEffect(() => listenForUnfocus(), []);
   // The top bar sits outside the app grid, and its status dot follows the state too.
   const screenState = SCREEN_STATE[state.kind];
   useEffect(() => {
@@ -83,6 +91,8 @@ export function Shell({ thread, approvals, activity }: ShellProps) {
 
   const switchView = (next: View) => {
     if (next === view) return;
+    // A spotlight belongs to the view it was lit in.
+    unfocus();
     const apply = () => setView(next);
     const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (calm || !document.startViewTransition) return apply();
@@ -146,12 +156,12 @@ export function Shell({ thread, approvals, activity }: ShellProps) {
               <p className="say-meta">{voice.meta || " "}</p>
             </div>
           </div>
-          <div className="thread thread--hosted">{thread}</div>
+          <Thread ask={firstAsk ? askTitle(firstAsk) : null} onReview={() => switchView("side")} />
         </main>
 
         <aside className="side col" aria-label="Needs approval and activity">
-          <section className="panel ask-panel" id="ask-panel" aria-label="Needs approval" tabIndex={-1}>
-            {approvals}
+          <section className="panel ask-panel" id="ask-panel" aria-labelledby="ask-h" tabIndex={-1}>
+            <AskPanel />
           </section>
           <section className="panel" aria-label="Activity">
             {activity}
@@ -182,6 +192,8 @@ export function Shell({ thread, approvals, activity }: ShellProps) {
         </nav>
       </div>
 
+      <canvas className="bus" ref={bus} aria-hidden="true" />
+      <canvas className="fx" ref={fx} aria-hidden="true" />
       {note && (
         <p className="nav-note" role="status" style={{ left: note.left, top: note.top, bottom: note.bottom }}>
           {note.text}

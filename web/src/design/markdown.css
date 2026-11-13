@@ -1,0 +1,34 @@
+/* The agent's replies, written in Markdown, set in the design's type: prose in the body
+   face, mono only inside code. Syntax colours use the design's roles, kept muted so a
+   code block never outshines the conversation around it. */
+.md { color: var(--color-ink-2); line-height: 1.6; overflow-wrap: anywhere; }
+.md > * + * { margin-top: var(--space-sm); }
+.md p, .md ul, .md ol, .md blockquote, .md h1, .md h2, .md h3, .md h4 { margin: 0; max-width: 65ch; }
+.md h1, .md h2, .md h3, .md h4 { color: var(--color-ink); font-weight: 400; letter-spacing: -0.015em; line-height: 1.25; }
+.md h1 { font-size: var(--text-xl); } .md h2 { font-size: var(--text-lg); } .md h3, .md h4 { font-size: var(--text-md); }
+.md strong { color: var(--color-ink); font-weight: 500; }
+.md a { color: var(--color-ink); text-decoration-color: var(--color-rule-2); }
+.md a:hover { text-decoration-color: var(--color-ink); }
+.md ul, .md ol { padding-left: var(--space-lg); }
+.md li + li { margin-top: var(--space-2xs); }
+.md li::marker { color: var(--color-muted); }
+.md blockquote { padding-left: var(--space-md); border-left: 2px solid var(--color-rule-2); color: var(--color-muted); }
+.md hr { border: 0; border-top: var(--rule-hair) solid var(--color-rule); }
+.md-inline-code { font-family: var(--font-mono); font-size: 0.875em; padding: 0.1em 0.35em; border-radius: 4px; background: var(--color-paper-3); color: var(--color-ink); }
+.md-pre-wrap { position: relative; border-radius: 10px; background: var(--color-paper); box-shadow: inset 0 0 0 var(--rule-hair) var(--color-rule); }
+.md-lang { position: absolute; top: var(--space-xs); right: var(--space-sm); font-size: var(--text-xs); color: var(--color-muted); }
+.md-pre { margin: 0; padding: var(--space-md); overflow-x: auto; font-family: var(--font-mono); font-size: 0.8125rem; line-height: 1.7; color: var(--color-ink-2); scrollbar-width: thin; }
+.md-table-wrap { overflow-x: auto; }
+.md-table { border-collapse: collapse; font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.md-table th, .md-table td { padding: var(--space-xs) var(--space-sm); text-align: left; border-bottom: var(--rule-hair) solid var(--color-rule); }
+.md-table th { color: var(--color-muted); font-weight: 400; }
+.md .katex { font-size: 1.05em; color: var(--color-ink); }
+
+.hljs { background: transparent; color: var(--color-ink-2); }
+.hljs-comment, .hljs-quote { color: var(--color-muted); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-name, .hljs-tag { color: var(--point-hi); }
+.hljs-string, .hljs-doctag, .hljs-attr, .hljs-regexp { color: var(--color-success); }
+.hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet { color: var(--color-attn); }
+.hljs-title, .hljs-section, .hljs-type, .hljs-class { color: var(--color-ink); }
+.hljs-addition { color: var(--color-success); } .hljs-deletion { color: var(--color-error); }
+.hljs-emphasis { font-style: italic; } .hljs-strong { font-weight: 500; }

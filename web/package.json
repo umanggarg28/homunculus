@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "clsx": "^2.1.1",
-    "framer-motion": "^11.11.17",
     "highlight.js": "^11.11.1",
     "katex": "^0.17.0",
     "react": "^18.3.1",

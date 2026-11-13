@@ -15,14 +15,65 @@
 .bar-in .install { margin-left: auto; white-space: nowrap; min-height: 32px; padding: 0 var(--space-sm); font-size: 0.8125rem; color: var(--color-muted); }
 .bar-in .install + .status { margin-left: 0; }
 
-/* The earlier chat, approvals and activity screens, shown inside the new columns until
-   each is redrawn in this design. Their page frames give way to the panels. */
-.thread--hosted { display: block; padding: 0; }
-.thread--hosted .page-shell, .side .page-shell { min-height: 0; padding: var(--space-md); background: transparent !important; }
-.thread--hosted .page-shell::before, .side .page-shell::before { display: none; }
-.thread--hosted .brut-chat-input-shell { position: sticky !important; left: auto !important; right: auto !important; bottom: 0; width: auto !important; }
+/* The earlier activity screen, shown inside the new column until it is redrawn. Its
+   page frame gives way to the panel. */
+.side .page-shell { min-height: 0; padding: var(--space-md); background: transparent !important; }
+.side .page-shell::before { display: none; }
 .side .panel { overflow: hidden; }
 
 /* The install offer arrives with the rest of the top bar after the opening. */
 .bar-in .install { transition: opacity 700ms var(--ease-out); }
 html.js:is([data-intro="0"], [data-intro="a"], [data-intro="1"], [data-intro="2"]) .bar-in .install { opacity: 0; }
+
+/* The thread: decisions you made, shown as quiet notes rather than as things you typed. */
+.msg-note { align-self: center; max-width: 36rem; margin: 0; font-size: var(--text-sm); color: var(--color-muted); text-align: center; overflow-wrap: anywhere; }
+.msg-stopped, .msg-error { margin: 0; font-size: var(--text-sm); }
+.msg-stopped { color: var(--color-muted); }
+.msg-error { color: var(--color-error); }
+/* Before the first word arrives: three points that breathe, in the presence's material. */
+.msg-wait { display: inline-flex; gap: 5px; margin: 0; padding: var(--space-xs) 0; }
+.msg-wait i { width: 4px; height: 4px; border-radius: 1px; background: var(--point-mid); animation: breathe 1.4s var(--ease-in-out) infinite; }
+.msg-wait i:nth-child(2) { animation-delay: 160ms; } .msg-wait i:nth-child(3) { animation-delay: 320ms; }
+.step.is-wait { box-shadow: inset 2px 0 0 var(--color-attn); }
+.step.is-wait .step-why { color: var(--color-attn); }
+.tag--now { color: var(--color-ink); }
+.live-chip { bottom: calc(44px + var(--space-xs) * 2 + 1.5rem + var(--space-md) + 12px); }
+
+/* The composer's Stop, which takes the send button's place while a turn runs. */
+.send--stop { background: var(--color-paper-3); color: var(--color-ink); }
+.send--stop:hover { background: var(--color-rule-2); }
+.send--stop svg { width: 14px; height: 14px; }
+
+/* Approvals: the request exactly as the agent proposed it, so you allow the real values. */
+.ask-args { margin: 0; max-height: 12rem; overflow: auto; padding: var(--space-sm); border-radius: 8px; background: var(--color-paper); box-shadow: inset 0 0 0 var(--rule-hair) var(--color-rule); font-family: var(--font-mono); font-size: 0.75rem; line-height: 1.6; color: var(--color-ink-2); white-space: pre-wrap; overflow-wrap: anywhere; scrollbar-width: thin; }
+.ask-input { min-height: 40px; padding: 0 var(--space-sm); border: 0; border-radius: 8px; background: var(--color-paper); box-shadow: inset 0 0 0 var(--rule-hair) var(--color-rule-2); color: var(--color-ink); font: inherit; font-size: var(--text-sm); }
+.ask-input::placeholder { color: var(--color-muted); }
+.ask-input:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 1px; }
+.ask-error { margin: 0; font-size: var(--text-sm); color: var(--color-error); }
+.ask-body + .ask-body { border-top: var(--rule-hair) solid var(--color-rule); padding-top: var(--space-md); }
+.ask-sub { margin: var(--space-xs) var(--space-md) 0; font-size: 0.8125rem; font-weight: 400; color: var(--color-muted); letter-spacing: 0; }
+.decided .name { font-size: 0.875rem; overflow-wrap: anywhere; }
+.decided .fig { font-size: 0.8125rem; color: var(--color-muted); }
+.decided .line { color: var(--color-muted); overflow-wrap: anywhere; }
+.decided .line:empty { display: none; }
+
+/* On a phone the approval waits as a bar above the composer; it opens the column that holds it. */
+.ask-dock { display: none; }
+@media (max-width: 48rem) {
+  .ask-dock { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); width: auto; min-height: 52px; padding: var(--space-xs) var(--space-md); border: 0; cursor: pointer; font: inherit; text-align: left; }
+}
+
+/* Without the rail the centre column is wide, so the conversation keeps the mock's
+   reading width (44rem) and sits in the middle of it, with the composer under it. */
+.app.no-rail .thread { padding-inline: max(var(--space-xl), calc((100% - 44rem) / 2)); }
+.app.no-rail .composer { margin-inline: max(var(--space-xl), calc((100% - 44rem) / 2)); }
+@media (max-width: 48rem) {
+  .app.no-rail .thread { padding-inline: var(--space-md); }
+  .app.no-rail .composer { margin-inline: var(--space-sm); }
+}
+.tag--wait { color: var(--color-attn); }
+/* The sheet's heading takes focus so a screen reader announces it; it needs no ring. */
+.hud h2:focus { outline: none; }
+/* A phone's top bar holds the name and the status pill; browsers there offer install in their own menu. */
+@media (max-width: 48rem) { .bar-in .install { display: none; } .bar-in .install + .status { margin-left: auto; } }
+.ask-dock .dock-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
