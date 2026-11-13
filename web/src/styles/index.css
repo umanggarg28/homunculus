@@ -95,67 +95,18 @@
 }
 
 /* ---------- Base ---------- */
-html, body {
-  background:
-    linear-gradient(180deg, rgba(108, 231, 255, 0.035), transparent 260px),
-    var(--color-bg);
+body {
+  background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  font-size: 14px;
   line-height: 1.5;
   font-feature-settings: "cv11", "ss03", "ss04";
 }
 
 #root { min-height: 100vh; position: relative; }
 
-@media (max-width: 760px) {
-  html, body { font-size: 13px; }
-}
-
-/* ---------- CRT scanline overlay ----------
- * Subtle horizontal scanline pattern layered over the entire UI.
- * Drawn via a fixed pseudo-element so it doesn't intercept clicks
- * (pointer-events: none) and stays above everything visually.
- * Adds the phosphor-CRT signature without dimming content. */
-body::before {
-  /* Static scanlines: barely-there texture. */
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  pointer-events: none;
-  background-image: repeating-linear-gradient(
-    0deg,
-    rgba(0, 0, 0, 0) 0px,
-    rgba(0, 0, 0, 0) 2px,
-    rgba(119, 255, 61, 0.012) 2px,
-    rgba(119, 255, 61, 0.012) 3px
-  );
-  mix-blend-mode: screen;
-}
-body::after {
-  /* The vertical-hold roll: soft band sweeping every ~18s.
-     Ambient, only catches the eye when you stop looking. */
-  content: "";
-  position: fixed;
-  left: 0; right: 0; top: 0;
-  height: 28px;
-  z-index: 100;
-  pointer-events: none;
-  background: linear-gradient(
-    180deg,
-    rgba(124, 254, 0, 0)    0%,
-    rgba(124, 254, 0, 0.015) 35%,
-    rgba(124, 254, 0, 0.04) 50%,
-    rgba(124, 254, 0, 0.015) 65%,
-    rgba(124, 254, 0, 0)    100%
-  );
-  animation: crt-roll 18s linear infinite;
-  filter: blur(0.4px);
-  mix-blend-mode: screen;
-}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
@@ -163,10 +114,6 @@ body::after {
     scroll-behavior: auto !important;
     transition-duration: 0.001ms !important;
   }
-}
-@keyframes crt-roll {
-  0%   { transform: translateY(-28px); }
-  100% { transform: translateY(calc(100vh + 14px)); }
 }
 ::selection { background: var(--color-accent-dim); color: var(--color-text); }
 

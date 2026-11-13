@@ -120,7 +120,11 @@ export function useChatStream(): UseChatStream {
                 const data = JSON.parse(event.data || "{}");
                 if (event.event === "turn") {
                   turnRef.current = data.id;
-                  if (text === undefined) setMessages((prev) => [...prev, ...placeholder(data.message)]);
+                  if (text === undefined) {
+                    // Rejoining a turn that was already running, such as after a reload.
+                    setMessages((prev) => [...prev, ...placeholder(data.message)]);
+                    recordTurnEvent({ event: "user_message", text: data.message });
+                  }
                   if (stopWantedRef.current) api.stopTurn(data.id).catch(() => undefined);
                 } else if (event.event === "delta") {
                   update((m) => ({ ...m, content: m.content + data.text }));
@@ -140,6 +144,7 @@ export function useChatStream(): UseChatStream {
                   recordTurnEvent({
                     event: "tool",
                     name: step.name,
+                    arguments: step.arguments,
                     answer: step.answer,
                     result: step.result,
                     outcome: step.outcome,

@@ -979,11 +979,13 @@ In plain English: "One message that uses one tool is written as one trace of fou
 
 ## 7. The web console
 
-Code: `web/src/`, mainly `hooks/useChatStream.ts`, `lib/sse.ts` and `lib/turnEvents.ts`. Test: `tests/browser/test_console.py`.
+Code: `web/src/`, mainly `hooks/useChatStream.ts`, `lib/sse.ts`, `lib/turnEvents.ts`, `state/agentState.ts` and `shell/`. Test: `tests/browser/test_console.py`.
 
 ### The problem
 
 Chapters 1 to 6 end at the server, which sends a stream of text events. A person needs a screen: somewhere to type, the reply appearing as it is written, the tool steps shown as they happen, and a sense of what the agent is doing. The console is that screen. It is a single-page web app the server hands out, so the whole agent is one program you open in a browser.
+
+It is one screen at `/`. A top bar holds a status pill. The middle column has the agent's presence (a sphere of points drawn with WebGL), one spoken line under it, and the conversation. The right column holds what needs approval and what the agent did. On a phone the two columns share the screen through a tab bar. The earlier addresses `/chat`, `/approvals` and `/activity` lead to `/`.
 
 ### The idea
 
@@ -993,7 +995,9 @@ Chapters 1 to 6 end at the server, which sends a stream of text events. A person
 
 **Watching a turn, not owning it.** The turn runs on the server (chapter 3), so the console only watches it. The first event names the turn, and the console keeps its id. **[stop]** sends `POST /api/turns/{id}/stop`, and the stream then ends with `stopped`. Leaving the page closes only the watching. If the connection drops while the page is open, or ends before the turn's last event, the console waits a second and reconnects to `GET /api/turns/{id}/events` with the last event id it saw in `Last-Event-ID`, so nothing is missed or shown twice. It tries five times, as a browser's own `EventSource` keeps retrying, then says the connection was lost. When the chat screen opens, it loads the history, then asks `GET /api/turns/current`. If a turn is still running, such as one started before a reload, it rejoins it from the first event, so you see your message and the reply catching up, then arriving live. Then it asks again, so a message that was waiting behind that turn is followed too.
 
-**One source of truth for what is happening.** Every event the console receives is also recorded in `lib/turnEvents.ts`, a tiny in-page store. The robot in the sidebar and the thinking indicator read that store. The rule is that they show only what an event says. The console never guesses the agent's state.
+**One source of truth for what is happening.** Every event the console receives is also recorded in `lib/turnEvents.ts`, a tiny in-page store. `state/agentState.ts` reads that store, and the list of requests waiting for approval, and works out one word for the moment: `ready`, `thinking`, `working`, `waiting`, `done`, `stuck` or `stopped`. The status pill, the spoken line and the presence all read that one word, so they can never disagree. The rule is that the word comes only from what an event or a request says. The console never guesses the agent's state, and it never claims a step total, because the agent does not plan its steps ahead.
+
+**An opening, once.** On a session's first load the presence and its first words start alone at the centre of the screen, then dock while the panels unfold. A small script in `index.html` decides before the first paint, by setting `data-intro` on the page to `0` (play) or `done` (skip). A reload skips it, because a reload is when you want to see the work. People who ask their system for less motion never see it.
 
 ### A picture
 
@@ -1003,7 +1007,7 @@ Chapters 1 to 6 end at the server, which sends a stream of text events. A person
       ▼
  useChatStream.send("Save my priorities")
       │  adds your message and an empty reply to `messages`
-      │  records { event: "user_message" }            ──►  turnEvents  ──►  robot: THINKING
+      │  records { event: "user_message" }            ──►  turnEvents  ──►  thinking
       ▼
  fetch POST /api/chat  ──►  server (chapter 3) starts the turn
       │
@@ -1011,11 +1015,11 @@ Chapters 1 to 6 end at the server, which sends a stream of text events. A person
  buffer += piece ──► parseSseChunks(buffer) ──► complete events + leftover
       │
       ├─ turn   → keep the turn's id, for [stop] and for reconnecting
-      ├─ tool   → add a ToolStep to `toolCalls`, record it  ──►  robot: WORKING
+      ├─ tool   → add a ToolStep to `toolCalls`, record it  ──►  working
       ├─ delta  → append the text to the reply in `messages`
-      ├─ error  → mark the reply failed, record it           ──►  robot: FAULT
-      ├─ stopped → mark the reply "stopped by you"
-      └─ done   → record { event: "assistant_reply" }        ──►  robot: RESPONDING, DONE, IDLE
+      ├─ error  → mark the reply failed, record it           ──►  stuck
+      ├─ stopped → mark the reply "stopped by you", record it ──►  stopped
+      └─ done   → record { event: "assistant_reply" }        ──►  done, then ready
 ```
 
 ### One value, traced
@@ -1029,7 +1033,7 @@ messages[-2] = { id: "…", role: "user", content: "Save my priorities", ts: "20
 messages[-1] = { id: "…", role: "assistant", content: "", inFlight: true, ts: "…" }
 ```
 
-The empty reply is a placeholder that text will be added to. `recordTurnEvent({ event: "user_message" })` puts the first event in the store, and the robot switches to THINKING.
+The empty reply is a placeholder that text will be added to. `recordTurnEvent({ event: "user_message" })` puts the first event in the store. `deriveAgentState` finds that the last `user_message` has no end after it and no tool step, so it answers `thinking`: the pill says `Thinking` and the presence turns faster.
 
 **The first event** is `turn`, `{"id": "1f68…", "message": "Save my priorities"}`. `follow` keeps the id in `turnRef`, for [stop] and for reconnecting. A [stop] pressed before this event arrived is remembered and sent now.
 
@@ -1045,15 +1049,22 @@ id: 2\nevent: tool\ndata: {"name": "write", "arguments": "{…}", "answer": "act
 parseSseChunks(buffer) -> { events: [{ id: "2", event: "tool", data: '{"name": "write", …}' }], remainder: "id: 3\nevent: del" }
 ```
 
-`events` is a list of 1. `JSON.parse(data)` gives an object with `name`, `arguments`, `answer`, `result`, `duration_ms` and `outcome`. `lastId` becomes 2. Because the event is `tool`, `follow` adds a `ToolStep` to `toolCalls` (a list of 1 now), which draws the WRITE block, and records the step in the store. The robot switches to WORKING. The server sent `"outcome": "ok"`, so the block reads `OK · 0MS` in green. The console never works out the outcome for itself; it shows what the server decided, so the block, the robot and the thinking indicator always agree.
+`events` is a list of 1. `JSON.parse(data)` gives an object with `name`, `arguments`, `answer`, `result`, `duration_ms` and `outcome`. `lastId` becomes 2. Because the event is `tool`, `follow` adds a `ToolStep` to `toolCalls` (a list of 1 now), which draws the WRITE block, and records the step in the store, with its arguments. Now the turn has one tool step and no end, so the state is `working` with `step: 1`:
+
+```
+deriveAgentState([user_message, tool write], [], now) -> { kind: "working", step: 1, last: { name: "write", arguments: '{"path": "priorities.md", …}', … } }
+voiceOf(state, …) -> { say: "Writing priorities.md.", meta: "Step 1, write", pill: "Working, step 1" }
+```
+
+The presence ripples once on the side facing the thread. The server sent `"outcome": "ok"`, so the block reads `OK · 0MS` in green and the ripple is lime. Had it sent `"failed"`, the ripple would be red. The console never works out the outcome for itself; it shows what the server decided, so the block, the ripple and the pill always agree.
 
 **The next piece** completes `id: 3\nevent: delta\ndata: {"text": "Saved "}`. Now `buffer` is `id: 3\nevent: del` plus the new text, which makes a whole event. `update` replaces the placeholder with a copy whose `content` is `"" + "Saved "`, so React redraws that one message. Each further `delta` appends again, and you watch the words arrive.
 
-**`done` arrives.** `recordTurnEvent({ event: "assistant_reply" })` makes the robot show RESPONDING, then DONE 1.5 seconds later, then IDLE. `finished` becomes `true`, the reading loop stops, and in `finally` the reply's `inFlight` is set to `false` and `sending` to `false`, so the input is ready again.
+**`done` arrives.** `recordTurnEvent({ event: "assistant_reply" })` ends the turn, so the state is `done`: the presence flares green and the line says `Done.` with the true count of today's jobs from the activity log. Six seconds later it is `ready` again, and the line goes back to a greeting for the time of day. `finished` becomes `true`, the reading loop stops, and in `finally` the reply's `inFlight` is set to `false` and `sending` to `false`, so the input is ready again.
 
-**After a reload**, the hook asks `GET /api/history` and gets a list of 2 entries, your message and the reply, without times. Then it asks `GET /api/turns/current`, which answers 204 No Content because nothing is running. Had you reloaded mid-reply, it would have named the turn, and the hook would have rejoined it from event 1. The log shows `--:--` instead of a time, because inventing one would claim the messages were written now.
+**After a reload**, the hook asks `GET /api/history` and gets a list of 2 entries, your message and the reply, without times. Then it asks `GET /api/turns/current`, which answers 204 No Content because nothing is running. Had you reloaded mid-reply, it would have named the turn, and the hook would have rejoined it from event 1. Its first event, `turn`, is recorded as a `user_message`, because the store was empty after the reload and the pill must still say the agent is busy. The log shows `--:--` instead of a time, because inventing one would claim the messages were written now.
 
-**Where each value lives.** `messages` and `toolCalls` belong to `useChatStream` and are drawn by the chat log. The store in `turnEvents` is read by the robot (`useRobotState`) and the thinking indicator, and never by the log. `buffer` and `lastId` exist only inside one call to `follow`.
+**Where each value lives.** `messages` and `toolCalls` belong to `useChatStream` and are drawn by the chat log. The store in `turnEvents` is read by `AgentStateProvider` (which makes the one word), the presence (for its ripples) and the thinking indicator, and never by the log. `buffer` and `lastId` exist only inside one call to `follow`.
 
 ### The test
 
@@ -1062,22 +1073,25 @@ def test_sending_a_message_shows_the_tool_step_and_the_reply(
     page: Page, console_url: str, workspace: Path
 ) -> None:
     page.goto(f"{console_url}/chat")
+    expect(page).to_have_url(f"{console_url}/")
+    expect(status(page)).to_have_text("Ready")
 
     page.locator("textarea").fill("Save my priorities")
     page.locator("textarea").press("Enter")
 
-    expect(page.get_by_text("Saved priorities.md.")).to_be_visible()
-    expect(page.get_by_text("write", exact=True)).to_be_visible()
-    expect(page.get_by_text("OK ·")).to_be_visible()
+    expect(thread(page).get_by_text("Saved priorities.md.")).to_be_visible()
+    expect(thread(page).get_by_text("write", exact=True)).to_be_visible()
+    expect(thread(page).get_by_text("OK ·")).to_be_visible()
     assert (workspace / "priorities.md").read_text() == "1. Rest"
+    expect(status(page)).to_have_text("Ready")
 
     page.reload()
 
-    expect(page.get_by_text("Save my priorities")).to_be_visible()
-    expect(page.get_by_text("Saved priorities.md.")).to_be_visible()
+    expect(thread(page).get_by_text("Save my priorities")).to_be_visible()
+    expect(thread(page).get_by_text("Saved priorities.md.")).to_be_visible()
 ```
 
-In plain English: "In a real browser, typing a message and pressing Enter shows the tool step and the reply, really writes the file, and after a reload the conversation is still there."
+In plain English: "In a real browser, the old chat address leads to the one screen, and the pill says Ready. Typing a message and pressing Enter shows the tool step and the reply in the conversation, really writes the file, and the pill is back to Ready. After a reload the conversation is still there." `thread(page)` is the middle column. The same words also appear in the activity column, so each check says where it looks.
 
 It runs the real server and the built console, with only the model replaced by the scripted stand-in. Playwright drives a real Chromium browser. Because it needs the console built and a browser installed, it is marked `browser` and runs on its own: `uv run pytest -m browser`.
 
@@ -1085,7 +1099,7 @@ It runs the real server and the built console, with only the model replaced by t
 
 1. In `web/src/components/chat/BrutalistToolBlock.tsx`, change `const outcome = entry.outcome;` to `const outcome = "ok";`.
 2. Run `npm run build` in `web/`, then send a message the gate refuses through the README quick start, for example one asking the agent to write `../outside.md`.
-3. The tool block now says `REFUSE` in green, as though all were well, while the robot shows FAULT for the same step. One part of the screen has stopped reading what the server sent, and the screen now contradicts itself.
+3. The tool block now says `REFUSE` in green, as though all were well, while the presence ripples red for the same step. One part of the screen has stopped reading what the server sent, and the screen now contradicts itself.
 4. Undo the change and build again.
 
 ---
@@ -1125,7 +1139,7 @@ The gate (chapter 5) can answer "ask" or "hand off". Those answers need somewher
  loop: approvals.request(...)  ──►  approvals.json   { id: "04fdba", status: "pending", ... }
    │  model is told: "Waiting for the operator's approval (request 04fdba)..."
    ▼
- console: APPROVALS [1]  ──►  you press [approve]
+ console: Needs approval  ──►  you press [approve]
    │
    ▼
  server: decide → "approved"  ──►  run_tool(send_email, the saved arguments) → "Sent."
@@ -1157,7 +1171,7 @@ approvals.request("send_email", '{"to": ...}', "ask", "00-9f3c41d2...-df12ff...-
 
 The last argument is this turn's W3C `traceparent` (chapter 6), so the request remembers which piece of work asked for it. `Approvals.request` reads the saved list (`approvals.json`), adds this one, and writes the whole list back. It writes to a temporary file and moves it into place, so a crash mid-write can never leave half a list. The tool step's result is the waiting sentence, so the model replies "I've drafted the email. It's waiting for your approval." and the turn ends.
 
-**In the console.** `ApprovalsProvider` asks `GET /api/approvals` every ten seconds, and after every turn event. The list is one item, so the sidebar shows a badge of 1 and the screen shows the request with its arguments exactly as the agent proposed them, as formatted JSON, so you approve the real values and their types.
+**In the console.** `ApprovalsProvider` asks `GET /api/approvals` every ten seconds, and after every turn event. The list is one item, so the status pill says `Needs approval` once no turn is running, and the approvals panel shows the request with its arguments exactly as the agent proposed them, as formatted JSON, so you approve the real values and their types.
 
 **You press approve.** The console calls `POST /api/approvals/04fdba/approve`. In the server:
 
