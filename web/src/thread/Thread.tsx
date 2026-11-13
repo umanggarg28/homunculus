@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { MarkdownMessage } from "@/components/chat/MarkdownMessage";
+import { MarkdownMessage } from "./Markdown";
 import { useApprovals } from "@/hooks/useApprovals";
 import { useChatStream, type ChatMessage } from "@/hooks/useChatStream";
 import type { ToolStep } from "@/lib/toolSteps";
