@@ -15,12 +15,6 @@
 .bar-in .install { margin-left: auto; white-space: nowrap; min-height: 32px; padding: 0 var(--space-sm); font-size: 0.8125rem; color: var(--color-muted); }
 .bar-in .install + .status { margin-left: 0; }
 
-/* The earlier activity screen, shown inside the new column until it is redrawn. Its
-   page frame gives way to the panel. */
-.side .page-shell { min-height: 0; padding: var(--space-md); background: transparent !important; }
-.side .page-shell::before { display: none; }
-.side .panel { overflow: hidden; }
-
 /* The install offer arrives with the rest of the top bar after the opening. */
 .bar-in .install { transition: opacity 700ms var(--ease-out); }
 html.js:is([data-intro="0"], [data-intro="a"], [data-intro="1"], [data-intro="2"]) .bar-in .install { opacity: 0; }
@@ -77,3 +71,41 @@ html.js:is([data-intro="0"], [data-intro="a"], [data-intro="1"], [data-intro="2"
 /* A phone's top bar holds the name and the status pill; browsers there offer install in their own menu. */
 @media (max-width: 48rem) { .bar-in .install { display: none; } .bar-in .install + .status { margin-left: auto; } }
 .ask-dock .dock-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* Activity: today's jobs as columns of points, one point per step, along the day so far. */
+.day { margin: var(--space-md) var(--space-md) var(--space-2xs); }
+.day-chart { display: block; width: 100%; height: 72px; overflow: visible; }
+.day-chart .pt { fill: var(--point-mid); }
+.day-chart .pt--ok { fill: var(--point-hi); }
+.day-chart .pt--bad { fill: var(--color-error); }
+.day-chart .pt--live { fill: var(--color-accent); }
+.day-chart .pt--quiet { fill: var(--color-rule-2); }
+.day-base { stroke: var(--color-rule); stroke-width: 0.5; vector-effect: non-scaling-stroke; }
+.day-axis { display: flex; justify-content: space-between; margin-top: var(--space-2xs); font-size: var(--text-xs); color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.act-empty { margin: 0; padding: var(--space-sm) var(--space-md); font-size: var(--text-sm); color: var(--color-muted); }
+.activity .is-bad .kind { background: var(--color-error); }
+.activity .is-notice .kind { background: var(--color-rule-2); }
+.activity .is-notice .jobbtn { color: var(--color-muted); }
+.activity .jobbtn { overflow-wrap: anywhere; }
+/* A job, opened: its steps, its reply and the rating, under the row. */
+.act-more { grid-column: 2 / -1; display: flex; flex-direction: column; gap: var(--space-sm); margin-top: var(--space-xs); }
+.act-note, .act-reply { margin: 0; font-size: var(--text-sm); color: var(--color-ink-2); overflow-wrap: anywhere; white-space: pre-wrap; }
+.act-steps { list-style: none; margin: 0; padding: 0 0 0 var(--space-sm); border-left: var(--rule-hair) solid var(--color-rule-2); display: flex; flex-direction: column; gap: var(--space-xs); }
+.act-step { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.act-step .step-title { font-size: var(--text-sm); color: var(--color-ink); }
+.act-step .step-cmd { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-step .step-why { font-size: 0.8125rem; }
+.act-step--failed .step-why { color: var(--color-error); }
+.act-step--waiting .step-why { color: var(--color-attn); }
+.rate { display: flex; flex-direction: column; gap: var(--space-xs); }
+.rate-row { display: flex; align-items: center; gap: var(--space-xs); }
+.rate-q { font-size: 0.8125rem; color: var(--color-muted); margin-right: auto; }
+.rate-btn { display: grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: 50%; cursor: pointer; background: transparent; color: var(--color-muted); box-shadow: inset 0 0 0 var(--rule-hair) var(--color-rule-2); }
+.rate-btn:hover { color: var(--color-ink); background: var(--color-paper-3); }
+.rate-btn.is-on { color: var(--color-paper); background: var(--color-ink); box-shadow: none; }
+.rate-btn svg { width: 16px; height: 16px; }
+.rate-form { display: flex; gap: var(--space-xs); }
+.rate-form .ask-input { flex: 1; min-width: 0; }
+.rate-reason { margin: 0; font-size: var(--text-sm); color: var(--color-ink-2); }
+/* Tools number lines with a tab; a narrow tab keeps the number beside its line. */
+.term { tab-size: 3; }

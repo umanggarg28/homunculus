@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ActivityPanel } from "@/activity/ActivityPanel";
 import { AskPanel, askTitle } from "@/approvals/AskPanel";
 import { useApprovals } from "@/hooks/useApprovals";
 import { useAgentState, type AgentKind } from "@/state/agentState";
@@ -36,14 +37,10 @@ const LATER: Record<Later, string> = {
 };
 const NOTE_MS = 4200;
 
-interface ShellProps {
-  activity: ReactNode;
-}
-
 /** The console's one screen: a top bar with the status pill, the conversation in the
  *  middle under the agent's presence, and what needs approval and what the agent did
  *  beside it. Below 48rem the two columns share the screen through a tab bar. */
-export function Shell({ activity }: ShellProps) {
+export function Shell() {
   const state = useAgentState();
   const today = useJobsToday();
   const firstAsk = useApprovals().approvals.find((a) => a.status === "pending");
@@ -163,8 +160,8 @@ export function Shell({ activity }: ShellProps) {
           <section className="panel ask-panel" id="ask-panel" aria-labelledby="ask-h" tabIndex={-1}>
             <AskPanel />
           </section>
-          <section className="panel" aria-label="Activity">
-            {activity}
+          <section className="panel" aria-labelledby="act-h">
+            <ActivityPanel />
           </section>
         </aside>
 

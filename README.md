@@ -2,7 +2,7 @@
 
 An always-on personal agent that works toward your goals in its own sandbox and asks before anything leaves it.
 
-> **Status:** early build. In place: the web console's chat, approvals and activity screens, replies streamed word by word from turns that keep running on the server when the page is closed or reloaded, file tools in the agent's own workspace with each call checked by the gate, approvals for actions that need your consent, and fixed instructions that tell the agent to ask when a request is missing something only you can supply. The plan and its progress are tracked in the [spec](https://github.com/umanggarg28/homunculus/issues/2) and its tickets.
+> **Status:** early build. In place: the web console, one screen with the conversation, what needs approval and what the agent did, replies streamed word by word from turns that keep running on the server when the page is closed or reloaded, file tools in the agent's own workspace with each call checked by the gate, approvals for actions that need your consent, and fixed instructions that tell the agent to ask when a request is missing something only you can supply. The plan and its progress are tracked in the [spec](https://github.com/umanggarg28/homunculus/issues/2) and its tickets.
 
 ## How it works
 
@@ -34,7 +34,7 @@ flowchart LR
 | `approvals` | Actions waiting for you. You approve, decline, or mark a hand-off done, and the agent is told. |
 | `sandbox` | A locked-down Docker container where commands run. Its only way out is a proxy that allows the package registries, opens each tunnel to check that only package pages are read, and logs every request. |
 | `tools` | `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`, inside the agent's workspace only, and `shell`, which runs commands in the sandbox. Each is described as an MCP tool. |
-| `activity` | An append-only record of every step as OpenTelemetry traces, plus log events for each turn's start, your decisions and your ratings, written by code, out of reach of every tool. Any OpenTelemetry tool can read both files. The activity screen shows one job per message, and you can rate each one. |
+| `activity` | An append-only record of every step as OpenTelemetry traces, plus log events for each turn's start, your decisions and your ratings, written by code, out of reach of every tool. Any OpenTelemetry tool can read both files. The console's Activity column shows one job per message, and you can rate each one. |
 
 The full design, including the modules still to come (skills, wiki, waker), is in [ARCHITECTURE.md](ARCHITECTURE.md). What is protected, where data can leave, and the accepted risk are in [SECURITY.md](SECURITY.md). [LEARN.md](LEARN.md) teaches the code one module at a time.
 
@@ -82,6 +82,14 @@ If the request fails, the stream ends with an `error` event that says why, for e
 To see a tool in use, send `"Save a note called tea.md that says I like green tea."`. The file appears in the data directory's `workspace/` folder, and the step is recorded in its `traces.jsonl`. On macOS, `open ~/Library/Application\ Support/homunculus` shows them in Finder.
 
 ## The web console
+
+One screen. The agent's presence sits at the top of the conversation and says what it is doing. Under each reply is a card of the steps it took. Beside it are what needs your approval and what the agent did today. These screenshots use a made-up demo workspace.
+
+![A request waiting for approval: the presence turns amber and faces the approvals panel, which shows the exact arguments and a button you hold to allow it](docs/images/console-needs-approval.jpg)
+
+![The live view of a job: its terminal, grouped by step, with today's jobs beside it](docs/images/console-live-view.jpg)
+
+<img src="docs/images/console-phone.jpg" alt="The console on a phone: the presence, the conversation, and a tab bar" width="320">
 
 The console is a React app in `web/`. Build it once, and the server serves it:
 

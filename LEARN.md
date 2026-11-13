@@ -881,7 +881,7 @@ Attributes use the conventions' names, such as `gen_ai.tool.name`, `gen_ai.tool.
 | `homunculus.approval.decision` | this program | the request id, its status and note, and the tool |
 | `gen_ai.evaluation.result` | the GenAI conventions | the evaluation's name, score and label, and your reason |
 
-The first two have no standard name, so they start with `homunculus.`, as OpenTelemetry's naming guidance asks for names that belong to one application. Because the turn's start is written at once, the activity screen shows what you asked while the job is still running, and still shows it if the program stopped before the job ended.
+The first two have no standard name, so they start with `homunculus.`, as OpenTelemetry's naming guidance asks for names that belong to one application. Because the turn's start is written at once, the Activity column shows what you asked while the job is still running, and still shows it if the program stopped before the job ended.
 
 ### A picture
 
@@ -932,7 +932,7 @@ One line of the file, cut down:
 
 ### Feedback
 
-On the activity screen each job has a 👍 and a 👎, and either can carry a reason. Pressing 👎 and typing "Ask before saving" sends `POST /api/activity/9f3c41d2.../feedback` with `{"rating": "down", "reason": "Ask before saving"}`.
+In the console's Activity column, each job opens to show its steps, its reply, and a thumbs up and a thumbs down, either of which can carry a reason. Pressing 👎 and typing "Ask before saving" sends `POST /api/activity/9f3c41d2.../feedback` with `{"rating": "down", "reason": "Ask before saving"}`.
 
 The GenAI conventions define one event for judging an agent's output: `gen_ai.evaluation.result`. Microsoft Foundry documents how to record an end user's thumbs up or down with it: a score of 1.0 labelled `pass`, or 0.0 labelled `fail`. The name, `task_completion`, is the one its own thumbs-up sample uses. This project follows both:
 
@@ -1192,7 +1192,7 @@ approvals.record_result("04fdba", "Sent.")
 activity.end_tool(span, "ask", "Sent.", "ok", "04fdba")   started under the request's traceparent, inside the lock
 ```
 
-That span joins the trace the request remembered, so the activity screen shows the sent email inside the job that asked for it (chapter 6).
+That span joins the trace the request remembered, so the Activity column shows the sent email inside the job that asked for it (chapter 6).
 
 The tool runs inside the same lock as a chat message (chapter 3), so it never runs alongside another turn's tools, and in a worker thread (`asyncio.to_thread`), so a slow tool does not hold up the rest of the server.
 
