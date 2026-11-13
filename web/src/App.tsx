@@ -1,32 +1,24 @@
-import { useEffect } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { DashboardShell } from "@/components/layout/DashboardShell";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { ApprovalsProvider } from "@/hooks/useApprovals";
+import { AgentStateProvider } from "@/state/agentState";
+import { Shell } from "@/shell/Shell";
 import { ActivityPage } from "@/pages/ActivityPage";
 import { ApprovalsPage } from "@/pages/ApprovalsPage";
 import { ChatPage } from "@/pages/ChatPage";
 
-/** Each route is its own surface, so a new route starts at the top. */
-function ScrollToTop() {
-  const { pathname } = useLocation();
-  useEffect(() => {
-    window.scrollTo(0, 0);
-  }, [pathname]);
-  return null;
-}
-
+/** One screen at "/". The earlier addresses (/chat, /approvals, /activity) lead to it,
+ *  so old links and bookmarks still work. */
 export default function App() {
   return (
     <BrowserRouter>
-      <ScrollToTop />
-      <DashboardShell>
-        <Routes>
-          <Route path="/" element={<Navigate to="/chat" replace />} />
-          <Route path="/chat" element={<ChatPage />} />
-          <Route path="/approvals" element={<ApprovalsPage />} />
-          <Route path="/activity" element={<ActivityPage />} />
-          <Route path="*" element={<Navigate to="/chat" replace />} />
-        </Routes>
-      </DashboardShell>
+      <ApprovalsProvider>
+        <AgentStateProvider>
+          <Routes>
+            <Route path="/" element={<Shell thread={<ChatPage />} approvals={<ApprovalsPage />} activity={<ActivityPage />} />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </AgentStateProvider>
+      </ApprovalsProvider>
     </BrowserRouter>
   );
 }

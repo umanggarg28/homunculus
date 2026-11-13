@@ -18,7 +18,7 @@ import mcp_types as mcp
 import pytest
 import uvicorn
 from fastapi import FastAPI
-from playwright.sync_api import Page, expect, sync_playwright
+from playwright.sync_api import Locator, Page, expect, sync_playwright
 from scripted_model import ScriptedModel
 
 from homunculus.activity import Activity
@@ -89,9 +89,41 @@ def page() -> Iterator[Page]:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         context = browser.new_context()
-        # The one-time boot overlay is not what these tests are about.
+        # The opening plays once per session, and is not what most tests are about.
         context.add_init_script("sessionStorage.setItem('homunculus_booted_v1', '1')")
         yield context.new_page()
+        browser.close()
+
+
+# The console is one screen: the conversation in the middle, and what needs approval
+# and what the agent did beside it. The same words can show in more than one place
+# (a reply is also in its activity row), so each check names where it looks.
+def thread(page: Page) -> Locator:
+    return page.get_by_role("main")
+
+
+def side(page: Page) -> Locator:
+    return page.get_by_role("complementary", name="Needs approval and activity")
+
+
+def status(page: Page) -> Locator:
+    """The status pill in the top bar, which says what the agent is doing now."""
+    return page.locator("#status")
+
+
+def test_the_opening_plays_on_the_first_visit_and_a_reload_skips_it(console_url: str) -> None:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.goto(console_url)
+        root = page.locator("html")
+        expect(root).to_have_attribute("data-intro", "0")
+        expect(root).to_have_attribute("data-intro", "done", timeout=8_000)
+        expect(page.get_by_role("main").locator("textarea")).to_be_visible()
+
+        page.reload(wait_until="domcontentloaded")
+
+        assert root.get_attribute("data-intro") == "done"
         browser.close()
 
 
@@ -99,19 +131,22 @@ def test_sending_a_message_shows_the_tool_step_and_the_reply(
     page: Page, console_url: str, workspace: Path
 ) -> None:
     page.goto(f"{console_url}/chat")
+    expect(page).to_have_url(f"{console_url}/")
+    expect(status(page)).to_have_text("Ready")
 
     page.locator("textarea").fill("Save my priorities")
     page.locator("textarea").press("Enter")
 
-    expect(page.get_by_text("Saved priorities.md.")).to_be_visible()
-    expect(page.get_by_text("write", exact=True)).to_be_visible()
-    expect(page.get_by_text("OK ·")).to_be_visible()
+    expect(thread(page).get_by_text("Saved priorities.md.")).to_be_visible()
+    expect(thread(page).get_by_text("write", exact=True)).to_be_visible()
+    expect(thread(page).get_by_text("OK ·")).to_be_visible()
     assert (workspace / "priorities.md").read_text() == "1. Rest"
+    expect(status(page)).to_have_text("Ready")
 
     page.reload()
 
-    expect(page.get_by_text("Save my priorities")).to_be_visible()
-    expect(page.get_by_text("Saved priorities.md.")).to_be_visible()
+    expect(thread(page).get_by_text("Save my priorities")).to_be_visible()
+    expect(thread(page).get_by_text("Saved priorities.md.")).to_be_visible()
 
 
 def test_approving_a_request_runs_it_and_the_agent_carries_on(page: Page, tmp_path: Path) -> None:
@@ -131,28 +166,26 @@ def test_approving_a_request_runs_it_and_the_agent_carries_on(page: Page, tmp_pa
         page.goto(f"{url}/chat")
         page.locator("textarea").fill("Email Sam")
         page.locator("textarea").press("Enter")
-        expect(page.get_by_text("I have asked you first.")).to_be_visible()
-        expect(page.get_by_text("ASK ·")).to_be_visible()
+        expect(thread(page).get_by_text("I have asked you first.")).to_be_visible()
+        expect(thread(page).get_by_text("ASK ·")).to_be_visible()
+        expect(status(page)).to_have_text("Needs approval")
 
-        page.get_by_role("link", name="APPROVALS").first.click()
-        expect(page.get_by_text("sam@example.com")).to_be_visible()
+        expect(side(page).get_by_text("sam@example.com").first).to_be_visible()
         assert sent == []
-        page.get_by_role("button", name="[approve]").click()
+        side(page).get_by_role("button", name="[approve]").click()
 
-        expect(page.get_by_text("result: Sent.")).to_be_visible()
+        expect(side(page).get_by_text("result: Sent.")).to_be_visible()
         assert sent == [{"to": "sam@example.com"}]
-        page.get_by_role("link", name="CHAT").first.click()
-        expect(page.get_by_text("Sam is emailed.")).to_be_visible()
+        expect(thread(page).get_by_text("Sam is emailed.")).to_be_visible()
 
 
 def test_a_piece_of_work_can_be_rated_and_the_rating_is_kept(page: Page, console_url: str) -> None:
     page.goto(f"{console_url}/chat")
     page.locator("textarea").fill("Save my priorities")
     page.locator("textarea").press("Enter")
-    expect(page.get_by_text("Saved priorities.md.")).to_be_visible()
+    expect(thread(page).get_by_text("Saved priorities.md.")).to_be_visible()
 
-    page.get_by_role("link", name="ACTIVITY").first.click()
-    expect(page.get_by_text("Wrote priorities.md.")).to_be_visible()
+    expect(side(page).get_by_text("Wrote priorities.md.")).to_be_visible()
     page.get_by_role("button", name="not good work").click()
     page.get_by_placeholder("what could be better? (optional)").fill("Ask before saving")
     page.get_by_role("button", name="[save]").click()
@@ -191,12 +224,15 @@ def test_reloading_during_a_turn_still_shows_the_whole_reply(
         page.goto(f"{url}/chat")
         page.locator("textarea").fill("Plan my week")
         page.locator("textarea").press("Enter")
-        expect(page.get_by_text("Working", exact=True)).to_be_visible()
+        expect(thread(page).get_by_text("Working", exact=True)).to_be_visible()
+        expect(status(page)).to_have_text("Thinking")
 
         page.reload()
 
-        expect(page.get_by_text("Plan my week")).to_be_visible()
-        expect(page.get_by_text("Working on it.")).to_be_visible(timeout=10_000)
+        # A reload skips the opening and rejoins the turn where it is.
+        expect(thread(page).get_by_text("Plan my week")).to_be_visible()
+        expect(status(page)).to_have_text("Thinking")
+        expect(thread(page).get_by_text("Working on it.")).to_be_visible(timeout=10_000)
 
 
 def test_stop_ends_the_turn_on_the_server(page: Page, tmp_path: Path, workspace: Path) -> None:
@@ -204,10 +240,10 @@ def test_stop_ends_the_turn_on_the_server(page: Page, tmp_path: Path, workspace:
         page.goto(f"{url}/chat")
         page.locator("textarea").fill("Plan my week")
         page.locator("textarea").press("Enter")
-        expect(page.get_by_text("Working", exact=True)).to_be_visible()
+        expect(thread(page).get_by_text("Working", exact=True)).to_be_visible()
 
         page.get_by_role("button", name="[stop]").click()
 
-        expect(page.get_by_text("stopped by you")).to_be_visible()
-        page.get_by_role("link", name="ACTIVITY").first.click()
-        expect(page.get_by_text("The turn was stopped by the operator.")).to_be_visible()
+        expect(thread(page).get_by_text("stopped by you")).to_be_visible()
+        expect(status(page)).to_have_text("Stopped")
+        expect(side(page).get_by_text("The turn was stopped by the operator.")).to_be_visible()

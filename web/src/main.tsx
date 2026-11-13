@@ -1,8 +1,14 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+// The earlier screens' styles stay until the last of those screens is redrawn. The
+// design system loads after them, so its tokens and base styles win.
 import "./styles/index.css";
-import "./styles/atmosphere.css";
+import "./design/tokens.css";
+import "./design/base.css";
+import "./design/layout.css";
+import "./design/theme.css";
+import "./design/console.css";
 
 // A new build replaces the hashed chunk files, so a tab opened on an earlier
 // build can fail to load a chunk. Vite reports that as `vite:preloadError`:

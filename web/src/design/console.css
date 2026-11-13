@@ -1,0 +1,28 @@
+/* What the real console adds to the design system (DESIGN.md in the design repo).
+   Everything else in this folder is the design system itself, kept as it is. */
+
+/* Until goals and standing rules exist there is nothing for the left rail to hold, so
+   the screen is two columns and the conversation takes the room. */
+.app.no-rail { grid-template-columns: minmax(0, 1fr) 23rem; grid-template-areas: "center side"; }
+@media (max-width: 76rem) {
+  .app.no-rail { grid-template-columns: minmax(0, 1fr) minmax(20rem, 23rem); grid-template-areas: "v side" "tab tab"; }
+}
+@media (max-width: 48rem) {
+  .app.no-rail { grid-template-columns: minmax(0, 1fr); grid-template-areas: "v" "tab"; }
+}
+
+/* The install offer sits quietly before the status pill. */
+.bar-in .install { margin-left: auto; white-space: nowrap; min-height: 32px; padding: 0 var(--space-sm); font-size: 0.8125rem; color: var(--color-muted); }
+.bar-in .install + .status { margin-left: 0; }
+
+/* The earlier chat, approvals and activity screens, shown inside the new columns until
+   each is redrawn in this design. Their page frames give way to the panels. */
+.thread--hosted { display: block; padding: 0; }
+.thread--hosted .page-shell, .side .page-shell { min-height: 0; padding: var(--space-md); background: transparent !important; }
+.thread--hosted .page-shell::before, .side .page-shell::before { display: none; }
+.thread--hosted .brut-chat-input-shell { position: sticky !important; left: auto !important; right: auto !important; bottom: 0; width: auto !important; }
+.side .panel { overflow: hidden; }
+
+/* The install offer arrives with the rest of the top bar after the opening. */
+.bar-in .install { transition: opacity 700ms var(--ease-out); }
+html.js:is([data-intro="0"], [data-intro="a"], [data-intro="1"], [data-intro="2"]) .bar-in .install { opacity: 0; }

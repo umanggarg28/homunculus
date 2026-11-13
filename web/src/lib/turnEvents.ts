@@ -9,6 +9,8 @@ export interface TurnEvent {
   ts: string;
   event: "user_message" | "tool" | "assistant_reply" | "error" | "stopped";
   name?: string;
+  /** A tool step's arguments, as the JSON text the agent sent. */
+  arguments?: string;
   answer?: string;
   result?: string;
   outcome?: StepOutcome;
