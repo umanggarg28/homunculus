@@ -12,11 +12,12 @@ export interface StepWords {
 const MAX = 72;
 const clip = (s: string, n = MAX) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-/** The value a step acts on: a path, a command or a search, else the first argument. */
+/** The value a step acts on: a command, a search, or a path, else the first argument.
+ *  A search also names the folder it looked in, so its words come before any path. */
 export function stepSubject(args: string): string | null {
   const pairs = argumentPairs(args);
   const by = Object.fromEntries(pairs);
-  return by.path ?? by.command ?? by.query ?? by.pattern ?? pairs[0]?.[1] ?? null;
+  return by.command ?? by.text ?? by.path ?? pairs[0]?.[1] ?? null;
 }
 
 const DONE: Record<string, (s: string | null) => string> = {

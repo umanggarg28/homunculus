@@ -1,5 +1,5 @@
 import type { AgentState } from "@/state/agentState";
-import { argumentPairs } from "@/lib/toolSteps";
+import { stepSubject } from "@/thread/steps";
 
 /** What the agent says about the moment, as a spoken line, a quieter line under it,
  *  and the status pill's words. Every part comes from the agent's state or the
@@ -27,10 +27,9 @@ export function jobsToday(count: number | null): string {
   return `${count} jobs done today.`;
 }
 
-// The file or command a step acts on, so the line can name it.
+// The file, command or search a step acts on, short enough for the spoken line.
 function subject(args: string | undefined): string | null {
-  const pairs = Object.fromEntries(argumentPairs(args));
-  const value = pairs.path ?? pairs.command ?? pairs.query ?? pairs.raw ?? null;
+  const value = args ? stepSubject(args) : null;
   if (!value) return null;
   return value.length > 48 ? `${value.slice(0, 47)}…` : value;
 }

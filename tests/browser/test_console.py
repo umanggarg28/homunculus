@@ -199,19 +199,22 @@ def test_a_piece_of_work_can_be_rated_and_the_rating_is_kept(page: Page, console
     page.locator("textarea").press("Enter")
     expect(thread(page).get_by_text("Saved priorities.md.")).to_be_visible()
 
-    expect(side(page).get_by_text("Wrote priorities.md.")).to_be_visible()
+    # A job opens into its steps, its reply and the rating.
+    side(page).get_by_role("button", name="Save my priorities").click()
+    expect(side(page).get_by_text("Wrote priorities.md", exact=True)).to_be_visible()
     page.get_by_role("button", name="not good work").click()
-    page.get_by_placeholder("what could be better? (optional)").fill("Ask before saving")
-    page.get_by_role("button", name="[save]").click()
+    page.get_by_placeholder("What could be better? (optional)").fill("Ask before saving")
+    page.get_by_role("button", name="Save", exact=True).click()
     expect(page.get_by_text("“Ask before saving”")).to_be_visible()
 
     page.reload()
 
+    side(page).get_by_role("button", name="Save my priorities").click()
     expect(page.get_by_text("“Ask before saving”")).to_be_visible()
     # A new rating starts with no reason, so the old one is not carried over.
     page.get_by_role("button", name="good work", exact=True).click()
-    page.get_by_placeholder("what was good? (optional)").fill("Clear plan")
-    page.get_by_role("button", name="[save]").click()
+    page.get_by_placeholder("What was good? (optional)").fill("Clear plan")
+    page.get_by_role("button", name="Save", exact=True).click()
     expect(page.get_by_text("“Clear plan”")).to_be_visible()
     expect(page.get_by_text("“Ask before saving”")).to_have_count(0)
 
@@ -260,4 +263,5 @@ def test_stop_ends_the_turn_on_the_server(page: Page, tmp_path: Path, workspace:
 
         expect(thread(page).get_by_text("stopped by you")).to_be_visible()
         expect(status(page)).to_have_text("Stopped")
+        side(page).get_by_role("button", name="Plan my week").click()
         expect(side(page).get_by_text("The turn was stopped by the operator.")).to_be_visible()

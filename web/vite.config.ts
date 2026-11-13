@@ -1,11 +1,10 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
 
 // Dev: vite serves at :5173 and proxies /api to the server at :8765.
 // Production: `npm run build` outputs to /dist, served by FastAPI directly.
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react()],
   resolve: {
     alias: {
       "@": new URL("./src", import.meta.url).pathname,

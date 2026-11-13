@@ -1,9 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
-// The earlier screens' styles stay until the last of those screens is redrawn. The
-// design system loads after them, so its tokens and base styles win.
-import "./styles/index.css";
+// The design system, in the order its layers build on each other.
 import "./design/tokens.css";
 import "./design/base.css";
 import "./design/layout.css";
