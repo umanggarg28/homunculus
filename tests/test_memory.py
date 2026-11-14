@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from scripted_model import ScriptedModel
+from scripted_model import Reply, ScriptedModel
 
 from homunculus import loop
 from homunculus.activity import Activity
@@ -79,7 +79,7 @@ def commits(memory: Memory) -> list[tuple[str, str]]:
     return [tuple(line.split("\t", 1)) for line in out.splitlines()]  # type: ignore[misc]
 
 
-def write_page(path: str, content: str) -> list[list[str | ToolCall]]:
+def write_page(path: str, content: str) -> list[Reply]:
     return [[tool_call("write", path=path, content=content)], ["Done."]]
 
 
