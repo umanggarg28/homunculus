@@ -2,7 +2,7 @@
 
 An always-on personal agent that works toward your goals in its own sandbox and asks before anything leaves it.
 
-> **Status:** early build. In place: the web console, one screen with the conversation, what needs approval and what the agent did, replies streamed word by word from turns that keep running on the server when the page is closed or reloaded, file tools in the agent's own workspace with each call checked by the gate, approvals for actions that need your consent, and fixed instructions that tell the agent to ask when a request is missing something only you can supply. The plan and its progress are tracked in the [spec](https://github.com/umanggarg28/homunculus/issues/2) and its tickets.
+> **Status:** early build. In place: the web console, one screen with the conversation, what needs approval and what the agent did, replies streamed word by word from turns that keep running on the server when the page is closed or reloaded, file tools in the agent's own workspace with each call checked by the gate, approvals for actions that need your consent, fixed instructions that tell the agent to ask when a request is missing something only you can supply, and a memory: a wiki of plain markdown files in a private git repository, where every fact names its source. The plan and its progress are tracked in the [spec](https://github.com/umanggarg28/homunculus/issues/2) and its tickets.
 
 ## How it works
 
@@ -33,7 +33,8 @@ flowchart LR
 | `gate` | Decides for every tool call whether it may run, from what the tool says it does. Reading acts, deleting and anything outward waits for your approval, and anything it cannot read is refused. |
 | `approvals` | Actions waiting for you. You approve, decline, or mark a hand-off done, and the agent is told. |
 | `sandbox` | A locked-down Docker container where commands run. Its only way out is a proxy that allows the package registries, opens each tunnel to check that only package pages are read, and logs every request. |
-| `tools` | `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`, inside the agent's workspace only, and `shell`, which runs commands in the sandbox. Each is described as an MCP tool. |
+| `tools` | `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`, inside the agent's workspace, or in its memory for paths that start with `memory/`, and `shell`, which runs commands in the sandbox. Each is described as an MCP tool. |
+| `memory` | What the agent knows about you, as a wiki of markdown files in a local git repository: raw sources it never changes, pages it writes, a short profile, your goals and a schema. Every write is checked first (title and summary, a source for every fact, links that lead somewhere), then indexed, logged and committed. Your own edits are kept as yours, and a page you edited is never rewritten whole. Profile, goals and index are in every prompt, each within a size cap. |
 | `activity` | An append-only record of every step as OpenTelemetry traces, plus log events for each turn's start, your decisions and your ratings, written by code, out of reach of every tool. Any OpenTelemetry tool can read both files. The console's Activity column shows one job per message, and you can rate each one. |
 
 The full design, including the modules still to come (skills, wiki, waker), is in [ARCHITECTURE.md](ARCHITECTURE.md). What is protected, where data can leave, and the accepted risk are in [SECURITY.md](SECURITY.md). [LEARN.md](LEARN.md) teaches the code one module at a time.
@@ -44,7 +45,7 @@ Every model request asks OpenRouter to route only to providers that keep no copy
 
 The server listens on `127.0.0.1` only, so nothing else on your network can reach it.
 
-The agent's files live in a data directory outside this repository, in the operating system's standard place for application data: `~/Library/Application Support/homunculus` on macOS and `~/.local/share/homunculus` on Linux. Set `HOMUNCULUS_HOME` to use another folder. Its tools can only touch the `workspace` folder inside it: any path that leads outside, including through `..` or a symbolic link, is refused.
+The agent's files live in a data directory outside this repository, in the operating system's standard place for application data: `~/Library/Application Support/homunculus` on macOS and `~/.local/share/homunculus` on Linux. Set `HOMUNCULUS_HOME` to use another folder. Its tools can only touch the `workspace` and `memory` folders inside it: any path that leads outside, including through `..` or a symbolic link, is refused. `memory` is a local git repository that is never pushed, and the sandbox cannot see it.
 
 ## Quick start
 

@@ -9,6 +9,7 @@ from typing import IO, Any, NoReturn
 
 import mcp_types as mcp
 
+from homunculus.memory import Change, Memory
 from homunculus.tools import Tool, ToolError
 
 # Opening one folder of a path: only a folder, and never through a link.
@@ -34,9 +35,10 @@ CHANGES = mcp.ToolAnnotations(
 )
 
 
-def file_tools(workspace: Path) -> list[Tool]:
-    """The file tools, each confined to `workspace`."""
-    return Files(workspace).tools()
+def file_tools(workspace: Path, memory: Memory | None = None) -> list[Tool]:
+    """The file tools, each confined to `workspace`, and to `memory` for paths that start
+    with `memory/`."""
+    return Files(workspace, memory).tools()
 
 
 def _file_tool(
@@ -67,11 +69,33 @@ def _file_tool(
 
 
 class Files:
-    def __init__(self, workspace: Path) -> None:
+    def __init__(self, workspace: Path, memory: Memory | None = None) -> None:
         self._root = workspace.resolve()
+        self._memory = memory
+
+    def _where(self, path: str) -> tuple[Path, list[str], bool]:
+        """The folder a path lives under, its parts inside that folder, and whether it is
+        in memory. Memory is a separate folder that the sandbox never sees, reached
+        through the `memory/` prefix, as Anthropic's memory tool maps `/memories`."""
+        parts = _parts(path)
+        if self._memory is not None and parts[0] == "memory":
+            return self._memory.root, parts[1:] or ["."], True
+        return self._root, parts, False
+
+    def _current(self, path: str, root: Path, parts: list[str]) -> str | None:
+        """A memory file's text as it is now, or None if there is none."""
+        *folders, name = parts
+        try:
+            with (
+                self._folder(path, folders, root=root) as folder,
+                _opened(path, name, os.O_RDONLY, folder) as file,
+            ):
+                return file.read().decode()
+        except ToolError:
+            return None
 
     def tools(self) -> list[Tool]:
-        in_workspace = "Path relative to the workspace."
+        in_workspace = "Path relative to the workspace, or memory/... for your memory."
         return [
             _file_tool(
                 "read",
@@ -160,19 +184,39 @@ class Files:
     # two could lead anywhere.
 
     def write(self, arguments: dict[str, Any]) -> str:
-        path = arguments["path"]
-        *folders, name = _parts(path)
-        with self._folder(path, folders, create=True) as folder:
+        path, content = arguments["path"], arguments["content"]
+        root, parts, in_memory = self._where(path)
+        memory = self._memory if in_memory else None
+        if memory is not None:
+            self._checked(Change("write", "/".join(parts), None, content), path, root, parts)
+        *folders, name = parts
+        with self._folder(path, folders, create=True, root=root) as folder:
             flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
             with _opened(path, name, flags, folder) as file:
-                file.write(arguments["content"].encode())
-        return f"Wrote {path}."
+                file.write(content.encode())
+        note = memory.record("write", "/".join(parts)) if memory is not None else ""
+        return f"Wrote {path}.{note}"
+
+    def _checked(self, change: Change, path: str, root: Path, parts: list[str]) -> Memory:
+        """Before a change in memory: take the operator's own edits as theirs, then check
+        the change against the file as it is now."""
+        assert self._memory is not None
+        self._memory.take_hand_edits()
+        before = self._current(path, root, parts)
+        after = change.after
+        if change.tool == "edit" and before is not None:
+            after = before.replace(change.before or "", after or "")
+        self._memory.check(Change(change.tool, change.path, before, after))
+        return self._memory
 
     def read(self, arguments: dict[str, Any]) -> str:
         path = arguments["path"]
-        *folders, name = _parts(path)
+        root, parts, in_memory = self._where(path)
+        if in_memory and self._memory is not None:
+            self._memory.take_hand_edits()
+        *folders, name = parts
         with (
-            self._folder(path, folders) as folder,
+            self._folder(path, folders, root=root) as folder,
             _opened(path, name, os.O_RDONLY, folder) as file,
         ):
             lines = file.read().decode().splitlines()
@@ -180,8 +224,17 @@ class Files:
 
     def edit(self, arguments: dict[str, Any]) -> str:
         path, old, new = arguments["path"], arguments["old"], arguments["new"]
-        *folders, name = _parts(path)
-        with self._folder(path, folders) as folder, _opened(path, name, os.O_RDWR, folder) as file:
+        root, parts, in_memory = self._where(path)
+        if in_memory:
+            # The check sees the whole file as it would be, so `old` must appear once.
+            current = self._current(path, root, parts) or ""
+            if current.count(old) == 1:
+                self._checked(Change("edit", "/".join(parts), old, new), path, root, parts)
+        *folders, name = parts
+        with (
+            self._folder(path, folders, root=root) as folder,
+            _opened(path, name, os.O_RDWR, folder) as file,
+        ):
             text = file.read().decode()
             count = text.count(old)
             if count != 1:
@@ -189,11 +242,14 @@ class Files:
             file.seek(0)
             file.truncate()
             file.write(text.replace(old, new).encode())
+        if in_memory and self._memory is not None:
+            return f"Edited {path}.{self._memory.record('edit', '/'.join(parts))}"
         return f"Edited {path}."
 
     def list_folder(self, arguments: dict[str, Any]) -> str:
         path = arguments["path"]
-        with self._folder(path, _parts(path), want_folder=True) as folder:
+        root, parts, _ = self._where(path)
+        with self._folder(path, parts, want_folder=True, root=root) as folder:
             names = sorted(
                 f"{entry.name}/" if entry.is_dir(follow_symlinks=False) else entry.name
                 for entry in os.scandir(folder)
@@ -202,10 +258,11 @@ class Files:
 
     def search(self, arguments: dict[str, Any]) -> str:
         path = arguments["path"]
-        parts = _parts(path)
+        root, inner, in_memory = self._where(path)
+        parts = ["memory", *inner] if in_memory else inner
         wanted = arguments["text"].lower()
         matches: list[tuple[str, int, str]] = []
-        with self._folder(path, parts, want_folder=True) as folder:
+        with self._folder(path, inner, want_folder=True, root=root) as folder:
             walk = os.fwalk(".", dir_fd=folder, follow_symlinks=False)
             for here, _, names, here_fd in walk:
                 for name in names:
@@ -226,33 +283,53 @@ class Files:
 
     def delete(self, arguments: dict[str, Any]) -> str:
         path = arguments["path"]
-        *folders, name = _parts(path)
-        with self._folder(path, folders) as folder:
+        root, parts, in_memory = self._where(path)
+        if in_memory:
+            self._checked(Change("delete", "/".join(parts), None, None), path, root, parts)
+        *folders, name = parts
+        with self._folder(path, folders, root=root) as folder:
             _plain_file(path, name, folder)
             os.unlink(name, dir_fd=folder)
+        if in_memory and self._memory is not None:
+            return f"Deleted {path}.{self._memory.record('delete', '/'.join(parts))}"
         return f"Deleted {path}."
 
     def rename(self, arguments: dict[str, Any]) -> str:
         path, to = arguments["path"], arguments["to"]
-        *folders, name = _parts(path)
-        *new_folders, new_name = _parts(to)
+        root, parts, in_memory = self._where(path)
+        new_root, new_parts, to_memory = self._where(to)
+        if in_memory != to_memory:
+            raise ToolError("A file cannot move between the workspace and memory.")
+        if in_memory and self._memory is not None:
+            self._memory.take_hand_edits()
+        *folders, name = parts
+        *new_folders, new_name = new_parts
         with (
-            self._folder(path, folders) as folder,
-            self._folder(to, new_folders, create=True) as new_folder,
+            self._folder(path, folders, root=root) as folder,
+            self._folder(to, new_folders, create=True, root=new_root) as new_folder,
         ):
             _plain_file(path, name, folder)
             if _exists(new_name, new_folder):
                 raise ToolError(f"{to} already exists; rename will not overwrite it.")
             os.rename(name, new_name, src_dir_fd=folder, dst_dir_fd=new_folder)
+        if in_memory and self._memory is not None:
+            note = self._memory.record("rename", "/".join(parts), to="/".join(new_parts))
+            return f"Moved {path} to {to}.{note}"
         return f"Moved {path} to {to}."
 
     @contextmanager
     def _folder(
-        self, path: str, parts: list[str], create: bool = False, want_folder: bool = False
+        self,
+        path: str,
+        parts: list[str],
+        create: bool = False,
+        want_folder: bool = False,
+        root: Path | None = None,
     ) -> Iterator[int]:
-        """A handle on the folder at `parts` inside the workspace, reached one folder at a
-        time with no link followed, making missing folders when `create` is set."""
-        handle = os.open(self._root, os.O_RDONLY | os.O_DIRECTORY)
+        """A handle on the folder at `parts` inside `root` (the workspace by default),
+        reached one folder at a time with no link followed, making missing folders when
+        `create` is set."""
+        handle = os.open(root or self._root, os.O_RDONLY | os.O_DIRECTORY)
         try:
             for part in parts:
                 if create:

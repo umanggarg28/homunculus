@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from homunculus import loop
 from homunculus.activity import DECISION, Activity, context_of, fail
 from homunculus.approvals import Approval, ApprovalError, Approvals, Kind, Status
+from homunculus.memory import Memory
 from homunculus.model import Message, Model, ModelError
 from homunculus.tools import Tool
 from homunculus.turns import Event, Turn, Turns
@@ -61,6 +62,7 @@ def create_app(
     activity: Activity,
     approvals: Approvals,
     console: Path | None = None,
+    memory: Memory | None = None,
 ) -> FastAPI:
     """The HTTP API, and the built web console from `console` when one is given."""
     app = FastAPI(title="Homunculus")
@@ -82,7 +84,7 @@ def create_app(
             async with turn:
                 try:
                     async for item in loop.run(
-                        model, tools, activity, approvals, history, request.message
+                        model, tools, activity, approvals, history, request.message, memory=memory
                     ):
                         if isinstance(item, loop.ToolStep):
                             await running.add("tool", dataclasses.asdict(item))
@@ -144,7 +146,7 @@ def create_app(
         async with turn:
             try:
                 async for _ in loop.run(
-                    model, tools, activity, approvals, history, text, notice=True
+                    model, tools, activity, approvals, history, text, notice=True, memory=memory
                 ):
                     pass
             except Exception as error:

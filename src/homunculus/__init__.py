@@ -9,6 +9,7 @@ from platformdirs import user_data_path
 
 from homunculus.activity import Activity
 from homunculus.approvals import Approvals
+from homunculus.memory import Memory
 from homunculus.model import OpenRouterModel
 from homunculus.sandbox import docker
 from homunculus.sandbox.docker import DockerSandbox
@@ -31,7 +32,9 @@ def main() -> None:
     workspace = home / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     activity = Activity(home)
-    tools = file_tools(workspace)
+    # Memory sits beside the workspace, never inside it, so the sandbox cannot reach it.
+    memory = Memory.open(home / "memory")
+    tools = file_tools(workspace, memory)
     sandbox = DockerSandbox(workspace)
     # Commands run only inside the sandbox. Without it there is no shell tool at all,
     # never a shell on this machine.
@@ -50,6 +53,7 @@ def main() -> None:
         activity,
         Approvals(home / "approvals.json"),
         console=CONSOLE if (CONSOLE / "index.html").is_file() else None,
+        memory=memory,
     )
     try:
         # Bound to this machine only: nothing else on the network can reach the API.

@@ -38,6 +38,7 @@ def test_every_turn_starts_with_the_fixed_instructions_in_order(tmp_path: Path) 
         "Who you are",
         "When to ask",
         "What you can and cannot do",
+        "Your memory",
     ]
 
 
