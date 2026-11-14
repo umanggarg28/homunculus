@@ -9,15 +9,15 @@ Homunculus is one always-on process that holds a small model loop, a few general
 | `server` | HTTP API for the web console and chat channels, and the built console itself | Chat stream, history, console files |
 | `loop` | Ask the model, run the tool it asks for, repeat until done | Full loop |
 | `turns` | Turns running on the server, and their numbered events | Each turn a task of its own; events kept in memory for rejoining; stop on request |
-| `prompt` | What the model is told at the start of every turn | Fixed instructions in `prompt.md`, shipped with the code and the same every turn; layers from memory and skills are planned |
+| `prompt` | What the model is told at the start of every turn | Fixed instructions in `prompt.md`, shipped with the code and the same every turn, then the profile, goals and wiki index from memory; a layer from skills is planned |
 | `model` | One streaming call to the model provider | Streaming text and tool calls, privacy routing, error reporting |
 | `gate` | The answer for every proposed action | Decides from each tool's MCP annotations: read-only acts, a sandboxed tool acts, outward or unannotated asks, destructive asks except `write`, `edit` and `rename`; paths must stay in the workspace; unknown tools and unreadable calls are refused |
-| `tools` | Plain functions the model can ask to run, each described as an MCP `Tool` with annotations | `read`, `write`, `edit`, `list`, `search`, `delete`, `rename` in the workspace; results are MCP `CallToolResult`s; `shell` runs bash commands in the sandbox |
+| `tools` | Plain functions the model can ask to run, each described as an MCP `Tool` with annotations | `read`, `write`, `edit`, `list`, `search`, `delete`, `rename` in the workspace, and in memory for paths that start with `memory/`; results are MCP `CallToolResult`s; `shell` runs bash commands in the sandbox |
 | `activity` | Append-only record of every step, as OpenTelemetry traces | Written by the loop and the server, never by a tool; `traces.jsonl` in OpenTelemetry's file format, following the GenAI conventions; turn starts, decisions and ratings as OpenTelemetry log events in `logs.jsonl`; kept outside the workspace |
 | `approvals` | Requests waiting for the operator | Saved to the data directory; approve, decline, or done for hand-offs |
 | `sandbox` | Where the agent's commands run, apart from the operator's machine | Docker: a locked-down container on an internal network, with a Squid proxy sidecar as its only way out, to the package registries; every request logged |
 | `skills` | Skill folders in the Agent Skills format | Planned |
-| `memory` | The wiki, raw sources, profile and goals, as files | Planned |
+| `memory` | The wiki, raw sources, profile and goals, as files | A local git repository at `HOMUNCULUS_HOME/memory`, created empty with a starting `SCHEMA.md`; checks on every write (frontmatter, a raw source for every new fact, links), a generated index, an append-only log, one commit per change, hand edits committed as the operator's; profile, goals and index in every prompt with their budgets |
 | `waker` | When the agent works unprompted | Planned |
 
 Each module has one job. A new module needs a stated reason. `activity` is separate from `memory` because it is written only by code and must stay out of reach of every tool, while memory is written by the agent through its tools. `sandbox` is separate from `tools` because a tool only says what to run, while the sandbox owns where it runs and what that place can reach; another backend can replace Docker without touching the tool. `turns` is separate from `server` because the server only wires HTTP to the work, while a turn outlives the request that started it and is watched by any number of pages. `prompt` is separate from `loop` because the loop decides what runs next, while the prompt decides what the model is told, and later tickets add layers to the prompt without touching the loop. `approvals` is separate from `gate` because the gate is a pure decision with no state, while requests are saved, wait for the operator and change status once.
@@ -26,7 +26,7 @@ Each module has one job. A new module needs a stated reason. `activity` is separ
 
 1. `POST /api/chat` arrives at `server` with `{"message": "Hello"}`.
 2. `server` starts a turn as a task of its own (`turns`), and the response watches it. The turn waits for any reply already in progress, then calls `loop.run` with the model, the conversation history and the text. Closing the page ends only the watching.
-3. `loop` builds the message list: the system message from `prompt.system_prompt()`, the earlier turns, then the messages of this turn so far. Each tool's description says when to use it.
+3. `loop` first takes any edits the operator made to memory by hand, then builds the message list: the system message from `prompt.system_prompt()` followed by `memory.context()`, the earlier turns, then the messages of this turn so far. Each tool's description says when to use it.
 4. `model` sends that list and the tool schemas to OpenRouter with `stream: true` and the fixed privacy routing. It yields text chunks as they arrive, and each tool call once its fragments are complete.
 5. `loop` passes each text chunk up as it arrives. The turn keeps each one as a numbered event, and `server` sends it as a `delta` server-sent event with that number as its `id`.
 6. If the model asked for tools, `loop` puts each call through `gate.decide`, with the definition of the tool it names. Allowed calls run; the rest are not run. Either way the result goes into the turn as a `tool` message, the step is recorded in the activity log, `loop` yields a `ToolStep` that `server` sends as a `tool` event, and the loop goes back to step 3.
@@ -113,7 +113,7 @@ def create_app(model: Model, tools: list[Tool], activity: Activity,
 
 `create_app` takes the model, tools and activity log as arguments, so tests can pass a scripted stand-in and temporary folders, and the real program passes `OpenRouterModel` and the data directory.
 
-The data directory is the operating system's place for application data (`~/Library/Application Support/homunculus` on macOS, `~/.local/share/homunculus` on Linux), found with `platformdirs`, or `HOMUNCULUS_HOME` when set. It holds `workspace/`, `traces.jsonl`, `logs.jsonl` and `approvals.json`, and stays outside the repository.
+The data directory is the operating system's place for application data (`~/Library/Application Support/homunculus` on macOS, `~/.local/share/homunculus` on Linux), found with `platformdirs`, or `HOMUNCULUS_HOME` when set. It holds `workspace/`, `memory/`, `traces.jsonl`, `logs.jsonl` and `approvals.json`, and stays outside the repository.
 
 ## Design rules
 
@@ -126,6 +126,7 @@ The data directory is the operating system's place for application data (`~/Libr
 - **What is approved is what runs.** A request stores the arguments as the model wrote them, and no decision changes them.
 - **Record only what happened.** The conversation history changes only after a reply completes. A failed call ends the stream with `error`, never `done`. The activity log is written by code, never by the model.
 - **Local only.** The server binds to `127.0.0.1`.
+- **Memory keeps its evidence and its history.** The gate refuses every change to `memory/raw/`, `memory/wiki/index.md` and `memory/wiki/log.md`, and asks before any change to `memory/goals.md` or `memory/SCHEMA.md`. A write to memory is checked before anything is written, so a refused write leaves no trace. Each change is one git commit; a change on disk the agent did not make is committed as the operator's, and that page is then only added to, never rewritten whole.
 
 ## Sandbox
 

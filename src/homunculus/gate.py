@@ -27,6 +27,12 @@ HAND_OFF_ACTIONS = {"pay", "enter_password", "enter_verification_code"}
 # action, such as delete, asks.
 ALLOWED_DESTRUCTIVE = {"write", "edit", "rename"}
 
+# Memory's rules, by path. Raw sources are evidence and are never changed, and the index
+# and log are written only by code, so nothing the model says can alter them. Goals and
+# the schema steer the agent, so the operator approves every change to them.
+MEMORY_NEVER = ("memory/raw/", "memory/wiki/index.md", "memory/wiki/log.md")
+MEMORY_ASKS = ("memory/goals.md", "memory/SCHEMA.md")
+
 
 def decide(call: ToolCall, tool: Tool | None) -> Answer:
     """Answer a proposed tool call, given the definition of the tool it names, or None
@@ -45,17 +51,23 @@ def _decide(call: ToolCall, tool: Tool | None) -> Answer:
         return Answer.HAND_OFF
     if tool is None:
         return Answer.REFUSE
+    paths: list[str] = []
     for name in tool.workspace_paths:
         path = arguments.get(name)
         if path is None and name not in tool.required:
             continue
         if not isinstance(path, str) or not _stays_in_workspace(path):
             return Answer.REFUSE
+        paths.append(PurePosixPath(path).as_posix())
     # The annotations are trusted because every tool so far is the program's own. A tool
     # from an outside MCP server must not be judged by its own annotations (#9).
     hints = tool.definition.annotations or mcp.ToolAnnotations()
     if hints.read_only_hint is True:
         return Answer.ACT
+    if any(path.startswith(MEMORY_NEVER) for path in paths):
+        return Answer.REFUSE
+    if any(path in MEMORY_ASKS for path in paths):
+        return Answer.ASK
     # A sandboxed tool acts freely, as the spec's table says: the sandbox's own limits,
     # not a question to the operator, keep it from the operator's machine and data.
     if tool.runs_in_sandbox:

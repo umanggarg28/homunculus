@@ -112,3 +112,43 @@ def test_a_tool_that_runs_in_the_sandbox_is_allowed() -> None:
     sandboxed = stand_in("shell", outward)
     sandboxed = Tool(sandboxed.definition, sandboxed.run, runs_in_sandbox=True)
     assert decide(call("shell", '{"command": "ls"}'), sandboxed) is Answer.ACT
+
+
+# Memory: the gate is where its rules are written down.
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["memory/raw/conversations/2026-11-14.md", "memory/wiki/index.md", "memory/wiki/log.md"],
+)
+@pytest.mark.parametrize("name", ["write", "edit", "delete"])
+def test_raw_sources_and_generated_wiki_files_are_never_changed(
+    name: str, path: str, tools: dict[str, Tool]
+) -> None:
+    assert decide(call(name, json.dumps({"path": path})), tools[name]) is Answer.REFUSE
+
+
+def test_moving_a_file_into_raw_sources_is_refused(tools: dict[str, Tool]) -> None:
+    arguments = json.dumps({"path": "memory/wiki/tea.md", "to": "memory/raw/tea.md"})
+    assert decide(call("rename", arguments), tools["rename"]) is Answer.REFUSE
+
+
+@pytest.mark.parametrize("path", ["memory/goals.md", "memory/SCHEMA.md"])
+@pytest.mark.parametrize("name", ["write", "edit"])
+def test_changing_the_goals_or_the_schema_asks_first(
+    name: str, path: str, tools: dict[str, Tool]
+) -> None:
+    assert decide(call(name, json.dumps({"path": path})), tools[name]) is Answer.ASK
+
+
+@pytest.mark.parametrize("path", ["memory/wiki/tea.md", "memory/profile.md"])
+@pytest.mark.parametrize("name", ["write", "edit"])
+def test_writing_wiki_pages_and_the_profile_is_allowed(
+    name: str, path: str, tools: dict[str, Tool]
+) -> None:
+    assert decide(call(name, json.dumps({"path": path})), tools[name]) is Answer.ACT
+
+
+def test_reading_raw_sources_is_allowed(tools: dict[str, Tool]) -> None:
+    arguments = json.dumps({"path": "memory/raw/conversations/2026-11-14.md"})
+    assert decide(call("read", arguments), tools["read"]) is Answer.ACT

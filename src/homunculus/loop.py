@@ -24,6 +24,7 @@ from homunculus.activity import (
     traceparent_of,
 )
 from homunculus.approvals import Approvals, Kind
+from homunculus.memory import Memory
 from homunculus.model import Message, Model, ModelError, ToolCall, Usage
 from homunculus.tools import Tool, make_result, result_text
 
@@ -51,6 +52,7 @@ async def run(
     history: list[Message],
     text: str,
     notice: bool = False,
+    memory: Memory | None = None,
 ) -> AsyncIterator[str | ToolStep]:
     """Answer one operator message, yielding the reply text as it streams and a
     ToolStep after each tool call, so a caller can show the work as it happens.
@@ -61,10 +63,17 @@ async def run(
 
     A `notice` is a message the program writes on the operator's behalf, such as the
     outcome of an approval. It is marked so the console can show it as one.
+
+    With `memory`, the turn starts by taking any edits the operator made by hand, and the
+    instructions are followed by the profile, goals and wiki index, read fresh each turn.
     """
     by_name = {tool.name: tool for tool in tools}
     schemas = [tool.schema() for tool in tools]
-    system: Message = {"role": "system", "content": prompt.system_prompt()}
+    instructions = prompt.system_prompt()
+    if memory is not None:
+        memory.take_hand_edits()
+        instructions += "\n\n" + memory.context()
+    system: Message = {"role": "system", "content": instructions}
     opening: Message = {"role": "user", "content": text}
     if notice:
         opening["notice"] = True
