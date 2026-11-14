@@ -9,6 +9,7 @@ import { listenForUnfocus, unfocus } from "@/presence/focus";
 import { attachOverlay } from "@/presence/overlay";
 import { Thread } from "@/thread/Thread";
 import { InstallButton } from "./InstallButton";
+import { Mark } from "./Mark";
 import { playOpening } from "./opening";
 import { TAB_ICONS } from "./tabIcons";
 import { voiceOf } from "./voice";
@@ -109,7 +110,7 @@ export function Shell() {
       <header className="bar">
         <div className="bar-in">
           <a className="wordmark" href="/" aria-label="Homunculus, home">
-            <span className="mark" aria-hidden="true" />
+            <Mark />
             Homunculus
           </a>
           <nav className="nav" aria-label="Main">

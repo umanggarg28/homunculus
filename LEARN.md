@@ -997,6 +997,8 @@ It is one screen at `/`. A top bar holds a status pill. The middle column has th
 
 **One source of truth for what is happening.** Every event the console receives is also recorded in `lib/turnEvents.ts`, a tiny in-page store. `state/agentState.ts` reads that store, and the list of requests waiting for approval, and works out one word for the moment: `ready`, `thinking`, `working`, `waiting`, `done`, `stuck` or `stopped`. The status pill, the spoken line and the presence all read that one word, so they can never disagree. The rule is that the word comes only from what an event or a request says. The console never guesses the agent's state, and it never claims a step total, because the agent does not plan its steps ahead.
 
+**The mark reads the same word.** The small mark next to the name (`shell/Mark.tsx`) is the presence in miniature: the same sphere of points, and one point going round it with a short trail. It takes the same one word as the pill: a slow lap when `ready`, a quicker one while `thinking` or `working`, parked and pulsing when `waiting`, and still when `stuck`. Its points come from `shell/markGeometry.ts`, which `scripts/make_icons.py` writes from the same drawing as the app icons in `web/public`, so the mark and the icons never drift apart.
+
 **An opening, once.** On a session's first load the presence and its first words start alone at the centre of the screen, then dock while the panels unfold. A small script in `index.html` decides before the first paint, by setting `data-intro` on the page to `0` (play) or `done` (skip). A reload skips it, because a reload is when you want to see the work. People who ask their system for less motion never see it.
 
 ### A picture

@@ -15,7 +15,16 @@ h1, h2, h3 { font-variation-settings: "SHRP" 0; color: var(--color-ink); }
 
 /* chrome: wordmark, nav and one status pill that mirrors the presence */
 .wordmark { color: var(--color-ink); font-weight: 400; font-size: var(--text-lg); letter-spacing: -0.02em; font-variation-settings: "SHRP" 100; }
-.wordmark .mark { width: 15px; height: 15px; background: radial-gradient(circle, var(--point-hi) 1.1px, transparent 1.5px) 0 0 / 5px 5px; }
+/* the mark is the presence in miniature: its point sphere, and one point going round it (shell/Mark.tsx);
+   that point takes the state's colour, as the status dot does */
+.wordmark .mark { width: 24px; height: 24px; margin-block: calc(var(--space-3xs) * -1); }
+.mark .mark-hi { fill: var(--point-hi); }
+.mark .mark-mid, .mark .mark-trail { fill: var(--point-mid); }
+.mark .mark-lo { fill: var(--point-lo); }
+.mark .mark-end { fill: var(--point-hi); transition: fill var(--dur-short) var(--ease-out); }
+html[data-state="working"] .mark .mark-end { fill: var(--color-live); }
+html[data-state="waiting"] .mark .mark-end { fill: var(--color-attn); }
+html[data-state="stuck"] .mark .mark-end { fill: var(--point-mid); }
 .nav a { color: var(--color-muted); }
 .nav a:hover { color: var(--color-ink); }
 .nav a { border-radius: var(--space-xs); }
