@@ -1,5 +1,6 @@
 """File tools for the agent's workspace."""
 
+import dataclasses
 import os
 import stat
 from collections.abc import Callable, Iterator
@@ -96,7 +97,7 @@ class Files:
 
     def tools(self) -> list[Tool]:
         in_workspace = "Path relative to the workspace, or memory/... for your memory."
-        return [
+        tools = [
             _file_tool(
                 "read",
                 "Read file",
@@ -176,6 +177,18 @@ class Files:
                 self.write,
             ),
         ]
+        memory = self._memory
+        if memory is None:
+            return tools
+
+        def locked(run: Callable[[dict[str, Any]], str]) -> Callable[[dict[str, Any]], str]:
+            def hold(arguments: dict[str, Any]) -> str:
+                with memory.lock:
+                    return run(arguments)
+
+            return hold
+
+        return [dataclasses.replace(tool, run=locked(tool.run)) for tool in tools]
 
     # Every operation reaches its file one folder at a time from the workspace's own
     # folder handle, refusing a link at every step (the `openat` pattern, with

@@ -17,8 +17,10 @@ agent may change is decided by the gate; whether a change is well formed is chec
 here, before anything is written, so a bad write leaves no trace.
 """
 
+import hashlib
 import re
 import subprocess
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from importlib.resources import files
@@ -40,8 +42,13 @@ FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 FOOTNOTE_USE = re.compile(r"\[\^([^\]]+)\](?!:)")
 FOOTNOTE_DEFINITION = re.compile(r"^\[\^([^\]]+)\]:\s*(\S+)", re.M)
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
+LOG_ENTRY = re.compile(r"^## \[([^\]]+)\] (.+?) \| (.+)$", re.M)
 # Sections whose lines are navigation, not facts, so they need no source.
 UNSOURCED_SECTIONS = {"See also"}
+
+
+class Stale(Exception):
+    """A save made from a version of the file that is no longer the current one."""
 
 
 @dataclass(frozen=True)
@@ -57,6 +64,10 @@ class Change:
 class Memory:
     def __init__(self, root: Path) -> None:
         self.root = root
+        # Held for the whole of each change, by the agent's file tools and by the
+        # console's saves. Tools run in worker threads, so without it a save could land
+        # between the agent writing a file and committing it, and be credited wrongly.
+        self.lock = threading.RLock()
 
     @classmethod
     def open(cls, root: Path) -> "Memory":
@@ -141,8 +152,7 @@ class Memory:
                 )
             self._check_sources(path, change)
         elif path.startswith("wiki/"):
-            match = FRONTMATTER.match(change.after)
-            fields = dict(_field(line) for line in match.group(1).splitlines()) if match else {}
+            fields = _frontmatter(change.after)
             if not fields.get("title") or not fields.get("summary"):
                 raise ToolError(
                     f"{path} needs a title and a summary in its frontmatter, between --- lines "
@@ -170,6 +180,96 @@ class Memory:
     def hand_edited(self, path: str) -> bool:
         authors = self._git("log", "--format=%an", "--", path).split()
         return OPERATOR[0] in authors
+
+    # What the console reads and saves
+
+    def pages(self) -> list[dict[str, str | int]]:
+        """Each wiki page with its title, summary and how many guesses wait on it."""
+        listed: list[dict[str, str | int]] = []
+        for page in self._pages():
+            text = self._read(page) or ""
+            fields = _frontmatter(text)
+            listed.append(
+                {
+                    "path": page,
+                    "title": fields.get("title") or page,
+                    "summary": fields.get("summary", ""),
+                    "guesses": _guesses(text),
+                }
+            )
+        return listed
+
+    def page(self, path: str) -> dict[str, str]:
+        """A page the operator may read and edit: a wiki page, or the profile."""
+        name = self._editable(path)
+        text = self._read(name) or ""
+        return {"path": name, "text": text, "version": _version(text)}
+
+    def save(self, path: str, text: str, version: str) -> dict[str, str]:
+        """Save the operator's edit, made from `version`, as their hand edit. The agent's
+        checks do not apply: the operator is the source of their own corrections. Only
+        the caps do, because they keep the prompt small whoever writes."""
+        with self.lock:
+            return self._save(path, text, version)
+
+    def _save(self, path: str, text: str, version: str) -> dict[str, str]:
+        name = self._editable(path)
+        # Anything already changed on disk is recorded as it is, apart from this save.
+        self.take_hand_edits()
+        if _version(self._read(name) or "") != version:
+            raise Stale(f"{name} has changed since you opened it.")
+        if name in CAPS and len(text) > CAPS[name]:
+            raise ValueError(
+                f"{name} would be {len(text):,} characters, over its cap of {CAPS[name]:,}."
+            )
+        (self.root / name).write_text(text, encoding="utf-8")
+        self.take_hand_edits()
+        return self.page(name)
+
+    def sources(self) -> list[dict[str, str | None]]:
+        """Every file under raw/, with when it first entered the memory."""
+        with self.lock:
+            self.take_hand_edits()
+        added: dict[str, str] = {}
+        when = ""
+        # Newest first, so the last date seen for a file is when it was first added.
+        for line in self._git(
+            "log", "--diff-filter=A", "--format=@%aI", "--name-only", "--", "raw"
+        ).splitlines():
+            if line.startswith("@"):
+                when = line[1:]
+            elif line:
+                added[line] = when
+        raw = self.root / "raw"
+        found = sorted(p.relative_to(self.root).as_posix() for p in raw.rglob("*") if p.is_file())
+        return [{"path": path, "added": added.get(path)} for path in found]
+
+    def source(self, path: str) -> dict[str, str]:
+        """A raw source as it is. Read only: nothing here changes one."""
+        name = _normal(PurePosixPath(path))
+        file = self.root / name if name else None
+        if (
+            name is None
+            or not name.startswith("raw/")
+            or file is None
+            or file.is_symlink()
+            or not file.is_file()
+        ):
+            raise LookupError(path)
+        return {"path": name, "text": file.read_text(encoding="utf-8", errors="replace")}
+
+    def log(self) -> list[dict[str, str]]:
+        """The log's entries, newest first."""
+        entries = LOG_ENTRY.findall(self._read(LOG) or "")
+        return [{"time": t, "action": a, "path": p} for t, a, p in reversed(entries)]
+
+    def _editable(self, path: str) -> str:
+        name = _normal(PurePosixPath(path))
+        if name == "profile.md" or (name and name in self._pages()):
+            file = self.root / name
+            if not file.is_symlink() and file.is_file():
+                return name
+        raise LookupError(path)
 
     # Checks
 
@@ -238,8 +338,7 @@ class Memory:
         from the pages and the model never has to keep it up to date."""
         lines = ["# Index", ""]
         for page in self._pages():
-            match = FRONTMATTER.match(self._read(page) or "")
-            fields = dict(_field(line) for line in match.group(1).splitlines()) if match else {}
+            fields = _frontmatter(self._read(page) or "")
             link = PurePosixPath(page).relative_to("wiki").as_posix()
             title = fields.get("title") or link
             lines.append(f"- [{title}]({link}): {fields.get('summary', '')}".rstrip(": "))
@@ -273,6 +372,27 @@ class Memory:
         return subprocess.run(
             ["git", *arguments], cwd=self.root, capture_output=True, text=True, check=True
         ).stdout
+
+
+def _frontmatter(text: str) -> dict[str, str]:
+    match = FRONTMATTER.match(text)
+    return dict(_field(line) for line in match.group(1).splitlines()) if match else {}
+
+
+def _guesses(text: str) -> int:
+    """Lines under ## Inferred that state something, struck lines aside."""
+    count, inside = 0, False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            inside = re.fullmatch(r"#+\s*Inferred", stripped) is not None
+        elif inside and stripped and not FOOTNOTE_DEFINITION.match(stripped):
+            count += not stripped.startswith("~~")
+    return count
+
+
+def _version(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _field(line: str) -> tuple[str, str]:
