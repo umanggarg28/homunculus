@@ -6,7 +6,7 @@ Homunculus is one always-on process that holds a small model loop, a few general
 
 | Module | Owns | Status |
 |---|---|---|
-| `server` | HTTP API for the web console and chat channels, and the built console itself | Chat stream, history, console files |
+| `server` | HTTP API for the web console and chat channels, and the built console itself | Chat stream, history, memory pages, console files |
 | `loop` | Ask the model, run the tool it asks for, repeat until done | Full loop |
 | `turns` | Turns running on the server, and their numbered events | Each turn a task of its own; events kept in memory for rejoining; stop on request |
 | `prompt` | What the model is told at the start of every turn | Fixed instructions in `prompt.md`, shipped with the code and the same every turn, then the profile, goals and wiki index from memory; a layer from skills is planned |
@@ -17,7 +17,7 @@ Homunculus is one always-on process that holds a small model loop, a few general
 | `approvals` | Requests waiting for the operator | Saved to the data directory; approve, decline, or done for hand-offs |
 | `sandbox` | Where the agent's commands run, apart from the operator's machine | Docker: a locked-down container on an internal network, with a Squid proxy sidecar as its only way out, to the package registries; every request logged |
 | `skills` | Skill folders in the Agent Skills format | Planned |
-| `memory` | The wiki, raw sources, profile and goals, as files | A local git repository at `HOMUNCULUS_HOME/memory`, created empty with a starting `SCHEMA.md`; checks on every write (frontmatter, a raw source for every new fact, links), a generated index, an append-only log, one commit per change, hand edits committed as the operator's; profile, goals and index in every prompt with their budgets |
+| `memory` | The wiki, raw sources, profile and goals, as files | A local git repository at `HOMUNCULUS_HOME/memory`, created empty with a starting `SCHEMA.md`; checks on every write (frontmatter, a raw source for every new fact, links), a generated index, an append-only log, one commit per change, hand edits committed as the operator's; profile, goals and index in every prompt with their budgets; pages read and saved for the console; one lock held for each change, by the tools and by saves |
 | `waker` | When the agent works unprompted | Planned |
 
 Each module has one job. A new module needs a stated reason. `activity` is separate from `memory` because it is written only by code and must stay out of reach of every tool, while memory is written by the agent through its tools. `sandbox` is separate from `tools` because a tool only says what to run, while the sandbox owns where it runs and what that place can reach; another backend can replace Docker without touching the tool. `turns` is separate from `server` because the server only wires HTTP to the work, while a turn outlives the request that started it and is watched by any number of pages. `prompt` is separate from `loop` because the loop decides what runs next, while the prompt decides what the model is told, and later tickets add layers to the prompt without touching the loop. `approvals` is separate from `gate` because the gate is a pure decision with no state, while requests are saved, wait for the operator and change status once.
@@ -86,6 +86,21 @@ When the gate answers ask or hand off, the loop saves a request with the exact t
 A request is decided once. After any decision the server runs a short turn telling the agent the outcome, as a message marked as a notice. The model module sends only the fields the Chat Completions format defines, so the mark never reaches the provider. If that turn fails, the notice is still added to the conversation, and the request records `follow_up` as `replied` or `failed: <why>`, which the console shows.
 
 An approved action runs inside the same lock as a chat turn and in a worker thread. A request approved but left without a result because the server stopped is marked, on the next start, as unknown: it may or may not have run.
+
+## Memory over HTTP
+
+The console reads and edits memory through these. A page is a wiki page or `profile.md`; the index, the log, the goals and the schema are not pages here, and raw sources are only read.
+
+| Endpoint | Effect |
+|---|---|
+| `GET /api/memory/pages` | Each wiki page: `path`, `title` and `summary` from its frontmatter, and `guesses`, the lines under `## Inferred` not struck through |
+| `GET /api/memory/pages/{path}` | One page: `path`, `text` (its markdown) and `version` (a SHA-256 of the text) |
+| `PUT /api/memory/pages/{path}` | `{"text": "...", "version": "..."}`. Saves the operator's edit, committed and logged as a hand edit. 409 if the page changed since `version`, and nothing is written; 422 if it is over its cap. The agent's source checks do not apply: the operator is the source of their own corrections |
+| `GET /api/memory/about` | `sources` (every file under `raw/`, with `added`, the time git first recorded it), `profile` (as a page, with its `cap`) and `egress`, the list in `egress.py` |
+| `GET /api/memory/sources/{path}` | One raw source as it is, read only |
+| `GET /api/memory/log` | The log's entries, newest first: `time`, `action`, `path` |
+
+The file tools run in worker threads, so a save from the console could otherwise land between the agent writing a page and committing it, and be credited to the wrong author. `Memory.lock` is held for the whole of each file tool call and each save, so one waits for the other. Undo in the console is another save of the earlier text, so it is committed and logged like any edit.
 
 ## The web console
 
@@ -163,6 +178,7 @@ Tests sit at agreed seams and fake only the outside world.
 | Server HTTP API: shell | The tool offered, acting without asking, output and exit code, failures, timeouts in milliseconds capped at ten minutes, long output shortened | A stand-in sandbox |
 | Sandbox proof | Every claim in the sandbox table, against the real containers | Nothing; needs Docker and the internet |
 | Server HTTP API: turns | A turn carries on after the page goes away, a page rejoins from the start, `Last-Event-ID` sends only what was missed, stop ends a turn and leaves the conversation, only a running turn can be stopped | The model (a stand-in that waits until the test lets it finish) |
+| Server HTTP API: memory | The page list with guesses, reading a page, a save recorded as the operator's hand edit, a save from an older version refused, the profile's cap, only pages and the profile editable, sources with when they arrived, reading a source, the log newest first, saves and tool calls waiting for each other, and the egress list matching the proxy, the model's address and SECURITY.md | The model (unused) |
 | Server HTTP API: approvals | Waiting instead of running, approve, decline, hand-off done, decided once, survives a restart, notices | The model; stand-in tools that record their calls |
 | Server HTTP API | Event format including tool steps, errors, one reply at a time, privacy routing on every request, tools offered and streamed tool calls run, history, serving the console | The model, or only the network beneath the real model |
 | Console in a browser | Sending a message shows the tool step and the reply, the conversation survives a reload, holding to allow a request runs it (a click alone does not) and the agent carries on, a rating in the Activity column is kept, reloading during a turn still shows its whole reply, Stop ends the turn on the server, and the opening plays on a first visit only | The model only; real server, built console and Chromium |

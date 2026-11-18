@@ -473,7 +473,7 @@ All are local variables of `create_app`. The functions defined inside it can sti
 turns.start(work) -> Turn(id="1f68ddcd07d2139a", events=[], done=False, task=<Task>)
 ```
 
-Then [server.py:98](src/homunculus/server.py#L98) `return watch(turns.start(work))` returns at once with a `StreamingResponse` that follows this turn. Nothing has been sent yet.
+Then [server.py:104](src/homunculus/server.py#L104) `return watch(turns.start(work))` returns at once with a `StreamingResponse` that follows this turn. Nothing has been sent yet.
 
 **The turn task runs.** `work` first adds the opening event, then takes the lock and runs the loop. Each item becomes an event with the next number:
 
@@ -581,7 +581,7 @@ The defaults assume the worst, so a tool that says nothing about itself is treat
 
 **Few, general tools.** Homunculus has seven file tools, and one `shell` tool that runs commands in the sandbox (chapter 10). The file tools are `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`. Their behaviour follows Anthropic's published memory-tool interface (view a file with numbered lines, create, replace text that appears exactly once, delete, rename). `search` is plain text search, the approach Claude Code takes with its Grep tool, instead of a pre-built index. Anthropic's "Seeing like an agent" notes that every extra tool is one more option the model has to weigh, so the bar for adding one is high. This project caps itself at 20.
 
-**The workspace is a fence, with two layers.** The gate (chapter 5) refuses any path that is absolute or contains `..` before a tool runs. Then the tool reaches the file one folder at a time, starting from a handle on the workspace folder itself, and never follows a link at any step: [files.py:16](src/homunculus/tools/files.py#L16) `FOLDER_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW`. A link is refused even when it points inside the workspace. That matters because the sandbox (chapter 10) can change the workspace while a tool is working: a tool that checked a path first and opened it afterwards could be sent anywhere by a link swapped in between. Walking with folder handles leaves no such gap. One mistake in either layer is not enough to get out. The activity log lives outside the workspace, so no tool can reach it.
+**The workspace is a fence, with two layers.** The gate (chapter 5) refuses any path that is absolute or contains `..` before a tool runs. Then the tool reaches the file one folder at a time, starting from a handle on the workspace folder itself, and never follows a link at any step: [files.py:17](src/homunculus/tools/files.py#L17) `FOLDER_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW`. A link is refused even when it points inside the workspace. That matters because the sandbox (chapter 10) can change the workspace while a tool is working: a tool that checked a path first and opened it afterwards could be sent anywhere by a link swapped in between. Walking with folder handles leaves no such gap. One mistake in either layer is not enough to get out. The activity log lives outside the workspace, so no tool can reach it.
 
 ### A picture
 
@@ -929,7 +929,7 @@ One line of the file, cut down:
 
 **From spans to jobs.** [activity.py:200](src/homunculus/activity.py#L200) `def jobs(spans: list[dict[str, Any]], events: list[dict[str, Any]]) -> list[dict[str, Any]]:` groups the spans and events by `traceId`. For each trace it finds the root ([activity.py:214](src/homunculus/activity.py#L214) `root = next((s for s in members if s["name"] == ROOT_SPAN), None)`), reads your message from the root, or from the turn's start event while the root is not written yet, and the reply from the root's attributes, and turns each `execute_tool` span into a step, in the order they started. Read the job aloud: "you asked me to note that you like green tea; I wrote tea.md, which worked; I replied Saved."
 
-**An approved action joins its trace later.** When the gate asks, the approval request stores the turn's W3C `traceparent`, the standard text form of a trace context: `"00-9f3c41d2...-df12ff...-01"`, meaning version, trace id, parent span id and flags. When you approve, the server passes it to `context_of`, which turns the text back into a context with OpenTelemetry's own W3C propagator, and [server.py:198](src/homunculus/server.py#L198) `span = activity.start_tool(` starts the approved run's `execute_tool` span under the original root, with the original tool call id. Its `homunculus.gate.answer` is `"ask"`, because that is what the gate answered, and its outcome is what the run did. So the job reads: asked (◷), then approved and done (✓).
+**An approved action joins its trace later.** When the gate asks, the approval request stores the turn's W3C `traceparent`, the standard text form of a trace context: `"00-9f3c41d2...-df12ff...-01"`, meaning version, trace id, parent span id and flags. When you approve, the server passes it to `context_of`, which turns the text back into a context with OpenTelemetry's own W3C propagator, and [server.py:204](src/homunculus/server.py#L204) `span = activity.start_tool(` starts the approved run's `execute_tool` span under the original root, with the original tool call id. Its `homunculus.gate.answer` is `"ask"`, because that is what the gate answered, and its outcome is what the run did. So the job reads: asked (◷), then approved and done (✓).
 
 ### Feedback
 
@@ -943,7 +943,7 @@ The GenAI conventions define one event for judging an agent's output: `gen_ai.ev
         gen_ai.evaluation.explanation = "Ask before saving"
 ```
 
-[server.py:248](src/homunculus/server.py#L248) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` finds the job, then [server.py:257](src/homunculus/server.py#L257) `found["feedback"] = activity.rate(` writes the event. `rate` attaches it to the job's root span by writing the job's trace id and root span id as a W3C traceparent and turning that into a context, the same way an approved action finds its trace, so a trace viewer shows the rating on the work it judges.
+[server.py:254](src/homunculus/server.py#L254) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` finds the job, then [server.py:263](src/homunculus/server.py#L263) `found["feedback"] = activity.rate(` writes the event. `rate` attaches it to the job's root span by writing the job's trace id and root span id as a W3C traceparent and turning that into a context, the same way an approved action finds its trace, so a trace viewer shows the rating on the work it judges.
 
 If you change your mind and press 👍, a second event is written. `jobs` keeps the latest one ([activity.py:210](src/homunculus/activity.py#L210) `ratings = {e["traceId"]: e for e in events if _is_rating(e)}`: a later event for the same trace replaces the earlier one in the dict, and only this program's `task_completion` evaluations labelled `pass` or `fail` count). Both stay in the file. A new rating starts with an empty reason box, so the old reason is never sent with it. Nothing reads the ratings yet. Ticket #17, the daily learning pass, is where they will be used.
 
@@ -1508,7 +1508,7 @@ In plain English: "From inside the real sandbox, a tunnel that says pypi.org twi
 
 ## 11. Memory
 
-Code: `src/homunculus/memory.py`, `src/homunculus/schema.md` (the wiki's starting rules), the `memory/` routing in `src/homunculus/tools/files.py`, and the memory rows in `src/homunculus/gate.py`. Tests: `tests/test_memory.py` and the memory tests in `tests/test_gate.py`.
+Code: `src/homunculus/memory.py`, `src/homunculus/schema.md` (the wiki's starting rules), the `memory/` routing in `src/homunculus/tools/files.py`, and the memory rows in `src/homunculus/gate.py`. The console's endpoints are in `src/homunculus/server.py`, and the egress list in `src/homunculus/egress.py`. Tests: `tests/test_memory.py`, `tests/test_memory_api.py` and the memory tests in `tests/test_gate.py`.
 
 ### The problem
 
@@ -1553,27 +1553,53 @@ Your saved conversation `raw/conversations/2026-11-14.md` says you drink green t
 
 The gate turns the path into `"memory/wiki/tea.md"`. `write` is not read-only, so [gate.py:67](src/homunculus/gate.py#L67) `if any(path.startswith(MEMORY_NEVER) for path in paths):` is checked: the path is not under `raw/` and is not the index or log. It is not the goals or the schema either, so the answer is `act`.
 
-`Files.write` asks where the path lives. [files.py:82](src/homunculus/tools/files.py#L82) `return self._memory.root, parts[1:] or ["."], True` drops the `memory` prefix:
+`Files.write` asks where the path lives. [files.py:83](src/homunculus/tools/files.py#L83) `return self._memory.root, parts[1:] or ["."], True` drops the `memory` prefix:
 
 ```
 _where("memory/wiki/tea.md") -> (Path(".../memory"), ["wiki", "tea.md"], True)
                                  the root,            parts inside it,      in memory
 ```
 
-Before writing, [files.py:204](src/homunculus/tools/files.py#L204) `self._memory.take_hand_edits()` commits anything you changed by hand, and [files.py:209](src/homunculus/tools/files.py#L209) `self._memory.check(Change(change.tool, change.path, before, after))` judges the change:
+Before writing, [files.py:217](src/homunculus/tools/files.py#L217) `self._memory.take_hand_edits()` commits anything you changed by hand, and [files.py:222](src/homunculus/tools/files.py#L222) `self._memory.check(Change(change.tool, change.path, before, after))` judges the change:
 
 ```
 Change(tool="write", path="wiki/tea.md", before=None, after="---\ntitle: Tea\n...")
          what runs     inside memory      no file yet    the file as it would be
 ```
 
-`check` finds the title and the summary. For each new line of the body, [memory.py:193](src/homunculus/memory.py#L193) `uses = FOOTNOTE_USE.findall(stripped)` finds the footnotes it uses: the fact line gives `["1"]`, and `[^1]` is defined. [memory.py:206](src/homunculus/memory.py#L206) `if not (self.root / source).is_file():` confirms `raw/conversations/2026-11-14.md` exists. The page has no links, so nothing else can fail. `check` returns, and the file is written.
+`check` finds the title and the summary. For each new line of the body, [memory.py:293](src/homunculus/memory.py#L293) `uses = FOOTNOTE_USE.findall(stripped)` finds the footnotes it uses: the fact line gives `["1"]`, and `[^1]` is defined. [memory.py:306](src/homunculus/memory.py#L306) `if not (self.root / source).is_file():` confirms `raw/conversations/2026-11-14.md` exists. The page has no links, so nothing else can fail. `check` returns, and the file is written.
 
-Then `Memory.record` runs. [memory.py:157](src/homunculus/memory.py#L157) `self._log(tool, path if to is None else f"{path} -> {to}")` appends `## [2026-11-15 02:31] write | wiki/tea.md` to the log. [memory.py:158](src/homunculus/memory.py#L158) `self._write_index()` rebuilds the index, where [memory.py:245](src/homunculus/memory.py#L245) `lines.append(f"- [{title}]({link}): {fields.get('summary', '')}".rstrip(": "))` writes `- [Tea](tea.md): How the operator takes their morning tea.`. [memory.py:159](src/homunculus/memory.py#L159) `self._commit(AGENT, f"{tool} {path}" if to is None else f"{tool} {path} to {to}")` commits it as `Homunculus | write wiki/tea.md`. No other page links to `tea.md` yet, so the result says so: `Wrote memory/wiki/tea.md. No other page links to wiki/tea.md yet.`
+Then `Memory.record` runs. [memory.py:167](src/homunculus/memory.py#L167) `self._log(tool, path if to is None else f"{path} -> {to}")` appends `## [2026-11-15 02:31] write | wiki/tea.md` to the log. [memory.py:168](src/homunculus/memory.py#L168) `self._write_index()` rebuilds the index, where [memory.py:344](src/homunculus/memory.py#L344) `lines.append(f"- [{title}]({link}): {fields.get('summary', '')}".rstrip(": "))` writes `- [Tea](tea.md): How the operator takes their morning tea.`. [memory.py:169](src/homunculus/memory.py#L169) `self._commit(AGENT, f"{tool} {path}" if to is None else f"{tool} {path} to {to}")` commits it as `Homunculus | write wiki/tea.md`. No other page links to `tea.md` yet, so the result says so: `Wrote memory/wiki/tea.md. No other page links to wiki/tea.md yet.`
 
-Next turn you ask what you drink in the morning. [loop.py:75](src/homunculus/loop.py#L75) `instructions += "\n\n" + memory.context()` adds the index to the prompt, where [memory.py:101](src/homunculus/memory.py#L101) `shown = re.sub(r"\]\(([^)]+)\)", r"](memory/wiki/\1)", shown)` turns `tea.md` into `memory/wiki/tea.md`, the path the tools take. The model read that page straight away and answered.
+Next turn you ask what you drink in the morning. [loop.py:75](src/homunculus/loop.py#L75) `instructions += "\n\n" + memory.context()` adds the index to the prompt, where [memory.py:112](src/homunculus/memory.py#L112) `shown = re.sub(r"\]\(([^)]+)\)", r"](memory/wiki/\1)", shown)` turns `tea.md` into `memory/wiki/tea.md`, the path the tools take. The model read that page straight away and answered.
 
 Where the value lives: the page is in `memory/wiki/tea.md`, its line in the index in `memory/wiki/index.md`, its log entry in `memory/wiki/log.md`, and its history in git. The activity log records the `write` step; memory never touches the activity log, and the sandbox never sees memory.
+
+### From the console
+
+You read and correct memory in the console, through the endpoints in ARCHITECTURE.md. Follow one correction. You open the tea page:
+
+```
+GET /api/memory/pages/wiki/tea.md
+  -> {"path": "wiki/tea.md", "text": "---\ntitle: Tea\n...", "version": "19a55810ef75..."}
+     the page            its markdown, as on disk    a SHA-256 of that text
+```
+
+The version is not a counter. It is a fingerprint of the text you were shown, so the server can later tell whether the file still holds that text. You add "The operator takes it without sugar." under the fact and save. The console sends the new text and the version it started from:
+
+```
+PUT /api/memory/pages/wiki/tea.md  {"text": "...without sugar.\n...", "version": "19a55810ef75..."}
+```
+
+[server.py:320](src/homunculus/server.py#L320) `return memory.save(path, edit.text, edit.version)` hands it to memory. [memory.py:212](src/homunculus/memory.py#L212) `with self.lock:` waits if an agent's file tool is mid-change, then `_save` commits anything already changed on disk, and checks the fingerprint: [memory.py:219](src/homunculus/memory.py#L219) `if _version(self._read(name) or "") != version:`. The file still holds what you saw, so the fingerprints match. [memory.py:225](src/homunculus/memory.py#L225) `(self.root / name).write_text(text, encoding="utf-8")` writes your text, and the same `take_hand_edits` the loop calls commits it as `Operator | Hand edit: wiki/tea.md` and logs `{"time": "2026-11-19 04:48", "action": "hand edit", "path": "wiki/tea.md"}`. The reply carries the new version, `dfea59b1edbb...`.
+
+Your new line has no footnote, and nothing refuses it. The agent's source checks are for what the model writes; you are the source of your own corrections. Only the cap applies, because it keeps the prompt small whoever writes.
+
+Now send the same save again, still from `19a55810ef75...`. The file's fingerprint is `dfea59b1edbb...`, so [memory.py:220](src/homunculus/memory.py#L220) `raise Stale(f"{name} has changed since you opened it.")` stops it before anything is written, and [server.py:324](src/homunculus/server.py#L324) `raise HTTPException(status_code=409, detail=str(stale)) from None` answers 409. The same happens when the agent changed the page while you were editing: your save can never wipe out a change you did not see.
+
+Why the lock: tools run in worker threads. Without [files.py:186](src/homunculus/tools/files.py#L186) `with memory.lock:` around each file tool, your save could run between the agent writing `tea.md` and committing it, and the agent's write would be committed under your name, then protected from the agent as if you had made it.
+
+Where the value lives: your line is in `memory/wiki/tea.md`; the commit, with you as its author, in git; the entry in `memory/wiki/log.md`. From now on `tea.md` counts as hand-edited, so the agent can add to it or change one part with `edit`, but never `write` it whole.
 
 ### The test
 

@@ -12,10 +12,10 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from homunculus import loop
+from homunculus import egress, loop
 from homunculus.activity import DECISION, Activity, context_of, fail
 from homunculus.approvals import Approval, ApprovalError, Approvals, Kind, Status
-from homunculus.memory import Memory
+from homunculus.memory import CAPS, Memory, Stale
 from homunculus.model import Message, Model, ModelError
 from homunculus.tools import Tool
 from homunculus.turns import Event, Turn, Turns
@@ -32,6 +32,12 @@ class ChatRequest(BaseModel):
 
 class Decision(BaseModel):
     note: str | None = None
+
+
+class PageEdit(BaseModel):
+    text: str
+    # The version the edit was made from, so a save never overwrites a newer change.
+    version: str
 
 
 class Feedback(BaseModel):
@@ -272,6 +278,9 @@ def create_app(
                 shown.append(entry)
         return shown
 
+    if memory is not None:
+        _memory_routes(app, memory)
+
     if console is not None:
         if (console / "assets").is_dir():
             app.mount("/assets", StaticFiles(directory=console / "assets"), name="assets")
@@ -288,6 +297,53 @@ def create_app(
             return FileResponse(console / "index.html")
 
     return app
+
+
+def _memory_routes(app: FastAPI, memory: Memory) -> None:
+    """What the console reads and edits in memory. Plain functions, so FastAPI runs them
+    in worker threads and one waiting on the memory's lock never holds up the server."""
+
+    @app.get("/api/memory/pages")
+    def list_pages() -> list[dict[str, Any]]:
+        return memory.pages()
+
+    @app.get("/api/memory/pages/{path:path}")
+    def read_page(path: str) -> dict[str, str]:
+        try:
+            return memory.page(path)
+        except LookupError:
+            raise HTTPException(status_code=404, detail=f"There is no page {path}.") from None
+
+    @app.put("/api/memory/pages/{path:path}")
+    def save_page(path: str, edit: PageEdit) -> dict[str, str]:
+        try:
+            return memory.save(path, edit.text, edit.version)
+        except LookupError:
+            raise HTTPException(status_code=404, detail=f"There is no page {path}.") from None
+        except Stale as stale:
+            raise HTTPException(status_code=409, detail=str(stale)) from None
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+
+    @app.get("/api/memory/about")
+    def about() -> dict[str, Any]:
+        profile = memory.page("profile.md")
+        return {
+            "sources": memory.sources(),
+            "profile": {**profile, "cap": CAPS["profile.md"]},
+            "egress": [route._asdict() for route in egress.ROUTES],
+        }
+
+    @app.get("/api/memory/sources/{path:path}")
+    def read_source(path: str) -> dict[str, str]:
+        try:
+            return memory.source(path)
+        except LookupError:
+            raise HTTPException(status_code=404, detail=f"There is no source {path}.") from None
+
+    @app.get("/api/memory/log")
+    def log() -> list[dict[str, str]]:
+        return memory.log()
 
 
 def _request_summary(approval: Approval) -> str:
