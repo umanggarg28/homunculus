@@ -1,0 +1,174 @@
+/* Memory: the page list, About you, a page with its numbered sources, and the change log.
+   Ported from the design mock (homunculus-design/console-v13, pages.css), keeping only what
+   this screen uses, with the later review rounds' rules folded in. It reuses the panels,
+   the stage, list rows and buttons of the design system. */
+
+html[data-page] .bus, html[data-page] .fx, html[data-page] .skip { display: none; }
+.pg { max-width: var(--container); margin-inline: auto; height: calc(100dvh - var(--bar-h) - env(safe-area-inset-top, 0px)); min-height: 600px; padding: var(--space-md) max(var(--space-lg), env(safe-area-inset-right, 0px)) var(--app-pad) max(var(--space-lg), env(safe-area-inset-left, 0px)); display: grid; grid-template-rows: minmax(0, 1fr); gap: var(--space-sm); }
+.pg-mem { grid-template-columns: 17rem minmax(0, 1fr) 21rem; grid-template-areas: "rail main side"; }
+.pg-main { grid-area: main; display: flex; flex-direction: column; overflow: hidden; }
+.pg-side { grid-area: side; overflow-y: auto; scrollbar-width: thin; }
+.pg-rail { grid-area: rail; overflow-y: auto; scrollbar-width: none; }
+.pg-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.pg-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; padding: 0 var(--space-md) var(--space-lg); -webkit-mask-image: linear-gradient(to bottom, transparent 0, var(--color-ink) var(--space-md)); mask-image: linear-gradient(to bottom, transparent 0, var(--color-ink) var(--space-md)); }
+.pg .stage { --core: 112px; padding-block: var(--space-sm); }
+.pg .say { min-height: 0; }
+/* this screen's line is a headline, not the moment: one size down from Now */
+.pg .stage .say, .pg .stage .say[data-len] { font-size: 1.75rem; line-height: 1.12; letter-spacing: -0.03em; max-width: 30ch; }
+.pg .stage .say-meta { color: var(--color-muted); }
+.pg .stage .say-meta.is-attn { color: var(--color-attn); }
+.pg .stage .say-meta .linkbtn { min-height: 0; color: var(--color-ink); font-size: inherit; padding: var(--space-3xs) var(--space-xs) var(--space-3xs) 0; border-radius: 6px; }
+.pg .stage .say-meta .linkbtn:focus-visible { outline-offset: 2px; }
+.pg-head { padding-top: var(--space-md); }
+.pg-head h1, .mem-head h1 { max-width: none; font-size: var(--text-display); font-weight: 250; letter-spacing: -0.03em; color: var(--color-ink); }
+.pg-foot { margin: var(--space-md) 0 0; padding: 0 var(--space-md) var(--space-md); font-size: var(--text-xs); color: var(--color-muted); }
+.mono { font-family: var(--font-mono); font-weight: 400; }
+.only-narrow { display: none; }
+/* the page list is on screen beside the page until a phone, where it has its own address */
+.only-phone { display: none !important; }
+.src-open { display: none; }
+.pg-scrim { display: none; }
+a.btn { text-decoration: none; }
+/* headings that take focus on arrival show no ring; controls keep theirs */
+[tabindex="-1"]:focus { outline: none; }
+
+/* the opening belongs to Now: arriving straight on Memory, its stage is already in place */
+html.js .pg .stage, html.js[data-intro] .pg .stage { transform: none; grid-template-columns: var(--core) minmax(0, 1fr); justify-items: stretch; text-align: left; border-bottom-color: var(--color-rule); }
+html.js[data-intro] .pg .voice { align-items: stretch; max-width: none; }
+html.js[data-intro] .pg .say { justify-items: start; }
+
+/* the page list */
+.mem-nav > li { display: block; padding: 0; }
+.list.mem-nav > li + li { border-top-color: transparent; }
+.mem-link { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-3xs) var(--space-sm); padding: var(--space-sm); border-radius: 10px; text-decoration: none; color: inherit; margin: 0 var(--space-2xs); transition: background-color var(--dur-short) var(--ease-out); }
+/* hover is a half step, so the chosen row still reads as chosen under the pointer */
+.mem-link:hover { background: color-mix(in oklab, var(--color-paper-2), var(--color-paper-3)); }
+.mem-nav .is-sel .mem-link { background: var(--color-paper-3); }
+.mem-link:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -2px; }
+.mem-link .name { grid-column: 1; font-size: 0.9375rem; }
+.mem-link .line { grid-column: 1 / -1; font-size: 0.8125rem; color: var(--color-muted); }
+.badge-attn { grid-column: 2; grid-row: 1; align-self: center; min-width: 20px; height: 20px; padding: 0 var(--space-xs); border-radius: 10px; background: var(--color-attn); color: var(--color-attn-ink); font-size: 0.75rem; font-weight: 500; display: inline-grid; place-items: center; font-variant-numeric: tabular-nums; }
+
+/* About you: sections, the one that needs you first */
+.sec { margin-top: var(--space-lg); }
+.sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-sm); padding: 0 0 var(--space-xs); }
+.sec-head h2 { max-width: none; font-size: var(--text-lg); font-weight: 300; letter-spacing: -0.015em; color: var(--color-ink); }
+.sec-head .note { font-size: 0.8125rem; color: var(--color-muted); text-align: right; }
+.sec-note { margin: var(--space-xs) 0 0; font-size: 0.8125rem; color: var(--color-muted); }
+.sec-note.is-attn { color: var(--color-attn); }
+.sec--attn { padding: var(--space-md); border-radius: var(--radius-panel); box-shadow: inset 0 0 0 var(--rule-hair) color-mix(in oklab, var(--color-attn) 55%, var(--color-paper-2)); }
+.sec--attn .sec-head h2 { color: var(--color-attn); }
+.sec--attn .sec-note { margin: 0 0 var(--space-xs); }
+.guesses > li, .srcs > li, .egress > li { padding-inline: 0; }
+.guesses .name { grid-column: 1 / -1; color: var(--color-ink); }
+.guesses .line { grid-column: 1 / -1; font-size: 0.8125rem; color: var(--color-muted); }
+.guesses .line a { color: var(--color-ink-2); }
+.g-acts { grid-column: 1 / -1; display: flex; gap: var(--space-xs); margin-top: var(--space-xs); }
+.srcs > li { grid-template-columns: minmax(0, 1fr); }
+.srcs .name { font-size: 0.875rem; color: var(--color-ink); text-decoration-color: var(--color-rule-2); }
+.srcs .line, .egress .line { font-size: 0.8125rem; color: var(--color-muted); }
+.egress .name { font-size: 0.8125rem; color: var(--color-ink); }
+.egress > li { grid-template-columns: minmax(0, 1fr); }
+
+/* a page: each fact with its numbered sources; guesses in amber, earlier lines struck through */
+.mem-head { padding: var(--space-md) 0; }
+.row-acts { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-top: var(--space-sm); }
+.wiki { display: flex; flex-direction: column; max-width: 44rem; }
+.cl-group { display: flex; flex-direction: column; gap: var(--space-3xs); padding: var(--space-sm) 0; }
+.cl-group + .cl-group { border-top: var(--rule-hair) solid var(--color-rule); }
+.cl-h { margin: 0 0 var(--space-2xs); font-size: 0.8125rem; font-weight: 400; color: var(--color-muted); }
+.claim { margin: 0; padding: var(--space-2xs) var(--space-sm); margin-inline: calc(var(--space-sm) * -1); border-radius: 8px; color: var(--color-ink-2); line-height: 1.6; transition: background-color var(--dur-short) var(--ease-out); }
+.claim.is-cited { background: var(--color-paper-3); color: var(--color-ink); }
+.claim-t { text-wrap: pretty; }
+.claim-t .wl { color: var(--color-ink); text-decoration-color: var(--color-rule-2); text-underline-offset: 0.2em; }
+.cites { display: inline-flex; gap: var(--space-xs); margin-left: var(--space-xs); vertical-align: 0.15em; }
+.cite { position: relative; min-width: 24px; height: 24px; padding: 0 var(--space-2xs); border: 0; border-radius: 4px; background: var(--color-paper-3); color: var(--color-muted); font: inherit; font-size: 0.6875rem; font-variant-numeric: tabular-nums; cursor: pointer; line-height: 24px; }
+.cite::after { content: ""; position: absolute; inset: -10px -4px; }
+.cite:hover, .cite.is-on { background: var(--color-ink); color: var(--color-paper); }
+.cite:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+/* a chip on a highlighted line is ringed, never filled: only the chosen source is filled */
+.claim.is-cited .cite:not(.is-on) { background: var(--color-paper-3); color: var(--color-ink); box-shadow: inset 0 0 0 1px var(--color-rule-2); }
+.claim.is-guess .claim-t { text-decoration: underline dotted var(--color-attn); text-underline-offset: 0.3em; text-decoration-thickness: 1.5px; }
+.guess-acts { display: inline-flex; align-items: baseline; gap: var(--space-sm); margin-left: var(--space-sm); font-size: 0.8125rem; }
+.guess-acts .linkbtn { position: relative; min-height: 0; padding: var(--space-3xs) var(--space-sm); border-radius: var(--radius-pill); box-shadow: inset 0 0 0 var(--rule-hair) var(--color-rule-2); text-decoration: none; font-size: 0.8125rem; color: var(--color-ink); }
+.guess-acts .linkbtn::after { content: ""; position: absolute; inset: -12px -6px; }
+.guess-acts .linkbtn:hover { box-shadow: inset 0 0 0 var(--rule-hair) var(--color-ink-2); }
+.guess-tag { font-size: 0.75rem; color: var(--color-attn); }
+.claim.is-old { color: var(--color-muted); }
+.claim.is-old .claim-t { text-decoration-color: var(--color-muted); }
+.old-tag, .mine-tag { margin-left: var(--space-sm); font-size: 0.75rem; color: var(--color-muted); }
+.claim.is-mine .claim-t { color: var(--color-ink); }
+.page-foot { display: flex; flex-wrap: wrap; gap: var(--space-sm); margin-top: var(--space-md); padding-bottom: var(--space-xs); }
+.page-foot:empty { display: none; }
+.mem-edit { display: flex; flex-direction: column; gap: var(--space-xs); max-width: 48rem; }
+.mem-ed { width: 100%; min-height: 22rem; padding: var(--space-md); border: 0; border-radius: 12px; background: var(--color-paper); box-shadow: inset 0 0 0 var(--rule-hair) var(--color-rule-2); color: var(--color-ink); font-family: var(--font-mono); font-size: 0.8125rem; line-height: 1.75; resize: vertical; }
+.mem-ed:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.pv-ask { align-items: center; }
+.pv-ask-t { margin: 0; flex: 1 1 14rem; font-size: 0.8125rem; color: var(--color-attn); }
+/* plain text is prose: it wraps */
+.pv-wrap { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-body); font-size: 0.9375rem; line-height: 1.6; color: var(--color-ink-2); }
+
+/* the side: where each fact came from */
+.srcs-side > li { position: relative; margin-inline: var(--space-2xs); padding-inline: var(--space-sm); grid-template-columns: 1.5rem minmax(0, 1fr); row-gap: var(--space-2xs); border-radius: 10px; }
+.srcs-side > li:hover { background: color-mix(in oklab, var(--color-paper-2), var(--color-paper-3)); }
+.srcs-side > li.is-sel { background: var(--color-paper-3); }
+.srcs-side .snum { grid-row: 1; grid-column: 1; font-size: 0.75rem; color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.srcs-side .name { grid-column: 2; min-height: 0; font-family: var(--font-mono); font-size: 0.8125rem; text-align: left; text-decoration: none; color: var(--color-ink); overflow-wrap: anywhere; }
+.srcs-side .line { grid-column: 2; font-size: 0.75rem; color: var(--color-muted); }
+.rowbtn::after { content: ""; position: absolute; inset: 0; border-radius: 10px; }
+.rowbtn:focus-visible { outline: none; }
+.srcs-side > li:has(.rowbtn:focus-visible) { outline: 2px solid var(--color-focus); outline-offset: -2px; }
+.srcs-side .line { position: relative; z-index: 1; }
+.list.srcs-side > li + li { border-top: 0; }
+.list.srcs-side > li + li::before { content: ""; position: absolute; top: 0; left: var(--space-md); right: var(--space-md); border-top: var(--rule-hair) solid var(--color-rule); }
+.list.srcs-side > li:hover::before, .list.srcs-side > li.is-sel::before, .list.srcs-side > li:hover + li::before, .list.srcs-side > li.is-sel + li::before { border-top-color: transparent; }
+.links > li { padding-block: var(--space-xs); font-size: 0.875rem; }
+.links a, .log a { color: var(--color-ink); text-decoration-color: var(--color-muted); }
+.mem-side > .panel-head:first-child { position: sticky; top: 0; z-index: 1; background: var(--color-paper-2); color: var(--color-ink); }
+.mem-side .srcs-side, .mem-side .log { padding-bottom: var(--space-sm); }
+.mem-side .page-foot { padding-inline: var(--space-md); }
+
+/* the change log */
+.log > li { position: relative; grid-template-columns: 6.5rem minmax(0, 1fr); padding-inline: var(--space-md); }
+.log .when { grid-column: 1; grid-row: 1; font-size: 0.75rem; color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.log .name { grid-column: 2; grid-row: 1; font-size: 0.8125rem; color: var(--color-ink-2); line-height: 1.45; }
+.log .mono { white-space: nowrap; }
+.list.log > li + li { border-top: 0; }
+.list.log > li + li::before { content: ""; position: absolute; top: 0; left: var(--space-md); right: var(--space-md); border-top: var(--rule-hair) solid var(--color-rule); }
+.pg-scroll > .list.log > li { padding-inline: 0; }
+
+/* narrower screens: the sources open as a sheet; Recent changes is its own address */
+@media (max-width: 76rem) {
+  .pg { grid-template-rows: minmax(0, 1fr) auto; padding-bottom: 0; }
+  .pg-mem { grid-template-columns: 15rem minmax(0, 1fr); grid-template-areas: "rail main" "tab tab"; }
+  .pg .tabbar { grid-area: tab; }
+  .mem-side { display: none; }
+  .mem-side.is-sheet { display: block; position: fixed; left: var(--space-sm); right: var(--space-sm); bottom: calc(72px + env(safe-area-inset-bottom, 0px)); max-height: 66dvh; z-index: var(--z-modal); box-shadow: inset 0 0 0 var(--rule-hair) var(--color-rule-2); animation: sheet var(--dur-long) var(--ease-out); }
+  .pg-mem[data-sheet="true"] .pg-scrim { display: block; position: fixed; inset: 0; z-index: calc(var(--z-modal) - 1); background: color-mix(in oklab, var(--color-paper) 72%, transparent); }
+  .src-open { display: inline-flex; }
+  .mem-about .only-narrow { display: flex; }
+}
+@media (max-width: 48rem) {
+  .pg { grid-template-columns: minmax(0, 1fr) !important; padding-inline: max(var(--space-xs), env(safe-area-inset-left, 0px)) max(var(--space-xs), env(safe-area-inset-right, 0px)); }
+  .pg-mem { grid-template-areas: "main" "tab"; }
+  .pg-mem .pg-rail { grid-area: main; }
+  .pg-mem:not([data-sub="list"]) .pg-rail, .pg-mem[data-sub="list"] .pg-main { display: none; }
+  .only-narrow { display: inline-flex; }
+  .only-phone { display: inline-flex !important; }
+  .mem-head .only-narrow { margin-bottom: var(--space-xs); }
+  .pg .stage { --core: 72px; padding-block: var(--space-2xs); }
+  html.js[data-intro] .pg .stage { --core: 72px; }
+  .pg .stage .say, .pg .stage .say[data-len] { font-size: 1.0625rem; line-height: 1.3; letter-spacing: -0.01em; }
+  .pg .stage .say-meta { font-size: 0.8125rem; }
+  .pg .pg-scroll { padding-inline: var(--space-xs); }
+  .guess-acts { display: flex; margin: var(--space-xs) 0 0; }
+  .mem-ed { font-size: 16px; }
+}
+@media (pointer: coarse) {
+  .cite { min-width: 28px; height: 28px; line-height: 28px; font-size: 0.75rem; border-radius: 6px; }
+  .guess-acts .linkbtn { min-height: 44px; }
+  .guess-acts .linkbtn::after { inset: 0; }
+  .pg .stage .say-meta .linkbtn { min-height: 44px; }
+}
+/* the message and its Undo keep apart, so the focus ring never touches the words */
+.pg .stage .say-meta > span + .linkbtn { margin-left: var(--space-xs); padding-left: var(--space-xs); }

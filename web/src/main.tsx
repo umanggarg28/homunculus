@@ -8,6 +8,7 @@ import "./design/layout.css";
 import "./design/theme.css";
 import "./design/markdown.css";
 import "./design/console.css";
+import "./design/memory.css";
 
 // A new build replaces the hashed chunk files, so a tab opened on an earlier
 // build can fail to load a chunk. Vite reports that as `vite:preloadError`:

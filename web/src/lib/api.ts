@@ -141,3 +141,75 @@ export const api = {
     return response.json();
   },
 };
+
+/** A wiki page as the page list shows it. */
+export interface MemoryPageInfo {
+  path: string;
+  title: string;
+  summary: string;
+  guesses: number;
+}
+
+/** A page the operator can read and edit: its markdown, and the version it was read at. */
+export interface MemoryPage {
+  path: string;
+  text: string;
+  version: string;
+}
+
+export interface MemorySource {
+  path: string;
+  /** When git first recorded the file, as ISO 8601. */
+  added: string | null;
+}
+
+export interface EgressRoute {
+  by: string;
+  to: string;
+  what: string;
+}
+
+export interface MemoryAbout {
+  sources: MemorySource[];
+  profile: MemoryPage & { cap: number };
+  egress: EgressRoute[];
+}
+
+export interface MemoryLogEntry {
+  time: string;
+  action: string;
+  path: string;
+}
+
+/** The save was made from a version of the page that is no longer the current one. */
+export class StaleError extends Error {}
+
+async function getJson<T>(url: string): Promise<T> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`${url} failed: ${response.status}`);
+  return response.json();
+}
+
+// Paths are sent segment by segment, so a name with a space or a "#" still reaches its file.
+const encodePath = (path: string) => path.split("/").map(encodeURIComponent).join("/");
+
+export const memoryApi = {
+  pages: () => getJson<MemoryPageInfo[]>("/api/memory/pages"),
+  page: (path: string) => getJson<MemoryPage>(`/api/memory/pages/${encodePath(path)}`),
+  about: () => getJson<MemoryAbout>("/api/memory/about"),
+  source: (path: string) => getJson<{ path: string; text: string }>(`/api/memory/sources/${encodePath(path)}`),
+  log: () => getJson<MemoryLogEntry[]>("/api/memory/log"),
+
+  /** Save the operator's edit, made from `version`. */
+  async save(path: string, text: string, version: string): Promise<MemoryPage> {
+    const response = await fetch(`/api/memory/pages/${encodePath(path)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, version }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (response.status === 409) throw new StaleError(body.detail ?? "The page changed since you opened it.");
+    if (!response.ok) throw new Error(body.detail ?? `save failed (${response.status})`);
+    return body;
+  },
+};

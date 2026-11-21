@@ -2,7 +2,7 @@
 
 An always-on personal agent that works toward your goals in its own sandbox and asks before anything leaves it.
 
-> **Status:** early build. In place: the web console, one screen with the conversation, what needs approval and what the agent did, replies streamed word by word from turns that keep running on the server when the page is closed or reloaded, file tools in the agent's own workspace with each call checked by the gate, approvals for actions that need your consent, fixed instructions that tell the agent to ask when a request is missing something only you can supply, and a memory: a wiki of plain markdown files in a private git repository, where every fact names its source. The plan and its progress are tracked in the [spec](https://github.com/umanggarg28/homunculus/issues/2) and its tickets.
+> **Status:** early build. In place: the web console, one screen with the conversation, what needs approval and what the agent did, replies streamed word by word from turns that keep running on the server when the page is closed or reloaded, file tools in the agent's own workspace with each call checked by the gate, approvals for actions that need your consent, fixed instructions that tell the agent to ask when a request is missing something only you can supply, and a memory: a wiki of plain markdown files in a private git repository, where every fact names its source, which you read, correct and confirm on the console's Memory screen. The plan and its progress are tracked in the [spec](https://github.com/umanggarg28/homunculus/issues/2) and its tickets.
 
 ## How it works
 

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { ActivityPanel } from "@/activity/ActivityPanel";
 import { AskPanel, askTitle } from "@/approvals/AskPanel";
 import { useApprovals } from "@/hooks/useApprovals";
@@ -8,15 +9,14 @@ import { Presence } from "@/presence/Presence";
 import { listenForUnfocus, unfocus } from "@/presence/focus";
 import { attachOverlay } from "@/presence/overlay";
 import { Thread } from "@/thread/Thread";
-import { InstallButton } from "./InstallButton";
-import { Mark } from "./Mark";
+import { TopBar, useLaterNote } from "./Nav";
 import { playOpening } from "./opening";
 import { TAB_ICONS } from "./tabIcons";
 import { voiceOf } from "./voice";
 
 // The screen's data-state, which the design's CSS reads: the presence's glow, the
 // status dot and the live activity row all follow it.
-const SCREEN_STATE: Record<AgentKind, string> = {
+export const SCREEN_STATE: Record<AgentKind, string> = {
   ready: "idle",
   thinking: "working",
   working: "working",
@@ -27,16 +27,6 @@ const SCREEN_STATE: Record<AgentKind, string> = {
 };
 
 type View = "chat" | "side";
-type Later = "goals" | "library" | "memory";
-
-// Parts of the product that are planned but not built yet. They stay in the
-// navigation so it does not move when they arrive, and say plainly what they will be.
-const LATER: Record<Later, string> = {
-  goals: "Goals aren’t built yet. They will show what the agent is working toward for you.",
-  library: "Library isn’t built yet. It will hold what the agent has made for you.",
-  memory: "Memory isn’t built yet. It will hold what the agent knows about you, and let you edit it.",
-};
-const NOTE_MS = 4200;
 
 /** The console's one screen: a top bar with the status pill, the conversation in the
  *  middle under the agent's presence, and what needs approval and what the agent did
@@ -47,9 +37,11 @@ export function Shell() {
   const firstAsk = useApprovals().approvals.find((a) => a.status === "pending");
   const [now, setNow] = useState(() => new Date());
   const voice = voiceOf(state, today, now);
-  const [view, setView] = useState<View>("chat");
-  const [note, setNote] = useState<{ text: string; left: number; top?: number; bottom?: number } | null>(null);
-  const noteTimer = useRef<number>();
+  // Another screen's Activity tab arrives here asking for the side view.
+  const arrival = useLocation().state as { view?: View } | null;
+  const [view, setView] = useState<View>(arrival?.view ?? "chat");
+  const navigate = useNavigate();
+  const later = useLaterNote();
   const bus = useRef<HTMLCanvasElement>(null);
   const fx = useRef<HTMLCanvasElement>(null);
 
@@ -66,27 +58,6 @@ export function Shell() {
   useEffect(() => {
     document.documentElement.dataset.state = screenState;
   }, [screenState]);
-  useEffect(() => {
-    const close = (e: KeyboardEvent) => e.key === "Escape" && setNote(null);
-    document.addEventListener("keydown", close);
-    return () => document.removeEventListener("keydown", close);
-  }, []);
-
-  const showLater = (kind: Later, from: HTMLElement) => {
-    const r = from.getBoundingClientRect();
-    const inTabBar = !!from.closest(".tabbar");
-    // On a phone the note sits wholly above the composer; on a desktop it hangs from its word.
-    const composer = document.querySelector("textarea")?.getBoundingClientRect();
-    const above = composer && composer.top > 0 ? composer.top : r.top;
-    setNote(
-      inTabBar
-        ? { text: LATER[kind], left: 16, bottom: innerHeight - above + 12 }
-        : { text: LATER[kind], left: Math.max(16, Math.min(r.left - 4, innerWidth - 368)), top: r.bottom + 10 },
-    );
-    window.clearTimeout(noteTimer.current);
-    noteTimer.current = window.setTimeout(() => setNote(null), NOTE_MS);
-  };
-
   const switchView = (next: View) => {
     if (next === view) return;
     // A spotlight belongs to the view it was lit in.
@@ -107,36 +78,7 @@ export function Shell() {
       <a className="skip" href="#ask-panel" hidden={!waiting}>
         Skip to what needs approval
       </a>
-      <header className="bar">
-        <div className="bar-in">
-          <a className="wordmark" href="/" aria-label="Homunculus, home">
-            <Mark />
-            Homunculus
-          </a>
-          <nav className="nav" aria-label="Main">
-            <a href="/" aria-current="page">
-              Now
-            </a>
-            {(["goals", "library", "memory"] as const).map((kind) => (
-              <a
-                key={kind}
-                href={`#${kind}`}
-                onClick={(e) => {
-                  e.preventDefault();
-                  showLater(kind, e.currentTarget);
-                }}
-              >
-                {kind[0].toUpperCase() + kind.slice(1)}
-              </a>
-            ))}
-          </nav>
-          <InstallButton />
-          <p className="status" id="status" role="status">
-            <span className="status-dot" aria-hidden="true" />
-            <span id="status-text">{voice.pill}</span>
-          </p>
-        </div>
-      </header>
+      <TopBar current="now" pill={voice.pill} onLater={later.show} />
 
       <div className="app no-rail" id="now" data-state={SCREEN_STATE[state.kind]} data-ask={waiting ? "yes" : undefined} data-view={view}>
         <main className="center panel col" aria-labelledby="stage-h">
@@ -181,22 +123,22 @@ export function Shell() {
             {TAB_ICONS.activity}
             <span>Activity</span>
           </button>
-          {(["goals", "library", "memory"] as const).map((kind) => (
-            <button key={kind} type="button" onClick={(e) => showLater(kind, e.currentTarget)}>
+          {(["goals", "library"] as const).map((kind) => (
+            <button key={kind} type="button" onClick={(e) => later.show(kind, e.currentTarget)}>
               {TAB_ICONS[kind]}
               <span>{kind[0].toUpperCase() + kind.slice(1)}</span>
             </button>
           ))}
+          <button type="button" onClick={() => navigate("/memory/about")}>
+            {TAB_ICONS.memory}
+            <span>Memory</span>
+          </button>
         </nav>
       </div>
 
       <canvas className="bus" ref={bus} aria-hidden="true" />
       <canvas className="fx" ref={fx} aria-hidden="true" />
-      {note && (
-        <p className="nav-note" role="status" style={{ left: note.left, top: note.top, bottom: note.bottom }}>
-          {note.text}
-        </p>
-      )}
+      {later.view}
     </>
   );
 }
