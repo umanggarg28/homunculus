@@ -277,3 +277,47 @@ def test_on_a_phone_pages_open_from_the_list_and_back_returns(page: Page, url: s
     expect(page.get_by_role("heading", name="Tea", level=1)).to_be_visible()
     page.get_by_role("main").get_by_role("button", name="Back").click()
     expect(page).to_have_url(f"{url}/memory/pages")
+
+
+def test_an_edit_keeps_each_old_line_above_its_replacement_and_never_loses_history(
+    page: Page, url: str, memory: Memory
+) -> None:
+    page.goto(f"{url}/memory/wiki/book.md")
+    main = page.get_by_role("main")
+    main.get_by_role("button", name="Edit").click()
+    editor = main.get_by_role("textbox", name="The book, as markdown")
+    edited = (
+        BOOK.replace("~~The draft stands at 30,000 words.~~[^1]\n", "")  # an earlier line deleted
+        .replace("38,200", "41,000")  # two lines next to each other changed
+        .replace("due in March", "due in April")
+        # two guesses swapped, unchanged
+        .replace(
+            "Chapter 7 is the midpoint.[^2]\nThe ending is not written yet.[^1]",
+            "The ending is not written yet.[^1]\nChapter 7 is the midpoint.[^2]",
+        )
+    )
+
+    editor.fill(edited)
+    main.get_by_role("button", name="Save").click()
+    expect(editor).to_be_hidden()
+
+    assert book(memory).split("---\n", 2)[2] == (
+        "\n"
+        "~~The draft stands at 30,000 words.~~[^1]\n"
+        "~~The draft stands at 38,200 words.~~[^1]\n"
+        "The draft stands at 41,000 words.[^1]\n"
+        "~~The draft is due in March.~~[^1]\n"
+        "The draft is due in April.[^1]\n"
+        "\n"
+        "## Inferred\n"
+        "\n"
+        "The ending is not written yet.[^1]\n"
+        "Chapter 7 is the midpoint.[^2]\n"
+        "\n"
+        "## See also\n"
+        "\n"
+        "- [Tea](tea.md)\n"
+        "\n"
+        "[^1]: raw/conversations/2026-11-13.md\n"
+        "[^2]: raw/book-notes/structure.md\n"
+    )

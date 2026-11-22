@@ -221,43 +221,64 @@ export interface Saved {
   removed: number;
 }
 
-/** The operator's edit as it is saved: a sourced fact they changed or removed stays in
- *  the file, struck through, where it stood, so the page keeps its own history. */
+/** The operator's edit as it is saved. The page keeps its own history:
+ *  - a sourced fact they change or remove stays in the file, struck through, right above
+ *    the line that replaced it;
+ *  - an earlier, struck line stays even if it is deleted in the editor, because history
+ *    is read only;
+ *  - a line moved somewhere else unchanged is a move, not a change, and is not struck. */
 export function withHistory(before: string, after: string): Saved {
   const ops = diff(before.split("\n"), after.split("\n"));
-  const out: string[] = [];
-  let changed = 0;
-  let added = 0;
-  let removed = 0;
-  let gone = 0;
-  let fresh = 0;
-  const settle = () => {
-    const pairs = Math.min(gone, fresh);
-    changed += pairs;
-    added += fresh - pairs;
-    removed += gone - pairs;
-    gone = fresh = 0;
-  };
+  const goneText = new Set(ops.filter((o) => o.op === "gone").map((o) => o.line));
+  const newText = new Set(ops.filter((o) => o.op === "new").map((o) => o.line));
+  const moved = (line: string) => line.trim() !== "" && goneText.has(line) && newText.has(line);
   // In the history the frontmatter belongs to the page, never to a fact.
   const frontmatterLines = bodyStart(before);
-  ops.forEach((op, k) => {
+  const out: string[] = [];
+  const saved: Saved = { text: "", changed: 0, added: 0, removed: 0 };
+  let gone: { line: string; index: number }[] = [];
+  let fresh: string[] = [];
+
+  /** Write out one stretch of removed and added lines, between lines that stayed. */
+  const flush = () => {
+    let next = 0;
+    let removedHere = 0;
+    for (const { line, index } of gone) {
+      if (moved(line)) continue;
+      const parts = split(line);
+      if (index >= frontmatterLines && parts.struck) {
+        out.push(line);
+        continue;
+      }
+      if (line.trim()) removedHere++;
+      if (index >= frontmatterLines && isSourcedFact(line)) out.push(strike(line));
+      if (next < fresh.length) out.push(fresh[next++]);
+    }
+    out.push(...fresh.slice(next));
+    const addedHere = fresh.filter((line) => line.trim() && !moved(line)).length;
+    const pairs = Math.min(removedHere, addedHere);
+    saved.changed += pairs;
+    saved.added += addedHere - pairs;
+    saved.removed += removedHere - pairs;
+    gone = [];
+    fresh = [];
+  };
+
+  let index = 0;
+  for (const op of ops) {
     if (op.op === "same") {
-      settle();
+      flush();
       out.push(op.line);
-      return;
+      index++;
+    } else if (op.op === "gone") {
+      gone.push({ line: op.line, index: index++ });
+    } else {
+      fresh.push(op.line);
     }
-    const counts = op.line.trim() !== "";
-    if (op.op === "new") {
-      if (counts) fresh++;
-      out.push(op.line);
-      return;
-    }
-    if (counts) gone++;
-    const index = ops.slice(0, k).filter((o) => o.op !== "new").length;
-    if (index >= frontmatterLines && isSourcedFact(op.line)) out.push(strike(op.line));
-  });
-  settle();
-  return { text: out.join("\n"), changed, added, removed };
+  }
+  flush();
+  saved.text = out.join("\n");
+  return saved;
 }
 
 /** "1 line changed, 1 line added" */
