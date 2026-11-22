@@ -8,19 +8,16 @@ run on their own: `uv run pytest -m browser`.
 import asyncio
 import json
 import re
-import socket
-import threading
-import time
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
 
 import mcp_types as mcp
 import pytest
-import uvicorn
 from fastapi import FastAPI
 from playwright.sync_api import Locator, Page, expect, sync_playwright
 from scripted_model import ScriptedModel
+from serve import CONSOLE, start_server
 
 from homunculus.activity import Activity
 from homunculus.approvals import Approvals
@@ -29,8 +26,6 @@ from homunculus.server import create_app
 from homunculus.tools import Tool
 from homunculus.tools.files import file_tools
 
-CONSOLE = Path(__file__).resolve().parents[2] / "web" / "dist"
-
 pytestmark = [
     pytest.mark.browser,
     pytest.mark.enable_socket,
@@ -38,29 +33,11 @@ pytestmark = [
 ]
 
 
-def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
 @pytest.fixture
 def workspace(tmp_path: Path) -> Path:
     folder = tmp_path / "workspace"
     folder.mkdir()
     return folder
-
-
-def start_server(app: FastAPI) -> Iterator[str]:
-    port = free_port()
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    while not server.started:
-        time.sleep(0.05)
-    yield f"http://127.0.0.1:{port}"
-    server.should_exit = True
-    thread.join(timeout=5)
 
 
 def console_app(model: ScriptedModel, tools: list[Tool], tmp_path: Path) -> FastAPI:
@@ -83,17 +60,6 @@ def console_url(tmp_path: Path, workspace: Path) -> Iterator[str]:
         ]
     )
     yield from start_server(console_app(model, file_tools(workspace), tmp_path))
-
-
-@pytest.fixture
-def page() -> Iterator[Page]:
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
-        context = browser.new_context()
-        # The opening plays once per session, and is not what most tests are about.
-        context.add_init_script("sessionStorage.setItem('homunculus_booted_v1', '1')")
-        yield context.new_page()
-        browser.close()
 
 
 # The console is one screen: the conversation in the middle, and what needs approval

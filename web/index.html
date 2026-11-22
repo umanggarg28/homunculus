@@ -8,15 +8,18 @@
     <link rel="manifest" href="/manifest.json" />
     <meta name="theme-color" content="#0b1013" />
     <script>
-      /* Before the first paint: the opening plays only on a session's first load, and
-         not at all for people who ask for less motion. */
+      /* Before the first paint: the opening plays only on a session's first load of Now,
+         and not at all for people who ask for less motion. It belongs to Now, so
+         arriving on another screen neither plays it nor uses it up. */
       (function () {
         var root = document.documentElement;
         var calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
         var first = false;
         try {
-          first = !sessionStorage.getItem("homunculus_booted_v1");
-          sessionStorage.setItem("homunculus_booted_v1", "1");
+          if (location.pathname === "/") {
+            first = !sessionStorage.getItem("homunculus_booted_v1");
+            sessionStorage.setItem("homunculus_booted_v1", "1");
+          }
         } catch (e) {}
         if (!calm) root.classList.add("js");
         root.dataset.intro = first && !calm ? "0" : "done";

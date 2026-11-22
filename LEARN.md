@@ -1508,7 +1508,7 @@ In plain English: "From inside the real sandbox, a tunnel that says pypi.org twi
 
 ## 11. Memory
 
-Code: `src/homunculus/memory.py`, `src/homunculus/schema.md` (the wiki's starting rules), the `memory/` routing in `src/homunculus/tools/files.py`, and the memory rows in `src/homunculus/gate.py`. The console's endpoints are in `src/homunculus/server.py`, and the egress list in `src/homunculus/egress.py`. Tests: `tests/test_memory.py`, `tests/test_memory_api.py` and the memory tests in `tests/test_gate.py`.
+Code: `src/homunculus/memory.py`, `src/homunculus/schema.md` (the wiki's starting rules), the `memory/` routing in `src/homunculus/tools/files.py`, and the memory rows in `src/homunculus/gate.py`. The console's endpoints are in `src/homunculus/server.py`, the egress list in `src/homunculus/egress.py`, and the Memory screen in `web/src/memory/`. Tests: `tests/test_memory.py`, `tests/test_memory_api.py`, `tests/browser/test_memory_screen.py` and the memory tests in `tests/test_gate.py`.
 
 ### The problem
 
@@ -1600,6 +1600,34 @@ Now send the same save again, still from `19a55810ef75...`. The file's fingerpri
 Why the lock: tools run in worker threads. Without [files.py:186](src/homunculus/tools/files.py#L186) `with memory.lock:` around each file tool, your save could run between the agent writing `tea.md` and committing it, and the agent's write would be committed under your name, then protected from the agent as if you had made it.
 
 Where the value lives: your line is in `memory/wiki/tea.md`; the commit, with you as its author, in git; the entry in `memory/wiki/log.md`. From now on `tea.md` counts as hand-edited, so the agent can add to it or change one part with `edit`, but never `write` it whole.
+
+### On the Memory screen
+
+The screen keeps no state of its own about a page: the file is the state. Every view reads a page through `parsePage` in `web/src/memory/wiki.ts`, and every change, an edit, a Confirm or a Remove, is a new text for the file, sent with the `PUT` above.
+
+`parsePage` reads each line by the schema's rules. [wiki.ts:113](web/src/memory/wiki.ts#L113) `const kind: ClaimKind = parts.struck ? "old" : section === "Inferred" ? "guess" : parts.cites.length ? "fact" : "mine";` gives each line one of four kinds:
+
+```
+"~~The draft stands at 30,000 words.~~[^1]"  -> {kind: "old",   text: "The draft stands at 30,000 words.", cites: ["1"]}
+"The draft stands at 38,200 words.[^1]"      -> {kind: "fact",  text: "The draft stands at 38,200 words.", cites: ["1"]}
+"Chapter 7 is the midpoint.[^2]"  (Inferred) -> {kind: "guess", text: "Chapter 7 is the midpoint.",       cites: ["2"]}
+"Short replies."                             -> {kind: "mine",  text: "Short replies.",                   cites: []}
+```
+
+A line with no footnote can only be yours, because the agent's writes are refused without one, so it is tagged "Your edit". Old lines are hidden until "Show earlier lines".
+
+Now an edit. You open The book, change 38,200 to 41,000 in the editor and press Save. The editor hands over your text, but it is not sent as it is. [wiki.ts:230](web/src/memory/wiki.ts#L230) `export function withHistory(before: string, after: string): Saved {` lines up the file before and your text after. The line `The draft stands at 38,200 words.[^1]` is gone and `The draft stands at 41,000 words.[^1]` is new; [wiki.ts:193](web/src/memory/wiki.ts#L193) `} else if (i < n && (j >= m || lcs[i + 1][j] >= lcs[i][j + 1])) {` puts the removal before the addition at the same spot. The removed line names a source, so [wiki.ts:254](web/src/memory/wiki.ts#L254) `if (index >= frontmatterLines && isSourcedFact(line)) out.push(strike(line));` keeps it, struck, and the line that replaced it goes straight under it:
+
+```
+withHistory(BOOK, edited) -> {text: "...~~The draft stands at 38,200 words.~~[^1]\nThe draft stands at 41,000 words.[^1]...",
+                              changed: 1, added: 0, removed: 0}
+```
+
+Two more rules keep the history honest. A line that is already struck stays where it is, even if you delete it in the editor, because earlier lines are read only. And a line you only move, such as swapping two guesses, is taken out in one place and added unchanged in another; [wiki.ts:247](web/src/memory/wiki.ts#L247) `if (moved(line)) continue;` sees that and does not strike it, because nothing about it changed. Change two lines next to each other and each old line sits right above its own replacement.
+
+That text is what [MemoryScreen.tsx:102](web/src/memory/MemoryScreen.tsx#L102) `const saved = await memoryApi.save(from.path, text, from.version);` sends. The spoken line says "Saved your edits to “The book”: 1 line changed.", and focus moves to "Undo your change to “The book”". Undo is another save, of the text from before, made from the version the save returned: [MemoryScreen.tsx:107](web/src/memory/MemoryScreen.tsx#L107) `await memoryApi.save(from.path, from.text, saved.version);`. If the agent changed the page in between, that version no longer matches, the server answers 409, and Undo says it left the page as it is rather than wiping out the agent's change.
+
+Where the value lives: the struck line and your new line are in `memory/wiki/book.md`; the commit, by Operator, in git; the screen holds nothing but what it last read. The undo stack lives in the screen and is gone when you leave Memory.
 
 ### The test
 
