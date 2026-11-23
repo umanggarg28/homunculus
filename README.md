@@ -82,6 +82,38 @@ If the request fails, the stream ends with an `error` event that says why, for e
 
 To see a tool in use, send `"Save a note called tea.md that says I like green tea."`. The file appears in the data directory's `workspace/` folder, and the step is recorded in its `traces.jsonl`. On macOS, `open ~/Library/Application\ Support/homunculus` shows them in Finder.
 
+## Importing your own files
+
+The agent learns about you from what you tell it, and from files you choose to give it. It never reads your real folders. Instead you run the import yourself, and it copies the files you list into its memory, after a scan:
+
+```bash
+uv run homunculus import
+```
+
+The first run creates three files in the data directory: `import.txt`, the list of what to import (one path or pattern per line, `!` to leave something out); `identifiers.txt`, the words that identify you (your name, emails, handles); and `import-rules.toml`, every setting the import uses, with its defaults. Fill in the list and run it again.
+
+Before copying anything it shows every file and what will happen to it, and copies only if you agree. A file is left out when:
+
+- a word in its path is on the excluded list (`visa`, `bank`, `medical` and others, in `import-rules.toml`), so categories such as immigration, finances and health stay out by default;
+- the scan finds personal data in it: emails, phone numbers, card and bank numbers, and identity numbers such as Aadhaar, PAN, passport and US Social Security numbers, found by [Microsoft Presidio](https://microsoft.github.io/presidio/), which checks each one's pattern, checksum where it has one, and the words around it;
+- [gitleaks](https://github.com/gitleaks/gitleaks) finds a key or password in it;
+- it mentions one of your identifiers;
+- it is not a text file, or is over 1 MB.
+
+Findings are shown masked (`r•••@e•••.com`), never in full. To bring in a file you have looked at, add `--allow <path>`. Copies land in `memory/raw/imports/<date and time>/`, one git commit per import, and appear on the Memory screen under What I read. A file already imported, unchanged, is skipped; a changed one is copied again beside the old copy, which stays.
+
+What it cannot catch: categories are found by the words in a file's path, not by what the file is about, because reading a file's meaning would need a model and nothing goes to a model before you have looked. Gitleaks knows many key formats but not all; it has no rule for OpenRouter keys (`sk-or-...`), for example. Your review of the list is the last check.
+
+The import needs gitleaks (`brew install gitleaks`) and refuses to run without it. It makes no network requests.
+
+**A check on your own commits.** `identifiers.txt` also feeds a pre-commit check that stops a commit whose staged lines mention you. Turn it on once in your clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+It does nothing until `identifiers.txt` exists, so it is safe in any clone.
+
 ## The web console
 
 One screen. The agent's presence sits at the top of the conversation and says what it is doing. Under each reply is a card of the steps it took. Beside it are what needs your approval and what the agent did today. These screenshots use a made-up demo workspace.
@@ -104,7 +136,7 @@ Then open http://127.0.0.1:8765. While working on the console itself, `npm run d
 ## Development
 
 ```bash
-uv run pytest        # tests (no network access allowed)
+uv run pytest        # tests (no network access allowed; the import tests need gitleaks)
 uv run mypy          # type checks
 uv run ruff check    # lint
 uv run ruff format   # formatting

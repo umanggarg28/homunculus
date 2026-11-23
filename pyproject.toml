@@ -8,12 +8,14 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "en-core-web-sm",
     "fastapi>=0.154.0",
     "httpx>=0.28.1",
     "mcp-types==2.3.0",
     "opentelemetry-exporter-otlp-proto-common==1.45.1",
     "opentelemetry-sdk==1.45.1",
     "platformdirs>=4.13.5",
+    "presidio-analyzer>=2.2.366",
     "uvicorn>=0.54.0",
 ]
 
@@ -57,3 +59,6 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 strict = true
 files = ["src", "tests"]
+
+[tool.uv.sources]
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }

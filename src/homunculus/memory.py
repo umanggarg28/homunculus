@@ -17,6 +17,7 @@ agent may change is decided by the gate; whether a change is well formed is chec
 here, before anything is written, so a bad write leaves no trace.
 """
 
+import fcntl
 import hashlib
 import re
 import subprocess
@@ -25,6 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path, PurePosixPath
+from typing import IO
 
 from homunculus.tools import ToolError
 
@@ -47,6 +49,34 @@ LOG_ENTRY = re.compile(r"^## \[([^\]]+)\] (.+?) \| (.+)$", re.M)
 UNSOURCED_SECTIONS = {"See also"}
 
 
+class ChangeLock:
+    """Held for the whole of a change to memory. The agent's tools run in worker threads
+    of the server, and an import runs in its own process, so it is a lock across both:
+    a thread lock, and an exclusive lock on a file in the repository's .git folder.
+    It can be taken again by the thread that holds it."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._thread = threading.RLock()
+        self._depth = 0
+        self._file: IO[str] | None = None
+
+    def __enter__(self) -> None:
+        self._thread.acquire()
+        if self._depth == 0:
+            self._file = self._path.open("a")
+            fcntl.flock(self._file, fcntl.LOCK_EX)
+        self._depth += 1
+
+    def __exit__(self, *_: object) -> None:
+        self._depth -= 1
+        if self._depth == 0 and self._file is not None:
+            fcntl.flock(self._file, fcntl.LOCK_UN)
+            self._file.close()
+            self._file = None
+        self._thread.release()
+
+
 class Stale(Exception):
     """A save made from a version of the file that is no longer the current one."""
 
@@ -64,10 +94,10 @@ class Change:
 class Memory:
     def __init__(self, root: Path) -> None:
         self.root = root
-        # Held for the whole of each change, by the agent's file tools and by the
-        # console's saves. Tools run in worker threads, so without it a save could land
-        # between the agent writing a file and committing it, and be credited wrongly.
-        self.lock = threading.RLock()
+        # Held for the whole of each change, by the agent's file tools, the console's
+        # saves and imports. Without it a save or an import could land between the agent
+        # writing a file and committing it, and be credited to the wrong author.
+        self.lock = ChangeLock(root / ".git" / "homunculus.lock")
 
     @classmethod
     def open(cls, root: Path) -> "Memory":
@@ -118,6 +148,10 @@ class Memory:
     def take_hand_edits(self) -> None:
         """Record any change on disk that the agent did not make as the operator's own,
         so it is never mistaken for the agent's work and never rewritten whole."""
+        with self.lock:
+            self._take_hand_edits()
+
+    def _take_hand_edits(self) -> None:
         changed = self._changed_paths()
         if not changed:
             return
@@ -176,6 +210,14 @@ class Memory:
             if not self._linked_from_elsewhere(landed):
                 return f" No other page links to {landed} yet."
         return ""
+
+    def record_import(self, paths: list[str]) -> None:
+        """After the operator's import has copied files into raw/: log each, commit them
+        as the operator's."""
+        with self.lock:
+            for path in paths:
+                self._log("import", path)
+            self._commit(OPERATOR, f"Import {len(paths)} file" + ("" if len(paths) == 1 else "s"))
 
     def hand_edited(self, path: str) -> bool:
         authors = self._git("log", "--format=%an", "--", path).split()

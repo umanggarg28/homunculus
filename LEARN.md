@@ -31,6 +31,7 @@ Diagrams are plain text, so they read the same in any editor.
 9. [The prompt](#9-the-prompt)
 10. [The sandbox](#10-the-sandbox)
 11. [Memory](#11-memory)
+12. [Importing your files](#12-importing-your-files)
 
 ---
 
@@ -1567,11 +1568,11 @@ Change(tool="write", path="wiki/tea.md", before=None, after="---\ntitle: Tea\n..
          what runs     inside memory      no file yet    the file as it would be
 ```
 
-`check` finds the title and the summary. For each new line of the body, [memory.py:293](src/homunculus/memory.py#L293) `uses = FOOTNOTE_USE.findall(stripped)` finds the footnotes it uses: the fact line gives `["1"]`, and `[^1]` is defined. [memory.py:306](src/homunculus/memory.py#L306) `if not (self.root / source).is_file():` confirms `raw/conversations/2026-11-14.md` exists. The page has no links, so nothing else can fail. `check` returns, and the file is written.
+`check` finds the title and the summary. For each new line of the body, [memory.py:335](src/homunculus/memory.py#L335) `uses = FOOTNOTE_USE.findall(stripped)` finds the footnotes it uses: the fact line gives `["1"]`, and `[^1]` is defined. [memory.py:348](src/homunculus/memory.py#L348) `if not (self.root / source).is_file():` confirms `raw/conversations/2026-11-14.md` exists. The page has no links, so nothing else can fail. `check` returns, and the file is written.
 
-Then `Memory.record` runs. [memory.py:167](src/homunculus/memory.py#L167) `self._log(tool, path if to is None else f"{path} -> {to}")` appends `## [2026-11-15 02:31] write | wiki/tea.md` to the log. [memory.py:168](src/homunculus/memory.py#L168) `self._write_index()` rebuilds the index, where [memory.py:344](src/homunculus/memory.py#L344) `lines.append(f"- [{title}]({link}): {fields.get('summary', '')}".rstrip(": "))` writes `- [Tea](tea.md): How the operator takes their morning tea.`. [memory.py:169](src/homunculus/memory.py#L169) `self._commit(AGENT, f"{tool} {path}" if to is None else f"{tool} {path} to {to}")` commits it as `Homunculus | write wiki/tea.md`. No other page links to `tea.md` yet, so the result says so: `Wrote memory/wiki/tea.md. No other page links to wiki/tea.md yet.`
+Then `Memory.record` runs. [memory.py:201](src/homunculus/memory.py#L201) `self._log(tool, path if to is None else f"{path} -> {to}")` appends `## [2026-11-15 02:31] write | wiki/tea.md` to the log. [memory.py:202](src/homunculus/memory.py#L202) `self._write_index()` rebuilds the index, where [memory.py:386](src/homunculus/memory.py#L386) `lines.append(f"- [{title}]({link}): {fields.get('summary', '')}".rstrip(": "))` writes `- [Tea](tea.md): How the operator takes their morning tea.`. [memory.py:203](src/homunculus/memory.py#L203) `self._commit(AGENT, f"{tool} {path}" if to is None else f"{tool} {path} to {to}")` commits it as `Homunculus | write wiki/tea.md`. No other page links to `tea.md` yet, so the result says so: `Wrote memory/wiki/tea.md. No other page links to wiki/tea.md yet.`
 
-Next turn you ask what you drink in the morning. [loop.py:75](src/homunculus/loop.py#L75) `instructions += "\n\n" + memory.context()` adds the index to the prompt, where [memory.py:112](src/homunculus/memory.py#L112) `shown = re.sub(r"\]\(([^)]+)\)", r"](memory/wiki/\1)", shown)` turns `tea.md` into `memory/wiki/tea.md`, the path the tools take. The model read that page straight away and answered.
+Next turn you ask what you drink in the morning. [loop.py:75](src/homunculus/loop.py#L75) `instructions += "\n\n" + memory.context()` adds the index to the prompt, where [memory.py:142](src/homunculus/memory.py#L142) `shown = re.sub(r"\]\(([^)]+)\)", r"](memory/wiki/\1)", shown)` turns `tea.md` into `memory/wiki/tea.md`, the path the tools take. The model read that page straight away and answered.
 
 Where the value lives: the page is in `memory/wiki/tea.md`, its line in the index in `memory/wiki/index.md`, its log entry in `memory/wiki/log.md`, and its history in git. The activity log records the `write` step; memory never touches the activity log, and the sandbox never sees memory.
 
@@ -1591,11 +1592,11 @@ The version is not a counter. It is a fingerprint of the text you were shown, so
 PUT /api/memory/pages/wiki/tea.md  {"text": "...without sugar.\n...", "version": "19a55810ef75..."}
 ```
 
-[server.py:320](src/homunculus/server.py#L320) `return memory.save(path, edit.text, edit.version)` hands it to memory. [memory.py:212](src/homunculus/memory.py#L212) `with self.lock:` waits if an agent's file tool is mid-change, then `_save` commits anything already changed on disk, and checks the fingerprint: [memory.py:219](src/homunculus/memory.py#L219) `if _version(self._read(name) or "") != version:`. The file still holds what you saw, so the fingerprints match. [memory.py:225](src/homunculus/memory.py#L225) `(self.root / name).write_text(text, encoding="utf-8")` writes your text, and the same `take_hand_edits` the loop calls commits it as `Operator | Hand edit: wiki/tea.md` and logs `{"time": "2026-11-19 04:48", "action": "hand edit", "path": "wiki/tea.md"}`. The reply carries the new version, `dfea59b1edbb...`.
+[server.py:320](src/homunculus/server.py#L320) `return memory.save(path, edit.text, edit.version)` hands it to memory. [memory.py:254](src/homunculus/memory.py#L254) `with self.lock:` waits if an agent's file tool is mid-change, then `_save` commits anything already changed on disk, and checks the fingerprint: [memory.py:261](src/homunculus/memory.py#L261) `if _version(self._read(name) or "") != version:`. The file still holds what you saw, so the fingerprints match. [memory.py:267](src/homunculus/memory.py#L267) `(self.root / name).write_text(text, encoding="utf-8")` writes your text, and the same `take_hand_edits` the loop calls commits it as `Operator | Hand edit: wiki/tea.md` and logs `{"time": "2026-11-19 04:48", "action": "hand edit", "path": "wiki/tea.md"}`. The reply carries the new version, `dfea59b1edbb...`.
 
 Your new line has no footnote, and nothing refuses it. The agent's source checks are for what the model writes; you are the source of your own corrections. Only the cap applies, because it keeps the prompt small whoever writes.
 
-Now send the same save again, still from `19a55810ef75...`. The file's fingerprint is `dfea59b1edbb...`, so [memory.py:220](src/homunculus/memory.py#L220) `raise Stale(f"{name} has changed since you opened it.")` stops it before anything is written, and [server.py:324](src/homunculus/server.py#L324) `raise HTTPException(status_code=409, detail=str(stale)) from None` answers 409. The same happens when the agent changed the page while you were editing: your save can never wipe out a change you did not see.
+Now send the same save again, still from `19a55810ef75...`. The file's fingerprint is `dfea59b1edbb...`, so [memory.py:262](src/homunculus/memory.py#L262) `raise Stale(f"{name} has changed since you opened it.")` stops it before anything is written, and [server.py:324](src/homunculus/server.py#L324) `raise HTTPException(status_code=409, detail=str(stale)) from None` answers 409. The same happens when the agent changed the page while you were editing: your save can never wipe out a change you did not see.
 
 Why the lock: tools run in worker threads. Without [files.py:186](src/homunculus/tools/files.py#L186) `with memory.lock:` around each file tool, your save could run between the agent writing `tea.md` and committing it, and the agent's write would be committed under your name, then protected from the agent as if you had made it.
 
@@ -1650,6 +1651,84 @@ In plain English: "A page whose fact names no source is refused, and nothing is 
 2. Run `uv run pytest tests/test_memory.py`. The budget test fails, because the prompt now says "of 200 characters", and the sourced-profile test fails, because that profile is now over its cap.
 3. Put the cap back to `2000`. Now open `src/homunculus/schema.md` and remove the line about striking through outdated facts. Run the tests again. They all pass: the schema is advice the model reads, and the checks in `memory.py` are what code enforces. Anything that must hold whatever the model does belongs in code, and in a test.
 4. Undo the change.
+
+---
+
+## 12. Importing your files
+
+Code: `src/homunculus/importing.py`, `src/homunculus/identifiers.py`, the subcommands in `src/homunculus/__init__.py`, `Memory.record_import` and `ChangeLock` in `src/homunculus/memory.py`, and `.githooks/pre-commit`. Tests: `tests/test_import.py`.
+
+### The problem
+
+Memory so far fills only from conversation. You already have notes, plans and a CV that would tell the agent a lot, but your folders also hold things it must never see: a visa letter, a bank statement, a key pasted into a setup note. Anything copied into `memory/raw/` can be read by the agent, and what it reads goes to the model. So something has to stand between your files and the agent, run by you, that shows what would cross and lets nothing through until you say so.
+
+### The idea
+
+**Copy, never connect.** Personal agents such as OpenAI's Dots and Meta's Muse connect to your accounts and read them directly. Here the agent never touches your folders: you run a command, and it copies only files you listed into `raw/imports/`. Copies, not links, so the raw source stays exactly as it was when you imported it.
+
+**Scan with maintained tools.** Finding personal data is a solved problem with established tools, so the import uses them rather than patterns of its own. [Microsoft Presidio](https://microsoft.github.io/presidio/) finds emails, phones, card and bank numbers and identity numbers; each of its recognizers checks a pattern, a checksum where the number has one (Aadhaar's Verhoeff digit, a card's Luhn digit), and the words around it. [Gitleaks](https://github.com/gitleaks/gitleaks) finds keys. Your own identifiers are matched as written.
+
+**Categories by name.** Health or immigration cannot be found by a pattern, and asking a model would send the file before you have looked. So a file whose path contains a word like `visa` or `medical` is left out without being opened.
+
+**Every setting where you can see it.** The excluded words, file types, size limit, phone countries, what the scan looks for and how sure it must be are all in `import-rules.toml` in the data directory, written with the defaults the first time.
+
+### A picture
+
+```
+ your folders          homunculus import (you run it)                  memory/
+ ~/Notes/...   ──►  import.txt ─► resolve ─► name check ─► scan ─► show ─► your y ─► raw/imports/<time>/
+                                             (rules file)   Presidio          │        one commit, by Operator
+                                                            gitleaks          │
+                                                            identifiers.txt   no ─► nothing copied
+```
+
+### One value, traced
+
+Your list says `~/Notes/**/*.md`, and the folder holds `running-plan.md`, `contacts.md` and `visa/renewal.md`. `resolve` turns the list into pairs of (file, the name it keeps in memory): `(Path(".../Notes/contacts.md"), "Notes/contacts.md")` and so on.
+
+Each file meets the checks in order. For `visa/renewal.md`, [importing.py:201](src/homunculus/importing.py#L201) `word = excluded_by(name, words)` returns `"visa"`, and the file is left out unopened. `contacts.md` passes the name check, is text, and is new, so [importing.py:221](src/homunculus/importing.py#L221) `findings = scan(text, mine, engine, rules) + keys(file)` runs. Its line `Coach: riya@example.com, +91 98765 43210` gives:
+
+```
+scan(...) -> [Finding(kind="email", line=1, shown="r•••@e•••.com"),
+              Finding(kind="phone", line=1, shown="+•••10")]
+keys(...) -> []                      gitleaks found no key
+```
+
+A `Finding` is three things: what kind, which line, and a masked copy, so the report never repeats what it protects. [importing.py:222](src/homunculus/importing.py#L222) `if findings and file.resolve() not in allowed:` leaves it out, unless you passed `--allow` for it. `running-plan.md` has no findings and joins the plan.
+
+Nothing has been copied yet. The plan is printed, and [importing.py:185](src/homunculus/importing.py#L185) `if input(f"Copy {count} into memory? [y/N] ").strip().lower() not in ("y", "yes"):` waits for you. You type `y`. The file is copied to `raw/imports/2026-11-23-1310/Notes/running-plan.md`, and [importing.py:375](src/homunculus/importing.py#L375) `memory.record_import(landed)` logs `import | raw/imports/2026-11-23-1310/Notes/running-plan.md` and commits it: [memory.py:220](src/homunculus/memory.py#L220) `self._commit(OPERATOR, f"Import {len(paths)} file" + ("" if len(paths) == 1 else "s"))`.
+
+The copy and the commit happen inside `memory.lock`, a `ChangeLock`: a thread lock plus an exclusive lock on a file in `.git`. The import is a separate program from the server, so a thread lock alone could not stop the agent committing halfway through your import.
+
+One more detail: Presidio's email check uses a library that downloads the public suffix list the first time it runs. An import must reach no network, so [importing.py:292](src/homunculus/importing.py#L292) `tldextract.tldextract.TLD_EXTRACTOR = tldextract.TLDExtract(cache_dir=None, suffix_list_urls=())` makes it use the copy bundled with it.
+
+Where the value lives: the copy in `memory/raw/imports/`, its commit in git, its line in `memory/wiki/log.md`, and on the Memory screen under What I read. Your original is untouched, and the agent reads the copy only when asked.
+
+### The test
+
+```python
+def test_a_file_with_findings_is_left_out_and_its_values_are_never_shown(
+    home: Path, notes: Path, run: Run
+) -> None:
+    import_list(home, f"{notes}/*.md")
+
+    _, out = run("import")
+
+    assert (raw(home) / "Notes" / "running-plan.md").exists()
+    assert not (raw(home) / "Notes" / "contacts.md").exists()
+    assert "contacts.md" in out
+    assert "email" in out and "phone" in out
+    assert "riya@example.com" not in out
+    assert "98765 43210" not in out
+```
+
+In plain English: "A file with an email and a phone number in it stays out, and the report names what it found without showing it." The test runs the command the way you would, `main(["import"])`, on fictional files in temporary folders; only the clock and your answer at the prompt are supplied. Another test runs the import in a process of its own with every connection refused, and fails if it tries to reach the network.
+
+### Change it yourself
+
+1. Run `uv run homunculus import` once with `HOMUNCULUS_HOME` set to an empty folder, then open `import-rules.toml` there.
+2. Set `min_score = 0.9` and import a file containing `Passport J8369854 renewed.` It is imported: Presidio is only 0.45 sure about a passport number, even with the word "Passport" beside it.
+3. Set it back to `0.4`, delete the `[scan]` section entirely, and import again. The file is left out: a setting you delete goes back to its default.
 
 ---
 
