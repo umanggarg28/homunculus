@@ -235,6 +235,8 @@ def jobs(spans: list[dict[str, Any]], events: list[dict[str, Any]]) -> list[dict
             "reply": None,
             "error": None,
             "feedback": None,
+            "cost": _cost(members),
+            "limit": None,
         }
         if opened is not None:
             job["message"] = _text(opened["attributes"].get("gen_ai.input.messages"))
@@ -242,12 +244,23 @@ def jobs(spans: list[dict[str, Any]], events: list[dict[str, Any]]) -> list[dict
         if root is not None:
             job["ended"] = _iso(int(root["endTimeUnixNano"]))
             job["reply"] = _text(root["attributes"].get("gen_ai.output.messages"))
+            job["limit"] = root["attributes"].get("homunculus.limit")
             if root.get("status", {}).get("code") == StatusCode.ERROR.value:
                 job["error"] = root["status"].get("message")
         if trace_id in ratings:
             job["feedback"] = _rating(ratings[trace_id])
         found.append(job)
     return sorted(found, key=lambda job: job["started"], reverse=True)
+
+
+def _cost(spans: list[dict[str, Any]]) -> float | None:
+    """What a job's model calls cost, or None when no call reported a cost."""
+    costs = [
+        s["attributes"]["homunculus.cost_usd"]
+        for s in spans
+        if "homunculus.cost_usd" in s["attributes"]
+    ]
+    return sum(costs) if costs else None
 
 
 def _is_rating(event: dict[str, Any]) -> bool:

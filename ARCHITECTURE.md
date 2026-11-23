@@ -7,10 +7,10 @@ Homunculus is one always-on process that holds a small model loop, a few general
 | Module | Owns | Status |
 |---|---|---|
 | `server` | HTTP API for the web console and chat channels, and the built console itself | Chat stream, history, memory pages, console files |
-| `loop` | Ask the model, run the tool it asks for, repeat until done | Full loop |
+| `loop` | Ask the model, run the tool it asks for, repeat until done or a limit is reached | Full loop; each job ends at its step, minute or cost limit, checked after each round of tool calls, and does not start once the month's budget is spent |
 | `turns` | Turns running on the server, and their numbered events | Each turn a task of its own; events kept in memory for rejoining; stop on request |
 | `prompt` | What the model is told at the start of every turn | Fixed instructions in `prompt.md`, shipped with the code and the same every turn, then the profile, goals and wiki index from memory; a layer from skills is planned |
-| `model` | One streaming call to the model provider | Streaming text and tool calls, privacy routing, error reporting |
+| `model` | One streaming call to the model provider, its cost and retries | Streaming text and tool calls, privacy routing, error reporting; each call's cost from OpenRouter's `usage.cost`; up to three attempts when a call fails before any reply (429, 5xx, network), after 2 and 8 seconds; the key's spend this month from `GET /api/v1/key` |
 | `gate` | The answer for every proposed action | Decides from each tool's MCP annotations: read-only acts, a sandboxed tool acts, outward or unannotated asks, destructive asks except `write`, `edit` and `rename`; paths must stay in the workspace; unknown tools and unreadable calls are refused |
 | `tools` | Plain functions the model can ask to run, each described as an MCP `Tool` with annotations | `read`, `write`, `edit`, `list`, `search`, `delete`, `rename` in the workspace, and in memory for paths that start with `memory/`; results are MCP `CallToolResult`s; `shell` runs bash commands in the sandbox |
 | `activity` | Append-only record of every step, as OpenTelemetry traces | Written by the loop and the server, never by a tool; `traces.jsonl` in OpenTelemetry's file format, following the GenAI conventions; turn starts, decisions and ratings as OpenTelemetry log events in `logs.jsonl`; kept outside the workspace |
@@ -18,6 +18,7 @@ Homunculus is one always-on process that holds a small model loop, a few general
 | `sandbox` | Where the agent's commands run, apart from the operator's machine | Docker: a locked-down container on an internal network, with a Squid proxy sidecar as its only way out, to the package registries; every request logged |
 | `skills` | Skill folders in the Agent Skills format | Planned |
 | `memory` | The wiki, raw sources, profile and goals, as files | A local git repository at `HOMUNCULUS_HOME/memory`, created empty with a starting `SCHEMA.md`; checks on every write (frontmatter, a raw source for every new fact, links), a generated index, an append-only log, one commit per change, hand edits committed as the operator's; profile, goals and index in every prompt with their budgets; pages read and saved for the console; one lock held for each change, by the tools, by saves and by imports, across threads and processes |
+| `limits` | What bounds spending and runaway jobs | `limits.toml` in the data directory; `Budget` reads the month's spend (reused for a minute) and says whether a job may start: chat until 100% of the budget, unprompted work until 80%, and unprompted work not at all when the spend cannot be read |
 | `waker` | When the agent works unprompted | Planned |
 | `importing` | Copying the operator's files into memory | The `homunculus import` command: reads `import.txt`, leaves out files by the words in their path, scans the rest with Presidio and gitleaks and against the operator's identifiers, shows everything, copies on agreement into `raw/imports/<date and time>/`; settings in `import-rules.toml`; no network |
 | `identifiers` | The operator's private identifier list | `identifiers.txt` in the data directory; matched by the import scan and by the pre-commit check (`homunculus check-identifiers --staged`); matches shown masked |
@@ -48,6 +49,8 @@ If the model call fails at any point, `model` raises `ModelError`, `server` send
 | `done` | `{}` | The reply is complete |
 | `error` | `{"message": "..."}` | The reply failed, and why |
 | `stopped` | `{}` | The operator stopped the turn |
+| `notice` | `{"text", "limit"}` | A limit ended the job, or kept it from starting; `limit` is `steps`, `minutes`, `cost` or `budget`. The text is added to the history as an assistant message marked `notice`, and the stream then ends with `done` |
+| `retrying` | `{"attempt", "of"}` | The model call failed before replying and is being tried again |
 
 Every stream ends with one of `done`, `error` or `stopped`. A turn that fails for any other reason, such as a tool bug or the program shutting down, ends with `error`, in the same words its trace records.
 
@@ -69,7 +72,8 @@ Each turn is one OpenTelemetry trace, recorded with the official SDK and named a
 
 | Endpoint | Effect |
 |---|---|
-| `GET /api/activity` | The 100 most recent jobs, newest first |
+| `GET /api/activity` | The 100 most recent jobs, newest first, each with its `cost` (from its model calls' `homunculus.cost_usd`) and the `limit` that ended it, if one did |
+| `GET /api/budget` | This month's spend, the budget and the share at which unprompted work stops |
 | `POST /api/activity/{job}/feedback` | `{"rating": "up" \| "down", "reason": "..."}`. Writes a `gen_ai.evaluation.result` event on the job's root span; the latest rating for a job counts. `job` is the trace id |
 
 A rating is a new event, never an edit, so both files stay append-only.
@@ -186,6 +190,8 @@ Tests sit at agreed seams and fake only the outside world.
 | Server HTTP API: turns | A turn carries on after the page goes away, a page rejoins from the start, `Last-Event-ID` sends only what was missed, stop ends a turn and leaves the conversation, only a running turn can be stopped | The model (a stand-in that waits until the test lets it finish) |
 | Server HTTP API: memory | The page list with guesses, reading a page, a save recorded as the operator's hand edit, a save from an older version refused, the profile's cap, only pages and the profile editable, sources with when they arrived, reading a source, the log newest first, saves and tool calls waiting for each other, and the egress list matching the proxy, the model's address and SECURITY.md | The model (unused) |
 | Command line | `homunculus import`: nothing copied until the operator agrees, findings left out and never shown in full, `--allow`, exclusion by name and by the rules file, identity and card numbers (and numbers that fail their checksum not reported), keys through gitleaks, refusal without gitleaks, identifiers, file types and size, re-imports, waiting on the memory lock, no network in a process of its own; `check-identifiers --staged` on a throwaway repository | The clock; the operator's answer at the prompt |
+| Loop: limits | A job ends at its step, minute and cost limits and says so; its cost is recorded; chat is refused once the budget is spent; unprompted work stops at 80% and when the spend cannot be read; the spend is read at most once a minute; a limit below a cent is named as it is; `limits.toml` defaults and changes | The model (scripted, reporting costs), the clock, the month's spend |
+| Model: cost and retries | The cost read from OpenRouter, retries with waits and a `Retrying` for each, giving up after three, no retry for a refused request or after words arrived, the month's spend from the key | Only the network beneath the real model |
 | Server HTTP API: approvals | Waiting instead of running, approve, decline, hand-off done, decided once, survives a restart, notices | The model; stand-in tools that record their calls |
 | Server HTTP API | Event format including tool steps, errors, one reply at a time, privacy routing on every request, tools offered and streamed tool calls run, history, serving the console | The model, or only the network beneath the real model |
 | Console in a browser | Sending a message shows the tool step and the reply, the conversation survives a reload, holding to allow a request runs it (a click alone does not) and the agent carries on, a rating in the Activity column is kept, reloading during a turn still shows its whole reply, Stop ends the turn on the server, and the opening plays on a first visit only. Memory: the nav reaches it and Back returns, a page's facts with numbered sources and earlier lines, an edit saved as the operator's with the old line struck and Undo, each old line above its replacement with earlier lines kept and moved lines left alone, a save after the page changed refused with the draft kept, guesses confirmed and removed, sources, profile and egress on About you, the profile edited, recent changes, and the phone's page list with Back | The model only; real server, built console and Chromium |

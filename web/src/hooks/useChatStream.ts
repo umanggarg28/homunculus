@@ -16,6 +16,10 @@ export interface ChatMessage {
   error?: string;
   /** Written by the program on the operator's behalf, such as an approval outcome. */
   notice?: boolean;
+  /** What a limit said when it ended this reply's job, shown under the reply. */
+  limitNote?: string;
+  /** "Retrying (2 of 3)" while the model is being tried again; gone once words arrive. */
+  retrying?: string;
 }
 
 interface UseChatStream {
@@ -127,7 +131,11 @@ export function useChatStream(): UseChatStream {
                   }
                   if (stopWantedRef.current) api.stopTurn(data.id).catch(() => undefined);
                 } else if (event.event === "delta") {
-                  update((m) => ({ ...m, content: m.content + data.text }));
+                  update((m) => ({ ...m, content: m.content + data.text, retrying: undefined }));
+                } else if (event.event === "retrying") {
+                  update((m) => ({ ...m, retrying: `Retrying (${data.attempt} of ${data.of})` }));
+                } else if (event.event === "notice") {
+                  update((m) => ({ ...m, limitNote: data.text, retrying: undefined }));
                 } else if (event.event === "tool") {
                   const step = data as ToolEvent;
                   setToolCalls((prev) => [

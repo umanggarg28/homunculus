@@ -11,6 +11,8 @@ from platformdirs import user_data_path
 from homunculus import identifiers, importing
 from homunculus.activity import Activity
 from homunculus.approvals import Approvals
+from homunculus.limits import Budget
+from homunculus.limits import load as load_limits
 from homunculus.memory import Memory
 from homunculus.model import OpenRouterModel
 from homunculus.sandbox import docker
@@ -81,13 +83,17 @@ def serve() -> None:
     else:
         sandbox.record_requests(activity)
         tools.append(shell_tool(sandbox))
+    model = OpenRouterModel(api_key)
+    limits = load_limits(home)
     app = create_app(
-        OpenRouterModel(api_key),
+        model,
         tools,
         activity,
         Approvals(home / "approvals.json"),
         console=CONSOLE if (CONSOLE / "index.html").is_file() else None,
         memory=memory,
+        limits=limits,
+        budget=Budget(limits, model.month_spend),
     )
     try:
         # Bound to this machine only: nothing else on the network can reach the API.

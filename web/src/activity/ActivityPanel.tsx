@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Job, type Rating } from "@/lib/api";
+import { api, type Job, type Rating, type MonthBudget } from "@/lib/api";
 import { useTurnEvents } from "@/lib/turnEvents";
 import type { ToolStep } from "@/lib/toolSteps";
 import { send as sendTrace } from "@/presence/overlay";
@@ -31,11 +31,23 @@ function jobTitle(job: Job): string {
   return m.length > TITLE_MAX ? `${m.slice(0, TITLE_MAX - 1)}…` : m;
 }
 
+/** Dollars as a person reads them: "$1.25", and to a tenth of a cent below a cent. */
+const dollars = (usd: number) => "$" + (usd < 0.01 ? usd.toFixed(3) : usd.toFixed(2));
+
+const LIMIT_WORDS: Record<string, string> = {
+  steps: "stopped at its step limit",
+  minutes: "stopped at its time limit",
+  cost: "stopped at its cost limit",
+  budget: "not started: over budget",
+};
+
 function jobLine(job: Job): string {
   const failed = job.steps.filter((s) => s.outcome === "failed").length;
   const parts = [job.steps.length ? (job.steps.length === 1 ? "One step" : `${job.steps.length} steps`) : "No steps"];
   if (failed) parts.push(failed === 1 ? "one failed" : `${failed} failed`);
   if (job.ended) parts.push(duration(job.started, job.ended));
+  if (job.cost !== null) parts.push(dollars(job.cost));
+  if (job.limit) parts.push(LIMIT_WORDS[job.limit] ?? `stopped by its ${job.limit} limit`);
   return parts.join(", ");
 }
 
@@ -149,9 +161,11 @@ export function ActivityPanel() {
   const list = useRef<HTMLOListElement>(null);
   const lastEnded = useRef<string | null>(null);
 
+  const [month, setMonth] = useState<MonthBudget | null>(null);
   const refresh = useCallback(async () => {
     try {
       setJobs(await api.activity());
+      setMonth(await api.budget());
     } catch {
       // Unreachable server: keep the last list rather than showing an empty one.
     }
@@ -194,6 +208,7 @@ export function ActivityPanel() {
           </p>
           <p className="sum-line">{today.length ? `${plural(steps, "step", "steps")}${failed ? `, ${plural(failed, "failed", "failed")}` : ", none failed"}.` : "Nothing finished yet today."}</p>
         </div>
+        {month && <MonthSpend month={month} />}
       </div>
       <DayChart jobs={jobs ?? []} />
       {jobs?.length === 0 && <p className="act-empty">Work appears here as the agent does it.</p>}
@@ -240,5 +255,25 @@ export function ActivityPanel() {
         })}
       </ol>
     </>
+  );
+}
+
+/** This month's spend against the budget, and what it means for the agent's work. */
+function MonthSpend({ month }: { month: MonthBudget }) {
+  const paused = month.spent >= month.budget * month.unprompted_stop_at;
+  const line =
+    month.spent >= month.budget
+      ? "Budget spent. Chat waits until next month."
+      : paused
+        ? "Unprompted work is paused. Chat still works."
+        : `Unprompted work stops at ${Math.round(month.unprompted_stop_at * 100)}%.`;
+  return (
+    <div>
+      <p className="sum-cap">This month</p>
+      <p className="sum-fig">
+        <span className="sum-n">{dollars(month.spent)}</span> <span>of {dollars(month.budget)}</span>
+      </p>
+      <p className={`sum-line${paused ? " is-attn" : ""}`}>{line}</p>
+    </div>
   );
 }

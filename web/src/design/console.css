@@ -109,3 +109,9 @@ html.js:is([data-intro="0"], [data-intro="a"], [data-intro="1"], [data-intro="2"
 .rate-reason { margin: 0; font-size: var(--text-sm); color: var(--color-ink-2); }
 /* Tools number lines with a tab; a narrow tab keeps the number beside its line. */
 .term { tab-size: 3; }
+/* while the model is being tried again: quiet, and gone once words arrive */
+.msg-retry { margin: 0; font-size: var(--text-xs); color: var(--color-muted); }
+/* a limit that ended the job reads as a notice under the reply it ended */
+.msg-it .msg-note { align-self: flex-start; margin-top: var(--space-xs); text-align: left; }
+/* the month's spend turns amber once unprompted work is paused: it needs you */
+.sum .sum-line.is-attn { color: var(--color-attn); }
