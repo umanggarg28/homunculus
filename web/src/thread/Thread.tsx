@@ -18,7 +18,7 @@ const TONE: Record<ToolStep["outcome"], Tone> = { ok: "live", failed: "bad", wai
 
 function Message({ m, children }: { m: ChatMessage; children?: React.ReactNode }) {
   const time = hhmm(m.ts);
-  if (m.role === "user" && m.notice) {
+  if (m.notice) {
     return <p className="msg-note">{m.content}</p>;
   }
   if (m.role === "user") {
@@ -41,7 +41,13 @@ function Message({ m, children }: { m: ChatMessage; children?: React.ReactNode }
       ) : (
         m.content && <MarkdownMessage text={m.content} />
       )}
+      {m.retrying && (
+        <p className="msg-retry" role="status">
+          {m.retrying}
+        </p>
+      )}
       {children}
+      {m.limitNote && <p className="msg-note">{m.limitNote}</p>}
       {m.error && <p className={m.error === "stopped" ? "msg-stopped" : "msg-error"}>{m.error === "stopped" ? "Stopped by you. Steps that already ran were not undone." : m.error}</p>}
       {time && !m.inFlight && <span className="time">{time}</span>}
     </div>

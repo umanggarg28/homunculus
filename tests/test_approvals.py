@@ -12,7 +12,7 @@ from scripted_model import ScriptedModel
 
 from homunculus.activity import Activity
 from homunculus.approvals import Approvals
-from homunculus.model import Message, ModelError, ToolCall, Usage
+from homunculus.model import Message, ModelError, Retrying, ToolCall, Usage
 from homunculus.server import create_app
 from homunculus.tools import Tool
 from homunculus.tools.files import file_tools
@@ -197,7 +197,7 @@ class FailingFollowUp(ScriptedModel):
 
     async def stream(
         self, messages: list[Message], tools: list[dict[str, Any]]
-    ) -> AsyncIterator[str | ToolCall | Usage]:
+    ) -> AsyncIterator[str | ToolCall | Usage | Retrying]:
         if len(self.received) >= 2:
             self.received.append(list(messages))
             raise ModelError("Model request failed (503): no providers available")

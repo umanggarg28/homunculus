@@ -82,6 +82,16 @@ If the request fails, the stream ends with an `error` event that says why, for e
 
 To see a tool in use, send `"Save a note called tea.md that says I like green tea."`. The file appears in the data directory's `workspace/` folder, and the step is recorded in its `traces.jsonl`. On macOS, `open ~/Library/Application\ Support/homunculus` shows them in Finder.
 
+## Budget and limits
+
+Spending and runaway jobs are bounded by code, with numbers you can change in `limits.toml` in the data directory, written with these defaults on first start:
+
+- **Each job**, whether you asked for it or the agent started it, ends when it reaches 25 steps (tool calls), 10 minutes or 5 cents, and says which in the conversation. Activity shows what each job cost and which limit ended it.
+- **Each month**, at 80% of the budget ($5 by default) work the agent starts on its own stops, and chat goes on until the whole budget is spent. The month's spend is what OpenRouter counts for your API key, so every use of the key counts. Activity shows it against the budget.
+- **When the model provider fails** before replying (rate limits, outages, a dropped connection), the call is tried again after 2 and then 8 seconds, and the console shows "Retrying (2 of 3)". After the third failure you are told.
+
+**Set a monthly limit on the key itself, too.** It is the backstop if a bug here ever miscounts. In your [OpenRouter key settings](https://openrouter.ai/settings/keys), edit the key Homunculus uses, set a credit limit (the same as `monthly_budget_usd`, or a little more), and choose a monthly reset. OpenRouter then refuses requests once the key has spent it, until the first of the next month (UTC).
+
 ## Importing your own files
 
 The agent learns about you from what you tell it, and from files you choose to give it. It never reads your real folders. Instead you run the import yourself, and it copies the files you list into its memory, after a scan:

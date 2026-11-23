@@ -3,7 +3,7 @@
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -24,8 +24,9 @@ from homunculus.activity import (
     traceparent_of,
 )
 from homunculus.approvals import Approvals, Kind
+from homunculus.limits import Budget, Limits, dollars
 from homunculus.memory import Memory
-from homunculus.model import Message, Model, ModelError, ToolCall, Usage
+from homunculus.model import Message, Model, ModelError, Retrying, ToolCall, Usage
 from homunculus.tools import Tool, make_result, result_text
 
 
@@ -44,6 +45,15 @@ class ToolStep:
     outcome: str
 
 
+@dataclass(frozen=True)
+class Stopped:
+    """A limit ended the job, or kept it from starting: which one, and what the operator
+    is told."""
+
+    limit: str  # "steps", "minutes", "cost" or "budget"
+    message: str
+
+
 async def run(
     model: Model,
     tools: list[Tool],
@@ -53,7 +63,11 @@ async def run(
     text: str,
     notice: bool = False,
     memory: Memory | None = None,
-) -> AsyncIterator[str | ToolStep]:
+    limits: Limits | None = None,
+    budget: Budget | None = None,
+    unprompted: bool = False,
+    clock: Callable[[], float] = time.monotonic,
+) -> AsyncIterator[str | ToolStep | Retrying | Stopped]:
     """Answer one operator message, yielding the reply text as it streams and a
     ToolStep after each tool call, so a caller can show the work as it happens.
 
@@ -66,7 +80,16 @@ async def run(
 
     With `memory`, the turn starts by taking any edits the operator made by hand, and the
     instructions are followed by the profile, goals and wiki index, read fresh each turn.
+
+    Every job is bounded by `limits` (the defaults when none are given): it ends once it
+    reaches its steps, minutes or cost, and with a `budget` it does not start once the
+    month's budget is spent, or for `unprompted` work, its share of it. A Stopped says
+    which, and its message is added to the conversation as a notice.
     """
+    limits = limits or Limits()
+    began = clock()
+    steps = 0
+    cost = 0.0
     by_name = {tool.name: tool for tool in tools}
     schemas = [tool.schema() for tool in tools]
     instructions = prompt.system_prompt()
@@ -101,7 +124,11 @@ async def run(
         {"gen_ai.input.messages": input_messages(text), "homunculus.notice": notice},
     )
     try:
-        while True:
+        stop = None
+        refusal = await budget.refusal(unprompted) if budget is not None else None
+        if refusal is not None:
+            stop = Stopped("budget", refusal)
+        while stop is None:
             parts: list[str] = []
             calls: list[ToolCall] = []
             messages = [system, *history, *turn]
@@ -111,6 +138,9 @@ async def run(
                         calls.append(item)
                     elif isinstance(item, Usage):
                         _record_usage(chat, item)
+                        cost += item.cost_usd or 0
+                    elif isinstance(item, Retrying):
+                        yield item
                     else:
                         parts.append(item)
                         yield item
@@ -122,9 +152,22 @@ async def run(
             if not calls:
                 break
             for call in calls:
+                if steps >= limits.job_steps:
+                    # Every call the model made gets an answer, so the conversation stays
+                    # well formed for the next turn.
+                    skipped = "Not run: this job reached its step limit."
+                    turn.append({"role": "tool", "tool_call_id": call.id, "content": skipped})
+                    continue
                 step = await _carry_out(call, by_name, activity, approvals, parent)
+                steps += 1
                 turn.append({"role": "tool", "tool_call_id": call.id, "content": step.result})
                 yield step
+            stop = _over(limits, steps, (clock() - began) / 60, cost)
+        if stop is not None:
+            reply = {"role": "assistant", "content": stop.message, "notice": True}
+            turn.append(reply)
+            root.set_attribute("homunculus.limit", stop.limit)
+            yield stop
     except ModelError as error:
         fail(root, error, str(error))
         raise
@@ -261,11 +304,43 @@ def _model_call(activity: Activity, model: Model, parent: Context) -> Iterator[S
     span.end()
 
 
+CARRY_ON = "Ask me to carry on if you want more."
+
+
+def _steps(n: int) -> str:
+    return "1 step" if n == 1 else f"{n} steps"
+
+
+def _over(limits: Limits, steps: int, minutes: float, cost: float) -> Stopped | None:
+    """The limit a job has reached, if any. Checked after each round of tool calls, so a
+    call already running finishes first."""
+    if steps >= limits.job_steps:
+        return Stopped(
+            "steps",
+            f"I stopped: this job reached its limit of {_steps(limits.job_steps)}. {CARRY_ON}",
+        )
+    if minutes >= limits.job_minutes:
+        return Stopped(
+            "minutes",
+            f"I stopped: this job reached its limit of {limits.job_minutes:g} minutes. {CARRY_ON}",
+        )
+    if cost >= limits.job_cost_usd:
+        return Stopped(
+            "cost",
+            f"I stopped: this job reached its cost limit of {dollars(limits.job_cost_usd)}. "
+            + CARRY_ON,
+        )
+    return None
+
+
 def _record_usage(span: Span, usage: Usage) -> None:
     span.set_attribute("gen_ai.usage.input_tokens", usage.input_tokens)
     span.set_attribute("gen_ai.usage.output_tokens", usage.output_tokens)
     if usage.cached_input_tokens:
         span.set_attribute("gen_ai.usage.cache_read.input_tokens", usage.cached_input_tokens)
+    # The GenAI conventions name no cost attribute, so this one is the program's own.
+    if usage.cost_usd is not None:
+        span.set_attribute("homunculus.cost_usd", usage.cost_usd)
 
 
 # The reason given when the operator stops a turn, so its record can say who stopped it.

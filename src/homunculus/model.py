@@ -1,7 +1,8 @@
-"""One streaming call to the language model."""
+"""One streaming call to the language model, with its cost and retries."""
 
+import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -29,6 +30,17 @@ class Usage:
     output_tokens: int
     # Input tokens the provider read from its cache, which cost less.
     cached_input_tokens: int = 0
+    # What the call cost, as the provider reports it.
+    cost_usd: float | None = None
+
+
+@dataclass(frozen=True)
+class Retrying:
+    """The call failed before any reply arrived, and is being tried again: this is
+    attempt `attempt` of `of`. Sent so the operator can see why nothing is happening."""
+
+    attempt: int
+    of: int
 
 
 class ModelError(Exception):
@@ -42,16 +54,23 @@ class Model(Protocol):
 
     def stream(
         self, messages: list[Message], tools: list[dict[str, Any]]
-    ) -> AsyncIterator[str | ToolCall | Usage]:
+    ) -> AsyncIterator[str | ToolCall | Usage | Retrying]:
         """Send the conversation and the tools on offer.
 
-        Yields the reply text as it arrives, chunk by chunk, each complete tool call, and
-        the token counts once the call is done, when the provider reports them.
+        Yields the reply text as it arrives, chunk by chunk, each complete tool call, the
+        token counts and cost once the call is done, when the provider reports them, and
+        a Retrying before each new attempt after a failure.
         """
         ...
 
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
+# Seconds to wait before each new attempt. A failure that lasts longer than this is
+# not a blip, and the operator is better told than kept waiting.
+RETRY_WAITS = (2, 8)
+# Failures worth another try: too many requests, and the provider's own errors.
+RETRY_STATUS = {408, 429, 500, 502, 503, 504}
 MODEL_ID = "z-ai/glm-5.3-flash"
 
 # Route only to providers that keep no copy of the request and do not train on it.
@@ -63,13 +82,28 @@ class OpenRouterModel:
     name = MODEL_ID
     provider = "openrouter"
 
-    def __init__(self, api_key: str, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        client: httpx.AsyncClient | None = None,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
         self._api_key = api_key
         self._client = client or httpx.AsyncClient(timeout=120)
+        self._sleep = sleep
+
+    async def month_spend(self) -> float:
+        """What this key has spent in the current calendar month (UTC), as OpenRouter
+        counts it. Every use of the key counts, including use by other programs."""
+        response = await self._client.get(
+            OPENROUTER_KEY_URL, headers={"Authorization": f"Bearer {self._api_key}"}
+        )
+        response.raise_for_status()
+        return float(response.json()["data"]["usage_monthly"])
 
     async def stream(
         self, messages: list[Message], tools: list[dict[str, Any]]
-    ) -> AsyncIterator[str | ToolCall | Usage]:
+    ) -> AsyncIterator[str | ToolCall | Usage | Retrying]:
         body: dict[str, Any] = {
             "model": MODEL_ID,
             "messages": [_api_fields(message) for message in messages],
@@ -79,11 +113,22 @@ class OpenRouterModel:
         if tools:
             body["tools"] = tools
         headers = {"Authorization": f"Bearer {self._api_key}"}
-        try:
-            async for item in self._request(body, headers):
-                yield item
-        except httpx.HTTPError as error:
-            raise ModelError(f"Could not reach the model: {error}") from error
+        attempts = len(RETRY_WAITS) + 1
+        for attempt in range(1, attempts + 1):
+            started = False
+            try:
+                async for item in self._request(body, headers):
+                    started = True
+                    yield item
+                return
+            except (httpx.HTTPError, _Retryable) as error:
+                # Once words have arrived, another attempt would repeat them.
+                if started or attempt == attempts:
+                    detail = error.message if isinstance(error, _Retryable) else str(error)
+                    tried = f" after {attempts} attempts" if attempt == attempts else ""
+                    raise ModelError(f"Could not reach the model{tried}: {detail}") from error
+                yield Retrying(attempt + 1, attempts)
+                await self._sleep(RETRY_WAITS[attempt - 1])
 
     async def _request(
         self, body: dict[str, Any], headers: dict[str, str]
@@ -93,9 +138,12 @@ class OpenRouterModel:
         ) as response:
             if response.status_code != 200:
                 await response.aread()
-                raise ModelError(
+                message = (
                     f"Model request failed ({response.status_code}): {_error_message(response)}"
                 )
+                if response.status_code in RETRY_STATUS:
+                    raise _Retryable(message)
+                raise ModelError(message)
             # A tool call arrives in fragments spread over several chunks, keyed by its
             # index: the id and name first, then the arguments a few characters at a time.
             # They are joined here and handed over whole once the stream ends.
@@ -135,7 +183,16 @@ class OpenRouterModel:
                     cached_input_tokens=(usage.get("prompt_tokens_details") or {}).get(
                         "cached_tokens", 0
                     ),
+                    cost_usd=usage.get("cost"),
                 )
+
+
+class _Retryable(Exception):
+    """A failure the provider may not repeat on another attempt."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
 
 
 def _error_message(response: httpx.Response) -> str:

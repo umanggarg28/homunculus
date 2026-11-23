@@ -15,8 +15,9 @@ from pydantic import BaseModel
 from homunculus import egress, loop
 from homunculus.activity import DECISION, Activity, context_of, fail
 from homunculus.approvals import Approval, ApprovalError, Approvals, Kind, Status
+from homunculus.limits import Budget, Limits
 from homunculus.memory import CAPS, Memory, Stale
-from homunculus.model import Message, Model, ModelError
+from homunculus.model import Message, Model, ModelError, Retrying
 from homunculus.tools import Tool
 from homunculus.turns import Event, Turn, Turns
 
@@ -69,6 +70,8 @@ def create_app(
     approvals: Approvals,
     console: Path | None = None,
     memory: Memory | None = None,
+    limits: Limits | None = None,
+    budget: Budget | None = None,
 ) -> FastAPI:
     """The HTTP API, and the built web console from `console` when one is given."""
     app = FastAPI(title="Homunculus")
@@ -90,10 +93,22 @@ def create_app(
             async with turn:
                 try:
                     async for item in loop.run(
-                        model, tools, activity, approvals, history, request.message, memory=memory
+                        model,
+                        tools,
+                        activity,
+                        approvals,
+                        history,
+                        request.message,
+                        memory=memory,
+                        limits=limits,
+                        budget=budget,
                     ):
                         if isinstance(item, loop.ToolStep):
                             await running.add("tool", dataclasses.asdict(item))
+                        elif isinstance(item, loop.Stopped):
+                            await running.add("notice", {"text": item.message, "limit": item.limit})
+                        elif isinstance(item, Retrying):
+                            await running.add("retrying", {"attempt": item.attempt, "of": item.of})
                         else:
                             await running.add("delta", {"text": item})
                 except ModelError as error:
@@ -152,7 +167,16 @@ def create_app(
         async with turn:
             try:
                 async for _ in loop.run(
-                    model, tools, activity, approvals, history, text, notice=True, memory=memory
+                    model,
+                    tools,
+                    activity,
+                    approvals,
+                    history,
+                    text,
+                    notice=True,
+                    memory=memory,
+                    limits=limits,
+                    budget=budget,
                 ):
                     pass
             except Exception as error:
@@ -277,6 +301,18 @@ def create_app(
                     entry["notice"] = True
                 shown.append(entry)
         return shown
+
+    if budget is not None:
+
+        @app.get("/api/budget")
+        async def month() -> dict[str, Any]:
+            """This month's spend against the budget, for the console."""
+            assert budget is not None
+            return {
+                "spent": await budget.spent(),
+                "budget": budget.limits.monthly_budget_usd,
+                "unprompted_stop_at": budget.limits.unprompted_stop_at,
+            }
 
     if memory is not None:
         _memory_routes(app, memory)

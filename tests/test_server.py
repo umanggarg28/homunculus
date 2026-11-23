@@ -11,7 +11,8 @@ from scripted_model import ScriptedModel, SlowScriptedModel
 
 from homunculus.activity import Activity
 from homunculus.approvals import Approvals
-from homunculus.model import Model, OpenRouterModel, ToolCall
+from homunculus.limits import Budget, Limits
+from homunculus.model import Model, OpenRouterModel, Retrying, ToolCall
 from homunculus.server import create_app
 from homunculus.tools import Tool
 from homunculus.tools.files import file_tools
@@ -44,8 +45,14 @@ def server(model: Model, tmp_path: Path, tools: list[Tool] | None = None) -> Tes
 
 
 def openrouter_model(network: Callable[[httpx.Request], httpx.Response]) -> OpenRouterModel:
-    """The real model module, with only the network replaced by `network`."""
-    return OpenRouterModel("test-key", httpx.AsyncClient(transport=httpx.MockTransport(network)))
+    """The real model module, with only the network replaced by `network`. Waits between
+    attempts are skipped, so a retried call takes no real time."""
+
+    async def no_wait(seconds: float) -> None:
+        return None
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(network))
+    return OpenRouterModel("test-key", client, sleep=no_wait)
 
 
 def openrouter_chunk(text: str) -> str:
@@ -277,4 +284,64 @@ def test_an_unreachable_model_ends_the_stream_with_a_readable_error(tmp_path: Pa
 
     events = chat(server(openrouter_model(network), tmp_path), "Hello")
 
-    assert events == [("error", {"message": "Could not reach the model: connection refused"})]
+    assert events == [
+        ("retrying", {"attempt": 2, "of": 3}),
+        ("retrying", {"attempt": 3, "of": 3}),
+        ("error", {"message": "Could not reach the model after 3 attempts: connection refused"}),
+    ]
+
+
+# Budget and limits, as the console sees them
+
+
+def limited_server(model: Model, tmp_path: Path, **options: Any) -> TestClient:
+    activity = Activity(tmp_path)
+    approvals = Approvals(tmp_path / "approvals.json")
+    return TestClient(create_app(model, [], activity, approvals, **options))
+
+
+def test_a_limit_reaches_the_console_as_a_notice_and_stays_in_the_history(tmp_path: Path) -> None:
+    async def spent() -> float:
+        return 5.5
+
+    client = limited_server(
+        ScriptedModel([["Hello."]]), tmp_path, budget=Budget(Limits(monthly_budget_usd=5), spent)
+    )
+
+    events = chat(client, "Hi")
+
+    notices = [data for name, data in events if name == "notice"]
+    assert len(notices) == 1 and notices[0]["limit"] == "budget"
+    assert events[-1][0] == "done"
+    history = client.get("/api/history").json()
+    assert history[-1] == {"role": "assistant", "content": notices[0]["text"], "notice": True}
+
+
+def test_a_retry_is_shown_while_the_model_is_tried_again(tmp_path: Path) -> None:
+    client = limited_server(ScriptedModel([[Retrying(2, 3), "Hello."]]), tmp_path)
+
+    events = chat(client, "Hi")
+
+    assert ("retrying", {"attempt": 2, "of": 3}) in events
+    assert ("delta", {"text": "Hello."}) in events
+
+
+def test_the_months_spend_and_budget_are_shown(tmp_path: Path) -> None:
+    async def spent() -> float:
+        return 1.25
+
+    client = limited_server(
+        ScriptedModel([]), tmp_path, budget=Budget(Limits(monthly_budget_usd=5), spent)
+    )
+
+    assert client.get("/api/budget").json() == {
+        "spent": 1.25,
+        "budget": 5.0,
+        "unprompted_stop_at": 0.8,
+    }
+
+
+def test_without_a_budget_there_is_nothing_to_show(tmp_path: Path) -> None:
+    client = limited_server(ScriptedModel([]), tmp_path)
+
+    assert client.get("/api/budget").status_code == 404
