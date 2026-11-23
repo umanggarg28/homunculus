@@ -1,5 +1,6 @@
 """Homunculus: an always-on personal agent."""
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import uvicorn
 from platformdirs import user_data_path
 
+from homunculus import identifiers, importing
 from homunculus.activity import Activity
 from homunculus.approvals import Approvals
 from homunculus.memory import Memory
@@ -22,13 +24,45 @@ PORT = 8765
 CONSOLE = Path(__file__).resolve().parents[2] / "web" / "dist"
 
 
-def main() -> None:
+def data_home() -> Path:
+    """The data directory. It lives outside the code repository, so private data cannot
+    be committed; by default it is the operating system's place for application data."""
+    home = Path(os.environ.get("HOMUNCULUS_HOME") or user_data_path("homunculus", appauthor=False))
+    home.mkdir(parents=True, exist_ok=True)
+    return home
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="homunculus", description="An always-on personal agent.")
+    commands = parser.add_subparsers(dest="command", metavar="command")
+    commands.add_parser("serve", help="Start the agent and its web console (the default).")
+    bring = commands.add_parser(
+        "import", help="Copy the files listed in import.txt into memory, after a scan."
+    )
+    bring.add_argument(
+        "--allow",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Include a file the scan left out, once you have looked at it. Can be repeated.",
+    )
+    check = commands.add_parser(
+        "check-identifiers", help="Stop a commit whose staged lines mention your identifiers."
+    )
+    check.add_argument("--staged", action="store_true", required=True)
+    arguments = parser.parse_args(argv)
+    if arguments.command == "import":
+        sys.exit(importing.run(data_home(), arguments.allow))
+    if arguments.command == "check-identifiers":
+        sys.exit(identifiers.check_staged(data_home()))
+    serve()
+
+
+def serve() -> None:
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         sys.exit("Set OPENROUTER_API_KEY to an OpenRouter API key, then start again.")
-    # The data directory lives outside the code repository, so private data cannot be
-    # committed. By default it is the operating system's place for application data.
-    home = Path(os.environ.get("HOMUNCULUS_HOME") or user_data_path("homunculus", appauthor=False))
+    home = data_home()
     workspace = home / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     activity = Activity(home)

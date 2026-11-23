@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stops a commit whose staged lines mention one of your identifiers, from the private
+# list in your data directory. Turn it on once with: git config core.hooksPath .githooks
+exec uv run --quiet homunculus check-identifiers --staged
