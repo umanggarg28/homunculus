@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Job, type Rating, type MonthBudget } from "@/lib/api";
 import { useTurnEvents } from "@/lib/turnEvents";
 import { useWaker } from "@/hooks/useWaker";
+import { WakerControls } from "@/shell/Nav";
 import type { ToolStep } from "@/lib/toolSteps";
 import { send as sendTrace } from "@/presence/overlay";
 import { stepWords } from "@/thread/steps";
@@ -56,7 +57,11 @@ function jobLine(job: Job): string {
   if (job.ended) parts.push(duration(job.started, job.ended));
   if (typeof job.cost === "number") parts.push(dollars(job.cost));
   if (job.limit) parts.push(LIMIT_WORDS[job.limit] ?? `stopped by its ${job.limit} limit`);
-  if (job.unprompted) parts.unshift(job.reason ? `On its own (${job.reason})` : "On its own");
+  if (job.unprompted) {
+    // The rest reads on from "On its own (…)", so it starts in lower case.
+    parts[0] = parts[0][0].toLowerCase() + parts[0].slice(1);
+    parts.unshift(job.reason ? `On its own (${job.reason})` : "On its own");
+  }
   return parts.join(", ");
 }
 
@@ -290,7 +295,8 @@ function MonthSpend({ month }: { month: MonthBudget }) {
 
 /** What the agent plans to do on its own: its next wake-ups and today's count. */
 function NextWakeUps() {
-  const { status } = useWaker();
+  const waker = useWaker();
+  const { status } = waker;
   if (!status) return null;
   const time = (at: string) => at.slice(11);
   const later = status.pending.slice(0, 3);
@@ -302,6 +308,9 @@ function NextWakeUps() {
           : `Next wake-up at ${time(status.next_timer)}.`}{" "}
         {status.today.woken} of {status.today.cap} wake-ups today.
       </p>
+      <div className="wake-here">
+        <WakerControls waker={waker} />
+      </div>
       {later.length > 0 && (
         <ul className="wake-list">
           {later.map((w) => (
