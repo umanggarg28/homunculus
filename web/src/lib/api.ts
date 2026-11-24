@@ -54,10 +54,11 @@ export interface Job {
   reply: string | null;
   error: string | null;
   feedback: { rating: Rating; reason: string | null; time: string } | null;
-  /** What the job's model calls cost, in US dollars, or null if none reported a cost. */
-  cost: number | null;
+  /** What the job's model calls cost, in US dollars, or null if none reported a cost.
+   *  Missing from a server that predates costs. */
+  cost?: number | null;
   /** The limit that ended the job, if one did: "steps", "minutes", "cost" or "budget". */
-  limit: string | null;
+  limit?: string | null;
 }
 
 /** This month's spend on the API key against the budget, in US dollars. */
@@ -130,7 +131,7 @@ export const api = {
   /** This month's spend against the budget, or null when the server keeps no budget. */
   async budget(): Promise<MonthBudget | null> {
     const response = await fetch("/api/budget");
-    if (response.status === 404) return null;
+    if (response.status === 204) return null;
     if (!response.ok) throw new Error(`budget failed: ${response.status}`);
     return response.json();
   },

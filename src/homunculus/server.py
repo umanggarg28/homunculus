@@ -302,17 +302,17 @@ def create_app(
                 shown.append(entry)
         return shown
 
-    if budget is not None:
-
-        @app.get("/api/budget")
-        async def month() -> dict[str, Any]:
-            """This month's spend against the budget, for the console."""
-            assert budget is not None
-            return {
-                "spent": await budget.spent(),
-                "budget": budget.limits.monthly_budget_usd,
-                "unprompted_stop_at": budget.limits.unprompted_stop_at,
-            }
+    @app.get("/api/budget", response_model=None)
+    async def month() -> dict[str, Any] | Response:
+        """This month's spend against the budget, for the console. With no budget kept,
+        204 No Content: nothing is wrong, so a browser has no error to log."""
+        if budget is None:
+            return Response(status_code=204)
+        return {
+            "spent": await budget.spent(),
+            "budget": budget.limits.monthly_budget_usd,
+            "unprompted_stop_at": budget.limits.unprompted_stop_at,
+        }
 
     if memory is not None:
         _memory_routes(app, memory)

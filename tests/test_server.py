@@ -344,4 +344,7 @@ def test_the_months_spend_and_budget_are_shown(tmp_path: Path) -> None:
 def test_without_a_budget_there_is_nothing_to_show(tmp_path: Path) -> None:
     client = limited_server(ScriptedModel([]), tmp_path)
 
-    assert client.get("/api/budget").status_code == 404
+    # No Content rather than Not Found: nothing is wrong, so a browser logs no error.
+    response = client.get("/api/budget")
+    assert response.status_code == 204
+    assert response.content == b""
