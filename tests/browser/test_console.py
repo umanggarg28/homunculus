@@ -231,3 +231,42 @@ def test_stop_ends_the_turn_on_the_server(page: Page, tmp_path: Path, workspace:
         expect(status(page)).to_have_text("Stopped")
         side(page).get_by_role("button", name="Plan my week").click()
         expect(side(page).get_by_text("The turn was stopped by the operator.")).to_be_visible()
+
+
+def test_now_loads_without_errors_in_the_browser_console(page: Page, console_url: str) -> None:
+    errors: list[str] = []
+    page.on(
+        "console", lambda message: errors.append(message.text) if message.type == "error" else None
+    )
+    page.on("pageerror", lambda error: errors.append(str(error)))
+
+    page.goto(console_url)
+    expect(status(page)).to_have_text("Ready")
+    expect(side(page).get_by_role("heading", name="Activity")).to_be_visible()
+    page.wait_for_timeout(500)
+
+    assert errors == []
+
+
+def test_activity_from_a_server_without_costs_still_shows(page: Page, console_url: str) -> None:
+    # A job as a server from before costs were recorded describes it: no cost, no limit.
+    job = {
+        "job": "a" * 32,
+        "span": "b" * 16,
+        "started": "2026-11-20T09:00:00+00:00",
+        "ended": "2026-11-20T09:00:05+00:00",
+        "message": "Tidy my notes.",
+        "notice": False,
+        "steps": [],
+        "reply": "Done.",
+        "error": None,
+        "feedback": None,
+    }
+    page.route("**/api/activity", lambda route: route.fulfill(json=[job]))
+    errors: list[str] = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+
+    page.goto(console_url)
+
+    expect(side(page).get_by_role("button", name="Tidy my notes.")).to_be_visible()
+    assert errors == []

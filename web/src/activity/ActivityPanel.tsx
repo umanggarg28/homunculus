@@ -46,7 +46,7 @@ function jobLine(job: Job): string {
   const parts = [job.steps.length ? (job.steps.length === 1 ? "One step" : `${job.steps.length} steps`) : "No steps"];
   if (failed) parts.push(failed === 1 ? "one failed" : `${failed} failed`);
   if (job.ended) parts.push(duration(job.started, job.ended));
-  if (job.cost !== null) parts.push(dollars(job.cost));
+  if (typeof job.cost === "number") parts.push(dollars(job.cost));
   if (job.limit) parts.push(LIMIT_WORDS[job.limit] ?? `stopped by its ${job.limit} limit`);
   return parts.join(", ");
 }
