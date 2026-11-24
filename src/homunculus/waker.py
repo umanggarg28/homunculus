@@ -1,0 +1,342 @@
+"""When the agent works on its own.
+
+Three things wake it: an hourly timer, a wake-up it set for itself with `wake_at`, and
+the operator pressing Wake now. A wake-up starts a fresh job: the agent reads the goals
+and its to-do notes, does the next useful piece of work, and keeps the notes current.
+
+The waker only decides when. Whether a job may start (the budget), how long it may run
+(the job limits) and what it may do (the gate) are decided where they are for every job.
+Its state is a small JSON file in the data directory, so a pause and the agent's own
+wake-ups survive a restart.
+
+Others do the same with a heartbeat: OpenClaw and nanobot wake every 30 minutes to read
+a checklist; OpenAI's Dots and Hermes let the agent schedule its own returns.
+"""
+
+import dataclasses
+import json
+import tomllib
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime, timedelta, tzinfo
+from pathlib import Path
+from typing import Any
+from zoneinfo import ZoneInfo
+
+import mcp_types as mcp
+
+from homunculus.limits import Limits
+from homunculus.tools import Tool, ToolError
+
+SETTINGS_FILE = "waker.toml"
+TIME_FORMAT = "%Y-%m-%d %H:%M"
+EARLIEST = timedelta(minutes=5)
+LATEST = timedelta(days=7)
+MAX_PENDING = 10
+
+# Why a wake-up happened, in words that read the same in Activity and in the agent's
+# prompt, which says "you" for a wake-up the agent set itself.
+OPERATOR_ASKED = "Wake now"
+TIMER = "the hourly timer"
+OWN = "a wake-up it set: "
+
+
+@dataclass(frozen=True)
+class WakerSettings:
+    every_minutes: int = 60
+    # An IANA name such as "Asia/Kolkata", or empty for the machine's own time zone.
+    time_zone: str = ""
+
+    def zone(self) -> tzinfo:
+        if self.time_zone:
+            return ZoneInfo(self.time_zone)
+        local = datetime.now().astimezone().tzinfo
+        assert local is not None
+        return local
+
+
+TEMPLATE = """\
+# When the agent wakes to work on its own. Read when the agent starts.
+
+# Minutes between wake-ups from the timer. The agent can also set its own wake-ups, and
+# every wake-up counts toward wakeups_per_day in limits.toml.
+every_minutes = {every_minutes}
+
+# The time zone for wake-up times and for counting the day, such as "Asia/Kolkata".
+# Empty means this computer's own time zone.
+time_zone = "{time_zone}"
+"""
+
+
+def load_settings(home: Path) -> WakerSettings:
+    path = home / SETTINGS_FILE
+    if not path.exists():
+        path.write_text(TEMPLATE.format(**dataclasses.asdict(WakerSettings())), encoding="utf-8")
+    data: dict[str, Any] = tomllib.loads(path.read_text(encoding="utf-8"))
+    known = {k: v for k, v in data.items() if k in WakerSettings.__dataclass_fields__}
+    return dataclasses.replace(WakerSettings(), **known)
+
+
+class Waker:
+    def __init__(
+        self,
+        path: Path,
+        settings: WakerSettings,
+        limits: Limits,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._path = path
+        self._settings = settings
+        self._limits = limits
+        self._zone = settings.zone()
+        self._clock = clock or (lambda: datetime.now(self._zone))
+        # Set by the server while an unprompted job runs.
+        self.working = False
+        self._state: dict[str, Any] = {
+            "paused": False,
+            "last_wake": self.now().isoformat(),
+            "pending": [],
+            "next_id": 1,
+            "day": self._today(),
+            "woken": 0,
+            "skipped_busy": 0,
+            "wake_now": False,
+            "own_files": [],
+        }
+        if path.exists():
+            self._state.update(json.loads(path.read_text(encoding="utf-8")))
+        self._save()
+        self.own_files = _OwnFiles(self)
+
+    # The operator's controls
+
+    def pause(self) -> None:
+        self._state["paused"] = True
+        self._save()
+
+    def resume(self) -> None:
+        self._state["paused"] = False
+        self._save()
+
+    def wake_now(self) -> None:
+        """The operator asks for a wake-up straight away. It runs even while paused,
+        because the operator asked for it, and it counts toward the day's wake-ups."""
+        self._state["wake_now"] = True
+        self._save()
+
+    # Deciding
+
+    def take(self) -> str | None:
+        """Why the agent should wake now, or None. Taking a wake-up uses it up."""
+        reason = self.peek()
+        if reason is None:
+            return None
+        now = self.now()
+        if reason == OPERATOR_ASKED:
+            self._state["wake_now"] = False
+        elif reason != TIMER:
+            due = self._due_wakeups(now)
+            self._state["pending"].remove(due[0])
+        self._state["last_wake"] = now.isoformat()
+        self._state["woken"] += 1
+        self._save()
+        return reason
+
+    def peek(self) -> str | None:
+        """Why the agent would wake now, without using it up."""
+        now = self.now()
+        self._roll_day()
+        if self._state["woken"] >= self._limits.wakeups_per_day:
+            if self._state["wake_now"]:
+                # Asked for past the day's limit: dropped, so it does not fire tomorrow.
+                self._state["wake_now"] = False
+                self._save()
+            return None
+        if self._state["wake_now"]:
+            return OPERATOR_ASKED
+        if self._state["paused"]:
+            return None
+        due = self._due_wakeups(now)
+        if due:
+            return OWN + due[0]["why"]
+        if now - datetime.fromisoformat(self._state["last_wake"]) >= self._every:
+            return TIMER
+        return None
+
+    def skip_busy(self) -> None:
+        """The timer came round while the operator was busy: that slot is skipped, not
+        queued, so the agent never catches up with a burst of wake-ups."""
+        self._state["last_wake"] = self.now().isoformat()
+        self._state["skipped_busy"] += 1
+        self._save()
+
+    def status(self) -> dict[str, Any]:
+        self._roll_day()
+        last = datetime.fromisoformat(self._state["last_wake"]).astimezone(self._zone)
+        return {
+            "paused": self._state["paused"],
+            "working": self.working,
+            "next_timer": (last + self._every).strftime(TIME_FORMAT),
+            "pending": [dict(w) for w in self._pending_sorted()],
+            "today": {
+                "woken": self._state["woken"],
+                "cap": self._limits.wakeups_per_day,
+                "skipped_busy": self._state["skipped_busy"],
+            },
+        }
+
+    # The agent's tools
+
+    def tools(self) -> list[Tool]:
+        own = mcp.ToolAnnotations(
+            read_only_hint=False, destructive_hint=False, open_world_hint=False
+        )
+        set_one = mcp.Tool(
+            name="wake_at",
+            title="Set a wake-up",
+            description=(
+                "Wake yourself at a set time to carry on with work, for example when "
+                "something you wait for should be ready, or when the work is best done "
+                "then. Times are the operator's local time. Returns every wake-up you "
+                "have waiting; check it before adding another."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "at": {"type": "string", "description": "Local time, as YYYY-MM-DD HH:MM."},
+                    "why": {"type": "string", "description": "What you will do then, briefly."},
+                },
+                "required": ["at", "why"],
+            },
+            annotations=own,
+        )
+        cancel_one = mcp.Tool(
+            name="cancel_wake",
+            title="Cancel a wake-up",
+            description="Cancel one of your waiting wake-ups by its id, when plans change.",
+            input_schema={
+                "type": "object",
+                "properties": {"id": {"type": "string", "description": "The wake-up's id."}},
+                "required": ["id"],
+            },
+            annotations=own,
+        )
+        return [Tool(set_one, self._wake_at), Tool(cancel_one, self._cancel)]
+
+    def _wake_at(self, arguments: dict[str, Any]) -> str:
+        try:
+            at = datetime.strptime(str(arguments["at"]).strip(), TIME_FORMAT)
+        except ValueError:
+            raise ToolError("Give the time as YYYY-MM-DD HH:MM, in local time.") from None
+        when = at.replace(tzinfo=self._zone)
+        now = self.now()
+        if when - now < EARLIEST:
+            raise ToolError("A wake-up must be at least 5 minutes from now.")
+        if when - now > LATEST:
+            raise ToolError("A wake-up must be at most 7 days from now.")
+        if len(self._state["pending"]) >= MAX_PENDING:
+            raise ToolError(
+                f"You already have {MAX_PENDING} wake-ups waiting. Cancel one with "
+                "cancel_wake before adding another.\n" + self._listing()
+            )
+        wakeup = {
+            "id": f"w{self._state['next_id']}",
+            "at": when.strftime(TIME_FORMAT),
+            "why": str(arguments["why"]).strip(),
+        }
+        self._state["next_id"] += 1
+        self._state["pending"].append(wakeup)
+        self._save()
+        return f"Wake-up {wakeup['id']} set.\n" + self._listing()
+
+    def _cancel(self, arguments: dict[str, Any]) -> str:
+        wanted = str(arguments["id"]).strip()
+        kept = [w for w in self._state["pending"] if w["id"] != wanted]
+        if len(kept) == len(self._state["pending"]):
+            raise ToolError(f"There is no wake-up {wanted}.\n" + self._listing())
+        self._state["pending"] = kept
+        self._save()
+        return f"Cancelled {wanted}.\n" + self._listing()
+
+    def _listing(self) -> str:
+        waiting = self._pending_sorted()
+        if not waiting:
+            return "No wake-ups waiting."
+        lines = [f"- {w['id']}: {w['at']}, {w['why']}" for w in waiting]
+        return "Wake-ups waiting:\n" + "\n".join(lines)
+
+    def _own(self) -> list[str]:
+        own: list[str] = self._state["own_files"]
+        return own
+
+    # Inside
+
+    @property
+    def _every(self) -> timedelta:
+        return timedelta(minutes=self._settings.every_minutes)
+
+    def now(self) -> datetime:
+        """The time in the waker's time zone."""
+        return self._clock().astimezone(self._zone)
+
+    def _today(self) -> str:
+        return self.now().date().isoformat()
+
+    def _roll_day(self) -> None:
+        today = self._today()
+        if self._state["day"] != today:
+            self._state.update(day=today, woken=0, skipped_busy=0)
+            self._save()
+
+    def _pending_sorted(self) -> list[dict[str, str]]:
+        return sorted(self._state["pending"], key=lambda w: w["at"])
+
+    def _due_wakeups(self, now: datetime) -> list[dict[str, str]]:
+        local = now.strftime(TIME_FORMAT)
+        return [w for w in self._pending_sorted() if w["at"] <= local]
+
+    def _save(self) -> None:
+        self._path.write_text(json.dumps(self._state, indent=2), encoding="utf-8")
+
+
+def wake_prompt(now: datetime, reason: str) -> str:
+    """What the agent is told when it wakes. It starts fresh: the goals and to-do notes
+    in its instructions are all it carries from earlier work."""
+    return (
+        f"It is {now.strftime('%A %-d %B %Y, %H:%M')}. You woke up on your own "
+        f"({_for_the_agent(reason)}); the operator is not waiting for a reply.\n\n"
+        "Read the goals and your to-do notes in memory/todo.md, both shown in your "
+        "instructions, and do the next useful piece of work toward the goals in your "
+        "workspace. Before you finish, update memory/todo.md: what you did, what is next "
+        "and why. If you want to carry on at a particular time, use wake_at.\n\n"
+        "No one asked for this work, so leave the operator's files as they are: write your "
+        "drafts and notes as new files beside them. Changing a file you did not make on "
+        "your own waits for their approval.\n\n"
+        "If the next step needs the operator's decision, put the question at the top of "
+        "memory/todo.md, say it in one line, and stop: do no other work toward that goal "
+        "until they answer.\n\n"
+        "If nothing is worth doing now, say so in one short line and use no tools."
+    )
+
+
+def _for_the_agent(reason: str) -> str:
+    if reason == OPERATOR_ASKED:
+        return "the operator pressed Wake now"
+    return reason.replace(OWN, "a wake-up you set: ", 1)
+
+
+class _OwnFiles:
+    """The workspace files the agent made on its own, saved with the waker's state, so
+    it can go on working on its own drafts on a later wake-up."""
+
+    def __init__(self, waker: Waker) -> None:
+        self._waker = waker
+
+    def __contains__(self, path: object) -> bool:
+        return path in self._waker._own()
+
+    def add(self, path: str) -> None:
+        own = self._waker._own()
+        if path not in own:
+            own.append(path)
+            self._waker._save()

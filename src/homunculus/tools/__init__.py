@@ -25,6 +25,10 @@ class Tool:
     workspace_paths: tuple[str, ...] = ()
     # True for a tool that runs inside the sandbox, so the sandbox is its boundary.
     runs_in_sandbox: bool = False
+    # For a tool that changes files in the workspace: given a call's arguments, the files
+    # that already exist that it would change, and the new files it would make. The gate
+    # uses it to hold back work the agent does on its own from the operator's files.
+    changes: Callable[[dict[str, Any]], tuple[list[str], list[str]]] | None = None
 
     @property
     def name(self) -> str:

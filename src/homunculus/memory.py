@@ -10,6 +10,7 @@ generated index and an append-only log. The profile and the goals sit beside the
       log.md      appended by code on every change
     profile.md  short, always in the prompt
     goals.md    the operator's goals; changed only with approval
+    todo.md     the agent's own to-do notes, carried from one wake-up to the next
     SCHEMA.md   how the wiki is organised; changed only with approval
 
 The file tools reach this folder through paths that start with `memory/`. What the
@@ -32,13 +33,15 @@ from homunculus.tools import ToolError
 
 # Always-loaded context stays small: these caps keep profile, goals and index together
 # near 2,500 tokens. Counted in characters, so they do not depend on any one model.
-CAPS = {"profile.md": 2000, "goals.md": 2000, "wiki/index.md": 6000}
+CAPS = {"profile.md": 2000, "goals.md": 2000, "todo.md": 2000, "wiki/index.md": 6000}
 
 # Commits name who made a change, which is how a hand edit is recognised later.
 AGENT = ("Homunculus", "agent@homunculus.local")
 OPERATOR = ("Operator", "operator@homunculus.local")
 
 INDEX = "wiki/index.md"
+TODO = "todo.md"
+TODO_START = "# To do\n"
 LOG = "wiki/log.md"
 FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 FOOTNOTE_USE = re.compile(r"\[\^([^\]]+)\](?!:)")
@@ -110,6 +113,7 @@ class Memory:
             starting = {
                 "profile.md": "# Profile\n\n## How I like to work\n",
                 "goals.md": "# Goals\n",
+                TODO: TODO_START,
                 "SCHEMA.md": files("homunculus").joinpath("schema.md").read_text(encoding="utf-8"),
                 LOG: "# Log\n",
             }
@@ -120,7 +124,12 @@ class Memory:
             memory._git("init", "--quiet")
             memory._write_index()
             memory._commit(AGENT, "Start the memory")
-        return cls(root.resolve())
+        memory = cls(root.resolve())
+        # A memory started before to-do notes existed gets them, as the agent's own file.
+        if not (memory.root / TODO).exists():
+            (memory.root / TODO).write_text(TODO_START, encoding="utf-8")
+            memory._commit(AGENT, "Start the to-do notes")
+        return memory
 
     # The prompt
 
@@ -131,6 +140,7 @@ class Memory:
         for title, name in [
             ("Profile", "profile.md"),
             ("Goals", "goals.md"),
+            ("To-do notes", TODO),
             ("Wiki index", INDEX),
         ]:
             text = self._read(name) or ""

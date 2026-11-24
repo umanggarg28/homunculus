@@ -237,10 +237,17 @@ def jobs(spans: list[dict[str, Any]], events: list[dict[str, Any]]) -> list[dict
             "feedback": None,
             "cost": _cost(members),
             "limit": None,
+            "unprompted": False,
+            "reason": None,
+            # An unprompted job that called no tool did nothing, whatever it said.
+            "quiet": False,
         }
         if opened is not None:
             job["message"] = _text(opened["attributes"].get("gen_ai.input.messages"))
             job["notice"] = bool(opened["attributes"].get("homunculus.notice"))
+            job["unprompted"] = bool(opened["attributes"].get("homunculus.unprompted"))
+            job["reason"] = opened["attributes"].get("homunculus.wake_reason")
+            job["quiet"] = job["unprompted"] and not tools
         if root is not None:
             job["ended"] = _iso(int(root["endTimeUnixNano"]))
             job["reply"] = _text(root["attributes"].get("gen_ai.output.messages"))

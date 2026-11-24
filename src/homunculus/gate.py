@@ -1,6 +1,7 @@
 """The gate: the one place that decides whether a proposed action may run."""
 
 import json
+from collections.abc import Container
 from enum import Enum
 from pathlib import PurePosixPath
 
@@ -34,11 +35,25 @@ MEMORY_NEVER = ("memory/raw/", "memory/wiki/index.md", "memory/wiki/log.md")
 MEMORY_ASKS = ("memory/goals.md", "memory/SCHEMA.md")
 
 
-def decide(call: ToolCall, tool: Tool | None) -> Answer:
+def decide(
+    call: ToolCall,
+    tool: Tool | None,
+    unprompted: bool = False,
+    own: Container[str] = frozenset(),
+) -> Answer:
     """Answer a proposed tool call, given the definition of the tool it names, or None
-    when no such tool exists. Any failure to decide is a refusal."""
+    when no such tool exists. Any failure to decide is a refusal.
+
+    Work the agent does on its own, `unprompted`, may make new files and change the files
+    it made on its own (`own`), but asks before changing any other file that already
+    exists: no one asked for that change, and the file may be the operator's own work."""
     try:
-        return _decide(call, tool)
+        answer = _decide(call, tool)
+        if answer is Answer.ACT and unprompted and tool is not None and tool.changes:
+            existing, _ = tool.changes(json.loads(call.arguments))
+            if any(path not in own for path in existing):
+                return Answer.ASK
+        return answer
     except Exception:
         return Answer.REFUSE
 

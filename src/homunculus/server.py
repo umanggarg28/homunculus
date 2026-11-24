@@ -4,6 +4,7 @@ import asyncio
 import dataclasses
 import json
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
@@ -20,6 +21,7 @@ from homunculus.memory import CAPS, Memory, Stale
 from homunculus.model import Message, Model, ModelError, Retrying
 from homunculus.tools import Tool
 from homunculus.turns import Event, Turn, Turns
+from homunculus.waker import Waker, wake_prompt
 
 # How many decided requests the approvals list shows below the pending ones.
 RECENT_DECISIONS = 10
@@ -72,15 +74,29 @@ def create_app(
     memory: Memory | None = None,
     limits: Limits | None = None,
     budget: Budget | None = None,
+    waker: Waker | None = None,
 ) -> FastAPI:
     """The HTTP API, and the built web console from `console` when one is given."""
-    app = FastAPI(title="Homunculus")
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # While the server runs, the waker is checked every 30 seconds, or at once when
+        # the operator presses Wake now.
+        task = asyncio.create_task(_keep_waking(app)) if waker is not None else None
+        yield
+        if task is not None:
+            task.cancel()
+
+    app = FastAPI(title="Homunculus", lifespan=lifespan)
     approvals.mark_interrupted()
     # One operator, one conversation, kept in memory for the life of the process.
     history: list[Message] = []
     # One piece of work at a time: a second message waits until the first reply is complete,
     # so it is sent to the model with the earlier exchange already in the history.
     turn = asyncio.Lock()
+    app.state.busy = turn
+    # Why the unprompted job running now should give way at its next step, if it should.
+    give_way: dict[str, str | None] = {"reason": None}
     # Turns run as tasks of their own, so a page closing does not stop the work.
     turns = Turns()
 
@@ -90,6 +106,9 @@ def create_app(
 
         async def work(running: Turn) -> None:
             await running.add("turn", {"id": running.id, "message": request.message})
+            if waker is not None and waker.working:
+                # The operator comes first: the job stops at its next step.
+                give_way["reason"] = "operator"
             async with turn:
                 try:
                     async for item in loop.run(
@@ -314,6 +333,83 @@ def create_app(
             "unprompted_stop_at": budget.limits.unprompted_stop_at,
         }
 
+    @app.get("/api/waker", response_model=None)
+    async def waker_status() -> dict[str, Any] | Response:
+        """When the agent works on its own. With no waker, 204 No Content: nothing is
+        wrong, so a browser has no error to log."""
+        if waker is None:
+            return Response(status_code=204)
+        return waker.status()
+
+    if waker is not None:
+        app.state.wake_signal = asyncio.Event()
+
+        async def waker_step() -> None:
+            """Wake the agent if it is time. A wake-up due while the operator is busy is
+            skipped if it came from the timer; the agent's own wake-ups and Wake now wait
+            until the operator is done."""
+            assert waker is not None
+            reason = waker.peek()
+            if reason is None:
+                return
+            if turn.locked():
+                if reason == "the hourly timer":
+                    waker.skip_busy()
+                return
+            async with turn:
+                reason = waker.take()
+                if reason is None:
+                    return
+                waker.working = True
+                give_way["reason"] = None
+                try:
+                    # A fresh conversation: unprompted work rests only on what is written
+                    # down, and never carries the operator's chat into it.
+                    async for _ in loop.run(
+                        model,
+                        tools,
+                        activity,
+                        approvals,
+                        [],
+                        wake_prompt(waker.now(), reason),
+                        memory=memory,
+                        limits=limits,
+                        budget=budget,
+                        unprompted=True,
+                        interruption=lambda: give_way["reason"],
+                        wake_reason=reason,
+                        own_files=waker.own_files,
+                    ):
+                        pass
+                except ModelError:
+                    pass  # The loop has recorded the failure on the job.
+                finally:
+                    waker.working = False
+                    give_way["reason"] = None
+
+        app.state.waker_step = waker_step
+
+        @app.post("/api/waker/pause")
+        async def pause() -> dict[str, Any]:
+            assert waker is not None
+            waker.pause()
+            if waker.working:
+                give_way["reason"] = "paused"
+            return waker.status()
+
+        @app.post("/api/waker/resume")
+        async def resume() -> dict[str, Any]:
+            assert waker is not None
+            waker.resume()
+            return waker.status()
+
+        @app.post("/api/waker/wake", status_code=202)
+        async def wake_now() -> dict[str, Any]:
+            assert waker is not None
+            waker.wake_now()
+            app.state.wake_signal.set()
+            return waker.status()
+
     if memory is not None:
         _memory_routes(app, memory)
 
@@ -380,6 +476,19 @@ def _memory_routes(app: FastAPI, memory: Memory) -> None:
     @app.get("/api/memory/log")
     def log() -> list[dict[str, str]]:
         return memory.log()
+
+
+async def _keep_waking(app: FastAPI) -> None:
+    while True:
+        try:
+            await app.state.waker_step()
+        except Exception:
+            pass  # A failed wake-up is recorded on its job; the waker keeps going.
+        try:
+            await asyncio.wait_for(app.state.wake_signal.wait(), timeout=30)
+        except TimeoutError:
+            pass
+        app.state.wake_signal.clear()
 
 
 def _request_summary(approval: Approval) -> str:

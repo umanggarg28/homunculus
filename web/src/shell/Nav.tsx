@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useWaker } from "@/hooks/useWaker";
 import { InstallButton } from "./InstallButton";
 import { Mark } from "./Mark";
 import { TAB_ICONS } from "./tabIcons";
@@ -67,13 +68,35 @@ export function TopBar({ current, pill, onLater }: { current: Screen; pill: stri
           Homunculus
         </Link>
         <MainNav current={current} onLater={onLater} />
+        <WakerControls pill={pill} />
         <InstallButton />
-        <p className="status" id="status" role="status">
-          <span className="status-dot" aria-hidden="true" />
-          <span id="status-text">{pill}</span>
-        </p>
       </div>
     </header>
+  );
+}
+
+/** Pause and Wake now, and the status pill, which says when the agent is working on its
+ *  own. Without a waker on the server, only the pill shows. */
+function WakerControls({ pill }: { pill: string }) {
+  const { status, pause, resume, wakeNow } = useWaker();
+  const own = status?.working && pill === "Ready";
+  return (
+    <>
+      {status && (
+        <div className="waker" role="group" aria-label="Work on its own">
+          <button type="button" className="btn btn--quiet" aria-pressed={status.paused} onClick={status.paused ? resume : pause}>
+            {status.paused ? "Resume" : "Pause"}
+          </button>
+          <button type="button" className="btn btn--quiet" disabled={status.working} onClick={wakeNow}>
+            Wake now
+          </button>
+        </div>
+      )}
+      <p className="status" id="status" role="status">
+        <span className="status-dot" aria-hidden="true" />
+        <span id="status-text">{own ? "Working on its own" : status?.paused && pill === "Ready" ? "Paused" : pill}</span>
+      </p>
+    </>
   );
 }
 

@@ -270,3 +270,36 @@ def test_activity_from_a_server_without_costs_still_shows(page: Page, console_ur
 
     expect(side(page).get_by_role("button", name="Tidy my notes.")).to_be_visible()
     assert errors == []
+
+
+def test_pause_and_wake_now_from_the_top_bar(page: Page, tmp_path: Path, workspace: Path) -> None:
+    from homunculus.limits import Limits
+    from homunculus.memory import Memory
+    from homunculus.waker import Waker, WakerSettings
+
+    memory = Memory.open(tmp_path / "memory")
+    waker = Waker(tmp_path / "waker.json", WakerSettings(), Limits())
+    model = ScriptedModel([["Nothing needs doing right now."]])
+    app = create_app(
+        model,
+        [*file_tools(workspace, memory), *waker.tools()],
+        Activity(tmp_path),
+        Approvals(tmp_path / "approvals.json"),
+        console=CONSOLE,
+        memory=memory,
+        waker=waker,
+    )
+    for url in start_server(app):
+        page.goto(url)
+        bar = page.get_by_role("group", name="Work on its own")
+
+        bar.get_by_role("button", name="Pause").click()
+        expect(status(page)).to_have_text("Paused")
+        expect(bar.get_by_role("button", name="Resume")).to_have_attribute("aria-pressed", "true")
+
+        bar.get_by_role("button", name="Resume").click()
+        bar.get_by_role("button", name="Wake now").click()
+
+        job = side(page).get_by_role("button", name="Nothing needed doing")
+        expect(job).to_be_visible(timeout=15_000)
+        expect(side(page).get_by_text("On its own (Wake now)")).to_be_visible()
