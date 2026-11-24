@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useWaker } from "@/hooks/useWaker";
+import type { WakerStatus } from "@/lib/api";
 import { InstallButton } from "./InstallButton";
 import { Mark } from "./Mark";
 import { TAB_ICONS } from "./tabIcons";
@@ -60,6 +61,7 @@ type OnLater = (kind: Later, from: HTMLElement) => void;
 
 /** The bar across the top of every screen: the mark, the destinations, and the status pill. */
 export function TopBar({ current, pill, onLater }: { current: Screen; pill: string; onLater: OnLater }) {
+  const waker = useWaker();
   return (
     <header className="bar">
       <div className="bar-in">
@@ -68,36 +70,39 @@ export function TopBar({ current, pill, onLater }: { current: Screen; pill: stri
           Homunculus
         </Link>
         <MainNav current={current} onLater={onLater} />
-        <WakerControls pill={pill} />
+        <WakerControls waker={waker} />
         <InstallButton />
+        <p className="status" id="status" role="status">
+          <span className="status-dot" aria-hidden="true" />
+          <span id="status-text">{pillText(pill, waker.status)}</span>
+        </p>
       </div>
     </header>
   );
 }
 
-/** Pause and Wake now, and the status pill, which says when the agent is working on its
- *  own. Without a waker on the server, only the pill shows. */
-function WakerControls({ pill }: { pill: string }) {
-  const { status, pause, resume, wakeNow } = useWaker();
-  const own = status?.working && pill === "Ready";
+/** Pause and Wake now. Without a waker on the server, nothing shows. Used in the top bar,
+ *  and on a phone, where the bar has no room, under Activity's next wake-ups. */
+export function WakerControls({ waker }: { waker: ReturnType<typeof useWaker> }) {
+  const { status, pause, resume, wakeNow } = waker;
+  if (!status) return null;
   return (
-    <>
-      {status && (
-        <div className="waker" role="group" aria-label="Work on its own">
-          <button type="button" className="btn btn--quiet" aria-pressed={status.paused} onClick={status.paused ? resume : pause}>
-            {status.paused ? "Resume" : "Pause"}
-          </button>
-          <button type="button" className="btn btn--quiet" disabled={status.working} onClick={wakeNow}>
-            Wake now
-          </button>
-        </div>
-      )}
-      <p className="status" id="status" role="status">
-        <span className="status-dot" aria-hidden="true" />
-        <span id="status-text">{own ? "Working on its own" : status?.paused && pill === "Ready" ? "Paused" : pill}</span>
-      </p>
-    </>
+    <div className="waker" role="group" aria-label="Work on its own">
+      <button type="button" className="btn btn--quiet" aria-pressed={status.paused} onClick={status.paused ? resume : pause}>
+        {status.paused ? "Resume" : "Pause"}
+      </button>
+      <button type="button" className="btn btn--quiet" disabled={status.working} onClick={wakeNow}>
+        Wake now
+      </button>
+    </div>
   );
+}
+
+/** The pill's words: what the agent is doing, including work on its own and a pause. */
+function pillText(pill: string, status: WakerStatus | null): string {
+  if (pill !== "Ready" || !status) return pill;
+  if (status.working) return "Working on its own";
+  return status.paused ? "Paused" : pill;
 }
 
 /** The top bar's destinations. */
