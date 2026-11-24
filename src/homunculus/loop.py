@@ -6,6 +6,7 @@ import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Protocol
 
 import mcp_types as mcp
 from opentelemetry import trace
@@ -45,12 +46,20 @@ class ToolStep:
     outcome: str
 
 
+class OwnFiles(Protocol):
+    """The workspace files the agent made on its own, which it may change again."""
+
+    def __contains__(self, path: object) -> bool: ...
+
+    def add(self, path: str) -> None: ...
+
+
 @dataclass(frozen=True)
 class Stopped:
     """A limit ended the job, or kept it from starting: which one, and what the operator
     is told."""
 
-    limit: str  # "steps", "minutes", "cost" or "budget"
+    limit: str  # "steps", "minutes", "cost", "budget", "operator" or "paused"
     message: str
 
 
@@ -67,6 +76,9 @@ async def run(
     budget: Budget | None = None,
     unprompted: bool = False,
     clock: Callable[[], float] = time.monotonic,
+    interruption: Callable[[], str | None] | None = None,
+    wake_reason: str | None = None,
+    own_files: OwnFiles | None = None,
 ) -> AsyncIterator[str | ToolStep | Retrying | Stopped]:
     """Answer one operator message, yielding the reply text as it streams and a
     ToolStep after each tool call, so a caller can show the work as it happens.
@@ -85,6 +97,11 @@ async def run(
     reaches its steps, minutes or cost, and with a `budget` it does not start once the
     month's budget is spent, or for `unprompted` work, its share of it. A Stopped says
     which, and its message is added to the conversation as a notice.
+
+    `interruption` is asked at each step boundary whether the job should give way:
+    "operator" when the operator's message is waiting, "paused" when they paused
+    unprompted work. An `unprompted` job records why it woke, as `wake_reason`, and
+    `own_files` holds the files it made on its own, which it may change again.
     """
     limits = limits or Limits()
     began = clock()
@@ -113,6 +130,8 @@ async def run(
             "gen_ai.conversation.id": activity.conversation_id,
             "gen_ai.input.messages": input_messages(text),
             "homunculus.notice": notice,
+            "homunculus.unprompted": unprompted,
+            **({"homunculus.wake_reason": wake_reason} if wake_reason else {}),
         },
     )
     parent = trace.set_span_in_context(root)
@@ -121,7 +140,12 @@ async def run(
     activity.event(
         TURN_START,
         parent,
-        {"gen_ai.input.messages": input_messages(text), "homunculus.notice": notice},
+        {
+            "gen_ai.input.messages": input_messages(text),
+            "homunculus.notice": notice,
+            "homunculus.unprompted": unprompted,
+            **({"homunculus.wake_reason": wake_reason} if wake_reason else {}),
+        },
     )
     try:
         stop = None
@@ -158,11 +182,15 @@ async def run(
                     skipped = "Not run: this job reached its step limit."
                     turn.append({"role": "tool", "tool_call_id": call.id, "content": skipped})
                     continue
-                step = await _carry_out(call, by_name, activity, approvals, parent)
+                step = await _carry_out(
+                    call, by_name, activity, approvals, parent, unprompted, own_files
+                )
                 steps += 1
                 turn.append({"role": "tool", "tool_call_id": call.id, "content": step.result})
                 yield step
-            stop = _over(limits, steps, (clock() - began) / 60, cost)
+            asked = interruption() if interruption is not None else None
+            stop = INTERRUPTED[asked] if asked in INTERRUPTED else None
+            stop = stop or _over(limits, steps, (clock() - began) / 60, cost)
         if stop is not None:
             reply = {"role": "assistant", "content": stop.message, "notice": True}
             turn.append(reply)
@@ -187,6 +215,8 @@ async def _carry_out(
     activity: Activity,
     approvals: Approvals,
     parent: Context,
+    unprompted: bool = False,
+    own_files: "OwnFiles | None" = None,
 ) -> ToolStep:
     """Put one tool call through the gate and, if allowed, run it. The step's result is
     what the model sees."""
@@ -194,7 +224,7 @@ async def _carry_out(
     span = activity.start_tool(call.name, call.arguments, parent, call_id=call.id)
     try:
         answer, result, outcome, request_id = await _decide_and_run(
-            call, by_name, approvals, parent
+            call, by_name, approvals, parent, unprompted, own_files
         )
     except BaseException as error:
         fail(span, error, str(error) or type(error).__name__)
@@ -211,17 +241,34 @@ async def _carry_out(
 
 
 async def _decide_and_run(
-    call: ToolCall, by_name: dict[str, Tool], approvals: Approvals, parent: Context
+    call: ToolCall,
+    by_name: dict[str, Tool],
+    approvals: Approvals,
+    parent: Context,
+    unprompted: bool = False,
+    own_files: "OwnFiles | None" = None,
 ) -> tuple[gate.Answer, str, str, str | None]:
     """The gate's answer, the result the model sees, the outcome, and the approval
     request made, if any."""
-    answer = gate.decide(call, by_name.get(call.name))
+    tool = by_name.get(call.name)
+    own: OwnFiles | frozenset[str] = own_files if own_files is not None else frozenset()
+    answer = gate.decide(call, tool, unprompted=unprompted, own=own)
     request_id = None
+    made: list[str] = []
+    if unprompted and own_files is not None and tool is not None and tool.changes:
+        # Worked out before the call runs, while a new file is still new.
+        try:
+            _, made = tool.changes(json.loads(call.arguments))
+        except Exception:
+            made = []
     if answer is gate.Answer.ACT:
         # In a worker thread, so a slow command does not stop the server answering anyone
         # else, such as a page asking to stop this very turn.
         done = await asyncio.to_thread(run_tool, call.name, call.arguments, by_name)
         result, outcome = as_text(done), outcome_of(done)
+        if outcome == "ok" and own_files is not None:
+            for path in made:
+                own_files.add(path)
     elif answer in WAITS_FOR_OPERATOR:
         outcome = "waiting"
         request = approvals.request(
@@ -305,6 +352,12 @@ def _model_call(activity: Activity, model: Model, parent: Context) -> Iterator[S
 
 
 CARRY_ON = "Ask me to carry on if you want more."
+NOT_UNDONE = "Steps that already ran were not undone."
+# Why an unprompted job gives way at a step boundary, and what it says.
+INTERRUPTED = {
+    "operator": Stopped("operator", f"Stopped for your message. {NOT_UNDONE}"),
+    "paused": Stopped("paused", f"Paused by you. {NOT_UNDONE}"),
+}
 
 
 def _steps(n: int) -> str:

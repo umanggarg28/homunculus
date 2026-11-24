@@ -59,7 +59,36 @@ export interface Job {
   cost?: number | null;
   /** The limit that ended the job, if one did: "steps", "minutes", "cost" or "budget". */
   limit?: string | null;
+  /** Work the agent started on its own, and why it woke. */
+  unprompted?: boolean;
+  reason?: string | null;
+  /** An unprompted job that called no tool: it found nothing worth doing. */
+  quiet?: boolean;
 }
+
+/** When the agent works on its own: paused or not, what is planned, and today's count. */
+export interface WakerStatus {
+  paused: boolean;
+  working: boolean;
+  /** Local time, "YYYY-MM-DD HH:MM". */
+  next_timer: string;
+  pending: { id: string; at: string; why: string }[];
+  today: { woken: number; cap: number; skipped_busy: number };
+}
+
+async function wakerCall(path: string, method = "GET"): Promise<WakerStatus | null> {
+  const response = await fetch(`/api/waker${path}`, { method });
+  if (response.status === 204) return null; // a server without a waker
+  if (!response.ok) throw new Error(`waker failed: ${response.status}`);
+  return response.json();
+}
+
+export const wakerApi = {
+  status: () => wakerCall(""),
+  pause: () => wakerCall("/pause", "POST"),
+  resume: () => wakerCall("/resume", "POST"),
+  wakeNow: () => wakerCall("/wake", "POST"),
+};
 
 /** This month's spend on the API key against the budget, in US dollars. */
 export interface MonthBudget {

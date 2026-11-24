@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Job, type Rating, type MonthBudget } from "@/lib/api";
 import { useTurnEvents } from "@/lib/turnEvents";
+import { useWaker } from "@/hooks/useWaker";
 import type { ToolStep } from "@/lib/toolSteps";
 import { send as sendTrace } from "@/presence/overlay";
 import { stepWords } from "@/thread/steps";
@@ -27,6 +28,11 @@ const plural = (n: number, one: string, many: string) => (n === 1 ? `one ${one}`
 /** A job in one line: what was asked, or for a decision, that it was one. */
 function jobTitle(job: Job): string {
   if (job.notice) return "Your decision";
+  if (job.unprompted) {
+    const said = (job.reply ?? "").split("\n")[0];
+    const title = job.quiet ? "Nothing needed doing" : said || "Worked on its own";
+    return title.length > TITLE_MAX ? `${title.slice(0, TITLE_MAX - 1)}…` : title;
+  }
   const m = (job.message ?? "No message was recorded for this job").split("\n")[0];
   return m.length > TITLE_MAX ? `${m.slice(0, TITLE_MAX - 1)}…` : m;
 }
@@ -35,6 +41,8 @@ function jobTitle(job: Job): string {
 const dollars = (usd: number) => "$" + (usd < 0.01 ? usd.toFixed(3) : usd.toFixed(2));
 
 const LIMIT_WORDS: Record<string, string> = {
+  operator: "stopped for your message",
+  paused: "paused by you",
   steps: "stopped at its step limit",
   minutes: "stopped at its time limit",
   cost: "stopped at its cost limit",
@@ -48,6 +56,7 @@ function jobLine(job: Job): string {
   if (job.ended) parts.push(duration(job.started, job.ended));
   if (typeof job.cost === "number") parts.push(dollars(job.cost));
   if (job.limit) parts.push(LIMIT_WORDS[job.limit] ?? `stopped by its ${job.limit} limit`);
+  if (job.unprompted) parts.unshift(job.reason ? `On its own (${job.reason})` : "On its own");
   return parts.join(", ");
 }
 
@@ -210,6 +219,7 @@ export function ActivityPanel() {
         </div>
         {month && <MonthSpend month={month} />}
       </div>
+      <NextWakeUps />
       <DayChart jobs={jobs ?? []} />
       {jobs?.length === 0 && <p className="act-empty">Work appears here as the agent does it.</p>}
       <ol className="list activity" ref={list}>
@@ -274,6 +284,33 @@ function MonthSpend({ month }: { month: MonthBudget }) {
         <span className="sum-n">{dollars(month.spent)}</span> <span>of {dollars(month.budget)}</span>
       </p>
       <p className={`sum-line${paused ? " is-attn" : ""}`}>{line}</p>
+    </div>
+  );
+}
+
+/** What the agent plans to do on its own: its next wake-ups and today's count. */
+function NextWakeUps() {
+  const { status } = useWaker();
+  if (!status) return null;
+  const time = (at: string) => at.slice(11);
+  const later = status.pending.slice(0, 3);
+  return (
+    <div className="wakeups">
+      <p className="sum-line">
+        {status.paused
+          ? "Working on its own is paused."
+          : `Next wake-up at ${time(status.next_timer)}.`}{" "}
+        {status.today.woken} of {status.today.cap} wake-ups today.
+      </p>
+      {later.length > 0 && (
+        <ul className="wake-list">
+          {later.map((w) => (
+            <li key={w.id}>
+              <span className="when">{time(w.at)}</span> {w.why}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

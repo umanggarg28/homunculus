@@ -50,6 +50,7 @@ def _file_tool(
     annotations: mcp.ToolAnnotations,
     run: Callable[[dict[str, Any]], str],
     paths: tuple[str, ...] = ("path",),
+    changes: Callable[[dict[str, Any]], tuple[list[str], list[str]]] | None = None,
 ) -> Tool:
     """A file tool whose arguments are all required strings, described by `arguments`."""
     definition = mcp.Tool(
@@ -66,13 +67,33 @@ def _file_tool(
         },
         annotations=annotations,
     )
-    return Tool(definition, run, workspace_paths=paths)
+    return Tool(definition, run, workspace_paths=paths, changes=changes)
 
 
 class Files:
     def __init__(self, workspace: Path, memory: Memory | None = None) -> None:
         self._root = workspace.resolve()
         self._memory = memory
+
+    def _exists(self, path: str) -> bool | None:
+        """Whether a workspace file is there now, or None for a path in memory, which
+        has its own rules."""
+        root, parts, in_memory = self._where(path)
+        if in_memory:
+            return None
+        return root.joinpath(*parts).is_file()
+
+    def _changes_one(self, arguments: dict[str, Any]) -> tuple[list[str], list[str]]:
+        path = str(arguments.get("path", ""))
+        exists = self._exists(path)
+        if exists is None:
+            return [], []
+        return ([path], []) if exists else ([], [path])
+
+    def _changes_renamed(self, arguments: dict[str, Any]) -> tuple[list[str], list[str]]:
+        moved, _ = self._changes_one({"path": arguments.get("path", "")})
+        to = str(arguments.get("to", ""))
+        return moved, [] if self._exists(to) is None else [to]
 
     def _where(self, path: str) -> tuple[Path, list[str], bool]:
         """The folder a path lives under, its parts inside that folder, and whether it is
@@ -119,6 +140,7 @@ class Files:
                 },
                 CHANGES,
                 self.edit,
+                changes=self._changes_one,
             ),
             _file_tool(
                 "list",
@@ -152,6 +174,7 @@ class Files:
                 {"path": in_workspace},
                 REPLACES,
                 self.delete,
+                changes=self._changes_one,
             ),
             _file_tool(
                 "rename",
@@ -165,6 +188,7 @@ class Files:
                 CHANGES,
                 self.rename,
                 paths=("path", "to"),
+                changes=self._changes_renamed,
             ),
             _file_tool(
                 "write",
@@ -175,6 +199,7 @@ class Files:
                 {"path": in_workspace, "content": "The full file content."},
                 REPLACES,
                 self.write,
+                changes=self._changes_one,
             ),
         ]
         memory = self._memory

@@ -19,7 +19,7 @@ from homunculus.activity import Activity
 from homunculus.approvals import Approvals
 from homunculus.limits import Budget, Limits
 from homunculus.model import Message, ModelError, OpenRouterModel, Retrying, ToolCall, Usage
-from homunculus.tools import Tool, make_result
+from homunculus.tools import Tool
 from homunculus.tools.files import file_tools
 
 
@@ -111,9 +111,9 @@ async def test_a_job_ends_when_it_reaches_its_step_limit(tmp_path: Path) -> None
 async def test_a_job_ends_when_it_reaches_its_time_limit(tmp_path: Path) -> None:
     clock = Clock()
 
-    def slow_list(arguments: dict[str, Any]) -> Any:
+    def slow_list(arguments: dict[str, Any]) -> str:
         clock.now += 6 * 60
-        return make_result("notes.md")
+        return "notes.md"
 
     slow = file_tools(tmp_path / "workspace")[0]
     tool = Tool(slow.definition, slow_list, workspace_paths=slow.workspace_paths)

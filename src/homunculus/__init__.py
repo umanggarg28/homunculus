@@ -20,6 +20,8 @@ from homunculus.sandbox.docker import DockerSandbox
 from homunculus.server import create_app
 from homunculus.tools.files import file_tools
 from homunculus.tools.shell import shell_tool
+from homunculus.waker import Waker
+from homunculus.waker import load_settings as load_waker_settings
 
 PORT = 8765
 # The web console's production build, present after `npm run build` in web/.
@@ -85,6 +87,10 @@ def serve() -> None:
         tools.append(shell_tool(sandbox))
     model = OpenRouterModel(api_key)
     limits = load_limits(home)
+    # The waker decides when the agent works on its own; its two tools let the agent set
+    # and cancel its own wake-ups.
+    waker = Waker(home / "waker.json", load_waker_settings(home), limits)
+    tools.extend(waker.tools())
     app = create_app(
         model,
         tools,
@@ -94,6 +100,7 @@ def serve() -> None:
         memory=memory,
         limits=limits,
         budget=Budget(limits, model.month_spend),
+        waker=waker,
     )
     try:
         # Bound to this machine only: nothing else on the network can reach the API.

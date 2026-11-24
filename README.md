@@ -82,6 +82,21 @@ If the request fails, the stream ends with an `error` event that says why, for e
 
 To see a tool in use, send `"Save a note called tea.md that says I like green tea."`. The file appears in the data directory's `workspace/` folder, and the step is recorded in its `traces.jsonl`. On macOS, `open ~/Library/Application\ Support/homunculus` shows them in Finder.
 
+## Working on its own
+
+Every hour the agent wakes by itself, reads your goals and its own to-do notes (`memory/todo.md`), and does the next useful piece of work in its workspace, keeping the notes current so the next wake-up can carry on. It can also set its own wake-ups with `wake_at` ("tomorrow at 09:00, to draft scene 1") and cancel them, at most 10 waiting and at most 7 days ahead. If nothing is worth doing, it says so and does nothing; Activity shows that as one quiet line.
+
+On its own it writes new files and changes only files it made on its own; changing any other file that already exists, such as your own work, waits for your approval on Now. When the next step needs your decision, it puts the question at the top of `todo.md` and stops work toward that goal until you answer.
+
+What it does on its own is in Activity, marked "On its own" with why it woke; it never appears in your chat. Each wake-up starts fresh, from the goals and notes, never from your conversation. Everything outward still waits for your approval, and every job has the limits below.
+
+- **Pause** in the top bar stops work on its own, including a job already running, at its next step, until you press Resume. It survives a restart.
+- **Wake now** starts a wake-up straight away.
+- **Your message comes first.** If you write while it is working on its own, that job stops at its next step and your message is answered.
+- At most 24 wake-ups a day (`wakeups_per_day` in `limits.toml`). A timer slot that falls while you are chatting is skipped, not queued, and after the Mac sleeps it wakes once, not once per missed hour.
+
+The timer's interval and the time zone are in `waker.toml` in the data directory.
+
 ## Budget and limits
 
 Spending and runaway jobs are bounded by code, with numbers you can change in `limits.toml` in the data directory, written with these defaults on first start:
