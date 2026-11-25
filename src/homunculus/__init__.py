@@ -18,14 +18,17 @@ from homunculus.model import OpenRouterModel
 from homunculus.sandbox import docker
 from homunculus.sandbox.docker import DockerSandbox
 from homunculus.server import create_app
+from homunculus.skills import Skills
 from homunculus.tools.files import file_tools
 from homunculus.tools.shell import shell_tool
-from homunculus.waker import Waker
+from homunculus.waker import RoutinesError, Waker, load_routines
 from homunculus.waker import load_settings as load_waker_settings
 
 PORT = 8765
 # The web console's production build, present after `npm run build` in web/.
 CONSOLE = Path(__file__).resolve().parents[2] / "web" / "dist"
+# Generic skills, published with the code. Personal ones live in the data directory.
+BUILTIN_SKILLS = Path(__file__).resolve().parents[2] / "skills"
 
 
 def data_home() -> Path:
@@ -72,8 +75,15 @@ def serve() -> None:
     activity = Activity(home)
     # Memory sits beside the workspace, never inside it, so the sandbox cannot reach it.
     memory = Memory.open(home / "memory")
-    tools = file_tools(workspace, memory)
-    sandbox = DockerSandbox(workspace)
+    (home / "skills").mkdir(exist_ok=True)
+    skills = Skills(BUILTIN_SKILLS, home / "skills", identifiers=lambda: identifiers.load(home))
+    found = skills.found()
+    for problem in skills.problems():
+        print(problem, file=sys.stderr)
+    tools = file_tools(workspace, memory, skills)
+    # The sandbox mounts the skills found now; one added later can be read straight
+    # away, and its scripts run after a restart.
+    sandbox = DockerSandbox(workspace, skills={name: s.folder for name, s in found.items()})
     # Commands run only inside the sandbox. Without it there is no shell tool at all,
     # never a shell on this machine.
     try:
@@ -89,7 +99,13 @@ def serve() -> None:
     limits = load_limits(home)
     # The waker decides when the agent works on its own; its two tools let the agent set
     # and cancel its own wake-ups.
-    waker = Waker(home / "waker.json", load_waker_settings(home), limits)
+    settings = load_waker_settings(home)
+    try:
+        routines = load_routines(home, settings.zone())
+    except RoutinesError as error:
+        sandbox.stop()
+        sys.exit(f"routines.toml: {error}")
+    waker = Waker(home / "waker.json", settings, limits, routines=routines)
     tools.extend(waker.tools())
     app = create_app(
         model,
@@ -101,6 +117,7 @@ def serve() -> None:
         limits=limits,
         budget=Budget(limits, model.month_spend),
         waker=waker,
+        skills=skills,
     )
     try:
         # Bound to this machine only: nothing else on the network can reach the API.

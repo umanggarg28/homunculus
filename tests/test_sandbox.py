@@ -41,6 +41,9 @@ def home(tmp_path_factory: pytest.TempPathFactory) -> Path:
     # sandbox must never see.
     (folder / "traces.jsonl").write_text("private")
     (folder / "approvals.json").write_text("[]")
+    scripts = folder / "skills" / "say-hello" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "hello.py").write_text("print('hello from a skill')\n")
     return folder
 
 
@@ -54,7 +57,8 @@ def sandbox(home: Path, name: str) -> Iterator[DockerSandbox]:
     with pytest.MonkeyPatch.context() as patch:
         # A key in the server's environment, as in real use.
         patch.setenv("OPENROUTER_API_KEY", SECRET)
-        started = DockerSandbox(home / "workspace", name=name)
+        skills = {"say-hello": home / "skills" / "say-hello"}
+        started = DockerSandbox(home / "workspace", name=name, skills=skills)
         started.start()
     yield started
     started.stop()
@@ -255,6 +259,19 @@ def test_the_workspace_is_the_one_folder_shared_and_it_can_be_written(
     assert (home / "workspace" / "probe.txt").read_text() == "made in the sandbox\n"
     found = run(sandbox, "find / -name traces.jsonl -o -name approvals.json 2>/dev/null")
     assert found.output.strip() == ""
+
+
+def test_a_skills_scripts_run_from_its_folder_which_cannot_be_changed(
+    sandbox: DockerSandbox, home: Path
+) -> None:
+    ran = run(sandbox, "python /skills/say-hello/scripts/hello.py")
+    assert (ran.exit_code, ran.output.strip()) == (0, "hello from a skill")
+    changed = run(sandbox, "echo changed > /skills/say-hello/scripts/hello.py")
+    assert changed.exit_code != 0
+    assert "Read-only file system" in changed.output
+    assert (home / "skills" / "say-hello" / "scripts" / "hello.py").read_text() == (
+        "print('hello from a skill')\n"
+    )
 
 
 def test_there_are_no_capabilities_and_no_way_to_gain_privileges(sandbox: DockerSandbox) -> None:

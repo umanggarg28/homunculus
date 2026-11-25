@@ -25,9 +25,10 @@ from homunculus.limits import Limits
 from homunculus.memory import Memory
 from homunculus.model import Message, ToolCall
 from homunculus.server import create_app
+from homunculus.skills import Skills
 from homunculus.tools import Tool
 from homunculus.tools.files import file_tools
-from homunculus.waker import Waker, WakerSettings
+from homunculus.waker import Routine, RoutinesError, Waker, WakerSettings, load_routines
 
 ZONE = ZoneInfo("Asia/Kolkata")
 
@@ -48,12 +49,15 @@ def clock() -> Clock:
     return Clock()
 
 
-def make_waker(tmp_path: Path, clock: Clock, **limits: Any) -> Waker:
+def make_waker(
+    tmp_path: Path, clock: Clock, routines: list[Routine] | None = None, **limits: Any
+) -> Waker:
     return Waker(
         tmp_path / "waker.json",
         WakerSettings(every_minutes=60, time_zone="Asia/Kolkata"),
         Limits(**limits),
         clock=clock,
+        routines=routines or [],
     )
 
 
@@ -249,7 +253,11 @@ async def test_a_job_stops_at_the_next_step_when_asked_and_says_why(tmp_path: Pa
 
 
 def server_with(
-    tmp_path: Path, model: ScriptedModel, waker: Waker, tools: list[Tool] | None = None
+    tmp_path: Path,
+    model: ScriptedModel,
+    waker: Waker,
+    tools: list[Tool] | None = None,
+    skills: Skills | None = None,
 ) -> tuple[Any, Memory]:
     memory = Memory.open(tmp_path / "memory")
     (memory.root / "goals.md").write_text("# Goals\n\nFinish the novel draft by March.\n")
@@ -264,6 +272,7 @@ def server_with(
         Approvals(tmp_path / "approvals.json"),
         memory=memory,
         waker=waker,
+        skills=skills,
     )
     return app, memory
 
@@ -435,6 +444,24 @@ async def test_pause_stops_a_running_job_and_wake_now_while_paused_still_runs(
     assert (await client.post("/api/waker/resume")).json()["paused"] is False
 
 
+async def test_every_chat_turn_is_told_the_local_date_and_time(
+    tmp_path: Path, clock: Clock, client_for: Any
+) -> None:
+    model = ScriptedModel([["Morning."], ["Still here."]])
+    waker = make_waker(tmp_path, clock)
+    app, _ = server_with(tmp_path, model, waker)
+    client = client_for(app)
+
+    await client.post("/api/chat", json={"message": "Hello."})
+    clock.advance(minutes=90)
+    await client.post("/api/chat", json={"message": "Hello again."})
+
+    first, second = (str(call[0]["content"]) for call in model.received)
+    # Last, so the instructions before it stay the same from turn to turn.
+    assert first.endswith("It is Wednesday 25 November 2026, 09:00 (Asia/Kolkata).")
+    assert second.endswith("It is Wednesday 25 November 2026, 10:30 (Asia/Kolkata).")
+
+
 async def test_the_waker_status_lists_what_is_planned(
     tmp_path: Path, clock: Clock, client_for: Any
 ) -> None:
@@ -550,3 +577,213 @@ def test_without_a_waker_its_status_is_empty_not_an_error(tmp_path: Path) -> Non
     response = TestClient(app).get("/api/waker")
 
     assert response.status_code == 204
+
+
+# Routines
+
+
+def brief_at(at: str, days: str = "weekdays", time_zone: str = "") -> Routine:
+    return Routine.of(
+        {"skill": "morning-brief", "at": at, "days": days, "time_zone": time_zone}, ZONE
+    )
+
+
+def test_a_routine_wakes_the_agent_at_its_time_on_its_days(tmp_path: Path, clock: Clock) -> None:
+    # Wednesday 25 November, 09:00.
+    waker = make_waker(tmp_path, clock, routines=[brief_at("10:00")])
+
+    clock.advance(minutes=59)
+    assert waker.take() is None
+    clock.advance(minutes=1)
+    # The routine and the timer are both due; the routine goes first, and resets the timer.
+    assert waker.take() == "the routine morning-brief"
+    assert waker.take() is None
+
+    clock.now = datetime(2026, 11, 26, 10, 0, tzinfo=ZONE)  # Thursday
+    assert waker.take() == "the routine morning-brief"
+    clock.now = datetime(2026, 11, 28, 10, 0, tzinfo=ZONE)  # Saturday
+    assert waker.take() == "the hourly timer"
+
+
+def test_a_routine_runs_in_its_own_time_zone(tmp_path: Path, clock: Clock) -> None:
+    # 10:00 in London is 15:30 in Kolkata in November.
+    waker = make_waker(tmp_path, clock, routines=[brief_at("10:00", "every day", "Europe/London")])
+
+    clock.now = datetime(2026, 11, 25, 15, 29, tzinfo=ZONE)
+    waker.take()  # the timer, which is long due
+    assert waker.take() is None
+    clock.advance(minutes=1)
+    assert waker.take() == "the routine morning-brief"
+
+
+def test_a_routine_missed_by_a_little_runs_once_when_the_computer_wakes(
+    tmp_path: Path, clock: Clock
+) -> None:
+    waker = make_waker(tmp_path, clock, routines=[brief_at("10:00")])
+
+    clock.now = datetime(2026, 11, 25, 11, 30, tzinfo=ZONE)
+
+    assert waker.take() == "the routine morning-brief"
+    assert waker.take() is None
+
+
+def test_a_routine_missed_by_more_than_two_hours_is_skipped_and_reported(
+    tmp_path: Path, clock: Clock
+) -> None:
+    waker = make_waker(tmp_path, clock, routines=[brief_at("10:00")])
+
+    clock.now = datetime(2026, 11, 25, 12, 30, tzinfo=ZONE)
+
+    assert waker.take() == "the hourly timer"
+    assert waker.take() is None
+    assert waker.status()["missed"] == [{"skill": "morning-brief", "at": "2026-11-25 10:00"}]
+    clock.now = datetime(2026, 11, 26, 9, 0, tzinfo=ZONE)
+    assert waker.status()["missed"] == []
+
+
+def test_a_new_routine_does_not_run_for_a_time_already_past_today(
+    tmp_path: Path, clock: Clock
+) -> None:
+    waker = make_waker(tmp_path, clock, routines=[brief_at("08:30")])
+
+    assert waker.take() is None
+    assert waker.status()["missed"] == []
+
+
+def test_a_routine_that_ran_does_not_run_again_after_a_restart(
+    tmp_path: Path, clock: Clock
+) -> None:
+    routines = [brief_at("10:00")]
+    waker = make_waker(tmp_path, clock, routines=routines)
+    clock.advance(hours=1)
+    assert waker.take() == "the routine morning-brief"
+
+    again = make_waker(tmp_path, clock, routines=routines)
+
+    assert again.take() is None
+
+
+def test_pause_holds_routines_too(tmp_path: Path, clock: Clock) -> None:
+    waker = make_waker(tmp_path, clock, routines=[brief_at("10:00")])
+    waker.pause()
+
+    clock.advance(hours=1)
+
+    assert waker.take() is None
+
+
+def test_the_status_lists_the_next_run_of_each_routine(tmp_path: Path, clock: Clock) -> None:
+    weekly = Routine.of({"skill": "plan-week", "at": "18:00", "days": "sun"}, ZONE)
+    waker = make_waker(tmp_path, clock, routines=[brief_at("08:00"), weekly])
+
+    assert waker.status()["routines"] == [
+        {"skill": "morning-brief", "at": "2026-11-26 08:00"},
+        {"skill": "plan-week", "at": "2026-11-29 18:00"},
+    ]
+
+
+def test_the_routines_file_starts_with_an_example_that_does_not_run(tmp_path: Path) -> None:
+    assert load_routines(tmp_path, ZONE) == []
+    assert "morning-brief" in (tmp_path / "routines.toml").read_text()
+
+
+def test_the_routines_file_names_a_skill_a_time_and_days_for_each_routine(
+    tmp_path: Path, clock: Clock
+) -> None:
+    (tmp_path / "routines.toml").write_text(
+        '[[routine]]\nskill = "morning-brief"\nat = "07:00"\ndays = "mon,thu"\n'
+        '\n[[routine]]\nskill = "plan-week"\nat = "18:30"\ndays = "weekends"\n'
+        'time_zone = "Europe/London"\n'
+    )
+
+    routines = load_routines(tmp_path, ZONE)
+    waker = make_waker(tmp_path, clock, routines=routines)
+
+    assert waker.status()["routines"] == [
+        {"skill": "morning-brief", "at": "2026-11-26 07:00"},
+        {"skill": "plan-week", "at": "2026-11-29 00:00"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("entry", "problem"),
+    [
+        ('skill = "morning-brief"\nat = "7am"', "routine 1: give at as HH:MM, such as 07:00"),
+        (
+            'skill = "morning-brief"\nat = "07:00"\ndays = "someday"',
+            "routine 1: days must be every day, weekdays, weekends or days such as mon,thu",
+        ),
+        ('at = "07:00"', "routine 1: name the skill it runs"),
+        (
+            'skill = "morning-brief"\nat = "07:00"\ntime_zone = "Mars/Base"',
+            "routine 1: Mars/Base is not a time zone",
+        ),
+    ],
+)
+def test_a_routine_that_cannot_be_understood_stops_the_start_with_the_reason(
+    tmp_path: Path, entry: str, problem: str
+) -> None:
+    (tmp_path / "routines.toml").write_text(f"[[routine]]\n{entry}\n")
+
+    with pytest.raises(RoutinesError, match=problem):
+        load_routines(tmp_path, ZONE)
+
+
+def skills_with_brief(tmp_path: Path) -> Skills:
+    folder = tmp_path / "home-skills" / "morning-brief"
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text(
+        "---\nname: morning-brief\ndescription: Write the day's brief.\n---\n"
+        "Write briefs/today.md with three things to do today.\n"
+    )
+    return Skills(tmp_path / "no-builtin", tmp_path / "home-skills")
+
+
+async def test_a_routine_hands_the_agent_its_skill_directly(
+    tmp_path: Path, clock: Clock, client_for: Any
+) -> None:
+    model = ScriptedModel([["Brief written."]])
+    waker = make_waker(tmp_path, clock, routines=[brief_at("10:00")])
+    app, _ = server_with(tmp_path, model, waker, skills=skills_with_brief(tmp_path))
+    clock.advance(hours=1)
+
+    await app.state.waker_step()
+
+    opening = model.received[-1][1]["content"]
+    assert "the routine morning-brief" in opening
+    assert "Write briefs/today.md with three things to do today." in opening
+    assert "skills/morning-brief/" in opening
+    (job,) = (await client_for(app).get("/api/activity")).json()
+    assert (job["unprompted"], job["reason"]) == (True, "the routine morning-brief")
+
+
+async def test_a_routine_whose_skill_is_missing_says_so_and_does_nothing(
+    tmp_path: Path, clock: Clock
+) -> None:
+    model = ScriptedModel([["The routine's skill is missing."]])
+    gone = Routine.of({"skill": "gone-skill", "at": "10:00"}, ZONE)
+    waker = make_waker(tmp_path, clock, routines=[gone])
+    app, _ = server_with(tmp_path, model, waker, skills=skills_with_brief(tmp_path))
+    clock.advance(hours=1)
+
+    await app.state.waker_step()
+
+    opening = model.received[-1][1]["content"]
+    assert "no skill named gone-skill" in opening
+    assert "use no tools" in opening
+
+
+async def test_a_routine_due_while_the_operator_is_chatting_waits_until_they_are_done(
+    tmp_path: Path, clock: Clock
+) -> None:
+    model = ScriptedModel([["Brief written."]])
+    waker = make_waker(tmp_path, clock, routines=[brief_at("10:00")])
+    app, _ = server_with(tmp_path, model, waker, skills=skills_with_brief(tmp_path))
+    clock.advance(hours=1)
+
+    async with app.state.busy:
+        await app.state.waker_step()
+    assert model.received == []
+
+    await app.state.waker_step()
+    assert "the routine morning-brief" in model.received[-1][1]["content"]

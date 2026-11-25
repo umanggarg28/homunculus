@@ -19,9 +19,10 @@ from homunculus.approvals import Approval, ApprovalError, Approvals, Kind, Statu
 from homunculus.limits import Budget, Limits
 from homunculus.memory import CAPS, Memory, Stale
 from homunculus.model import Message, Model, ModelError, Retrying
+from homunculus.skills import Skills
 from homunculus.tools import Tool
 from homunculus.turns import Event, Turn, Turns
-from homunculus.waker import Waker, wake_prompt
+from homunculus.waker import Waker, routine_skill, wake_prompt
 
 # How many decided requests the approvals list shows below the pending ones.
 RECENT_DECISIONS = 10
@@ -75,6 +76,7 @@ def create_app(
     limits: Limits | None = None,
     budget: Budget | None = None,
     waker: Waker | None = None,
+    skills: Skills | None = None,
 ) -> FastAPI:
     """The HTTP API, and the built web console from `console` when one is given."""
 
@@ -119,6 +121,8 @@ def create_app(
                         history,
                         request.message,
                         memory=memory,
+                        skills=skills,
+                        now=waker.now if waker is not None else None,
                         limits=limits,
                         budget=budget,
                     ):
@@ -194,6 +198,8 @@ def create_app(
                     text,
                     notice=True,
                     memory=memory,
+                    skills=skills,
+                    now=waker.now if waker is not None else None,
                     limits=limits,
                     budget=budget,
                 ):
@@ -371,8 +377,10 @@ def create_app(
                         activity,
                         approvals,
                         [],
-                        wake_prompt(waker.now(), reason),
+                        wake_prompt(waker.now(), reason, _routine_instructions(skills, reason)),
                         memory=memory,
+                        skills=skills,
+                        now=waker.now if waker is not None else None,
                         limits=limits,
                         budget=budget,
                         unprompted=True,
@@ -476,6 +484,16 @@ def _memory_routes(app: FastAPI, memory: Memory) -> None:
     @app.get("/api/memory/log")
     def log() -> list[dict[str, str]]:
         return memory.log()
+
+
+def _routine_instructions(skills: Skills | None, reason: str) -> str | None:
+    """The instructions of the skill a routine runs, read when it runs, so the routine
+    hands its skill to the agent directly. An empty string when the skill is missing."""
+    name = routine_skill(reason)
+    if name is None:
+        return None
+    found = skills.instructions(name) if skills is not None else None
+    return found or ""
 
 
 async def _keep_waking(app: FastAPI) -> None:

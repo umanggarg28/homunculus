@@ -6,7 +6,9 @@ import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 import mcp_types as mcp
 from opentelemetry import trace
@@ -28,6 +30,7 @@ from homunculus.approvals import Approvals, Kind
 from homunculus.limits import Budget, Limits, dollars
 from homunculus.memory import Memory
 from homunculus.model import Message, Model, ModelError, Retrying, ToolCall, Usage
+from homunculus.skills import Skills
 from homunculus.tools import Tool, make_result, result_text
 
 
@@ -44,6 +47,17 @@ class ToolStep:
     # How the step ended, so every reader classifies it the same way: "ok" (it ran),
     # "waiting" (the operator decides) or "failed" (refused, or the tool reported an error).
     outcome: str
+
+
+def local_time(moment: datetime) -> str:
+    """The date and time in words, with the time zone, as the agent is told it."""
+    zone = moment.tzinfo
+    name = zone.key if isinstance(zone, ZoneInfo) else moment.strftime("%Z")
+    return f"It is {moment.strftime('%A %-d %B %Y, %H:%M')} ({name})."
+
+
+def _local_now() -> datetime:
+    return datetime.now().astimezone()
 
 
 class OwnFiles(Protocol):
@@ -79,6 +93,8 @@ async def run(
     interruption: Callable[[], str | None] | None = None,
     wake_reason: str | None = None,
     own_files: OwnFiles | None = None,
+    skills: Skills | None = None,
+    now: Callable[[], datetime] | None = None,
 ) -> AsyncIterator[str | ToolStep | Retrying | Stopped]:
     """Answer one operator message, yielding the reply text as it streams and a
     ToolStep after each tool call, so a caller can show the work as it happens.
@@ -92,6 +108,8 @@ async def run(
 
     With `memory`, the turn starts by taking any edits the operator made by hand, and the
     instructions are followed by the profile, goals and wiki index, read fresh each turn.
+    With `skills`, the catalogue of skills follows them, also built fresh each turn.
+    The local date and time, from `now`, come last.
 
     Every job is bounded by `limits` (the defaults when none are given): it ends once it
     reaches its steps, minutes or cost, and with a `budget` it does not start once the
@@ -113,6 +131,12 @@ async def run(
     if memory is not None:
         memory.take_hand_edits()
         instructions += "\n\n" + memory.context()
+    catalogue = skills.catalogue() if skills is not None else ""
+    if catalogue:
+        instructions += "\n\n" + catalogue
+    # Last, so everything before it is the same from turn to turn and a provider can
+    # cache it.
+    instructions += "\n\n" + local_time((now or _local_now)())
     system: Message = {"role": "system", "content": instructions}
     opening: Message = {"role": "user", "content": text}
     if notice:

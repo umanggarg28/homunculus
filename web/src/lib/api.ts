@@ -74,6 +74,10 @@ export interface WakerStatus {
   next_timer: string;
   pending: { id: string; at: string; why: string }[];
   today: { woken: number; cap: number; skipped_busy: number };
+  /** Each routine's next run, local time, soonest first. */
+  routines?: { skill: string; at: string }[];
+  /** Routines missed today because the computer slept past them. */
+  missed?: { skill: string; at: string }[];
 }
 
 async function wakerCall(path: string, method = "GET"): Promise<WakerStatus | null> {

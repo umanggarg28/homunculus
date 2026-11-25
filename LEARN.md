@@ -13,7 +13,7 @@ There is one chapter per module, in the order the modules were built. Every chap
 
 Read a chapter with the code open beside it. Each one takes about fifteen minutes.
 
-References to code are links to the exact line, followed by the code they point at, for example [loop.py:158](src/homunculus/loop.py#L158) `messages = [system, *history, *turn]`. Click one to jump there. A check runs on every pull request and fails if any reference no longer matches its line, so they stay correct as the code changes.
+References to code are links to the exact line, followed by the code they point at, for example [loop.py:182](src/homunculus/loop.py#L182) `messages = [system, *history, *turn]`. Click one to jump there. A check runs on every pull request and fails if any reference no longer matches its line, so they stay correct as the code changes.
 
 Diagrams are plain text, so they read the same in any editor.
 
@@ -34,6 +34,7 @@ Diagrams are plain text, so they read the same in any editor.
 12. [Importing your files](#12-importing-your-files)
 13. [Budget and limits](#13-budget-and-limits)
 14. [Working on its own](#14-working-on-its-own)
+15. [Skills and routines](#15-skills-and-routines)
 
 ---
 
@@ -129,7 +130,7 @@ history = []                  # a list of message dicts; empty, since this is th
 text = "I like tea."          # a str
 ```
 
-**The opening message, then `turn`**: [loop.py:117-120](src/homunculus/loop.py#L117-L120) `opening: Message = ... turn: list[Message] = [opening]`
+**The opening message, then `turn`**: [loop.py:141-144](src/homunculus/loop.py#L141-L144) `opening: Message = ... turn: list[Message] = [opening]`
 
 ```python
 opening = {"role": "user", "content": "I like tea."}   # one message: a dict with two str keys
@@ -140,7 +141,7 @@ turn = [opening]                                         # a list of 1 message
 
 `turn` collects everything that happens in this one exchange. With tools, it grows to hold the tool calls and their results too.
 
-**[loop.py:158](src/homunculus/loop.py#L158) `messages = [system, *history, *turn]`**
+**[loop.py:182](src/homunculus/loop.py#L182) `messages = [system, *history, *turn]`**
 
 `system` is the system message, built once at the start of `run` from the fixed instructions (chapter 9). `*history` and `*turn` spread their contents into the new list. `history` is empty, so `messages` is a list of 2 dicts:
 
@@ -151,7 +152,7 @@ messages[1] = {"role": "user",   "content": "I like tea."}
 
 Read `messages[1]` aloud: "the user said: I like tea."
 
-**[loop.py:160](src/homunculus/loop.py#L160) `model.stream(messages, schemas)`** returns an async iterator. Each item is either a piece of text (`str`) or a finished tool request (`ToolCall`, chapter 4). Suppose the model's reply arrives as one piece of text:
+**[loop.py:184](src/homunculus/loop.py#L184) `model.stream(messages, schemas)`** returns an async iterator. Each item is either a piece of text (`str`) or a finished tool request (`ToolCall`, chapter 4). Suppose the model's reply arrives as one piece of text:
 
 ```python
 model.stream(messages, schemas) -> "Noted."      # yields 1 str, then ends
@@ -181,13 +182,13 @@ When a reply arrives in two pieces, `"Good "` and `"morning."`, each pull goes l
 
 `parts` is the loop's private notepad. It exists only so the full reply can be glued together at the end, and nothing outside `run` ever sees it.
 
-**[loop.py:172](src/homunculus/loop.py#L172) `reply: Message = {"role": "assistant", "content": "".join(parts)}`**
+**[loop.py:196](src/homunculus/loop.py#L196) `reply: Message = {"role": "assistant", "content": "".join(parts)}`**
 
-`"".join(["Noted."])` is `"Noted."`, so `reply` is `{"role": "assistant", "content": "Noted."}`. [loop.py:175](src/homunculus/loop.py#L175) `turn.append(reply)` appends it, and `turn` is now a list of 2.
+`"".join(["Noted."])` is `"Noted."`, so `reply` is `{"role": "assistant", "content": "Noted."}`. [loop.py:199](src/homunculus/loop.py#L199) `turn.append(reply)` appends it, and `turn` is now a list of 2.
 
-**[loop.py:176-177](src/homunculus/loop.py#L176-L177) `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
+**[loop.py:200-201](src/homunculus/loop.py#L200-L201) `if not calls: break`.** The model asked for no tools, so `calls` is `[]` and the `while` loop ends. This is the stopping rule in code.
 
-**[loop.py:209](src/homunculus/loop.py#L209) `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
+**[loop.py:233](src/homunculus/loop.py#L233) `history += turn`.** `history` was `[]` and is now a list of 2 dicts:
 
 ```python
 history[0] = {"role": "user",      "content": "I like tea."}
@@ -209,7 +210,7 @@ The model sees the whole exchange and can answer "tea". That is the entire mecha
 
 **Where each piece is used.** `parts` and `calls` are rebuilt on every pass of the `while` loop. `turn` lives for one call to `run`. `history` outlives the call: the server owns it, and `run` only adds to it. `system`, the system message, is built once per call to `run` and never stored anywhere.
 
-**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so [loop.py:209](src/homunculus/loop.py#L209) `history += turn` never runs and `history` stays as it was. On the way out, [loop.py:199-201](src/homunculus/loop.py#L199-L201) `except ModelError as error: ... raise` mark the turn's trace as failed (chapter 6) and pass the error on. A failed turn leaves no half-finished reply in the conversation.
+**Why history is updated last.** If the model fails halfway through, `model.stream` raises an error inside the `async for`. Python leaves the function at that point, so [loop.py:233](src/homunculus/loop.py#L233) `history += turn` never runs and `history` stays as it was. On the way out, [loop.py:223-225](src/homunculus/loop.py#L223-L225) `except ModelError as error: ... raise` mark the turn's trace as failed (chapter 6) and pass the error on. A failed turn leaves no half-finished reply in the conversation.
 
 ### The test
 
@@ -239,7 +240,7 @@ The other loop tests say: the loop streams the reply and calls the model exactly
 
 ### Change it yourself
 
-1. In `loop.py`, make the history update happen **before** the model is called. Add `history += turn` on a new line just above the `try:` that follows [loop.py:137](src/homunculus/loop.py#L137) `parent = trace.set_span_in_context(root)`.
+1. In `loop.py`, make the history update happen **before** the model is called. Add `history += turn` on a new line just above the `try:` that follows [loop.py:161](src/homunculus/loop.py#L161) `parent = trace.set_span_in_context(root)`.
 2. Run `uv run pytest tests/test_loop.py`.
 3. Two tests fail. Read their failure messages. One shows your message appearing twice in the list sent to the model. The other shows a failed turn leaving your message behind in `history`.
 4. Undo the change and run the tests again to see them pass.
@@ -476,7 +477,7 @@ All are local variables of `create_app`. The functions defined inside it can sti
 turns.start(work) -> Turn(id="1f68ddcd07d2139a", events=[], done=False, task=<Task>)
 ```
 
-Then [server.py:138](src/homunculus/server.py#L138) `return watch(turns.start(work))` returns at once with a `StreamingResponse` that follows this turn. Nothing has been sent yet.
+Then [server.py:142](src/homunculus/server.py#L142) `return watch(turns.start(work))` returns at once with a `StreamingResponse` that follows this turn. Nothing has been sent yet.
 
 **The turn task runs.** `work` first adds the opening event, then takes the lock and runs the loop. Each item becomes an event with the next number:
 
@@ -584,7 +585,7 @@ The defaults assume the worst, so a tool that says nothing about itself is treat
 
 **Few, general tools.** Homunculus has seven file tools, and one `shell` tool that runs commands in the sandbox (chapter 10). The file tools are `read`, `write`, `edit`, `list`, `search`, `delete` and `rename`. Their behaviour follows Anthropic's published memory-tool interface (view a file with numbered lines, create, replace text that appears exactly once, delete, rename). `search` is plain text search, the approach Claude Code takes with its Grep tool, instead of a pre-built index. Anthropic's "Seeing like an agent" notes that every extra tool is one more option the model has to weigh, so the bar for adding one is high. This project caps itself at 20.
 
-**The workspace is a fence, with two layers.** The gate (chapter 5) refuses any path that is absolute or contains `..` before a tool runs. Then the tool reaches the file one folder at a time, starting from a handle on the workspace folder itself, and never follows a link at any step: [files.py:17](src/homunculus/tools/files.py#L17) `FOLDER_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW`. A link is refused even when it points inside the workspace. That matters because the sandbox (chapter 10) can change the workspace while a tool is working: a tool that checked a path first and opened it afterwards could be sent anywhere by a link swapped in between. Walking with folder handles leaves no such gap. One mistake in either layer is not enough to get out. The activity log lives outside the workspace, so no tool can reach it.
+**The workspace is a fence, with two layers.** The gate (chapter 5) refuses any path that is absolute or contains `..` before a tool runs. Then the tool reaches the file one folder at a time, starting from a handle on the workspace folder itself, and never follows a link at any step: [files.py:18](src/homunculus/tools/files.py#L18) `FOLDER_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW`. A link is refused even when it points inside the workspace. That matters because the sandbox (chapter 10) can change the workspace while a tool is working: a tool that checked a path first and opened it afterwards could be sent anywhere by a link swapped in between. Walking with folder handles leaves no such gap. One mistake in either layer is not enough to get out. The activity log lives outside the workspace, so no tool can reach it.
 
 ### A picture
 
@@ -607,7 +608,7 @@ The defaults assume the worst, so a tool that says nothing about itself is treat
 
 You send `"Note that I like green tea."`. `tools` holds the seven file tools for the workspace (and `shell`, when Docker is running), `~/Library/Application Support/homunculus/workspace` on a Mac.
 
-**[loop.py:110-111](src/homunculus/loop.py#L110-L111) `by_name = ... schemas = ...`** prepare the tools two ways:
+**[loop.py:128-129](src/homunculus/loop.py#L128-L129) `by_name = ... schemas = ...`** prepare the tools two ways:
 
 ```
 by_name = {"read": <Tool>, "write": <Tool>, ..., "rename": <Tool>}       a dict of 7, name to Tool
@@ -631,11 +632,11 @@ by_name["write"].workspace_paths  -> ("path",)   the arguments the gate keeps in
 ToolCall(id="call_1", name="write", arguments='{"path": "tea.md", "content": "Green"}')
 ```
 
-`isinstance(item, ToolCall)` is true, so it goes into `calls` ([loop.py:162](src/homunculus/loop.py#L162) `calls.append(item)`), not `parts`. Nothing is yielded to you. `parts` stays `[]`.
+`isinstance(item, ToolCall)` is true, so it goes into `calls` ([loop.py:186](src/homunculus/loop.py#L186) `calls.append(item)`), not `parts`. Nothing is yielded to you. `parts` stays `[]`.
 
-**[loop.py:172-175](src/homunculus/loop.py#L172-L175) `reply: Message = ... turn.append(reply)`** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
+**[loop.py:196-199](src/homunculus/loop.py#L196-L199) `reply: Message = ... turn.append(reply)`** build the assistant message. `reply["content"]` is `""`, and `reply["tool_calls"]` is a list of 1, made by `_as_message`. `turn` is now a list of 2: your message, then this request.
 
-**[loop.py:176](src/homunculus/loop.py#L176) `if not calls:`** is false, because `calls` is not empty, so there is no `break`. **[loop.py:185](src/homunculus/loop.py#L185) `step = await _carry_out(`** hands the call to `_carry_out`, which runs the tool in a worker thread so a slow command does not hold up the server:
+**[loop.py:200](src/homunculus/loop.py#L200) `if not calls:`** is false, because `calls` is not empty, so there is no `break`. **[loop.py:209](src/homunculus/loop.py#L209) `step = await _carry_out(`** hands the call to `_carry_out`, which runs the tool in a worker thread so a slow command does not hold up the server:
 
 ```
 gate.decide(call, by_name["write"])  -> Answer.ACT                      (chapter 5)
@@ -649,7 +650,7 @@ outcome_of(result)                   -> "ok"                            because 
 
 `activity.end_tool(span, "act", "Wrote tea.md.", "ok", None)` ends the step's `execute_tool` span, which writes it to the activity log (chapter 6), and `_carry_out` returns the result.
 
-**[loop.py:189](src/homunculus/loop.py#L189) `turn.append({"role": "tool", ...})`** adds the tool message, and [loop.py:190](src/homunculus/loop.py#L190) `yield step` yields the step as a `ToolStep`, which the server sends to you as a `tool` event (chapter 3). `turn` is now a list of 3:
+**[loop.py:207](src/homunculus/loop.py#L207) `turn.append({"role": "tool", ...})`** adds the tool message, and [loop.py:214](src/homunculus/loop.py#L214) `yield step` yields the step as a `ToolStep`, which the server sends to you as a `tool` event (chapter 3). `turn` is now a list of 3:
 
 ```
 turn[0] = {"role": "user",      "content": "Note that I like green tea."}
@@ -659,7 +660,7 @@ turn[2] = {"role": "tool",      "tool_call_id": "call_1", "content": "Wrote tea.
 
 Read `turn[2]` aloud: "the result of request call_1 was: Wrote tea.md."
 
-**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so [loop.py:177](src/homunculus/loop.py#L177) `break` ends the loop. `turn` ends as a list of 4, and [loop.py:209](src/homunculus/loop.py#L209) `history += turn` adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
+**Second pass.** `messages` is the system message plus these 3. The model sees its own request and the result, and answers in words: `"Saved."`. That text is yielded to you as before. `calls` is `[]`, so [loop.py:201](src/homunculus/loop.py#L201) `break` ends the loop. `turn` ends as a list of 4, and [loop.py:233](src/homunculus/loop.py#L233) `history += turn` adds all 4 to `history`. Your next message will carry the whole exchange, tool call included.
 
 **How the real model streams a tool call.** OpenRouter sends the request in pieces, each tagged with an `index` saying which call it belongs to:
 
@@ -733,7 +734,7 @@ An agent that works by itself will sometimes propose something it should not do:
 
 ### The idea
 
-**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs ([loop.py:255](src/homunculus/loop.py#L255) `answer = gate.decide(call, tool, unprompted=unprompted, own=own)`). It returns one of five answers:
+**One gate, a table of answers.** Every tool call goes through `gate.decide` before anything runs ([loop.py:279](src/homunculus/loop.py#L279) `answer = gate.decide(call, tool, unprompted=unprompted, own=own)`). It returns one of five answers:
 
 | Answer | Meaning |
 |---|---|
@@ -903,7 +904,7 @@ The first two have no standard name, so they start with `homunculus.`, as OpenTe
 
 ### One value, traced
 
-You send `"Note that I like green tea."`. In `run`, [loop.py:123](src/homunculus/loop.py#L123) `root = activity.tracer.start_span(` starts the root span with these attributes, a dict of 7:
+You send `"Note that I like green tea."`. In `run`, [loop.py:147](src/homunculus/loop.py#L147) `root = activity.tracer.start_span(` starts the root span with these attributes, a dict of 7:
 
 ```
 {"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "Homunculus",
@@ -914,11 +915,11 @@ You send `"Note that I like green tea."`. In `run`, [loop.py:123](src/homunculus
 
 The span's trace id, `9f3c41d2...` (32 hex characters), is the job's id from now on. `parent` is a context holding the root, and every later span is started with it, so each one names the root as its parent.
 
-**The first model call.** [loop.py:159](src/homunculus/loop.py#L159) `with _model_call(activity, model, parent) as chat:` starts a `chat` span. The model streams a `ToolCall`, then, as its last item, `Usage(input_tokens=1195, output_tokens=85, cached_input_tokens=1044)`. [loop.py:164](src/homunculus/loop.py#L164) `_record_usage(chat, item)` copies those onto the span. Just before the `with` block ends, the span also records what the model said, in `gen_ai.output.messages`: here no text, one `tool_call` part with the tool's name, id and arguments, and `"finish_reason": "tool_call"`. If the model had written "Let me save that" before asking, that text would be recorded too. When the `with` block ends, the span ends and is written: the first line of the file.
+**The first model call.** [loop.py:183](src/homunculus/loop.py#L183) `with _model_call(activity, model, parent) as chat:` starts a `chat` span. The model streams a `ToolCall`, then, as its last item, `Usage(input_tokens=1195, output_tokens=85, cached_input_tokens=1044)`. [loop.py:188](src/homunculus/loop.py#L188) `_record_usage(chat, item)` copies those onto the span. Just before the `with` block ends, the span also records what the model said, in `gen_ai.output.messages`: here no text, one `tool_call` part with the tool's name, id and arguments, and `"finish_reason": "tool_call"`. If the model had written "Let me save that" before asking, that text would be recorded too. When the `with` block ends, the span ends and is written: the first line of the file.
 
-**The tool call.** In `_carry_out`, [loop.py:224](src/homunculus/loop.py#L224) `span = activity.start_tool(call.name, call.arguments, parent, call_id=call.id)` starts the `execute_tool write` span before the gate decides. After the write, [loop.py:232](src/homunculus/loop.py#L232) `activity.end_tool(span, answer.value, result, outcome, request_id)` sets `homunculus.gate.answer="act"`, `gen_ai.tool.call.result="Wrote tea.md."` and `homunculus.outcome="ok"`, and ends it. That is line two. A failed step gets an error status and `error.type`: `"tool_error"` when the tool ran and reported a failure, or the gate's answer, such as `"refuse"`, when it never ran. If anything goes wrong between starting the span and ending it, the `except` around it still ends the span, so no span is ever left open.
+**The tool call.** In `_carry_out`, [loop.py:248](src/homunculus/loop.py#L248) `span = activity.start_tool(call.name, call.arguments, parent, call_id=call.id)` starts the `execute_tool write` span before the gate decides. After the write, [loop.py:256](src/homunculus/loop.py#L256) `activity.end_tool(span, answer.value, result, outcome, request_id)` sets `homunculus.gate.answer="act"`, `gen_ai.tool.call.result="Wrote tea.md."` and `homunculus.outcome="ok"`, and ends it. That is line two. A failed step gets an error status and `error.type`: `"tool_error"` when the tool ran and reported a failure, or the gate's answer, such as `"refuse"`, when it never ran. If anything goes wrong between starting the span and ending it, the `except` around it still ends the span, so no span is ever left open.
 
-**The second model call** answers "Saved." and becomes line three. Then [loop.py:208](src/homunculus/loop.py#L208) `root.end()` ends the root, with the reply in `gen_ai.output.messages`: line four. If the model had failed, `fail` would have set the root's status to error with the message, and `error.type` to `"ModelError"`. Anything else that cuts a turn short, such as you closing the page, does the same, in the `except` block whose comment starts [loop.py:203](src/homunculus/loop.py#L203) `# Anything else that ends the turn early, such as a bug or the operator pressing`.
+**The second model call** answers "Saved." and becomes line three. Then [loop.py:232](src/homunculus/loop.py#L232) `root.end()` ends the root, with the reply in `gen_ai.output.messages`: line four. If the model had failed, `fail` would have set the root's status to error with the message, and `error.type` to `"ModelError"`. Anything else that cuts a turn short, such as you closing the page, does the same, in the `except` block whose comment starts [loop.py:227](src/homunculus/loop.py#L227) `# Anything else that ends the turn early, such as a bug or the operator pressing`.
 
 One line of the file, cut down:
 
@@ -932,7 +933,7 @@ One line of the file, cut down:
 
 **From spans to jobs.** [activity.py:200](src/homunculus/activity.py#L200) `def jobs(spans: list[dict[str, Any]], events: list[dict[str, Any]]) -> list[dict[str, Any]]:` groups the spans and events by `traceId`. For each trace it finds the root ([activity.py:214](src/homunculus/activity.py#L214) `root = next((s for s in members if s["name"] == ROOT_SPAN), None)`), reads your message from the root, or from the turn's start event while the root is not written yet, and the reply from the root's attributes, and turns each `execute_tool` span into a step, in the order they started. Read the job aloud: "you asked me to note that you like green tea; I wrote tea.md, which worked; I replied Saved."
 
-**An approved action joins its trace later.** When the gate asks, the approval request stores the turn's W3C `traceparent`, the standard text form of a trace context: `"00-9f3c41d2...-df12ff...-01"`, meaning version, trace id, parent span id and flags. When you approve, the server passes it to `context_of`, which turns the text back into a context with OpenTelemetry's own W3C propagator, and [server.py:247](src/homunculus/server.py#L247) `span = activity.start_tool(` starts the approved run's `execute_tool` span under the original root, with the original tool call id. Its `homunculus.gate.answer` is `"ask"`, because that is what the gate answered, and its outcome is what the run did. So the job reads: asked (◷), then approved and done (✓).
+**An approved action joins its trace later.** When the gate asks, the approval request stores the turn's W3C `traceparent`, the standard text form of a trace context: `"00-9f3c41d2...-df12ff...-01"`, meaning version, trace id, parent span id and flags. When you approve, the server passes it to `context_of`, which turns the text back into a context with OpenTelemetry's own W3C propagator, and [server.py:253](src/homunculus/server.py#L253) `span = activity.start_tool(` starts the approved run's `execute_tool` span under the original root, with the original tool call id. Its `homunculus.gate.answer` is `"ask"`, because that is what the gate answered, and its outcome is what the run did. So the job reads: asked (◷), then approved and done (✓).
 
 ### Feedback
 
@@ -946,7 +947,7 @@ The GenAI conventions define one event for judging an agent's output: `gen_ai.ev
         gen_ai.evaluation.explanation = "Ask before saving"
 ```
 
-[server.py:297](src/homunculus/server.py#L297) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` finds the job, then [server.py:306](src/homunculus/server.py#L306) `found["feedback"] = activity.rate(` writes the event. `rate` attaches it to the job's root span by writing the job's trace id and root span id as a W3C traceparent and turning that into a context, the same way an approved action finds its trace, so a trace viewer shows the rating on the work it judges.
+[server.py:303](src/homunculus/server.py#L303) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` finds the job, then [server.py:312](src/homunculus/server.py#L312) `found["feedback"] = activity.rate(` writes the event. `rate` attaches it to the job's root span by writing the job's trace id and root span id as a W3C traceparent and turning that into a context, the same way an approved action finds its trace, so a trace viewer shows the rating on the work it judges.
 
 If you change your mind and press 👍, a second event is written. `jobs` keeps the latest one ([activity.py:210](src/homunculus/activity.py#L210) `ratings = {e["traceId"]: e for e in events if _is_rating(e)}`: a later event for the same trace replaces the earlier one in the dict, and only this program's `task_completion` evaluations labelled `pass` or `fail` count). Both stay in the file. A new rating starts with an empty reason box, so the old reason is never sent with it. Nothing reads the ratings yet. Ticket #17, the daily learning pass, is where they will be used.
 
@@ -1212,7 +1213,7 @@ loop.run(..., text='Approved: request 04fdba, send_email {"to": ...}. Result: Se
 
 **If the server stops mid-action**, a request can be left approved with no result. On the next start, `Approvals.mark_interrupted` gives each such request the result `Unknown: the server stopped while this action was running, so it may or may not have run.` Nothing can tell which happened, so the record says exactly that.
 
-**The notice.** [loop.py:117-119](src/homunculus/loop.py#L117-L119) `opening: Message = ... opening["notice"] = True` build the opening message with `"notice": True`. It is stored in `history` with that mark. Before sending, `model.py` keeps only `role`, `content`, `tool_calls` and `tool_call_id`, so OpenRouter receives a plain user message. `GET /api/history` passes the mark on, and the chat shows the line under DECIDED instead of YOU.
+**The notice.** [loop.py:141-143](src/homunculus/loop.py#L141-L143) `opening: Message = ... opening["notice"] = True` build the opening message with `"notice": True`. It is stored in `history` with that mark. Before sending, `model.py` keeps only `role`, `content`, `tool_calls` and `tool_call_id`, so OpenRouter receives a plain user message. `GET /api/history` passes the mark on, and the chat shows the line under DECIDED instead of YOU.
 
 **Where each value lives.** The request lives in `approvals.json` in the data directory and is kept there as a record after it is decided. The notice lives in `history`. The tool's result is in three places: on the request, in the activity log, and in the notice the agent read.
 
@@ -1271,7 +1272,7 @@ The rules that must hold on every task have to be written down by the program an
 
 ### The idea
 
-**Fixed instructions, owned by the program.** Current personal agents build their prompt in layers. [OpenClaw](https://docs.openclaw.ai/concepts/system-prompt) starts with sections it writes itself, such as "Execution Bias" and "Care", then adds the user's own files, then a list of skills. Homunculus does the same. This chapter builds the first layer. Later tickets add your profile and the wiki index (#11) and the skill list (#15) after it.
+**Fixed instructions, owned by the program.** Current personal agents build their prompt in layers. [OpenClaw](https://docs.openclaw.ai/concepts/system-prompt) starts with sections it writes itself, such as "Execution Bias" and "Care", then adds the user's own files, then a list of skills. Homunculus does the same. This chapter builds the first layer. Your profile and the wiki index follow it (chapter 11), then the list of skills (chapter 15), and last the local date and time.
 
 **Written as markdown, shipped with the code.** The instructions are prose, so they live in a markdown file, `prompt.md`, sent to the model exactly as written. OpenAI's [Codex CLI](https://github.com/openai/codex/tree/main/codex-rs/core) does the same with its base instructions, keeping one markdown file per model next to its code. The file sits inside the Python package, and Python's standard `importlib.resources` reads it, so it is there wherever the program is installed. It is outside the workspace, so none of the agent's tools can rewrite its own rules, and it changes only through a reviewed pull request. Instructions you write yourself are a separate file in the data directory, added in #11.
 
@@ -1291,7 +1292,8 @@ The rules that must hold on every task have to be written down by the program an
  │ ## What you can and cannot do            │
  ├──────────────────────────────────────────┤
  │ profile, goals, wiki index (chapter 11)  │  layers after the
- │ skill list                      (#15)    │  fixed part
+ │ skill catalogue            (chapter 15)  │  fixed part
+ │ "It is Thursday 26 November 2026, 07:01" │  last: it changes every turn
  └──────────────────────────────────────────┘
  then: history, then this turn's messages
  and alongside: every tool's schema, each description saying when to use it
@@ -1309,7 +1311,7 @@ _INSTRUCTIONS   -> "## Who you are\n\nYou are Homunculus, ...\n\n## When to ask\
 system_prompt() -> the same str, on every call
 ```
 
-You send "Email Sam". In `run`, [loop.py:112](src/homunculus/loop.py#L112) `instructions = prompt.system_prompt()` takes that string, memory adds its own part after it (chapter 11), and [loop.py:116](src/homunculus/loop.py#L116) `system: Message = {"role": "system", "content": instructions}` wraps the result as the first message. Every pass of the loop sends `[system, *history, *turn]`, with the same `system` object.
+You send "Email Sam". In `run`, [loop.py:130](src/homunculus/loop.py#L130) `instructions = prompt.system_prompt()` takes that string, memory adds its own part after it (chapter 11), and [loop.py:140](src/homunculus/loop.py#L140) `system: Message = {"role": "system", "content": instructions}` wraps the result as the first message. Every pass of the loop sends `[system, *history, *turn]`, with the same `system` object.
 
 The real model reads "If a request is missing something only the operator can tell you, ... ask", and "If you can find the answer yourself, ... do that instead of asking". In a run against GLM it first called `search` with `{"path": ".", "text": "sam"}`. It found nothing, and replied asking for Sam's address and what the email should say. No email tool was called. That run used a stand-in `send_email` tool, since the real outward tools arrive in #9. Its description said to use it only once the operator has given the recipient and what to say. Given the address, subject and words, GLM called it straight away, and the gate turned that into an approval request (chapter 8). Its reply said the email "is prepared and waiting for your approval", not that it was sent, which follows the last section's rule.
 
@@ -1336,7 +1338,7 @@ A scripted model cannot show whether the real model follows the rules. That is c
 1. At the end of `prompt.md`, add a fourth section: a line `## Style`, a blank line, then `Reply in one sentence.`
 2. Run `uv run pytest tests/test_prompt.py`. The order test fails: it lists the sections by name, so a section can only be added, moved or renamed on purpose, with the test changed to match.
 3. Add `"Style"` to the end of the list in that test and run it again. It passes. Start the program (README quick start), since the file is read at start-up, and ask it something. The replies should now be one sentence long, because the model reads your section on every turn. A model can still ignore an instruction, which is why the real model is checked by hand.
-4. Now change `system_prompt` in `prompt.py` to put the current time at the very start, `return f"Now: {datetime.now()}\n\n" + _INSTRUCTIONS`. Run the tests again. The same-on-every-turn test fails: the first characters now change every turn, so the provider could never reuse its cached work. The spec does want the time in the prompt, so it will go after the fixed part, where a change costs nothing.
+4. Now change `system_prompt` in `prompt.py` to put the current time at the very start, `return f"Now: {datetime.now()}\n\n" + _INSTRUCTIONS`. Run the tests again. The same-on-every-turn test fails: the first characters now change every turn, so the provider could never reuse its cached work. The spec does want the time in the prompt, so it goes last, after everything that stays the same: [loop.py:139](src/homunculus/loop.py#L139) `instructions += "\n\n" + local_time((now or _local_now)())`.
 5. Undo both changes.
 
 
@@ -1363,7 +1365,8 @@ To be useful on its own, the agent has to run things: the code it writes, its te
 | `--cap-drop ALL` | None of Linux's special powers, such as changing the network or owning any file |
 | `--security-opt no-new-privileges` | No program inside can gain more power than it started with |
 | `--cpus 2 --memory 2g --pids-limit 256` | A runaway command cannot take over the machine |
-| `--volume <workspace>:/workspace` | The workspace is the one folder of yours it can see |
+| `--volume <workspace>:/workspace` | The workspace is the one folder of yours it can see and write |
+| `--mount type=bind,...,dst=/skills/<name>,readonly` | Each skill, read-only, so its scripts can run (chapter 15) |
 
 There is no Docker socket inside, so nothing can ask Docker for more, and no API key, because none is passed in.
 
@@ -1377,7 +1380,7 @@ There is no Docker socket inside, so nothing can ask Docker for more, and no API
 
 Think of PyPI's content network, Fastly, as one big apartment building with one street address, where PyPI lives next to thousands of strangers' sites. The first two names are what you tell the guard and the doorman; the third is written on the letter inside the sealed envelope. A command could say "pypi.org" twice and write a stranger's site on the letter, and a building that does not compare them delivers it. This is called **domain fronting**. Cloudflare, which serves npm, says in its own documentation that it refuses it; Fastly did not in a 2025 test.
 
-So the proxy opens every allowed tunnel and reads the letter, which is called **TLS inspection** (Squid calls it SslBump). To do that without the command noticing a stranger in the middle, the proxy runs its own small **certificate authority**. A certificate is a site's ID card, stamped by an authority the program trusts; the proxy makes a fresh "pypi.org" card for each tunnel and stamps it with its own stamp. The sandbox is set to trust that stamp and no other. Programs keep their list of trusted authorities in different places, so several settings point at it: `SSL_CERT_FILE` and `SSL_CERT_DIR` for OpenSSL, which Python, curl and Ubuntu's Node read; `PIP_CERT` and `REQUESTS_CA_BUNDLE` for pip and the requests library; and `GIT_SSL_CAINFO` and `GIT_SSL_CAPATH` for git, which Ubuntu builds with a different TLS library, GnuTLS. Each pair is a file and a folder, and both must be set: with only the file set, the usual folder of over a hundred authorities is still trusted. The stamp's private key is made in the proxy's memory each time it starts, by `start-proxy`, and never leaves it; the server copies out only the certificate, in [docker.py:251](src/homunculus/sandbox/docker.py#L251) `def _copy_proxy_certificate(self) -> Path:`. Office networks inspect traffic the same way. Once the letter is open, the proxy also checks what is asked: only reading (`GET` and `HEAD`), and only package pages, so a command cannot upload or publish.
+So the proxy opens every allowed tunnel and reads the letter, which is called **TLS inspection** (Squid calls it SslBump). To do that without the command noticing a stranger in the middle, the proxy runs its own small **certificate authority**. A certificate is a site's ID card, stamped by an authority the program trusts; the proxy makes a fresh "pypi.org" card for each tunnel and stamps it with its own stamp. The sandbox is set to trust that stamp and no other. Programs keep their list of trusted authorities in different places, so several settings point at it: `SSL_CERT_FILE` and `SSL_CERT_DIR` for OpenSSL, which Python, curl and Ubuntu's Node read; `PIP_CERT` and `REQUESTS_CA_BUNDLE` for pip and the requests library; and `GIT_SSL_CAINFO` and `GIT_SSL_CAPATH` for git, which Ubuntu builds with a different TLS library, GnuTLS. Each pair is a file and a folder, and both must be set: with only the file set, the usual folder of over a hundred authorities is still trusted. The stamp's private key is made in the proxy's memory each time it starts, by `start-proxy`, and never leaves it; the server copies out only the certificate, in [docker.py:260](src/homunculus/sandbox/docker.py#L260) `def _copy_proxy_certificate(self) -> Path:`. Office networks inspect traffic the same way. Once the letter is open, the proxy also checks what is asked: only reading (`GET` and `HEAD`), and only package pages, so a command cannot upload or publish.
 
 **Two images, built here.** An image is the set of files a container starts from, like a template the box is stamped out of. Both images are built on your machine from their Dockerfiles when the server first starts, on Ubuntu 26.04 pinned by digest, with packages from Ubuntu's own archive; Docker keeps the results, so later starts reuse them. The proxy's, from `proxy/Dockerfile`, has Squid built with OpenSSL, which TLS inspection needs. The sandbox's, from `box/Dockerfile`, has what a command usually reaches for: Python 3.14 with pip and venv, Node 22 with npm, git, curl, jq, ripgrep, unzip and a C compiler, which some Python packages need to install. It has no `sudo`, `gh` or `wget`: nothing to become root with, no client for GitHub, which the proxy refuses anyway, and no second downloader beside curl.
 
@@ -1437,7 +1440,7 @@ ToolCall(name="shell", arguments='{"command": "python3 -m venv /workspace/.venv 
 sandbox.run("python3 -m venv … && … pip install six", timeout_seconds=120.0)
 ```
 
-**Into the container.** [docker.py:189](src/homunculus/sandbox/docker.py#L189) `"docker", "exec", self._box,` runs:
+**Into the container.** [docker.py:198](src/homunculus/sandbox/docker.py#L198) `"docker", "exec", self._box,` runs:
 
 ```
 docker exec homunculus-sandbox timeout --kill-after=5 120 bash -c "python3 -m venv … && … pip install six"
@@ -1464,7 +1467,7 @@ attributes() -> {'http.request.method': 'GET', 'url.full': 'https://pypi.org/sim
                  'homunculus.sandbox.allowed': True}
 ```
 
-`allowed` means the proxy passed the request on to the site, as [docker.py:305](src/homunculus/sandbox/docker.py#L305) `def _passed_on(method: str, verdict: str, bump: str) -> bool:` decides. It is `False` for a refusal (`TCP_DENIED`), a tunnel closed at the handshake (`terminate`), and a request Squid answered itself instead of fetching it (`NONE_NONE` inside a tunnel), which is what happens when the name inside does not match the tunnel's.
+`allowed` means the proxy passed the request on to the site, as [docker.py:314](src/homunculus/sandbox/docker.py#L314) `def _passed_on(method: str, verdict: str, bump: str) -> bool:` decides. It is `False` for a refusal (`TCP_DENIED`), a tunnel closed at the handshake (`terminate`), and a request Squid answered itself instead of fetching it (`NONE_NONE` inside a tunnel), which is what happens when the name inside does not match the tunnel's.
 
 **Back to the model.** `pip` finishes, and the sandbox returns:
 
@@ -1483,7 +1486,7 @@ CommandResult(exit_code=0, output="Collecting six\n…Successfully installed six
 
 and both events say `allowed: False`, with `error.type: "ERR_ACCESS_DENIED"`, OpenTelemetry's standard attribute for what went wrong. Had the command skipped the proxy and connected directly, the internal network would have had no route for it at all.
 
-**Where each value lives.** The command and its output live in the turn and the trace. The workspace on your Mac holds `.venv`, which stays between runs. The containers and anything outside `/workspace` are removed when the program stops, by [docker.py:168](src/homunculus/sandbox/docker.py#L168) `def stop(self) -> None:`, and started fresh the next time.
+**Where each value lives.** The command and its output live in the turn and the trace. The workspace on your Mac holds `.venv`, which stays between runs. The containers and anything outside `/workspace` are removed when the program stops, by [docker.py:177](src/homunculus/sandbox/docker.py#L177) `def stop(self) -> None:`, and started fresh the next time.
 
 ### The tests
 
@@ -1556,14 +1559,14 @@ Your saved conversation `raw/conversations/2026-11-14.md` says you drink green t
 
 The gate turns the path into `"memory/wiki/tea.md"`. `write` is not read-only, so [gate.py:82](src/homunculus/gate.py#L82) `if any(path.startswith(MEMORY_NEVER) for path in paths):` is checked: the path is not under `raw/` and is not the index or log. It is not the goals or the schema either, so the answer is `act`.
 
-`Files.write` asks where the path lives. [files.py:104](src/homunculus/tools/files.py#L104) `return self._memory.root, parts[1:] or ["."], True` drops the `memory` prefix:
+`Files.write` asks where the path lives. [files.py:113](src/homunculus/tools/files.py#L113) `return self._memory.root, parts[1:] or ["."], True` drops the `memory` prefix:
 
 ```
 _where("memory/wiki/tea.md") -> (Path(".../memory"), ["wiki", "tea.md"], True)
                                  the root,            parts inside it,      in memory
 ```
 
-Before writing, [files.py:242](src/homunculus/tools/files.py#L242) `self._memory.take_hand_edits()` commits anything you changed by hand, and [files.py:247](src/homunculus/tools/files.py#L247) `self._memory.check(Change(change.tool, change.path, before, after))` judges the change:
+Before writing, [files.py:275](src/homunculus/tools/files.py#L275) `self._memory.take_hand_edits()` commits anything you changed by hand, and [files.py:280](src/homunculus/tools/files.py#L280) `self._memory.check(Change(change.tool, change.path, before, after))` judges the change:
 
 ```
 Change(tool="write", path="wiki/tea.md", before=None, after="---\ntitle: Tea\n...")
@@ -1574,7 +1577,7 @@ Change(tool="write", path="wiki/tea.md", before=None, after="---\ntitle: Tea\n..
 
 Then `Memory.record` runs. [memory.py:211](src/homunculus/memory.py#L211) `self._log(tool, path if to is None else f"{path} -> {to}")` appends `## [2026-11-15 02:31] write | wiki/tea.md` to the log. [memory.py:212](src/homunculus/memory.py#L212) `self._write_index()` rebuilds the index, where [memory.py:396](src/homunculus/memory.py#L396) `lines.append(f"- [{title}]({link}): {fields.get('summary', '')}".rstrip(": "))` writes `- [Tea](tea.md): How the operator takes their morning tea.`. [memory.py:213](src/homunculus/memory.py#L213) `self._commit(AGENT, f"{tool} {path}" if to is None else f"{tool} {path} to {to}")` commits it as `Homunculus | write wiki/tea.md`. No other page links to `tea.md` yet, so the result says so: `Wrote memory/wiki/tea.md. No other page links to wiki/tea.md yet.`
 
-Next turn you ask what you drink in the morning. [loop.py:115](src/homunculus/loop.py#L115) `instructions += "\n\n" + memory.context()` adds the index to the prompt, where [memory.py:152](src/homunculus/memory.py#L152) `shown = re.sub(r"\]\(([^)]+)\)", r"](memory/wiki/\1)", shown)` turns `tea.md` into `memory/wiki/tea.md`, the path the tools take. The model read that page straight away and answered.
+Next turn you ask what you drink in the morning. [loop.py:133](src/homunculus/loop.py#L133) `instructions += "\n\n" + memory.context()` adds the index to the prompt, where [memory.py:152](src/homunculus/memory.py#L152) `shown = re.sub(r"\]\(([^)]+)\)", r"](memory/wiki/\1)", shown)` turns `tea.md` into `memory/wiki/tea.md`, the path the tools take. The model read that page straight away and answered.
 
 Where the value lives: the page is in `memory/wiki/tea.md`, its line in the index in `memory/wiki/index.md`, its log entry in `memory/wiki/log.md`, and its history in git. The activity log records the `write` step; memory never touches the activity log, and the sandbox never sees memory.
 
@@ -1594,13 +1597,13 @@ The version is not a counter. It is a fingerprint of the text you were shown, so
 PUT /api/memory/pages/wiki/tea.md  {"text": "...without sugar.\n...", "version": "19a55810ef75..."}
 ```
 
-[server.py:452](src/homunculus/server.py#L452) `return memory.save(path, edit.text, edit.version)` hands it to memory. [memory.py:264](src/homunculus/memory.py#L264) `with self.lock:` waits if an agent's file tool is mid-change, then `_save` commits anything already changed on disk, and checks the fingerprint: [memory.py:271](src/homunculus/memory.py#L271) `if _version(self._read(name) or "") != version:`. The file still holds what you saw, so the fingerprints match. [memory.py:277](src/homunculus/memory.py#L277) `(self.root / name).write_text(text, encoding="utf-8")` writes your text, and the same `take_hand_edits` the loop calls commits it as `Operator | Hand edit: wiki/tea.md` and logs `{"time": "2026-11-19 04:48", "action": "hand edit", "path": "wiki/tea.md"}`. The reply carries the new version, `dfea59b1edbb...`.
+[server.py:460](src/homunculus/server.py#L460) `return memory.save(path, edit.text, edit.version)` hands it to memory. [memory.py:264](src/homunculus/memory.py#L264) `with self.lock:` waits if an agent's file tool is mid-change, then `_save` commits anything already changed on disk, and checks the fingerprint: [memory.py:271](src/homunculus/memory.py#L271) `if _version(self._read(name) or "") != version:`. The file still holds what you saw, so the fingerprints match. [memory.py:277](src/homunculus/memory.py#L277) `(self.root / name).write_text(text, encoding="utf-8")` writes your text, and the same `take_hand_edits` the loop calls commits it as `Operator | Hand edit: wiki/tea.md` and logs `{"time": "2026-11-19 04:48", "action": "hand edit", "path": "wiki/tea.md"}`. The reply carries the new version, `dfea59b1edbb...`.
 
 Your new line has no footnote, and nothing refuses it. The agent's source checks are for what the model writes; you are the source of your own corrections. Only the cap applies, because it keeps the prompt small whoever writes.
 
-Now send the same save again, still from `19a55810ef75...`. The file's fingerprint is `dfea59b1edbb...`, so [memory.py:272](src/homunculus/memory.py#L272) `raise Stale(f"{name} has changed since you opened it.")` stops it before anything is written, and [server.py:456](src/homunculus/server.py#L456) `raise HTTPException(status_code=409, detail=str(stale)) from None` answers 409. The same happens when the agent changed the page while you were editing: your save can never wipe out a change you did not see.
+Now send the same save again, still from `19a55810ef75...`. The file's fingerprint is `dfea59b1edbb...`, so [memory.py:272](src/homunculus/memory.py#L272) `raise Stale(f"{name} has changed since you opened it.")` stops it before anything is written, and [server.py:464](src/homunculus/server.py#L464) `raise HTTPException(status_code=409, detail=str(stale)) from None` answers 409. The same happens when the agent changed the page while you were editing: your save can never wipe out a change you did not see.
 
-Why the lock: tools run in worker threads. Without [files.py:211](src/homunculus/tools/files.py#L211) `with memory.lock:` around each file tool, your save could run between the agent writing `tea.md` and committing it, and the agent's write would be committed under your name, then protected from the agent as if you had made it.
+Why the lock: tools run in worker threads. Without [files.py:243](src/homunculus/tools/files.py#L243) `with memory.lock:` around each file tool, your save could run between the agent writing `tea.md` and committing it, and the agent's write would be committed under your name, then protected from the agent as if you had made it.
 
 Where the value lives: your line is in `memory/wiki/tea.md`; the commit, with you as its author, in git; the entry in `memory/wiki/log.md`. From now on `tea.md` counts as hand-edited, so the agent can add to it or change one part with `edit`, but never `write` it whole.
 
@@ -1773,7 +1776,7 @@ Stopped ─► "notice" event to the console, an assistant message marked notice
 
 A real run, against the real model, with fictional files and `job_cost_usd` set to $0.0001. You ask it to read every file in the workspace.
 
-Before anything runs, [loop.py:152](src/homunculus/loop.py#L152) `refusal = await budget.refusal(unprompted) if budget is not None else None` asks the budget. `Budget.spent()` reads OpenRouter's figure for the month:
+Before anything runs, [loop.py:176](src/homunculus/loop.py#L176) `refusal = await budget.refusal(unprompted) if budget is not None else None` asks the budget. `Budget.spent()` reads OpenRouter's figure for the month:
 
 ```
 budget.spent()                 ->  0.009175   dollars this month, reused for 60 seconds
@@ -1782,7 +1785,7 @@ refusal(unprompted=False)      ->  None       under the $5.00 budget: chat may s
 
 [limits.py:106](src/homunculus/limits.py#L106) `if spent >= budget:` is false, and so is [limits.py:111](src/homunculus/limits.py#L111) `if unprompted and spent >= budget * self.limits.unprompted_stop_at:`, so the job starts.
 
-The model asks for `list`, then for three `read`s. Each call ends with a `Usage`, and [loop.py:165](src/homunculus/loop.py#L165) `cost += item.cost_usd or 0` adds its cost. After each round of tools, [loop.py:193](src/homunculus/loop.py#L193) `stop = stop or _over(limits, steps, (clock() - began) / 60, cost)` checks the three counts:
+The model asks for `list`, then for three `read`s. Each call ends with a `Usage`, and [loop.py:189](src/homunculus/loop.py#L189) `cost += item.cost_usd or 0` adds its cost. After each round of tools, [loop.py:217](src/homunculus/loop.py#L217) `stop = stop or _over(limits, steps, (clock() - began) / 60, cost)` checks the three counts:
 
 ```
 after round 1 (list)       _over(limits, 1, 0.1, 0.00009)   ->  None
@@ -1792,7 +1795,7 @@ after round 2 (read ×3)    _over(limits, 4, 0.2, 0.000275)  ->  Stopped(limit="
 
 The `Stopped` becomes a `notice` event, and the same text is added to the history as `{"role": "assistant", "content": "I stopped: ...", "notice": True}`, so it is still there after a reload. Activity shows the job with `cost: 0.000275` and `limit: "cost"`.
 
-If the step limit had been reached partway through the three reads, the reads not run would still be answered, by [loop.py:182](src/homunculus/loop.py#L182) `skipped = "Not run: this job reached its step limit."`: the model asked for each, and the next turn sends the conversation back to it, which must have an answer for every call.
+If the step limit had been reached partway through the three reads, the reads not run would still be answered, by [loop.py:206](src/homunculus/loop.py#L206) `skipped = "Not run: this job reached its step limit."`: the model asked for each, and the next turn sends the conversation back to it, which must have an answer for every call.
 
 Where the value lives: each call's cost on its span in `traces.jsonl` as `homunculus.cost_usd`, the limit on the job's root span as `homunculus.limit`, the notice in the conversation, and the month's spend only at OpenRouter, read when needed.
 
@@ -1872,11 +1875,11 @@ waker.peek()  ->  "Wake now"
 waker.take()  ->  "Wake now"        today's count goes from 0 to 1
 ```
 
-`take` also resets the timer: [waker.py:140](src/homunculus/waker.py#L140) `self._state["last_wake"] = now.isoformat()`, so the hourly timer counts from this wake-up, and [waker.py:162](src/homunculus/waker.py#L162) `if now - datetime.fromisoformat(self._state["last_wake"]) >= self._every:` will not fire again for an hour. Before any of that, [waker.py:149](src/homunculus/waker.py#L149) `if self._state["woken"] >= self._limits.wakeups_per_day:` keeps the day to 24.
+`take` also resets the timer: [waker.py:271](src/homunculus/waker.py#L271) `self._state["last_wake"] = now.isoformat()`, so the hourly timer counts from this wake-up, and [waker.py:296](src/homunculus/waker.py#L296) `if now - datetime.fromisoformat(self._state["last_wake"]) >= self._every:` will not fire again for an hour. Before any of that, [waker.py:280](src/homunculus/waker.py#L280) `if self._state["woken"] >= self._limits.wakeups_per_day:` keeps the day to 24.
 
-The server starts a fresh job: [server.py:374](src/homunculus/server.py#L374) `wake_prompt(waker.now(), reason),` is the opening message, "It is Wednesday 25 November 2026, 03:24. You woke up on your own (the operator pressed Wake now)...", and the history is an empty list, so nothing of your chat reaches it.
+The server starts a fresh job: [server.py:380](src/homunculus/server.py#L380) `wake_prompt(waker.now(), reason, _routine_instructions(skills, reason)),` is the opening message, "It is Wednesday 25 November 2026, 03:24. You woke up on your own (the operator pressed Wake now)...", and the history is an empty list, so nothing of your chat reaches it.
 
-The agent read its notes and chapter 7, wrote `book/chapter-8-outline.md` (a new file, so the gate let it), and edited `todo.md` to put a question for you at the top: who is in the boat, and does the keeper arrive. Because that file was new, [loop.py:271](src/homunculus/loop.py#L271) `own_files.add(path)` remembers it as its own, in `waker.json`. The job cost $0.003.
+The agent read its notes and chapter 7, wrote `book/chapter-8-outline.md` (a new file, so the gate let it), and edited `todo.md` to put a question for you at the top: who is in the boat, and does the keeper arrive. Because that file was new, [loop.py:295](src/homunculus/loop.py#L295) `own_files.add(path)` remembers it as its own, in `waker.json`. The job cost $0.003.
 
 You press Wake now again. This time its notes say the next step needs your answer, and the prompt tells it to stop in that case. It read the notes and the outline, logged "checked in, nothing new done, chapter 8 is still blocked on the question below", and finished, for $0.001.
 
@@ -1887,7 +1890,7 @@ changes({"path": "book/chapter-7.md", "content": "..."})        ->  (["book/chap
 changes({"path": "book/chapter-8-outline.md", "content": "..."}) ->  ([], ["book/chapter-8-outline.md"])   new
 ```
 
-If you had written to it during the first wake-up, [server.py:111](src/homunculus/server.py#L111) `give_way["reason"] = "operator"` would have been set, and at the next step boundary [loop.py:192](src/homunculus/loop.py#L192) `stop = INTERRUPTED[asked] if asked in INTERRUPTED else None` would have ended the job with "Stopped for your message. Steps that already ran were not undone."
+If you had written to it during the first wake-up, [server.py:113](src/homunculus/server.py#L113) `give_way["reason"] = "operator"` would have been set, and at the next step boundary [loop.py:216](src/homunculus/loop.py#L216) `stop = INTERRUPTED[asked] if asked in INTERRUPTED else None` would have ended the job with "Stopped for your message. Steps that already ran were not undone."
 
 Where the value lives: the outline in the workspace; the question at the top of `memory/todo.md`; the fact the outline is its own in `waker.json`; the two jobs in Activity as "On its own (Wake now)". Your chat history has none of it.
 
@@ -1927,6 +1930,140 @@ In plain English: "A draft it made on one wake-up it may revise on the next; the
 2. Write a goal in `memory/goals.md` and one item in `memory/todo.md`, then watch Activity: about every five minutes a job marked "On its own (the hourly timer)" appears. (The name stays "hourly"; the interval is yours.)
 3. Press Pause and wait ten minutes: nothing appears. Press Wake now: one job runs, even while paused, because you asked.
 4. Put `every_minutes` back to 60.
+
+A fourth reason to wake, a routine, arrives in the next chapter.
+
+---
+
+## 15. Skills and routines
+
+Code: `src/homunculus/skills.py`, the `skills/` part of `src/homunculus/tools/files.py`, the routines in `src/homunculus/waker.py`, and the skill in `skills/morning-brief/`. Tests: `tests/test_skills.py`, the routine tests in `tests/test_waker.py`, and the skill-script test in `tests/test_sandbox.py`.
+
+This chapter assumes only this from earlier ones: each turn the model is sent instructions and then the conversation (chapter 9), it reads files with the `read` tool (chapter 4), and the waker starts jobs on its own (chapter 14).
+
+### The problem
+
+Some work comes back again and again in the same shape: a morning brief, a weekly review, tidying a draft to a house style. You could write how to do each one into the fixed instructions, but then every turn pays for every recipe, even "Hi". And a recipe you want run every weekday at 07:00 should not depend on the model remembering to pick it.
+
+### The idea
+
+**A skill is a folder with a recipe in it.** The format is the open [Agent Skills specification](https://agentskills.io/specification), which Claude Code, Codex and Hermes also read: a folder holding `SKILL.md`, which starts with a `name` and a `description` between `---` lines and then gives the instructions, with any `scripts/` or `references/` beside it. A skill written for another agent works here, and one written here works there.
+
+**Pay for a skill only when it is used.** The standard calls this progressive disclosure, in three steps. Every turn the model sees one short entry per skill: its name, its description and where it is. When a task fits, the model reads the skill's `SKILL.md` with its normal `read` tool, which the standard calls file-read activation; there is no skills tool, which the spec rules out. Only if those instructions point to another file does the model read it, or run a script in the sandbox.
+
+**Two places, and yours wins.** Generic skills are published in the repository's `skills/`. Your own skills live in the data directory's `skills/` and are never published. One with the same name as a built-in skill replaces it, so you can copy a built-in skill and change it.
+
+**Instructions only, never facts about you.** The sandbox sees your skills, and what the sandbox sees can reach the package registries (chapter 10). So a personal skill whose files mention anything in your `identifiers.txt` is left out, and the server tells you why.
+
+**A routine hands over its skill.** A routine is a line in `routines.toml`: a skill, a time, the days and a time zone. When it is due, the waker starts a job on its own as in chapter 14, and the wake-up message carries the skill's instructions, so nothing depends on the model choosing it. This is how [Hermes](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron) attaches skills to its scheduled jobs. A routine missed while the computer slept runs once when it wakes, unless it is more than 2 hours late.
+
+### A picture
+
+```
+ skills/morning-brief/SKILL.md        <data>/skills/plan-week/SKILL.md
+          │                                    │
+          └──────────── Skills.found() ────────┘   read from disk every time
+                              │
+   every turn:                ▼
+   catalogue()  ──►  <available_skills> name, description, location
+                              │                       (about 60 tokens a skill)
+   a task fits:               ▼
+   read("skills/morning-brief/SKILL.md")  ──►  the recipe, as a tool result
+                              │
+   if it says so:             ▼
+   read("skills/morning-brief/references/…")  or  shell("python /skills/…/scripts/…")
+
+   07:00 weekdays:  routine ──► waker "the routine morning-brief"
+                              ──► wake message with <skill_content> recipe </skill_content>
+```
+
+### One value, traced
+
+Follow one skill, `morning-brief`, through a real run against the real model, on fictional notes. The goals say "Finish the first draft of the novel, The Lantern Keeper, by March" and "Send the short story 'Salt Roads' to the Harbour Review by 30 November". The to-do notes start with a question for you: does the keeper arrive in chapter 8?
+
+**Finding it.** `Skills.found()` walks both folders. For each one, [skills.py:142](src/homunculus/skills.py#L142) `text = _read_plain(Path(entry.path) / SKILL_FILE)` reads `SKILL.md` without following a link, and [skills.py:146](src/homunculus/skills.py#L146) `name, description = _describe(text)` reads its frontmatter:
+
+```
+_describe("---\nname: morning-brief\ndescription: Write a short brief ...\n---\n# Morning brief ...")
+    -> ("morning-brief", "Write a short brief for the day from the operator's goals, ...")   a tuple of two str
+found()  -> {"morning-brief": Skill(name="morning-brief", description="Write a short ...",
+                                    folder=Path(".../homunculus/skills/morning-brief"), personal=False)}
+            a dict from name to Skill
+```
+
+**In the prompt.** [loop.py:134](src/homunculus/loop.py#L134) `catalogue = skills.catalogue() if skills is not None else ""` turns that dict into the entry the model sees on every turn, after the profile, goals and wiki index:
+
+```
+<available_skills>
+  <skill>
+    <name>morning-brief</name>
+    <description>Write a short brief for the day from the operator's goals, ...</description>
+    <location>skills/morning-brief/SKILL.md</location>
+  </skill>
+</available_skills>
+```
+
+Then [loop.py:139](src/homunculus/loop.py#L139) `instructions += "\n\n" + local_time((now or _local_now)())` adds "It is Thursday 26 November 2026, 06:55 (Asia/Kolkata)." last. The first real run had no time line in chat, and the agent replied that it had "no way to see today's date", so it could not name the brief's file.
+
+**Chosen in chat.** You write "What should I focus on today? A short brief would help." The model's first tool call is `read` with `{"path": "skills/morning-brief/SKILL.md"}`. In the file tools, [files.py:116](src/homunculus/tools/files.py#L116) `skill = self._skills.get(parts[1]) if len(parts) > 1 else None` turns `skills/morning-brief/SKILL.md` into the skill's own folder and the parts `["SKILL.md"]`, and the read goes on as in chapter 4. The model then followed the recipe in three steps: it read the skill, found no `briefs/` folder yet, and wrote `briefs/2026-11-26.md`, for $0.0005:
+
+```
+# Brief for Thursday 26 November
+
+## Today
+1. Proofread Salt Roads, then send it to Harbour Review: the deadline is 30 November, four days away.
+2. Answer whether the keeper arrives in chapter 8: it unblocks the chapter 8 outline.
+...
+## Waiting for you
+- Does the keeper arrive in chapter 8? Your answer unblocks the chapter 8 outline.
+```
+
+Two other messages in the same run, "Hi, how are you?" and a request to summarise a chapter, read no skill.
+
+**Handed over by a routine.** `routines.toml` has `skill = "morning-brief"`, `at = "07:00"`, `days = "every day"`. At 07:01 the waker's `peek()` finds it due, after the last time it handled, 06:55 when it was first seen, and within 2 hours, so [waker.py:292](src/homunculus/waker.py#L292) `return ROUTINE + routine.skill` gives the reason `"the routine morning-brief"`. The server reads the skill as the routine runs, with [server.py:495](src/homunculus/server.py#L495) `found = skills.instructions(name) if skills is not None else None`, and `wake_prompt` puts it in the opening message:
+
+```
+"It is Thursday 26 November 2026, 07:01. You woke up on your own (the routine morning-brief); ...
+ This routine runs the skill morning-brief. Its instructions follow; carry them out now. ...
+ <skill_content name="morning-brief">
+ # Morning brief
+ ...
+ </skill_content>"
+```
+
+The agent wrote the same kind of brief without reading the skill itself, for $0.003. The waker then records the time it handled, [waker.py:267](src/homunculus/waker.py#L267) `self._state["routines"][routine.key] = routine.last_time(now).isoformat()`, so the routine does not run again until tomorrow, even after a restart.
+
+Where the value lives: the skill on disk in the repository; one catalogue entry rebuilt in every turn's instructions and never stored; the recipe in the job's messages only while it runs; the brief in the workspace; the routine's last run in `waker.json`.
+
+### The test
+
+```python
+async def test_a_routine_hands_the_agent_its_skill_directly(
+    tmp_path: Path, clock: Clock, client_for: Any
+) -> None:
+    model = ScriptedModel([["Brief written."]])
+    waker = make_waker(tmp_path, clock, routines=[brief_at("10:00")])
+    app, _ = server_with(tmp_path, model, waker, skills=skills_with_brief(tmp_path))
+    clock.advance(hours=1)
+
+    await app.state.waker_step()
+
+    opening = model.received[-1][1]["content"]
+    assert "the routine morning-brief" in opening
+    assert "Write briefs/today.md with three things to do today." in opening
+    assert "skills/morning-brief/" in opening
+    (job,) = (await client_for(app).get("/api/activity")).json()
+    assert (job["unprompted"], job["reason"]) == (True, "the routine morning-brief")
+```
+
+In plain English: "When a routine is due, the agent is sent its skill's instructions, and the job shows in Activity as work on its own, woken by that routine." `model.received[-1]` is the list of messages in the last model call; index 0 is the system message and index 1 the opening message. Another test, `test_every_repository_skill_follows_the_specification`, runs the standard's reference validator on every folder in `skills/`, and CI runs it again from the command line.
+
+### Change it yourself
+
+1. Start the agent with a throwaway `HOMUNCULUS_HOME`. Make `<HOMUNCULUS_HOME>/skills/haiku/SKILL.md` with `name: haiku` and `description: Write a haiku about a topic. Use when asked for a haiku or a short poem.`, then a line of instructions, such as "Write three lines of five, seven and five syllables, and save them in poems/".
+2. Ask "Write me a short poem about rain." In Activity, the first step should be `read skills/haiku/SKILL.md`. Ask "What is 2 and 2?": no skill is read.
+3. Rename the folder to `poem` and restart. The server warns that the name `haiku` should match the folder `poem`, and the skill still works, as the standard advises.
+4. In `routines.toml`, add a routine for `haiku` two minutes from now, every day, and restart. Two minutes later Activity shows "On its own (the routine haiku)", and the job reads no skill: it was handed it.
 
 ---
 
