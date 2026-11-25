@@ -101,8 +101,13 @@ class ProxyRequest:
 
 
 class DockerSandbox:
-    def __init__(self, workspace: Path, name: str = "homunculus") -> None:
+    def __init__(
+        self, workspace: Path, name: str = "homunculus", skills: dict[str, Path] | None = None
+    ) -> None:
+        """`skills` maps each skill's name to its folder, mounted read-only at
+        /skills/<name> so its scripts can run; the names are checked safe by `skills`."""
         self._workspace = workspace.resolve()
+        self._skills = {name: folder.resolve() for name, folder in (skills or {}).items()}
         self._network = f"{name}-internal"
         self._box = f"{name}-sandbox"
         self._proxy = f"{name}-proxy"
@@ -153,6 +158,10 @@ class DockerSandbox:
             "--init",
             "--mount", f"type=bind,src={self._workspace},dst=/workspace",
             "--mount", f"type=bind,src={certificate},dst={TRUSTED_CERTIFICATE},readonly",
+            *(
+                f"--mount=type=bind,src={folder},dst=/skills/{skill},readonly"
+                for skill, folder in self._skills.items()
+            ),
             "--workdir", "/workspace",
             "--env", "HOME=/tmp",
             # Both spellings, since programs differ in which one they read.

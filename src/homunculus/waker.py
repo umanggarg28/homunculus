@@ -1,8 +1,10 @@
 """When the agent works on its own.
 
-Three things wake it: an hourly timer, a wake-up it set for itself with `wake_at`, and
-the operator pressing Wake now. A wake-up starts a fresh job: the agent reads the goals
-and its to-do notes, does the next useful piece of work, and keeps the notes current.
+Four things wake it: an hourly timer, a wake-up it set for itself with `wake_at`, a
+routine, and the operator pressing Wake now. A wake-up starts a fresh job: the agent
+reads the goals and its to-do notes, does the next useful piece of work, and keeps the
+notes current. A routine names a skill, which the job is handed directly, so recurring
+work such as a morning brief does not rest on the model choosing it.
 
 The waker only decides when. Whether a job may start (the budget), how long it may run
 (the job limits) and what it may do (the gate) are decided where they are for every job.
@@ -10,7 +12,9 @@ Its state is a small JSON file in the data directory, so a pause and the agent's
 wake-ups survive a restart.
 
 Others do the same with a heartbeat: OpenClaw and nanobot wake every 30 minutes to read
-a checklist; OpenAI's Dots and Hermes let the agent schedule its own returns.
+a checklist; OpenAI's Dots and Hermes let the agent schedule its own returns. Routines
+are Hermes's scheduled jobs that attach a skill, with its rule for missed runs: one run
+when the computer wakes, if it is not too late.
 """
 
 import dataclasses
@@ -18,10 +22,10 @@ import json
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, tzinfo
+from datetime import date, datetime, time, timedelta, tzinfo
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import mcp_types as mcp
 
@@ -39,6 +43,18 @@ MAX_PENDING = 10
 OPERATOR_ASKED = "Wake now"
 TIMER = "the hourly timer"
 OWN = "a wake-up it set: "
+ROUTINE = "the routine "
+
+ROUTINES_FILE = "routines.toml"
+# A routine missed while the computer slept still runs if it is at most this late, so a
+# morning brief is not written in the afternoon.
+CATCH_UP = timedelta(hours=2)
+WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+DAY_SETS = {
+    "every day": frozenset(range(7)),
+    "weekdays": frozenset(range(5)),
+    "weekends": frozenset({5, 6}),
+}
 
 
 @dataclass(frozen=True)
@@ -68,6 +84,109 @@ time_zone = "{time_zone}"
 """
 
 
+class RoutinesError(ValueError):
+    """The routines file cannot be understood; the message says where and why."""
+
+
+@dataclass(frozen=True)
+class Routine:
+    """Run a skill at a time of day, on some days of the week, in a time zone."""
+
+    skill: str
+    at: time
+    days: frozenset[int]
+    zone: tzinfo
+
+    @classmethod
+    def of(cls, entry: dict[str, Any], default_zone: tzinfo, number: int = 1) -> "Routine":
+        where = f"routine {number}"
+        skill = str(entry.get("skill", "")).strip()
+        if not skill:
+            raise RoutinesError(f"{where}: name the skill it runs")
+        try:
+            at = datetime.strptime(str(entry.get("at", "")).strip(), "%H:%M").time()
+        except ValueError:
+            raise RoutinesError(f"{where}: give at as HH:MM, such as 07:00") from None
+        days = _days(str(entry.get("days", "every day")))
+        if days is None:
+            raise RoutinesError(
+                f"{where}: days must be every day, weekdays, weekends or days such as mon,thu"
+            )
+        name = str(entry.get("time_zone", "")).strip()
+        try:
+            zone = ZoneInfo(name) if name else default_zone
+        except (ZoneInfoNotFoundError, ValueError):
+            raise RoutinesError(f"{where}: {name} is not a time zone") from None
+        return cls(skill, at, days, zone)
+
+    @property
+    def key(self) -> str:
+        """Names this routine in the waker's state, apart from another running the same
+        skill at another time."""
+        days = ",".join(WEEKDAYS[day] for day in sorted(self.days))
+        return f"{self.skill} {days} {self.at:%H:%M} {self.zone}"
+
+    def last_time(self, now: datetime) -> datetime:
+        """When it was last due, at or before `now`."""
+        return max(t for t in self._times_around(now) if t <= now)
+
+    def next_time(self, now: datetime) -> datetime:
+        """When it is next due, after `now`."""
+        return min(t for t in self._times_around(now) if t > now)
+
+    def _times_around(self, now: datetime) -> list[datetime]:
+        today = now.astimezone(self.zone).date()
+        days = (today + timedelta(days=offset) for offset in range(-7, 8))
+        return [self._on(day) for day in days if day.weekday() in self.days]
+
+    def _on(self, day: date) -> datetime:
+        return datetime.combine(day, self.at, tzinfo=self.zone)
+
+
+def _days(text: str) -> frozenset[int] | None:
+    text = " ".join(text.lower().split())
+    if text in DAY_SETS:
+        return DAY_SETS[text]
+    names = [name.strip() for name in text.split(",")]
+    if not names or any(name not in WEEKDAYS for name in names):
+        return None
+    return frozenset(WEEKDAYS.index(name) for name in names)
+
+
+ROUTINES_TEMPLATE = """\
+# Routines: run a skill at a set time, as work on its own. Read when the agent starts.
+# Each runs within the day's wake-ups, stops while paused, and waits if you are chatting.
+# One missed while the computer slept runs when it wakes, if it is at most 2 hours late.
+#
+# Remove the # signs below to have a brief written each weekday morning.
+#
+# [[routine]]
+# skill = "morning-brief"     # a skill's folder name, in skills/
+# at = "07:00"
+# days = "weekdays"           # every day, weekdays, weekends, or days such as "mon,thu"
+# time_zone = ""              # such as "Asia/Kolkata"; empty means waker.toml's
+"""
+
+
+def load_routines(home: Path, default_zone: tzinfo) -> list[Routine]:
+    path = home / ROUTINES_FILE
+    if not path.exists():
+        path.write_text(ROUTINES_TEMPLATE, encoding="utf-8")
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as error:
+        raise RoutinesError(f"{ROUTINES_FILE} is not valid TOML: {error}") from None
+    entries = data.get("routine", [])
+    if not isinstance(entries, list):
+        raise RoutinesError(f"{ROUTINES_FILE}: write each routine under [[routine]]")
+    return [Routine.of(entry, default_zone, number) for number, entry in enumerate(entries, 1)]
+
+
+def routine_skill(reason: str) -> str | None:
+    """The skill a wake-up's reason names, if a routine woke the agent."""
+    return reason.removeprefix(ROUTINE) if reason.startswith(ROUTINE) else None
+
+
 def load_settings(home: Path) -> WakerSettings:
     path = home / SETTINGS_FILE
     if not path.exists():
@@ -84,8 +203,10 @@ class Waker:
         settings: WakerSettings,
         limits: Limits,
         clock: Callable[[], datetime] | None = None,
+        routines: list[Routine] | None = None,
     ) -> None:
         self._path = path
+        self._routines = list(routines or [])
         self._settings = settings
         self._limits = limits
         self._zone = settings.zone()
@@ -102,9 +223,15 @@ class Waker:
             "skipped_busy": 0,
             "wake_now": False,
             "own_files": [],
+            # Each routine's last time handled, run or missed. A routine first seen now
+            # starts from now, so it never runs for a time already past.
+            "routines": {},
+            "missed": [],
         }
         if path.exists():
             self._state.update(json.loads(path.read_text(encoding="utf-8")))
+        for routine in self._routines:
+            self._state["routines"].setdefault(routine.key, self.now().isoformat())
         self._save()
         self.own_files = _OwnFiles(self)
 
@@ -134,6 +261,10 @@ class Waker:
         now = self.now()
         if reason == OPERATOR_ASKED:
             self._state["wake_now"] = False
+        elif reason.startswith(ROUTINE):
+            routine = self._due_routine(now)
+            assert routine is not None
+            self._state["routines"][routine.key] = routine.last_time(now).isoformat()
         elif reason != TIMER:
             due = self._due_wakeups(now)
             self._state["pending"].remove(due[0])
@@ -156,6 +287,9 @@ class Waker:
             return OPERATOR_ASKED
         if self._state["paused"]:
             return None
+        routine = self._due_routine(now)
+        if routine is not None:
+            return ROUTINE + routine.skill
         due = self._due_wakeups(now)
         if due:
             return OWN + due[0]["why"]
@@ -178,6 +312,14 @@ class Waker:
             "working": self.working,
             "next_timer": (last + self._every).strftime(TIME_FORMAT),
             "pending": [dict(w) for w in self._pending_sorted()],
+            "routines": sorted(
+                (
+                    {"skill": r.skill, "at": self._local(r.next_time(self.now()))}
+                    for r in self._routines
+                ),
+                key=lambda r: r["at"],
+            ),
+            "missed": [dict(m) for m in self._state["missed"]],
             "today": {
                 "woken": self._state["woken"],
                 "cap": self._limits.wakeups_per_day,
@@ -279,13 +421,32 @@ class Waker:
         """The time in the waker's time zone."""
         return self._clock().astimezone(self._zone)
 
+    def _local(self, moment: datetime) -> str:
+        return moment.astimezone(self._zone).strftime(TIME_FORMAT)
+
+    def _due_routine(self, now: datetime) -> Routine | None:
+        """The routine due now, if any. One missed by more than CATCH_UP is marked as
+        missed instead, so the operator sees it did not run."""
+        for routine in self._routines:
+            last = routine.last_time(now)
+            handled = datetime.fromisoformat(self._state["routines"][routine.key])
+            if last <= handled:
+                continue
+            if now - last > CATCH_UP:
+                self._state["routines"][routine.key] = last.isoformat()
+                self._state["missed"].append({"skill": routine.skill, "at": self._local(last)})
+                self._save()
+                continue
+            return routine
+        return None
+
     def _today(self) -> str:
         return self.now().date().isoformat()
 
     def _roll_day(self) -> None:
         today = self._today()
         if self._state["day"] != today:
-            self._state.update(day=today, woken=0, skipped_busy=0)
+            self._state.update(day=today, woken=0, skipped_busy=0, missed=[])
             self._save()
 
     def _pending_sorted(self) -> list[dict[str, str]]:
@@ -299,23 +460,48 @@ class Waker:
         self._path.write_text(json.dumps(self._state, indent=2), encoding="utf-8")
 
 
-def wake_prompt(now: datetime, reason: str) -> str:
+def wake_prompt(now: datetime, reason: str, routine: str | None = None) -> str:
     """What the agent is told when it wakes. It starts fresh: the goals and to-do notes
-    in its instructions are all it carries from earlier work."""
-    return (
+    in its instructions are all it carries from earlier work. A routine's wake-up also
+    carries the instructions of its skill, `routine`; an empty string means the skill
+    is missing."""
+    opening = (
         f"It is {now.strftime('%A %-d %B %Y, %H:%M')}. You woke up on your own "
         f"({_for_the_agent(reason)}); the operator is not waiting for a reply.\n\n"
-        "Read the goals and your to-do notes in memory/todo.md, both shown in your "
-        "instructions, and do the next useful piece of work toward the goals in your "
-        "workspace. Before you finish, update memory/todo.md: what you did, what is next "
-        "and why. If you want to carry on at a particular time, use wake_at.\n\n"
-        "No one asked for this work, so leave the operator's files as they are: write your "
-        "drafts and notes as new files beside them. Changing a file you did not make on "
-        "your own waits for their approval.\n\n"
-        "If the next step needs the operator's decision, put the question at the top of "
-        "memory/todo.md, say it in one line, and stop: do no other work toward that goal "
-        "until they answer.\n\n"
-        "If nothing is worth doing now, say so in one short line and use no tools."
+    )
+    skill = routine_skill(reason)
+    if skill is not None and not routine:
+        return opening + (
+            f"This routine runs the skill {skill}, but there is no skill named {skill}. "
+            "Say so in one line, so the operator can fix the routine, and use no tools."
+        )
+    if skill is not None:
+        task = (
+            f"This routine runs the skill {skill}. Its instructions follow; carry them out "
+            f"now. Paths in them are relative to skills/{skill}/.\n\n"
+            f'<skill_content name="{skill}">\n{routine}\n</skill_content>\n\n'
+            "Before you finish, add to memory/todo.md anything the next wake-up should know."
+        )
+    else:
+        task = (
+            "Read the goals and your to-do notes in memory/todo.md, both shown in your "
+            "instructions, and do the next useful piece of work toward the goals in your "
+            "workspace. Before you finish, update memory/todo.md: what you did, what is next "
+            "and why. If you want to carry on at a particular time, use wake_at."
+        )
+    return (
+        opening
+        + task
+        + (
+            "\n\n"
+            "No one asked for this work, so leave the operator's files as they are: write your "
+            "drafts and notes as new files beside them. Changing a file you did not make on "
+            "your own waits for their approval.\n\n"
+            "If the next step needs the operator's decision, put the question at the top of "
+            "memory/todo.md, say it in one line, and stop: do no other work toward that goal "
+            "until they answer.\n\n"
+            "If nothing is worth doing now, say so in one short line and use no tools."
+        )
     )
 
 

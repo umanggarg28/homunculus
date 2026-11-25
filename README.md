@@ -37,7 +37,7 @@ flowchart LR
 | `memory` | What the agent knows about you, as a wiki of markdown files in a local git repository: raw sources it never changes, pages it writes, a short profile, your goals and a schema. Every write is checked first (title and summary, a source for every fact, links that lead somewhere), then indexed, logged and committed. Your own edits are kept as yours, and a page you edited is never rewritten whole. Profile, goals and index are in every prompt, each within a size cap. The server lets the console list, read and save pages; a save from the console is your own edit, and is refused if the page changed since you opened it. |
 | `activity` | An append-only record of every step as OpenTelemetry traces, plus log events for each turn's start, your decisions and your ratings, written by code, out of reach of every tool. Any OpenTelemetry tool can read both files. The console's Activity column shows one job per message, and you can rate each one. |
 
-The full design, including the modules still to come (skills, wiki, waker), is in [ARCHITECTURE.md](ARCHITECTURE.md). What is protected, where data can leave, and the accepted risk are in [SECURITY.md](SECURITY.md). [LEARN.md](LEARN.md) teaches the code one module at a time.
+The full design, including the modules still to come, is in [ARCHITECTURE.md](ARCHITECTURE.md). What is protected, where data can leave, and the accepted risk are in [SECURITY.md](SECURITY.md). [LEARN.md](LEARN.md) teaches the code one module at a time.
 
 ## Privacy
 
@@ -96,6 +96,26 @@ What it does on its own is in Activity, marked "On its own" with why it woke; it
 - At most 24 wake-ups a day (`wakeups_per_day` in `limits.toml`). A timer slot that falls while you are chatting is skipped, not queued, and after the Mac sleeps it wakes once, not once per missed hour.
 
 The timer's interval and the time zone are in `waker.toml` in the data directory.
+
+## Skills and routines
+
+A skill is a folder of instructions for one kind of task, in the open [Agent Skills](https://agentskills.io/specification) format that other agents read too: a `SKILL.md` with a `name` and a `description`, and any `scripts/` or `references/` it needs. The agent sees the name and description of every skill in each turn. When a task fits one, it reads the skill's `SKILL.md`, and its other files only when the instructions call for them, so a skill costs almost nothing until it is used.
+
+- **Built-in skills** are in [`skills/`](skills/) in this repository. There is one so far, `morning-brief`, which writes `briefs/<date>.md` in the workspace: the three most useful things to do today and any question waiting for you.
+- **Your own skills** go in `skills/` in the data directory. They are never published. One with the same name as a built-in skill is used in its place. A skill holds instructions, never facts about you: one whose files mention anything in `identifiers.txt` is left out, and the server says why when it starts.
+- Skills are read-only to the agent. In the sandbox, each one is at `/skills/<name>`, read-only, so its scripts can run; a skill added while the server runs is used straight away, and its scripts run after a restart.
+
+A **routine** runs a skill at a set time. Routines are in `routines.toml` in the data directory, which starts with an example that does not run:
+
+```toml
+[[routine]]
+skill = "morning-brief"
+at = "07:00"
+days = "weekdays"          # every day, weekdays, weekends, or days such as "mon,thu"
+time_zone = "Asia/Kolkata" # optional; waker.toml's time zone otherwise
+```
+
+A routine is work on its own, with everything above: it counts toward the day's wake-ups, waits while you chat, and stops while paused. The agent is handed the skill's instructions directly, so it does not have to choose it. If the computer was asleep, a routine runs once when it wakes if it is at most 2 hours late; later than that it is skipped, and Activity says so. Activity also shows each routine's next run.
 
 ## Budget and limits
 
@@ -179,7 +199,7 @@ The same checks run on every pull request, along with a production build of the 
 - Python 3.12, FastAPI, httpx, managed with uv.
 - The model is `z-ai/glm-5.3-flash` through OpenRouter's OpenAI-compatible chat completions API.
 - Tools are described with the [Model Context Protocol](https://modelcontextprotocol.io)'s official types (`mcp-types`), including the annotations the gate decides from.
-- Planned: [Agent Skills](https://agentskills.io) for skills, MCP servers for outside services, and an [LLM wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) for memory.
+- [Agent Skills](https://agentskills.io) for skills, checked with its reference validator, and an [LLM wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) for memory. Planned: MCP servers for outside services.
 
 ## License
 

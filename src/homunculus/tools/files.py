@@ -11,6 +11,7 @@ from typing import IO, Any, NoReturn
 import mcp_types as mcp
 
 from homunculus.memory import Change, Memory
+from homunculus.skills import Skills
 from homunculus.tools import Tool, ToolError
 
 # Opening one folder of a path: only a folder, and never through a link.
@@ -36,10 +37,13 @@ CHANGES = mcp.ToolAnnotations(
 )
 
 
-def file_tools(workspace: Path, memory: Memory | None = None) -> list[Tool]:
-    """The file tools, each confined to `workspace`, and to `memory` for paths that start
-    with `memory/`."""
-    return Files(workspace, memory).tools()
+def file_tools(
+    workspace: Path, memory: Memory | None = None, skills: Skills | None = None
+) -> list[Tool]:
+    """The file tools, each confined to `workspace`, to `memory` for paths that start
+    with `memory/`, and to the skill folders, read-only, for paths that start with
+    `skills/`."""
+    return Files(workspace, memory, skills).tools()
 
 
 def _file_tool(
@@ -71,13 +75,18 @@ def _file_tool(
 
 
 class Files:
-    def __init__(self, workspace: Path, memory: Memory | None = None) -> None:
+    def __init__(
+        self, workspace: Path, memory: Memory | None = None, skills: Skills | None = None
+    ) -> None:
         self._root = workspace.resolve()
         self._memory = memory
+        self._skills = skills
 
     def _exists(self, path: str) -> bool | None:
         """Whether a workspace file is there now, or None for a path in memory, which
         has its own rules."""
+        if self._in_skills(path):
+            return None
         root, parts, in_memory = self._where(path)
         if in_memory:
             return None
@@ -102,7 +111,25 @@ class Files:
         parts = _parts(path)
         if self._memory is not None and parts[0] == "memory":
             return self._memory.root, parts[1:] or ["."], True
+        if self._in_skills(path):
+            assert self._skills is not None
+            skill = self._skills.get(parts[1]) if len(parts) > 1 else None
+            if skill is None:
+                raise ToolError(f"There is no skill {parts[1]}; list skills to see them.")
+            return skill.folder, parts[2:] or ["."], False
         return self._root, parts, False
+
+    def _in_skills(self, path: str) -> bool:
+        """Whether a path names the skill folders, which hold each skill in its own
+        folder, repository and personal skills together, and are only read."""
+        return self._skills is not None and _parts(path)[0] == "skills"
+
+    def _unchanged_skills(self, *paths: str) -> None:
+        if any(self._in_skills(path) for path in paths):
+            raise ToolError(
+                "Skills are read-only. Write a draft in the workspace instead, and tell "
+                "the operator."
+            )
 
     def _current(self, path: str, root: Path, parts: list[str]) -> str | None:
         """A memory file's text as it is now, or None if there is none."""
@@ -118,6 +145,11 @@ class Files:
 
     def tools(self) -> list[Tool]:
         in_workspace = "Path relative to the workspace, or memory/... for your memory."
+        if self._skills is not None:
+            in_workspace = (
+                "Path relative to the workspace, memory/... for your memory, or "
+                "skills/... to read a skill."
+            )
         tools = [
             _file_tool(
                 "read",
@@ -223,6 +255,7 @@ class Files:
 
     def write(self, arguments: dict[str, Any]) -> str:
         path, content = arguments["path"], arguments["content"]
+        self._unchanged_skills(path)
         root, parts, in_memory = self._where(path)
         memory = self._memory if in_memory else None
         if memory is not None:
@@ -262,6 +295,7 @@ class Files:
 
     def edit(self, arguments: dict[str, Any]) -> str:
         path, old, new = arguments["path"], arguments["old"], arguments["new"]
+        self._unchanged_skills(path)
         root, parts, in_memory = self._where(path)
         if in_memory:
             # The check sees the whole file as it would be, so `old` must appear once.
@@ -286,6 +320,9 @@ class Files:
 
     def list_folder(self, arguments: dict[str, Any]) -> str:
         path = arguments["path"]
+        if self._in_skills(path) and len(_parts(path)) == 1:
+            assert self._skills is not None
+            return "\n".join(f"{name}/" for name in self._skills.found()) or "(no skills)"
         root, parts, _ = self._where(path)
         with self._folder(path, parts, want_folder=True, root=root) as folder:
             names = sorted(
@@ -296,8 +333,18 @@ class Files:
 
     def search(self, arguments: dict[str, Any]) -> str:
         path = arguments["path"]
+        if self._in_skills(path) and len(_parts(path)) == 1:
+            found = [
+                self.search({"path": f"skills/{name}", "text": arguments["text"]})
+                for name in self._skills.found()  # type: ignore[union-attr]
+            ]
+            hits = [text for text in found if text != "No matches."]
+            return "\n".join(hits) or "No matches."
         root, inner, in_memory = self._where(path)
-        parts = ["memory", *inner] if in_memory else inner
+        if self._in_skills(path):
+            parts = _parts(path)[:2] + [part for part in inner if part != "."]
+        else:
+            parts = ["memory", *inner] if in_memory else inner
         wanted = arguments["text"].lower()
         matches: list[tuple[str, int, str]] = []
         with self._folder(path, inner, want_folder=True, root=root) as folder:
@@ -321,6 +368,7 @@ class Files:
 
     def delete(self, arguments: dict[str, Any]) -> str:
         path = arguments["path"]
+        self._unchanged_skills(path)
         root, parts, in_memory = self._where(path)
         if in_memory:
             self._checked(Change("delete", "/".join(parts), None, None), path, root, parts)
@@ -334,6 +382,7 @@ class Files:
 
     def rename(self, arguments: dict[str, Any]) -> str:
         path, to = arguments["path"], arguments["to"]
+        self._unchanged_skills(path, to)
         root, parts, in_memory = self._where(path)
         new_root, new_parts, to_memory = self._where(to)
         if in_memory != to_memory:

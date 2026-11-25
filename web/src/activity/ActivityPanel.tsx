@@ -298,14 +298,19 @@ function NextWakeUps() {
   const waker = useWaker();
   const { status } = waker;
   if (!status) return null;
-  const time = (at: string) => at.slice(11);
-  const later = status.pending.slice(0, 3);
+  const later = [
+    ...status.pending.map((w) => ({ key: w.id, at: w.at, what: w.why })),
+    ...(status.routines ?? []).map((r) => ({ key: `r-${r.skill}-${r.at}`, at: r.at, what: `the routine ${r.skill}` })),
+  ]
+    .sort((a, b) => a.at.localeCompare(b.at))
+    .slice(0, 3);
+  const missed = status.missed ?? [];
   return (
     <div className="wakeups">
       <p className="sum-line">
         {status.paused
           ? "Working on its own is paused."
-          : `Next wake-up at ${time(status.next_timer)}.`}{" "}
+          : `Next wake-up at ${when(status.next_timer)}.`}{" "}
         {status.today.woken} of {status.today.cap} wake-ups today.
       </p>
       <div className="wake-here">
@@ -314,12 +319,28 @@ function NextWakeUps() {
       {later.length > 0 && (
         <ul className="wake-list">
           {later.map((w) => (
-            <li key={w.id}>
-              <span className="when">{time(w.at)}</span> {w.why}
+            <li key={w.key}>
+              <span className="when">{when(w.at)}</span> {w.what}
             </li>
           ))}
         </ul>
       )}
+      {missed.map((m) => (
+        <p className="sum-line" key={`${m.skill}-${m.at}`}>
+          The routine {m.skill} did not run at {when(m.at)}: the computer was asleep, and
+          it was more than 2 hours late when it woke.
+        </p>
+      ))}
     </div>
   );
+}
+
+/** A local "YYYY-MM-DD HH:MM" as the time alone today, or with its weekday otherwise. */
+function when(at: string): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  if (at.slice(0, 10) === today) return at.slice(11);
+  const day = new Date(`${at.slice(0, 10)}T00:00`).toLocaleDateString("en-GB", { weekday: "short" });
+  return `${day} ${at.slice(11)}`;
 }
