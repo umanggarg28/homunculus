@@ -19,6 +19,7 @@ import html
 import ipaddress
 import re
 import socket
+import warnings
 from collections.abc import Callable, Iterable
 from typing import Any
 from urllib.parse import urljoin, urlsplit
@@ -26,9 +27,14 @@ from urllib.parse import urljoin, urlsplit
 import httpcore
 import httpx
 import mcp_types as mcp
-import trafilatura
 
 from homunculus.tools import Tool, ToolError
+
+with warnings.catch_warnings():
+    # trafilatura imports urllib3, which warns that its optional SOCKS proxy support is
+    # missing; no proxy is ever used here.
+    warnings.filterwarnings("ignore", message="SOCKS support in urllib3")
+    import trafilatura
 
 SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 SEARCH_RESULTS = 5
