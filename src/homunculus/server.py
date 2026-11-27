@@ -184,12 +184,21 @@ def create_app(
         decided = [a for a in reversed(requests) if a.status != "pending"][:RECENT_DECISIONS]
         return [dataclasses.asdict(a) for a in [*pending, *decided]]
 
-    async def tell_the_agent(approval_id: str, text: str) -> None:
+    async def tell_the_agent(
+        approval_id: str, text: str, ran: tuple[Approval, str] | None = None
+    ) -> None:
         """Run a turn that tells the agent the outcome of a request, so it can carry on.
+
+        An action that `ran` reaches the agent as its call and the call's result, the way
+        any tool result arrives, before the notice. The result is never in the notice: it
+        may be outside content, which must not arrive as if the operator wrote it, and the
+        chat shows the notice, not the result.
 
         The decision is part of the conversation whatever happens: if the turn fails,
         the notice is added on its own, so the agent reads it in its next turn."""
         async with turn:
+            if ran is not None:
+                history.extend(_ran_messages(*ran))
             try:
                 async for _ in loop.run(
                     model,
@@ -270,9 +279,8 @@ def create_app(
                 raise
             # The gate's answer was "ask"; the outcome records what the run itself did.
             activity.end_tool(span, "ask", result, loop.outcome_of(done), approval_id)
-        background.add_task(
-            tell_the_agent, approval_id, f"Approved: {_request_summary(decided)}. Result: {result}"
-        )
+        text = f"Approved: {_request_summary(decided)}. It ran, and its result is in Activity."
+        background.add_task(tell_the_agent, approval_id, text, (decided, result))
         return dataclasses.asdict(decided)
 
     @app.post("/api/approvals/{approval_id}/deny")
@@ -516,6 +524,18 @@ async def _keep_waking(app: FastAPI) -> None:
 def _request_summary(approval: Approval) -> str:
     """The request as the agent is told it: its id, the tool and the exact arguments."""
     return f"request {approval.id}, {approval.tool} {approval.arguments}"
+
+
+def _ran_messages(approval: Approval, result: str) -> list[Message]:
+    """The approved call and its result, as the model reads any tool call. The call gets
+    an id of its own: the one it was asked under already holds the "waiting" result."""
+    call_id = f"approved-{approval.id}"
+    function = {"name": approval.tool, "arguments": approval.arguments}
+    call: dict[str, object] = {"id": call_id, "type": "function", "function": function}
+    return [
+        {"role": "assistant", "content": "", "tool_calls": [call]},
+        {"role": "tool", "tool_call_id": call_id, "content": result},
+    ]
 
 
 def _appended(label: str, text: str | None) -> str:

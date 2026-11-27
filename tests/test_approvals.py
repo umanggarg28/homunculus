@@ -101,15 +101,37 @@ def test_approving_runs_exactly_that_action_and_the_agent_carries_on(
     assert send_email.calls == [{"to": "sam@example.com"}]
     assert decided["status"] == "approved"
     assert decided["result"] == "Sent."
-    told = model.received[2][-1]
+    # The agent gets the result as the result of its call, as any tool result arrives,
+    # then the note that the operator approved it.
+    *_, ran, result, told = model.received[2]
+    (call,) = ran["tool_calls"]
+    assert call["function"] == {"name": "send_email", "arguments": '{"to": "sam@example.com"}'}
+    assert result == {"role": "tool", "tool_call_id": call["id"], "content": "Sent."}
     assert told["role"] == "user"
     assert told["content"] == (
-        f'Approved: request {request}, send_email {{"to": "sam@example.com"}}. Result: Sent.'
+        f'Approved: request {request}, send_email {{"to": "sam@example.com"}}. '
+        "It ran, and its result is in Activity."
     )
     assert client.get("/api/history").json()[-1] == {
         "role": "assistant",
         "content": "Sam is emailed.",
     }
+
+
+def test_an_approved_result_reaches_the_agent_but_never_the_chat(
+    tmp_path: Path, send_email: StandIn
+) -> None:
+    model = ScriptedModel(
+        [[asks_to("send_email", to="sam@example.com")], ["I have asked."], ["Sam is emailed."]]
+    )
+    client = server(model, tmp_path, send_email)
+    client.post("/api/chat", json={"message": "Email Sam"})
+
+    client.post(f"/api/approvals/{pending_id(client)}/approve")
+
+    shown = json.dumps(client.get("/api/history").json())
+    assert "Sent." not in shown
+    assert "It ran, and its result is in Activity." in shown
 
 
 def test_declining_never_runs_the_action_and_tells_the_agent_why(
