@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { withoutLabel } from "@/lib/outside";
 import type { ToolStep } from "@/lib/toolSteps";
 import { stepSubject, stepWords } from "./steps";
 
@@ -18,7 +19,7 @@ export function termLines(step: ToolStep): [Kind, string][] {
     lines.push(["w", step.answer === "hand off" ? "handed to you: only you can do this" : "held: needs your approval"]);
     return lines;
   }
-  const out = step.result.split("\n").filter((l) => l.trim());
+  const out = withoutLabel(step.result).split("\n").filter((l) => l.trim());
   const kind: Kind = step.outcome === "failed" ? "e" : "o";
   out.slice(0, MAX_LINES).forEach((l) => lines.push([kind, l]));
   if (out.length > MAX_LINES) lines.push(["o", `… ${out.length - MAX_LINES} more lines in Activity`]);

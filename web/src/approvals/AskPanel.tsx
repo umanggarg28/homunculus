@@ -4,6 +4,7 @@ import { useApprovals } from "@/hooks/useApprovals";
 import { stepSubject } from "@/thread/steps";
 import { focus } from "@/presence/focus";
 import { send as sendTrace } from "@/presence/overlay";
+import { firstWords } from "@/lib/outside";
 
 // Allowing takes a deliberate hold, so a stray click never runs anything.
 const HOLD_MS = 600;
@@ -211,7 +212,7 @@ export function AskPanel() {
                 <span className="fig">
                   {DECIDED[a.status]} {hhmm(a.decided)}
                 </span>
-                <span className="line">{a.result ? `Result: ${a.result.split("\n")[0]}` : a.note ? `Note: ${a.note}` : a.follow_up === "replied" ? "The agent replied in the conversation." : ""}</span>
+                <span className="line">{a.result ? `Result: ${firstWords(a.result)}` : a.note ? `Note: ${a.note}` : a.follow_up === "replied" ? "The agent replied in the conversation." : ""}</span>
               </li>
             ))}
           </ul>

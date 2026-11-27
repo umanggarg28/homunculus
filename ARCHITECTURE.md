@@ -92,7 +92,7 @@ When the gate answers ask or hand off, the loop saves a request with the exact t
 | `POST /api/approvals/{id}/deny` | Declines; nothing runs. Optional `{"note": "..."}` as the reason |
 | `POST /api/approvals/{id}/done` | For a `hand off` request: the operator did it. Optional note |
 
-A request is decided once. After any decision the server runs a short turn telling the agent the outcome, as a message marked as a notice. The model module sends only the fields the Chat Completions format defines, so the mark never reaches the provider. If that turn fails, the notice is still added to the conversation, and the request records `follow_up` as `replied` or `failed: <why>`, which the console shows.
+A request is decided once. After any decision the server runs a short turn telling the agent the outcome, as a message marked as a notice. An approved action's result goes into the conversation before it, as the action's call and a tool message with the result, under a new call id (`approved-<id>`); the notice itself never holds the result, which may be outside content, and the console shows only the notice. The model module sends only the fields the Chat Completions format defines, so the mark never reaches the provider. If that turn fails, the notice is still added to the conversation, and the request records `follow_up` as `replied` or `failed: <why>`, which the console shows.
 
 An approved action runs inside the same lock as a chat turn and in a worker thread. A request approved but left without a result because the server stopped is marked, on the next start, as unknown: it may or may not have run.
 

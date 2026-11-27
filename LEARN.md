@@ -937,7 +937,7 @@ One line of the file, cut down:
 
 **From spans to jobs.** [activity.py:200](src/homunculus/activity.py#L200) `def jobs(spans: list[dict[str, Any]], events: list[dict[str, Any]]) -> list[dict[str, Any]]:` groups the spans and events by `traceId`. For each trace it finds the root ([activity.py:214](src/homunculus/activity.py#L214) `root = next((s for s in members if s["name"] == ROOT_SPAN), None)`), reads your message from the root, or from the turn's start event while the root is not written yet, and the reply from the root's attributes, and turns each `execute_tool` span into a step, in the order they started. Read the job aloud: "you asked me to note that you like green tea; I wrote tea.md, which worked; I replied Saved."
 
-**An approved action joins its trace later.** When the gate asks, the approval request stores the turn's W3C `traceparent`, the standard text form of a trace context: `"00-9f3c41d2...-df12ff...-01"`, meaning version, trace id, parent span id and flags. When you approve, the server passes it to `context_of`, which turns the text back into a context with OpenTelemetry's own W3C propagator, and [server.py:256](src/homunculus/server.py#L256) `span = activity.start_tool(` starts the approved run's `execute_tool` span under the original root, with the original tool call id. Its `homunculus.gate.answer` is `"ask"`, because that is what the gate answered, and its outcome is what the run did. So the job reads: asked (◷), then approved and done (✓).
+**An approved action joins its trace later.** When the gate asks, the approval request stores the turn's W3C `traceparent`, the standard text form of a trace context: `"00-9f3c41d2...-df12ff...-01"`, meaning version, trace id, parent span id and flags. When you approve, the server passes it to `context_of`, which turns the text back into a context with OpenTelemetry's own W3C propagator, and [server.py:265](src/homunculus/server.py#L265) `span = activity.start_tool(` starts the approved run's `execute_tool` span under the original root, with the original tool call id. Its `homunculus.gate.answer` is `"ask"`, because that is what the gate answered, and its outcome is what the run did. So the job reads: asked (◷), then approved and done (✓).
 
 ### Feedback
 
@@ -951,7 +951,7 @@ The GenAI conventions define one event for judging an agent's output: `gen_ai.ev
         gen_ai.evaluation.explanation = "Ask before saving"
 ```
 
-[server.py:306](src/homunculus/server.py#L306) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` finds the job, then [server.py:315](src/homunculus/server.py#L315) `found["feedback"] = activity.rate(` writes the event. `rate` attaches it to the job's root span by writing the job's trace id and root span id as a W3C traceparent and turning that into a context, the same way an approved action finds its trace, so a trace viewer shows the rating on the work it judges.
+[server.py:314](src/homunculus/server.py#L314) `async def give_feedback(job: str, feedback: Feedback) -> dict[str, Any]:` finds the job, then [server.py:323](src/homunculus/server.py#L323) `found["feedback"] = activity.rate(` writes the event. `rate` attaches it to the job's root span by writing the job's trace id and root span id as a W3C traceparent and turning that into a context, the same way an approved action finds its trace, so a trace viewer shows the rating on the work it judges.
 
 If you change your mind and press 👍, a second event is written. `jobs` keeps the latest one ([activity.py:210](src/homunculus/activity.py#L210) `ratings = {e["traceId"]: e for e in events if _is_rating(e)}`: a later event for the same trace replaces the earlier one in the dict, and only this program's `task_completion` evaluations labelled `pass` or `fail` count). Both stay in the file. A new rating starts with an empty reason box, so the old reason is never sent with it. Nothing reads the ratings yet. Ticket #17, the daily learning pass, is where they will be used.
 
@@ -1136,7 +1136,7 @@ The gate (chapter 5) can answer "ask" or "hand off". Those answers need somewher
 
 **What you approve is what runs.** The request stores the arguments as the model wrote them, and deciding never changes them. If the agent wants something different, that is a new request. Dots and Grok Bot describe the same rule: an approval covers the exact action shown.
 
-**The outcome becomes a message to the agent.** After you decide, the server starts a short turn that tells the agent what happened, for example `Approved: request 04fdba, send_email {...}. Result: Sent.` The agent replies as usual, so the work carries on. That message is marked as a **notice**: the console shows it as a decision rather than as something you typed, and the model module strips the mark before anything is sent to OpenRouter.
+**The outcome becomes a message to the agent.** After you decide, the server starts a short turn that tells the agent what happened. An approved action's result reaches the agent first, as the result of its call, the way any tool result arrives; then a short message says you approved it, for example `Approved: request 04fdba, send_email {...}. It ran, and its result is in Activity.` The result is never in that message: it could be a web page, and words from outside must not arrive as if you wrote them. The agent replies as usual, so the work carries on. That message is marked as a **notice**: the console shows it as a decision rather than as something you typed, and the model module strips the mark before anything is sent to OpenRouter.
 
 **Three kinds of decision**, matching the gate's answers:
 
@@ -1163,7 +1163,8 @@ The gate (chapter 5) can answer "ask" or "hand off". Those answers need somewher
  server: decide → "approved"  ──►  run_tool(send_email, the saved arguments) → "Sent."
    │
    ▼
- server: a new turn, notice=True:  "Approved: request 04fdba, send_email {...}. Result: Sent."
+ server: history += [assistant: send_email call, tool: "Sent."]
+         then a new turn, notice=True:  "Approved: request 04fdba, send_email {...}. It ran, and its result is in Activity."
    │
    ▼
  model: "Done: the email to Sam is sent."   ──►  shown in Chat
@@ -1207,11 +1208,15 @@ That span joins the trace the request remembered, so the Activity column shows t
 
 The tool runs inside the same lock as a chat message (chapter 3), so it never runs alongside another turn's tools, and in a worker thread (`asyncio.to_thread`), so a slow tool does not hold up the rest of the server.
 
-Then `background.add_task(tell_the_agent, ...)` schedules the follow-up turn to run after the response is sent, so your button does not wait for the model. `tell_the_agent` takes the lock again and calls:
+Then `background.add_task(tell_the_agent, ...)` schedules the follow-up turn to run after the response is sent, so your button does not wait for the model. `tell_the_agent` takes the lock again, adds the call and its result to `history`, and calls:
 
 ```
-loop.run(..., text='Approved: request 04fdba, send_email {"to": ...}. Result: Sent.', notice=True)
+_ran_messages(approval, "Sent.") -> [{"role": "assistant", "content": "", "tool_calls": [{"id": "approved-04fdba", ...}]},
+                                     {"role": "tool", "tool_call_id": "approved-04fdba", "content": "Sent."}]
+loop.run(..., text='Approved: request 04fdba, send_email {"to": ...}. It ran, and its result is in Activity.', notice=True)
 ```
+
+The call gets a new id, `approved-04fdba`, because the id it was first asked under already holds the result "waiting for approval".
 
 **If that turn fails**, for example because no provider answers, the decision must not vanish. `tell_the_agent` adds the notice to `history` on its own, so the agent reads it in its next turn, and records `follow_up = "failed: ..."` on the request. The approvals screen then says the agent could not reply, instead of pointing you to a reply that does not exist. When the turn succeeds, `follow_up` is `"replied"`, and an open chat screen loads the conversation again to show it.
 
@@ -1219,7 +1224,7 @@ loop.run(..., text='Approved: request 04fdba, send_email {"to": ...}. Result: Se
 
 **The notice.** [loop.py:143-145](src/homunculus/loop.py#L143-L145) `opening: Message = ... opening["notice"] = True` build the opening message with `"notice": True`. It is stored in `history` with that mark. Before sending, `model.py` keeps only `role`, `content`, `tool_calls` and `tool_call_id`, so OpenRouter receives a plain user message. `GET /api/history` passes the mark on, and the chat shows the line under DECIDED instead of YOU.
 
-**Where each value lives.** The request lives in `approvals.json` in the data directory and is kept there as a record after it is decided. The notice lives in `history`. The tool's result is in three places: on the request, in the activity log, and in the notice the agent read.
+**Where each value lives.** The request lives in `approvals.json` in the data directory and is kept there as a record after it is decided. The notice lives in `history`. The tool's result is in three places: on the request, in the activity log, and in the tool message the agent read. The chat shows only the notice.
 
 ### The test
 
@@ -1239,10 +1244,16 @@ def test_approving_runs_exactly_that_action_and_the_agent_carries_on(
     assert send_email.calls == [{"to": "sam@example.com"}]
     assert decided["status"] == "approved"
     assert decided["result"] == "Sent."
-    told = model.received[2][-1]
+    # The agent gets the result as the result of its call, as any tool result arrives,
+    # then the note that the operator approved it.
+    *_, ran, result, told = model.received[2]
+    (call,) = ran["tool_calls"]
+    assert call["function"] == {"name": "send_email", "arguments": '{"to": "sam@example.com"}'}
+    assert result == {"role": "tool", "tool_call_id": call["id"], "content": "Sent."}
     assert told["role"] == "user"
     assert told["content"] == (
-        f'Approved: request {request}, send_email {{"to": "sam@example.com"}}. Result: Sent.'
+        f'Approved: request {request}, send_email {{"to": "sam@example.com"}}. '
+        "It ran, and its result is in Activity."
     )
     assert client.get("/api/history").json()[-1] == {
         "role": "assistant",
@@ -1603,11 +1614,11 @@ The version is not a counter. It is a fingerprint of the text you were shown, so
 PUT /api/memory/pages/wiki/tea.md  {"text": "...without sugar.\n...", "version": "19a55810ef75..."}
 ```
 
-[server.py:464](src/homunculus/server.py#L464) `return memory.save(path, edit.text, edit.version)` hands it to memory. [memory.py:264](src/homunculus/memory.py#L264) `with self.lock:` waits if an agent's file tool is mid-change, then `_save` commits anything already changed on disk, and checks the fingerprint: [memory.py:271](src/homunculus/memory.py#L271) `if _version(self._read(name) or "") != version:`. The file still holds what you saw, so the fingerprints match. [memory.py:277](src/homunculus/memory.py#L277) `(self.root / name).write_text(text, encoding="utf-8")` writes your text, and the same `take_hand_edits` the loop calls commits it as `Operator | Hand edit: wiki/tea.md` and logs `{"time": "2026-11-19 04:48", "action": "hand edit", "path": "wiki/tea.md"}`. The reply carries the new version, `dfea59b1edbb...`.
+[server.py:472](src/homunculus/server.py#L472) `return memory.save(path, edit.text, edit.version)` hands it to memory. [memory.py:264](src/homunculus/memory.py#L264) `with self.lock:` waits if an agent's file tool is mid-change, then `_save` commits anything already changed on disk, and checks the fingerprint: [memory.py:271](src/homunculus/memory.py#L271) `if _version(self._read(name) or "") != version:`. The file still holds what you saw, so the fingerprints match. [memory.py:277](src/homunculus/memory.py#L277) `(self.root / name).write_text(text, encoding="utf-8")` writes your text, and the same `take_hand_edits` the loop calls commits it as `Operator | Hand edit: wiki/tea.md` and logs `{"time": "2026-11-19 04:48", "action": "hand edit", "path": "wiki/tea.md"}`. The reply carries the new version, `dfea59b1edbb...`.
 
 Your new line has no footnote, and nothing refuses it. The agent's source checks are for what the model writes; you are the source of your own corrections. Only the cap applies, because it keeps the prompt small whoever writes.
 
-Now send the same save again, still from `19a55810ef75...`. The file's fingerprint is `dfea59b1edbb...`, so [memory.py:272](src/homunculus/memory.py#L272) `raise Stale(f"{name} has changed since you opened it.")` stops it before anything is written, and [server.py:468](src/homunculus/server.py#L468) `raise HTTPException(status_code=409, detail=str(stale)) from None` answers 409. The same happens when the agent changed the page while you were editing: your save can never wipe out a change you did not see.
+Now send the same save again, still from `19a55810ef75...`. The file's fingerprint is `dfea59b1edbb...`, so [memory.py:272](src/homunculus/memory.py#L272) `raise Stale(f"{name} has changed since you opened it.")` stops it before anything is written, and [server.py:476](src/homunculus/server.py#L476) `raise HTTPException(status_code=409, detail=str(stale)) from None` answers 409. The same happens when the agent changed the page while you were editing: your save can never wipe out a change you did not see.
 
 Why the lock: tools run in worker threads. Without [files.py:243](src/homunculus/tools/files.py#L243) `with memory.lock:` around each file tool, your save could run between the agent writing `tea.md` and committing it, and the agent's write would be committed under your name, then protected from the agent as if you had made it.
 
@@ -1883,7 +1894,7 @@ waker.take()  ->  "Wake now"        today's count goes from 0 to 1
 
 `take` also resets the timer: [waker.py:271](src/homunculus/waker.py#L271) `self._state["last_wake"] = now.isoformat()`, so the hourly timer counts from this wake-up, and [waker.py:296](src/homunculus/waker.py#L296) `if now - datetime.fromisoformat(self._state["last_wake"]) >= self._every:` will not fire again for an hour. Before any of that, [waker.py:280](src/homunculus/waker.py#L280) `if self._state["woken"] >= self._limits.wakeups_per_day:` keeps the day to 24.
 
-The server starts a fresh job: [server.py:383](src/homunculus/server.py#L383) `wake_prompt(waker.now(), reason, _routine_instructions(skills, reason)),` is the opening message, "It is Wednesday 25 November 2026, 03:24. You woke up on your own (the operator pressed Wake now)...", and the history is an empty list, so nothing of your chat reaches it.
+The server starts a fresh job: [server.py:391](src/homunculus/server.py#L391) `wake_prompt(waker.now(), reason, _routine_instructions(skills, reason)),` is the opening message, "It is Wednesday 25 November 2026, 03:24. You woke up on your own (the operator pressed Wake now)...", and the history is an empty list, so nothing of your chat reaches it.
 
 The agent read its notes and chapter 7, wrote `book/chapter-8-outline.md` (a new file, so the gate let it), and edited `todo.md` to put a question for you at the top: who is in the boat, and does the keeper arrive. Because that file was new, [loop.py:300](src/homunculus/loop.py#L300) `own_files.add(path)` remembers it as its own, in `waker.json`. The job cost $0.003.
 
@@ -2026,7 +2037,7 @@ Then [loop.py:141](src/homunculus/loop.py#L141) `instructions += "\n\n" + local_
 
 Two other messages in the same run, "Hi, how are you?" and a request to summarise a chapter, read no skill.
 
-**Handed over by a routine.** `routines.toml` has `skill = "morning-brief"`, `at = "07:00"`, `days = "every day"`. At 07:01 the waker's `peek()` finds it due, after the last time it handled, 06:55 when it was first seen, and within 2 hours, so [waker.py:292](src/homunculus/waker.py#L292) `return ROUTINE + routine.skill` gives the reason `"the routine morning-brief"`. The server reads the skill as the routine runs, with [server.py:499](src/homunculus/server.py#L499) `found = skills.instructions(name) if skills is not None else None`, and `wake_prompt` puts it in the opening message:
+**Handed over by a routine.** `routines.toml` has `skill = "morning-brief"`, `at = "07:00"`, `days = "every day"`. At 07:01 the waker's `peek()` finds it due, after the last time it handled, 06:55 when it was first seen, and within 2 hours, so [waker.py:292](src/homunculus/waker.py#L292) `return ROUTINE + routine.skill` gives the reason `"the routine morning-brief"`. The server reads the skill as the routine runs, with [server.py:507](src/homunculus/server.py#L507) `found = skills.instructions(name) if skills is not None else None`, and `wake_prompt` puts it in the opening message:
 
 ```
 "It is Thursday 26 November 2026, 07:01. You woke up on your own (the routine morning-brief); ...
