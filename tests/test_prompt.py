@@ -49,8 +49,10 @@ def test_the_fixed_instructions_are_the_same_on_every_turn(tmp_path: Path) -> No
     client.post("/api/chat", json={"message": "Hi"})
     client.post("/api/chat", json={"message": "Are you there?"})
 
-    # The same opening text lets a provider reuse its cached work on that part.
-    assert model.received[0][0] == model.received[1][0]
+    # The same opening text lets a provider reuse its cached work on that part. Only the
+    # last paragraph, the local time, may change from turn to turn.
+    first, second = (str(call[0]["content"]) for call in model.received)
+    assert first.rsplit("\n\n", 1)[0] == second.rsplit("\n\n", 1)[0]
 
 
 def test_every_tool_offered_says_when_to_use_it(tmp_path: Path) -> None:

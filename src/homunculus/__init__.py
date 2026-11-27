@@ -21,6 +21,7 @@ from homunculus.server import create_app
 from homunculus.skills import Skills
 from homunculus.tools.files import file_tools
 from homunculus.tools.shell import shell_tool
+from homunculus.tools.web import Web
 from homunculus.waker import RoutinesError, Waker, load_routines
 from homunculus.waker import load_settings as load_waker_settings
 
@@ -81,6 +82,9 @@ def serve() -> None:
     for problem in skills.problems():
         print(problem, file=sys.stderr)
     tools = file_tools(workspace, memory, skills)
+    # Search needs a Brave Search API key; without one, pages can still be read. The key
+    # stays in this process, like the model's.
+    tools.extend(Web(os.environ.get("BRAVE_API_KEY") or None).tools())
     # The sandbox mounts the skills found now; one added later can be read straight
     # away, and its scripts run after a restart.
     sandbox = DockerSandbox(workspace, skills={name: s.folder for name, s in found.items()})
@@ -118,6 +122,7 @@ def serve() -> None:
         budget=Budget(limits, model.month_spend),
         waker=waker,
         skills=skills,
+        identifiers=lambda: identifiers.load(home),
     )
     try:
         # Bound to this machine only: nothing else on the network can reach the API.

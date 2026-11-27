@@ -3,7 +3,7 @@
 import asyncio
 import dataclasses
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
@@ -77,6 +77,7 @@ def create_app(
     budget: Budget | None = None,
     waker: Waker | None = None,
     skills: Skills | None = None,
+    identifiers: Callable[[], list[str]] | None = None,
 ) -> FastAPI:
     """The HTTP API, and the built web console from `console` when one is given."""
 
@@ -122,6 +123,7 @@ def create_app(
                         request.message,
                         memory=memory,
                         skills=skills,
+                        identifiers=identifiers,
                         now=waker.now if waker is not None else None,
                         limits=limits,
                         budget=budget,
@@ -199,6 +201,7 @@ def create_app(
                     notice=True,
                     memory=memory,
                     skills=skills,
+                    identifiers=identifiers,
                     now=waker.now if waker is not None else None,
                     limits=limits,
                     budget=budget,
@@ -380,6 +383,7 @@ def create_app(
                         wake_prompt(waker.now(), reason, _routine_instructions(skills, reason)),
                         memory=memory,
                         skills=skills,
+                        identifiers=identifiers,
                         now=waker.now if waker is not None else None,
                         limits=limits,
                         budget=budget,

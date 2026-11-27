@@ -17,6 +17,7 @@ dependencies = [
     "platformdirs>=4.13.5",
     "presidio-analyzer>=2.2.366",
     "strictyaml>=1.7.3",
+    "trafilatura>=2.4.0",
     "uvicorn>=0.54.0",
 ]
 

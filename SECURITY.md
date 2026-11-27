@@ -7,6 +7,7 @@ Homunculus is a personal agent that runs on its operator's machine and acts with
 - The operator's files, keys and other devices, from commands the agent runs.
 - The activity log and the agent's own instructions, from the agent's tools.
 - The operator's data, from leaving the machine except where listed below.
+- The operator's identity, from the outside services the agent searches and reads.
 - The proxy's signing key, from the sandbox. The proxy makes its own certificate authority in memory each time it starts, so it can open tunnels; the sandbox trusts that authority and no other, and receives only its certificate.
 
 ## How
@@ -20,6 +21,9 @@ Homunculus is a personal agent that runs on its operator's machine and acts with
 - **The operator's identifiers stay out of the repository.** They live in `identifiers.txt` in the data directory, and a pre-commit check stops a commit whose staged lines contain one.
 - **Work on its own has the same fences as chat, and more.** A wake-up goes through the same gate, so anything outward waits for the operator, and so does changing any workspace file it did not make on its own; it has the same job limits; and it stops at 80% of the month's budget, not 100%. It starts from the goals and its own notes, never from the operator's conversation. The operator can pause it, and their message stops it at its next step. The agent's own wake-ups are bounded: at most 10 waiting, at most 7 days ahead, and every wake-up counts toward 24 a day.
 - **Skills are instructions only, and read-only.** The file tools cannot change a skill, and the sandbox sees each one read-only. A personal skill whose files mention one of the operator's identifiers is left out of the prompt and the sandbox, because what the sandbox sees can reach the package registries. Skill folders that are links are skipped, so a skill cannot bring another folder of the operator's into the sandbox.
+- **Outside content is labelled as data.** Every search result and page reaches the model inside an `<untrusted_content>` label that the content cannot close, and the instructions say to treat it as information, never instructions, and to tell the operator what a page asks for.
+- **Searches and page addresses carrying the operator's identifiers wait for approval.** The gate matches every outward call's arguments, also decoded from URL encoding, against `identifiers.txt`.
+- **Pages are read only from public addresses.** `web_fetch` refuses this machine, the local network, link-local addresses such as cloud metadata, and other non-public ranges, before each request, after each redirect and again at the connection, so a name that changes its answer is caught. It ignores proxy settings, reads at most 5 MB, and stops after 20 seconds.
 - **The API key stays in the server.** It is never sent to the model or into the sandbox.
 
 ## Where data can leave the machine
@@ -27,6 +31,8 @@ Homunculus is a personal agent that runs on its operator's machine and acts with
 | From | To | What |
 |---|---|---|
 | The server | OpenRouter (`openrouter.ai`), routed only to providers that keep no copy and do not train on it | The conversation, the instructions and tool results |
+| The server, for `web_search` | Brave Search (`api.search.brave.com`), with the search key | Search queries |
+| The server, for `web_fetch` | `public websites`, any public address | A request for each page the agent reads, and whatever is written into its address |
 | The sandbox, through the proxy | `pypi.org`, `files.pythonhosted.org`, `registry.npmjs.org` | Requests to read package pages, and whatever a command writes into the addresses it asks for |
 
 The console shows this list on its memory screen, from `src/homunculus/egress.py`. A test fails if that list, the proxy's allow-list, the model's address and this table disagree.
@@ -40,4 +46,7 @@ The console shows this list on its memory screen, from `src/homunculus/egress.py
 - **The import catches categories by name, not by meaning.** A file about immigration in a folder called `notes` gets past the name check; the content scan finds numbers, keys, emails, phones and identifiers, not topics. Gitleaks does not know every key format (it has no rule for OpenRouter keys). The operator's review of the list before copying is the last check.
 - **A job can run a little past its limits.** Limits are checked after each round of tool calls, so a round already started finishes: a model call ends only when it is done or has waited two minutes for more of its reply, and a command can run up to ten minutes, and a job's cost is known only once each call reports it. The month's spend is read at most once a minute, so jobs started within that minute see the same figure. The key's own monthly limit on OpenRouter is the hard stop.
 - **A skill is followed as if the operator wrote it.** Its instructions go into the agent's context, and a routine hands them over without the model choosing. A skill copied from elsewhere could tell the agent to do harm; the gate still holds everything outward and every limit applies, but only reading a skill before adding it keeps out bad instructions. The identifier check matches the listed words, not facts about the operator in other words.
+- **A page address can carry data out.** The agent chooses what it searches for and which addresses it reads, so a hostile page could talk it into writing something it knows into a query or an address. Identifiers are caught by the gate; other facts are not. This is the risk the spec accepts: private context, outside content and an outward channel can meet in one job. It is measured by an eval (#20), and if that fails, every search or fetch after outside content enters a job will need approval.
+- **The label is a request, not a wall.** A model can still follow instructions it reads inside `<untrusted_content>`. The label and the instructions make it less likely; the gate holds anything that changes things outside, and an identifier in an outward call waits for approval.
+- **Brave sees the queries.** Brave says it does not share queries or train on them; full zero data retention is on its enterprise plan only.
 - **Requests are not tied to the job that made them.** The proxy cannot tell which command made a request, so its events in the activity log carry the time but not the job.

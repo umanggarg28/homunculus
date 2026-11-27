@@ -24,6 +24,18 @@ ROUTES = (
         "providers that keep no copy and do not train on it",
     ),
     Route(
+        "The server, for web_search",
+        "api.search.brave.com",
+        "Search queries, with the search key; a query carrying one of your identifiers "
+        "waits for your approval",
+    ),
+    Route(
+        "The server, for web_fetch",
+        "public websites",
+        "A request for the page at each address the agent reads, and whatever is written "
+        "into that address; one carrying an identifier waits for your approval",
+    ),
+    Route(
         "The sandbox, through the proxy",
         "pypi.org",
         "Requests to read package index pages" + IN_THE_ADDRESS,
