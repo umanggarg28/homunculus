@@ -95,6 +95,7 @@ async def run(
     own_files: OwnFiles | None = None,
     skills: Skills | None = None,
     now: Callable[[], datetime] | None = None,
+    identifiers: Callable[[], list[str]] | None = None,
 ) -> AsyncIterator[str | ToolStep | Retrying | Stopped]:
     """Answer one operator message, yielding the reply text as it streams and a
     ToolStep after each tool call, so a caller can show the work as it happens.
@@ -109,7 +110,8 @@ async def run(
     With `memory`, the turn starts by taking any edits the operator made by hand, and the
     instructions are followed by the profile, goals and wiki index, read fresh each turn.
     With `skills`, the catalogue of skills follows them, also built fresh each turn.
-    The local date and time, from `now`, come last.
+    The local date and time, from `now`, come last. `identifiers` gives the operator's
+    identifiers, read for each tool call, which the gate checks outward calls against.
 
     Every job is bounded by `limits` (the defaults when none are given): it ends once it
     reaches its steps, minutes or cost, and with a `budget` it does not start once the
@@ -207,7 +209,7 @@ async def run(
                     turn.append({"role": "tool", "tool_call_id": call.id, "content": skipped})
                     continue
                 step = await _carry_out(
-                    call, by_name, activity, approvals, parent, unprompted, own_files
+                    call, by_name, activity, approvals, parent, unprompted, own_files, identifiers
                 )
                 steps += 1
                 turn.append({"role": "tool", "tool_call_id": call.id, "content": step.result})
@@ -241,6 +243,7 @@ async def _carry_out(
     parent: Context,
     unprompted: bool = False,
     own_files: "OwnFiles | None" = None,
+    identifiers: Callable[[], list[str]] | None = None,
 ) -> ToolStep:
     """Put one tool call through the gate and, if allowed, run it. The step's result is
     what the model sees."""
@@ -248,7 +251,7 @@ async def _carry_out(
     span = activity.start_tool(call.name, call.arguments, parent, call_id=call.id)
     try:
         answer, result, outcome, request_id = await _decide_and_run(
-            call, by_name, approvals, parent, unprompted, own_files
+            call, by_name, approvals, parent, unprompted, own_files, identifiers
         )
     except BaseException as error:
         fail(span, error, str(error) or type(error).__name__)
@@ -271,12 +274,14 @@ async def _decide_and_run(
     parent: Context,
     unprompted: bool = False,
     own_files: "OwnFiles | None" = None,
+    identifiers: Callable[[], list[str]] | None = None,
 ) -> tuple[gate.Answer, str, str, str | None]:
     """The gate's answer, the result the model sees, the outcome, and the approval
     request made, if any."""
     tool = by_name.get(call.name)
     own: OwnFiles | frozenset[str] = own_files if own_files is not None else frozenset()
-    answer = gate.decide(call, tool, unprompted=unprompted, own=own)
+    mentions = identifiers() if identifiers is not None else None
+    answer = gate.decide(call, tool, unprompted=unprompted, own=own, identifiers=mentions)
     request_id = None
     made: list[str] = []
     if unprompted and own_files is not None and tool is not None and tool.changes:

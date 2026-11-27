@@ -1,12 +1,15 @@
 """The gate: the one place that decides whether a proposed action may run."""
 
 import json
-from collections.abc import Container
+from collections.abc import Container, Iterator
 from enum import Enum
 from pathlib import PurePosixPath
+from typing import Any
+from urllib.parse import unquote_plus
 
 import mcp_types as mcp
 
+from homunculus import identifiers as operator
 from homunculus.model import ToolCall
 from homunculus.tools import Tool
 
@@ -40,15 +43,24 @@ def decide(
     tool: Tool | None,
     unprompted: bool = False,
     own: Container[str] = frozenset(),
+    identifiers: list[str] | None = None,
 ) -> Answer:
     """Answer a proposed tool call, given the definition of the tool it names, or None
     when no such tool exists. Any failure to decide is a refusal.
 
     Work the agent does on its own, `unprompted`, may make new files and change the files
     it made on its own (`own`), but asks before changing any other file that already
-    exists: no one asked for that change, and the file may be the operator's own work."""
+    exists: no one asked for that change, and the file may be the operator's own work.
+
+    A call to a tool that reaches outside, other than through the sandbox, asks when its
+    arguments mention one of the operator's `identifiers`, so the agent does not reveal
+    who the operator is to an outside service."""
     try:
         answer = _decide(call, tool)
+        if answer is Answer.ACT and identifiers and tool is not None and _outward(tool):
+            said = " ".join(_texts(json.loads(call.arguments)))
+            if operator.find(said, identifiers):
+                return Answer.ASK
         if answer is Answer.ACT and unprompted and tool is not None and tool.changes:
             existing, _ = tool.changes(json.loads(call.arguments))
             if any(path not in own for path in existing):
@@ -56,6 +68,27 @@ def decide(
         return answer
     except Exception:
         return Answer.REFUSE
+
+
+def _outward(tool: Tool) -> bool:
+    """Whether a tool reaches outside the machine. The sandbox's own fences hold its
+    commands, so an identifier in a command does not ask."""
+    hints = tool.definition.annotations or mcp.ToolAnnotations()
+    return hints.open_world_hint is not False and not tool.runs_in_sandbox
+
+
+def _texts(value: Any) -> Iterator[str]:
+    """Every text in a call's arguments, also as it reads once decoded from an address,
+    so an identifier written as asha.rao%40example.com is still found."""
+    if isinstance(value, str):
+        yield value
+        yield unquote_plus(value)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _texts(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _texts(item)
 
 
 def _decide(call: ToolCall, tool: Tool | None) -> Answer:

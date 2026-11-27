@@ -54,8 +54,11 @@ Requires [uv](https://docs.astral.sh/uv/), an [OpenRouter](https://openrouter.ai
 ```bash
 uv sync
 export OPENROUTER_API_KEY=sk-or-...
+export BRAVE_API_KEY=...   # optional: web search, from https://brave.com/search/api/
 uv run homunculus
 ```
+
+Without `BRAVE_API_KEY` the agent has no search tool, and it can still read a web page you give it.
 
 **Manual check against the real model.** In a second terminal, send a message:
 
@@ -96,6 +99,15 @@ What it does on its own is in Activity, marked "On its own" with why it woke; it
 - At most 24 wake-ups a day (`wakeups_per_day` in `limits.toml`). A timer slot that falls while you are chatting is skipped, not queued, and after the Mac sleeps it wakes once, not once per missed hour.
 
 The timer's interval and the time zone are in `waker.toml` in the data directory.
+
+## Looking things up on the web
+
+`web_search` searches the web through the [Brave Search API](https://brave.com/search/api/), which keeps its own index and says it never shares or trains on queries; its free monthly credit covers about 1,000 searches. `web_fetch` reads one page and gives the agent its main text, at most 20,000 characters at a time. Both are recorded in Activity with the query or the address read.
+
+- **Outside content is labelled as data.** Every result reaches the agent inside an `<untrusted_content>` label, and its instructions say to use what is inside as information, never as instructions, and to tell you if a page asks it to do something.
+- **Your identity stays yours.** A search or page address that contains anything from your `identifiers.txt` waits for your approval before it is sent.
+- **Only public websites.** A page on this computer, your home network or a cloud's internal address is refused, at every redirect and at the moment of connecting.
+- HTML, plain text, Markdown, CSV and JSON can be read; PDFs and other files are refused for now.
 
 ## Skills and routines
 
